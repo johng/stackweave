@@ -126,6 +126,9 @@ static void runloom_mn_world_yield_if_monopolizing(runloom_hub_t *h)
 #if PY_VERSION_HEX >= 0x030D0000
     int i;
     if (__atomic_load_n(&h->stopping, __ATOMIC_ACQUIRE)) return;
+    /* An offload hub's next act is to detach for a blocking call, so the
+     * courtesy pause would only delay it. */
+    if (runloom_hub_is_offload(h->id)) return;
     /* Sole runnable g: exactly one in the ready ring and the own deque empty.
      * Relaxed loads (as documented above): own-thread here, but the indices are
      * relaxed-atomic for the cross-thread census -- keep every reader consistent. */
@@ -250,16 +253,39 @@ static volatile int runloom_mn_nidle = 0;   /* # hubs with idle_parked=1 (hint) 
 /* True iff some hub holds stealable surplus a steal would find RIGHT NOW: the
  * global runq is non-empty, or some deque has >1 g (one for its owner to run, at
  * least one to steal).  Cheap, lock-free; scanned only at park-decision time. */
-static int runloom_mn_any_stealable_work(void)
+static int runloom_mn_any_stealable_work(const runloom_hub_t *self)
 {
     int i;
-    if (__atomic_load_n(&runloom_global_runq_len, __ATOMIC_ACQUIRE) > 0) return 1;
+    if (__atomic_load_n(&runloom_global_runq_unpinned_len, __ATOMIC_ACQUIRE) > 0)
+        return 1;
+    if (self != NULL &&
+        __atomic_load_n(&self->runq_pinned_n, __ATOMIC_ACQUIRE) > 0) return 1;
     /* General hubs only: work sitting on an offload hub is NOT stealable by
      * anyone (exclusion 2), so counting it here would wake general hubs to
      * hunt for work they are forbidden to take. */
     for (i = 0; i < runloom_general_hub_count(); i++)
         if (runloom_cldeque_size(&runloom_hubs[i].deque) > 1) return 1;
     return 0;
+}
+
+/* Kick ONE named hub out of a deep idle wait, if it is registered.  Returns 1
+ * if this call is the CAS winner that un-parked it (the sole nidle decrementer),
+ * 0 if it was not parked or another thread got there first. */
+static int runloom_mn_wakep_kick(runloom_hub_t *h)
+{
+    int expect = 1;
+    if (__atomic_load_n(&h->idle_parked, __ATOMIC_RELAXED) != 1) return 0;
+    if (!__atomic_compare_exchange_n(&h->idle_parked, &expect, 0, 0,
+                                     __ATOMIC_ACQ_REL, __ATOMIC_RELAXED)) return 0;
+    __atomic_sub_fetch(&runloom_mn_nidle, 1, __ATOMIC_ACQ_REL);
+    /* Kick every wait mode (one hub; mirrors runloom_mn_kick_all_hubs). */
+    if (h->loop_wake_fd >= 0)
+        runloom_iouring_loop_wake(h->loop_wake_fd);
+    RUNLOOM_RLOCK(&h->idle_lock, RUNLOOM_RANK_HUB_IDLE);
+    runloom_cond_signal(&h->idle_cond);
+    RUNLOOM_RUNLOCK(&h->idle_lock, RUNLOOM_RANK_HUB_IDLE);
+    runloom_netpoll_wake_pump((void *)h);
+    return 1;
 }
 
 /* Producer side: wake ONE parked hub so it re-scans + steals.  Gated on the
@@ -285,22 +311,21 @@ static void runloom_mn_wakep_one(void)
      * Offload hubs are woken by their own submit path instead
      * (runloom_mn_hub_submit), which is how pinned work reaches them. */
     for (i = 0; i < runloom_general_hub_count(); i++) {
-        runloom_hub_t *h = &runloom_hubs[i];
-        int expect = 1;
-        if (__atomic_load_n(&h->idle_parked, __ATOMIC_RELAXED) != 1) continue;
-        if (__atomic_compare_exchange_n(&h->idle_parked, &expect, 0, 0,
-                                        __ATOMIC_ACQ_REL, __ATOMIC_RELAXED)) {
-            __atomic_sub_fetch(&runloom_mn_nidle, 1, __ATOMIC_ACQ_REL);
-            /* Kick every wait mode (one hub; mirrors runloom_mn_kick_all_hubs). */
-            if (h->loop_wake_fd >= 0)
-                runloom_iouring_loop_wake(h->loop_wake_fd);
-            RUNLOOM_RLOCK(&h->idle_lock, RUNLOOM_RANK_HUB_IDLE);
-            runloom_cond_signal(&h->idle_cond);
-            RUNLOOM_RUNLOCK(&h->idle_lock, RUNLOOM_RANK_HUB_IDLE);
-            runloom_netpoll_wake_pump((void *)h);
+        if (runloom_mn_wakep_kick(&runloom_hubs[i]))
             return;                              /* one wakep per surplus, like Go */
-        }
     }
+}
+
+/* Wake the ONE hub a pinned global-runq entry belongs to: every other hub walks
+ * past the entry, so wakep_one could rouse a hub that cannot take it while the
+ * owner stays deep-parked.  Bounded by runloom_hub_count, not the general-hub
+ * count, because G.pin(N) accepts any live hub.  Same backoff gate as wakep_one. */
+static void runloom_mn_wakep_pinned(int hub_id)
+{
+    if (runloom_idle_backoff_cap_ms() <= 1) return;
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);     /* publish BEFORE the idle read */
+    if (hub_id < 0 || hub_id >= runloom_hub_count || runloom_hubs == NULL) return;
+    (void)runloom_mn_wakep_kick(&runloom_hubs[hub_id]);
 }
 
 /* Park side: register this hub as wakep-able, then re-scan (the double-check).
@@ -313,7 +338,7 @@ static int runloom_mn_park_enter(runloom_hub_t *h)
     __atomic_store_n(&h->idle_parked, 1, __ATOMIC_RELEASE);
     __atomic_add_fetch(&runloom_mn_nidle, 1, __ATOMIC_ACQ_REL);
     __atomic_thread_fence(__ATOMIC_SEQ_CST);   /* set-flag BEFORE re-scan */
-    if (runloom_mn_any_stealable_work()) {
+    if (runloom_mn_any_stealable_work(h)) {
         expect = 1;
         if (__atomic_compare_exchange_n(&h->idle_parked, &expect, 0, 0,
                                         __ATOMIC_ACQ_REL, __ATOMIC_RELAXED))
@@ -645,6 +670,11 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                      * is unperturbed.  One event per woken g; coalesced by the driver. */
                     runloom_mnwake_trace_event("HUB_DRAIN", (unsigned long)(uintptr_t)sub, 0);
                     runloom_sched_ready_push(&h->sched, sub);
+                } else if (__atomic_load_n(&sub->pin_hub1,
+                                          __ATOMIC_ACQUIRE) == h->id + 1) {
+                    /* Pinned to THIS hub: local ready ring, never the
+                     * stealable deque. */
+                    runloom_sched_ready_push(&h->sched, sub);
                 } else if (runloom_cldeque_push(&h->deque, sub) != 0) {
                     RUNLOOM_COVER_HIT(RUNLOOM_COV_DEQUE_FULL_FALLBACK);
                     /* Deque full (>RUNLOOM_CLDEQUE_CAP=4096 fresh gs on this
@@ -786,7 +816,7 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
              * stalled hub's woken work is recovered promptly.  from_runq tells
              * the resume block to claim the g (QUEUED->RUNNING) and to drop the
              * entry's queue ref when the resume ends. */
-            g = runloom_mn_global_runq_pull();
+            g = runloom_mn_global_runq_pull(h->id);
             if (g != NULL) {
                 RUNLOOM_COVER_HIT(RUNLOOM_COV_GLOBAL_RUNQ_PULL);
                 from_runq = 1;

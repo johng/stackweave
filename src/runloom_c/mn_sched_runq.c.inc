@@ -106,6 +106,8 @@ static runloom_mutex_t  runloom_global_runq_lock = RUNLOOM_MUTEX_STATIC_INIT;
 static runloom_g_t     *runloom_global_runq_head = NULL;
 static runloom_g_t     *runloom_global_runq_tail = NULL;
 static volatile long runloom_global_runq_len  = 0;
+/* Entries with pin_hub1 == 0: the part of the queue any hub may pull. */
+static volatile long runloom_global_runq_unpinned_len = 0;
 
 /* Link g onto the tail of the global run-queue.  Each entry holds one queue
  * ref (incref'd by the caller -- wake_g, or the RUNNING_WOKEN release) so it
@@ -114,6 +116,7 @@ static volatile long runloom_global_runq_len  = 0;
  * on this queue at most once -- no re-push, no duplicate. */
 static void runloom_mn_global_runq_push(runloom_g_t *g)
 {
+    int pin1;
     RUNLOOM_RLOCK(&runloom_global_runq_lock, RUNLOOM_RANK_GLOBAL_RUNQ);
     g->next = NULL;
     if (runloom_global_runq_tail != NULL) {
@@ -123,22 +126,34 @@ static void runloom_mn_global_runq_push(runloom_g_t *g)
     }
     runloom_global_runq_tail = g;
     __atomic_add_fetch(&runloom_global_runq_len, 1, __ATOMIC_RELAXED);
+    pin1 = __atomic_load_n(&g->pin_hub1, __ATOMIC_ACQUIRE);
+    if (pin1 == 0) {
+        __atomic_add_fetch(&runloom_global_runq_unpinned_len, 1, __ATOMIC_RELAXED);
+    } else if (pin1 - 1 < runloom_hub_count) {
+        __atomic_add_fetch(&runloom_hubs[pin1 - 1].runq_pinned_n, 1, __ATOMIC_RELAXED);
+    }
     RUNLOOM_RUNLOCK(&runloom_global_runq_lock, RUNLOOM_RANK_GLOBAL_RUNQ);
     RUNLOOM_EVT(RUNLOOM_EVT_G_SUBMIT, g, NULL, 0);
     runloom_g_state_set(g, RUNLOOM_GST_SUBMITTED);
     /* WAKEP: a migratable woken g any idle hub may run -- kick a deep-parked hub
      * to re-scan + pull it (the global-runq counterpart of deque-surplus wakep).
      * The unlock above is the release publish; wakep_one's SEQ_CST fence orders
-     * it before the idle_parked read, so no parked hub misses this push. */
-    runloom_mn_wakep_one();
+     * it before the idle_parked read, so no parked hub misses this push.
+     * A PINNED entry must kick its own hub instead: every other hub walks
+     * past it. */
+    if (pin1 != 0) runloom_mn_wakep_pinned(pin1 - 1);
+    else           runloom_mn_wakep_one();
 }
 
-/* Pop one g from the global run-queue head (NULL if empty).  No per-hub
- * pending rebalance (see header: only the sum matters, and the mutex
- * release/acquire already orders the g's writes for the puller). */
-static runloom_g_t *runloom_mn_global_runq_pull(void)
+/* Pop one g for hub `hub_id` from the global run-queue (NULL if it holds
+ * nothing this hub may run).  No per-hub pending rebalance (see header: only
+ * the sum matters, and the mutex release/acquire already orders the g's writes
+ * for the puller).
+ */
+static runloom_g_t *runloom_mn_global_runq_pull(int hub_id)
 {
-    runloom_g_t *g;
+    runloom_g_t *g, *prev;
+    const int want = hub_id + 1;   /* +1 encoding; hub_id<0 -> match unpinned only */
     /* Lock-free fast-out: the queue is empty in the common case (default
      * mode never touches it; per-g-tstate only when a wake is in flight),
      * so skip the mutex when there is clearly nothing to take.  A racing
@@ -147,17 +162,83 @@ static runloom_g_t *runloom_mn_global_runq_pull(void)
         return NULL;
     }
     RUNLOOM_RLOCK(&runloom_global_runq_lock, RUNLOOM_RANK_GLOBAL_RUNQ);
+    prev = NULL;
     g = runloom_global_runq_head;
+    while (g != NULL) {
+        /* First match, not head-only: a head entry pinned to a busy hub would
+         * otherwise block every unpinned entry behind it.  One load of
+         * pin_hub1 per entry; its stores are under this lock (repin) or
+         * pre-publication (spawn). */
+        int p1 = __atomic_load_n(&g->pin_hub1, __ATOMIC_ACQUIRE);
+        if (p1 == 0 || p1 == want) break;
+        prev = g;
+        g = g->next;
+    }
     if (g != NULL) {
-        runloom_global_runq_head = g->next;
-        if (runloom_global_runq_head == NULL) {
-            runloom_global_runq_tail = NULL;
-        }
+        /* Unlink g from wherever the walk stopped.  Read g->next for the tail
+         * fixup BEFORE clearing it -- clearing first would strand the tail
+         * pointer at a node that is no longer last. */
+        if (prev == NULL) runloom_global_runq_head = g->next;
+        else              prev->next = g->next;
+        if (g->next == NULL) runloom_global_runq_tail = prev;
         g->next = NULL;
         __atomic_sub_fetch(&runloom_global_runq_len, 1, __ATOMIC_RELAXED);
+        {   /* Mirror the push-side accounting exactly, or the idle scan drifts
+             * and a hub either spins forever or sleeps through its own work. */
+            int pin1 = __atomic_load_n(&g->pin_hub1, __ATOMIC_ACQUIRE);
+            if (pin1 == 0) {
+                __atomic_sub_fetch(&runloom_global_runq_unpinned_len, 1,
+                                   __ATOMIC_RELAXED);
+            } else if (pin1 - 1 < runloom_hub_count) {
+                __atomic_sub_fetch(&runloom_hubs[pin1 - 1].runq_pinned_n, 1,
+                                   __ATOMIC_RELAXED);
+            }
+        }
     }
     RUNLOOM_RUNLOCK(&runloom_global_runq_lock, RUNLOOM_RANK_GLOBAL_RUNQ);
     return g;
+}
+
+/* The only post-spawn writer of g->pin_hub1.  push and pull classify an entry
+ * by pin_hub1 UNDER THIS LOCK, so a bare store on a queued g would make pull
+ * decrement a different counter than push incremented, and the drift never
+ * heals (a stuck count keeps a hub from ever sleeping, or lets it sleep through
+ * work it could take).  The O(n) walk is fine: only pin() reaches here. */
+static void runloom_mn_global_runq_repin(runloom_g_t *g, int new_pin1)
+{
+    runloom_g_t *it;
+    int queued = 0, old_pin1;
+    RUNLOOM_RLOCK(&runloom_global_runq_lock, RUNLOOM_RANK_GLOBAL_RUNQ);
+    old_pin1 = __atomic_load_n(&g->pin_hub1, __ATOMIC_ACQUIRE);
+    for (it = runloom_global_runq_head; it != NULL; it = it->next) {
+        if (it == g) { queued = 1; break; }
+    }
+    if (queued && old_pin1 != new_pin1 && runloom_hubs != NULL) {
+        if (old_pin1 == 0) {
+            __atomic_sub_fetch(&runloom_global_runq_unpinned_len, 1, __ATOMIC_RELAXED);
+        } else if (old_pin1 - 1 < runloom_hub_count) {
+            __atomic_sub_fetch(&runloom_hubs[old_pin1 - 1].runq_pinned_n, 1,
+                               __ATOMIC_RELAXED);
+        }
+        if (new_pin1 == 0) {
+            __atomic_add_fetch(&runloom_global_runq_unpinned_len, 1, __ATOMIC_RELAXED);
+        } else if (new_pin1 - 1 < runloom_hub_count) {
+            __atomic_add_fetch(&runloom_hubs[new_pin1 - 1].runq_pinned_n, 1,
+                               __ATOMIC_RELAXED);
+        }
+    }
+    __atomic_store_n(&g->pin_hub1, new_pin1, __ATOMIC_RELEASE);
+    RUNLOOM_RUNLOCK(&runloom_global_runq_lock, RUNLOOM_RANK_GLOBAL_RUNQ);
+    /* Outside the runq lock (wakep takes hub idle_lock -- do not invert ranks).
+     * A re-pinned queued entry changes WHICH hub may take it, so kick the new
+     * owner: it may be deep-parked, and after the re-pin nobody else will. */
+    if (queued) {
+        if (new_pin1 != 0) {
+            runloom_mn_wakep_pinned(new_pin1 - 1);
+        } else {
+            runloom_mn_wakep_one();
+        }
+    }
 }
 
 /* RUNLOOM_PER_G_TSTATE (default OFF, experimental, GATED): give each fiber its

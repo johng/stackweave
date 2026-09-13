@@ -202,11 +202,13 @@ def enable_migration(allow_unsafe=False):
     Idempotent."""
     if not migration_available() and not allow_unsafe:
         st = migration_status()
+        # The patches are version-specific: name the one for the running interpreter.
+        _tag = "cpython%d%dt" % _sys.version_info[:2]
         missing = ", ".join(
             name for name, have in (
-                ("alloc-home (src/patches/cpython313t-tstate-alloc-home.patch)",
+                ("alloc-home (src/patches/%s-tstate-alloc-home.patch)" % _tag,
                  st["alloc_home"]),
-                ("exec-home (src/patches/cpython314t-tstate-exec-home.patch)",
+                ("exec-home (src/patches/%s-tstate-exec-home.patch)" % _tag,
                  st["exec_home"]),
             ) if not have
         )

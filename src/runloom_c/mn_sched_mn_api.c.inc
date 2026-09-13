@@ -261,6 +261,57 @@ static void runloom_mn_hub_submit(runloom_hub_t *h, runloom_g_t *g)
         runloom_mnwake_trace_event("SIGNAL", (unsigned long)(uintptr_t)g, 0);
 }
 
+/* Confine g's next (and every later) wake to hub `hub_id`.  See the contract in
+ * mn_sched.h and the pin_hub1 field comment in runloom_sched.h. */
+int runloom_mn_pin_for_wake(runloom_g_t *g, int hub_id)
+{
+    void *park_hub;
+    int home;
+    if (g == NULL) {
+        PyErr_SetString(PyExc_RuntimeError, "pin(): dead fiber handle");
+        return -1;
+    }
+    if (runloom_hubs == NULL || runloom_hub_count <= 0) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "pin(): the M:N runtime is not running");
+        return -1;
+    }
+    if (hub_id >= runloom_hub_count) {
+        PyErr_Format(PyExc_ValueError,
+                     "pin(%d): only %d hub%s running (0..%d)",
+                     hub_id, runloom_hub_count,
+                     runloom_hub_count == 1 ? " is" : "s are",
+                     runloom_hub_count - 1);
+        return -1;
+    }
+
+    if (hub_id < 0) {                    /* clear the pin */
+        runloom_mn_global_runq_repin(g, 0);
+        return 0;
+    }
+
+    park_hub = (void *)__atomic_load_n(&g->park_hub, __ATOMIC_ACQUIRE);
+    home = runloom_mn_hub_id_of(park_hub);
+    if (home < 0 && g == runloom_tls_current_g && runloom_tls_hub != NULL)
+        home = runloom_tls_hub->id;
+
+    // Fail if cross hub migrations are not enabled
+    if (!runloom_use_global_runq() && home != hub_id) {
+        PyErr_Format(PyExc_RuntimeError,
+            "pin(%d): the default scheduler cannot resume a fiber on a hub "
+            "other than its own (%d) -- a woken fiber is hub-pinned by design, "
+            "so this pin would be silently ignored rather than honoured.  Start "
+            "the runtime with runloom.enable_migration() on an interpreter "
+            "carrying both CPython patches (see runloom.migration_status()) to "
+            "target another hub.",
+            hub_id, home);
+        return -1;
+    }
+
+    runloom_mn_global_runq_repin(g, hub_id + 1);
+    return 0;
+}
+
 void runloom_mn_wake_g(void *hub_opaque, runloom_g_t *g)
 {
     if (hub_opaque == NULL) {

@@ -474,9 +474,10 @@ static PyObject *m_mn_init(PyObject *self, PyObject *args, PyObject *kw)
 
 static PyObject *m_mn_fiber(PyObject *self, PyObject *args, PyObject *kw)
 {
-    static char *kwlist[] = {"fn", "stack_size", NULL};
+    static char *kwlist[] = {"fn", "stack_size", "hub", NULL};
     PyObject *callable;
     Py_ssize_t stack_size = 0;
+    int hub = -1;
     (void)self;
     /* mn-sim fence (I3, wake contract #16): a spawn from a FOREIGN OS thread
      * during a seeded run inserts work at a wall-clock-decided placement slot.
@@ -492,15 +493,31 @@ static PyObject *m_mn_fiber(PyObject *self, PyObject *args, PyObject *kw)
             "ordered (MN_SIM_DST_PLAN.md wake contract #16)");
         return NULL;
     }
-    if (!PyArg_ParseTupleAndKeywords(args, kw, "O|n", kwlist,
-                                     &callable, &stack_size)) {
+    if (!PyArg_ParseTupleAndKeywords(args, kw, "O|ni", kwlist,
+                                     &callable, &stack_size, &hub)) {
         return NULL;
     }
     if (!PyCallable_Check(callable)) {
         PyErr_SetString(PyExc_TypeError, "mn_fiber(): callable required");
         return NULL;
     }
+    if (hub >= 0) {
+        return runloom_mn_fiber_pinned(callable,
+                                       stack_size > 0 ? (size_t)stack_size : 0,
+                                       hub);
+    }
     return runloom_mn_fiber(callable, stack_size > 0 ? (size_t)stack_size : 0);
+}
+
+/* mn_current_hub() -> int | None.  Dense id of the hub running the calling
+ * fiber, or None on a non-hub thread.  Lock-free TLS read. */
+static PyObject *m_mn_current_hub(PyObject *self, PyObject *unused)
+{
+    int id;
+    (void)self; (void)unused;
+    id = runloom_mn_hub_id_of(runloom_mn_current_hub_opaque());
+    if (id < 0) Py_RETURN_NONE;
+    return PyLong_FromLong(id);
 }
 
 /* fiber_n(fn, n, stack_size=0, indexed=False): bulk-spawn n fibers all running
