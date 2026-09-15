@@ -462,6 +462,10 @@ static int runloom_hub_tstate_lock_inited = 0;
  * mn_sched_hub_main.c.inc (it needs the hub array + per-hub kick helpers). */
 static void runloom_mn_wakep_one(void);
 static void runloom_mn_wakep_pinned(int hub_id);
+/* LOCAL-WAKE forward decl: the RUNNING_WOKEN release in mn_sched_hub_main.c.inc
+ * re-enqueues a woken migratable g; the definition lives in mn_sched_mn_api.c.inc
+ * (it needs the TLS hub pointer + the replay no-steal gate). */
+static void runloom_mn_woken_enqueue(runloom_g_t *g);
 
 #include "mn_sched_runq.c.inc"
 #include "mn_sched_hub_resume_preempt.c.inc"

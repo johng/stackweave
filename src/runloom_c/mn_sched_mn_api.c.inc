@@ -28,7 +28,8 @@ int runloom_mn_offload_hub_count(void)
  * climbing floor across soak iterations = fibers stuck in hub queues.
  * mn_completed_total: cumulative retired gs across hubs -- an odometer
  * (never falls), a liveness signal to confirm the soak is retiring work.
- * mn_deque_depth_total: fresh (stealable) gs across all hub deques. */
+ * mn_deque_depth_total: stealable gs across all hub deques -- fresh ones, plus
+ * locally-woken ones under migration (runloom_mn_woken_enqueue). */
 long runloom_mn_pending_total(void)
 {
     long total = 0;
@@ -312,6 +313,57 @@ int runloom_mn_pin_for_wake(runloom_g_t *g, int hub_id)
     return 0;
 }
 
+/* Enqueue a woken migratable g (wake_state QUEUED, holding its queue ref) where
+ * a hub will find it soonest.
+ *
+ * GO-STYLE LOCAL WAKE.  When the waker is itself a GENERAL hub thread, the g
+ * goes onto the waker's OWN Chase-Lev deque: a legal owner push (same OS
+ * thread, no lock), and the data the waker just touched is what the g reads
+ * next.  The waker's hub picks it up at its next pick step; any idle general
+ * hub may steal it meanwhile (wakep_one kicks one).  The global run-queue then
+ * serves only the wakes with nowhere local to go:
+ *   - a FOREIGN (non-hub) waker -- main-thread signal delivery, the asyncio
+ *     bridge, an mp feeder thread -- has no deque of its own;
+ *   - an OFFLOAD hub as waker: general work must never sit on an offload hub
+ *     (RUNLOOM_OFFLOAD_HUBS exclusions 1+2) and general hubs never steal from
+ *     one, so it would strand behind the hub's next blocking call;
+ *   - a PINNED g: a deque is stealable by ANY general hub, so only the global
+ *     queue (whose pull honours pin_hub1) can confine it;
+ *   - controlled replay (no-steal): a deque-resident woken g would wait for
+ *     the waker's fiber to yield, a schedule the replay model does not have;
+ *   - the waker's deque is full.
+ * The wake state machine is untouched: the caller took the PARKED->QUEUED (or
+ * *_WOKEN->QUEUED) edge and the queue ref exactly as for the global path, and
+ * hub_main recognises a QUEUED g popped/stolen from a deque and runs the same
+ * QUEUED->RUNNING claim + queue-ref drop it runs for a global pull.  Per-hub
+ * `pending` is NOT rebalanced, as for the global path: under migration only the
+ * SUM is meaningful (spawn +1 on the placement hub, completion -1 on whichever
+ * hub finishes; see the runq header). */
+static void runloom_mn_woken_enqueue(runloom_g_t *g)
+{
+    runloom_hub_t *cur = runloom_tls_hub;
+    if (cur != NULL && runloom_hubs != NULL &&
+        !runloom_hub_is_offload(cur->id) &&
+        !runloom_mn_ctrl_no_steal() &&
+        __atomic_load_n(&g->pin_hub1, __ATOMIC_ACQUIRE) == 0 &&
+        runloom_cldeque_push(&cur->deque, g) == 0) {
+        RUNLOOM_COVER_HIT(RUNLOOM_COV_LOCAL_WAKE);
+        RUNLOOM_EVT(RUNLOOM_EVT_G_SUBMIT, g, cur, 0);
+        runloom_g_state_set(g, RUNLOOM_GST_SUBMITTED);
+        /* The push's RELEASE on `bottom` publishes the g; wakep_one's SEQ_CST
+         * fence orders it before the idle_parked read -- the Dekker pair with
+         * runloom_mn_park_enter, whose re-scan under migration counts a deque
+         * of ONE as surplus (runloom_mn_any_stealable_work), so a hub that is
+         * parking right now either sees this g or gets kicked. */
+        runloom_mn_wakep_one();
+    } else {
+        runloom_mn_global_runq_push(g);
+    }
+    /* Same cross-hub wake-latency fix as hub_submit: an idle hub blocked in
+     * epoll_wait re-loops to steal / pull.  No-op if the pump is not armed. */
+    runloom_netpoll_wake_pump(NULL);
+}
+
 void runloom_mn_wake_g(void *hub_opaque, runloom_g_t *g)
 {
     if (hub_opaque == NULL) {
@@ -326,10 +378,11 @@ void runloom_mn_wake_g(void *hub_opaque, runloom_g_t *g)
         return;
     }
     if (runloom_use_global_runq()) {
-        /* per-g-tstate OR steal-woken: g is migratable, so route it to the
-         * global run-queue any idle hub can drain instead of the origin hub's
-         * owner-drained sub list -- recovers it even if the origin hub is wedged
-         * in a blocking C call.  Drive the per-g wake state machine (see
+        /* per-g-tstate OR steal-woken: g is migratable, so route it where a
+         * hub other than its origin can reach it -- the waker's own deque, else
+         * the global run-queue (runloom_mn_woken_enqueue) -- instead of the
+         * origin hub's owner-drained sub list; recovers it even if the origin
+         * hub is wedged in a blocking C call.  Drive the per-g wake state machine (see
          * runloom_sched.h); it is tstate-agnostic -- the snap (steal-woken) or the
          * per-g tstate (per-g-tstate) carries the migrated state:
          *
@@ -359,14 +412,7 @@ void runloom_mn_wake_g(void *hub_opaque, runloom_g_t *g)
                                                 __ATOMIC_ACQUIRE)) {
                     RUNLOOM_WS_NOTE(RUNLOOM_WS_PARKED, RUNLOOM_WS_QUEUED);
                     runloom_g_incref(g);   /* queue ref, dropped when consumed */
-                    runloom_mn_global_runq_push(g);
-                    /* Same cross-hub wake-latency fix as hub_submit: any hub can
-                     * drain the global runq, but an idle one is blocked in
-                     * epoll_wait -- kick the pump so it wakes now (no-op if not
-                     * armed; the pump drains the eventfd and re-loops).  NULL =
-                     * default pool; global runq is drained by ANY hub (steal mode,
-                     * default-off) which re-polls on its bounded timeout. */
-                    runloom_netpoll_wake_pump(NULL);
+                    runloom_mn_woken_enqueue(g);
                     return;
                 }
                 /* lost: st reloaded to the current state; re-evaluate */
@@ -530,7 +576,7 @@ void runloom_mn_sweep_claim_release(runloom_g_t *g)
     RUNLOOM_WS_NOTE(RUNLOOM_WS_SWEEPING_WOKEN, RUNLOOM_WS_QUEUED);
     __atomic_store_n(&g->wake_state, RUNLOOM_WS_QUEUED, __ATOMIC_RELEASE);
     runloom_g_incref(g);   /* queue ref, dropped when consumed */
-    runloom_mn_global_runq_push(g);
+    runloom_mn_woken_enqueue(g);
 }
 
 int runloom_mn_yield_current(void)

@@ -48,7 +48,11 @@
  *   block in mn_sched_runq.c.inc).  That is what lets an idle hub rescue the
  *   woken work of a hub wedged in a blocking C call -- the failure the
  *   default mode cannot recover from.  Fresh-fiber work-stealing is unchanged
- *   and still runs alongside it.
+ *   and still runs alongside it.  A wake performed on a general hub thread
+ *   skips the global queue: the g goes onto the waker's own deque (Go-style
+ *   local wake, runloom_mn_woken_enqueue) where the waker's hub or any idle
+ *   thief picks it up; the global queue serves foreign-thread wakers, offload
+ *   hub wakers, pinned fibers, replay, and a full deque.
  *
  *   Why migration needs a patched interpreter.  In STOCK free-threaded
  *   CPython it is unsound, for two independent reasons, and either alone
