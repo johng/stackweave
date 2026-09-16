@@ -1,18 +1,14 @@
-"""Time-sliced preemption (preempt_init) -- liveness AND in-dealloc safety,
-ISOLATED from the sysmon eval-wrapper.
+"""Time-sliced preemption (preempt_init) -- liveness AND in-dealloc safety.
 
-stackweave has TWO preemption mechanisms:
-  * the sysmon eval-frame wrapper (STACKWEAVE_PREEMPT, default ON) -- covered by
-    test_sched_fairness.test_preemption_busy_loop_yields_to_sibling (which is
-    SKIPPED when STACKWEAVE_PREEMPT=0);
-  * the explicit time-slicer: preempt_init(quantum_us) starts an OS timer thread
-    that posts Py_AddPendingCall(runloom_preempt_yield_cb) every quantum
-    (runloom_sched_preempt.c.inc).
+stackweave's one wall-clock preemption mechanism is the explicit time-slicer:
+preempt_init(quantum_us) starts an OS timer thread that posts
+Py_AddPendingCall(runloom_preempt_yield_cb) every quantum
+(runloom_sched_preempt.c.inc).  (The old sysmon eval-frame wrapper is gone:
+migration mode stood it down.)
 
 The time-slicer had only the cov95 "posts and yields" tests, whose hogs are
 TIME-BOUNDED (`while monotonic() < t0 + 0.3`) -- they finish whether or not a
 preemption ever fired, so they don't assert the slicer actually preempts.  These
-run with STACKWEAVE_PREEMPT=0 so the ONLY preemption source is the time-slicer, and
 assert it positively:
 
   1. LIVENESS (single-thread + M:N): a hog with NO cooperative yield spins until a
@@ -21,7 +17,7 @@ assert it positively:
      span.  A dead slicer => the counter never advances => the hog spins forever
      => subprocess TIMEOUT (rc 124), a clean failure.
   2. SAFETY (in-dealloc gate, runloom_sched_preempt.c.inc:25): the time-slicer
-     reaches its yield via a path SEPARATE from the M:N sysmon gates; it must
+     reaches its yield via its own path (a pending call, not the scheduler); it must
      defer while a tstate is mid object-destruction, else a concurrent
      stop-the-world gc.collect() reclaims a half-destroyed object -> UAF.  Under an
      aggressive slicer, heavy __del__s race a foreign STW thread; the invariant is
@@ -44,11 +40,10 @@ pytestmark = pytest.mark.skipif(
 
 
 def _run(code, timeout=30):
-    """Run a snippet in a fresh subprocess with the sysmon eval-wrapper DISABLED
-    (STACKWEAVE_PREEMPT=0), so the time-slicer is the only preemption source."""
+    """Run a snippet in a fresh subprocess."""
     preamble = "import sys; sys.path.insert(0, %r)\nimport stackweave_c as rc\n" % (
         os.path.join(REPO, "src"))
-    env = dict(os.environ, PYTHON_GIL="0", STACKWEAVE_PREEMPT="0")
+    env = dict(os.environ, PYTHON_GIL="0")
     try:
         p = subprocess.run([sys.executable, "-c", preamble + code],
                            cwd=REPO, env=env, timeout=timeout,

@@ -6,8 +6,7 @@ hub idle, no runnable/stealable work, no sleeper/timer, nothing in flight on
 netpoll/blockpool/io_uring/a foreign park -- the remaining fibers are blocked on
 a channel/lock/await that nothing can ever wake.  Without the census mn_run
 spins its 1 ms poll forever: a silent hang.  With it, mn_run surfaces a
-diagnostic (warn, the default) or raises (STACKWEAVE_DEADLOCK=raise /
-set_deadlock_mode(2)).
+diagnostic (warn, the default) or raises (set_deadlock_mode(2)).
 
 Just as important: it must NOT false-fire while a legitimate wake source exists
 (a pending timer/sleeper, parked netpoll I/O, or simply busy hubs).  These

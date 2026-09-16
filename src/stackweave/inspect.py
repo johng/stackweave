@@ -423,10 +423,6 @@ def hubs():
         dwell_ms      -- how long the current resume has run (None if idle); a
                          large value with state 'detached' is a wedged hub
         pending       -- fibers owned + queued on this hub
-        preempt_requested -- sysmon has asked this hub to yield (a CPU wedge)
-        instrumented  -- whether sysmon resume-tracking is live (it is by
-                         default on free-threaded 3.13t; running_g / dwell_ms /
-                         blocked_at need it)
         blocked_at    -- best-effort Python call site of a DETACHED-wedged hub's
                          blocking call, e.g. 'cursor.execute (db.py:88)', or None
         stack_cmd     -- a ready-to-run command that dumps the full C+Python
@@ -449,8 +445,6 @@ WEDGE_MS = 50.0
 
 def _hub_label(h):
     """A one-word health label for a hub row."""
-    if not h["instrumented"]:
-        return h["state"]
     if h["running_g"] is None:
         return "idle"
     if (h["dwell_ms"] or 0.0) >= WEDGE_MS:

@@ -26,7 +26,7 @@
 #      (stackweave: runloom_iframe_borrow_alloc_home, wired in mn_sched_hub_main.c.inc)
 #
 # HISTORY: first written against 3.13.13 (validated there: 593 stdlib tests with
-# the flag ON; 24/24 on the STACKWEAVE_PER_G_TSTATE channel-churn crash vs 8/8
+# the flag ON; 24/24 on the cross-hub migration channel-churn crash vs 8/8
 # aborts without).  That 3.13 patch was removed with 3.13 support and is in git
 # history.  It does NOT apply to 3.14 (2/2 hunks in pycore_tstate.h and 2/9 in
 # obmalloc.c reject), and applying it with fuzz (-F3) silently produces a

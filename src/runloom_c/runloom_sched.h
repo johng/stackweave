@@ -32,7 +32,7 @@ typedef struct runloom_g runloom_g_t;
 typedef struct runloom_sched runloom_sched_t;
 typedef struct runloom_pystate_snap runloom_pystate_snap_t;
 
-/* Per-g wake state machine for the RUNLOOM_PER_G_TSTATE global run-queue.
+/* Per-g wake state machine for the global run-queue.
  * See the wake_state field on struct runloom_g for the protocol and the legal
  * edges.  PARKED is 0 so a slab-zeroed g is in a defined state; spawn lifts a
  * fresh g to RUNNING under per-g-tstate before it can be resumed. */
@@ -208,9 +208,9 @@ struct runloom_g {
     PyObject *result;
     PyObject *error;
     runloom_pystate_snap_t snap;     /* saved tstate; valid only when suspended */
-    PyThreadState *tstate;        /* per-g tstate, non-NULL only under
-                                   * RUNLOOM_PER_G_TSTATE; the g's own Python
-                                   * execution state, migratable across hubs */
+    PyThreadState *tstate;        /* per-g tstate, non-NULL under M:N;
+                                   * the g's own Python execution state,
+                                   * migratable across hubs */
     double wake_at;
     uint64_t sleep_seq;  /* FIFO tiebreak for equal wake_at (asyncio (when,seq) order) */
     runloom_g_t *next;
@@ -298,7 +298,7 @@ struct runloom_g {
      * isn't enqueued and later popped twice, which would resume a
      * freed coro on the second pop. */
     int in_sub_queue;
-    /* ---- RUNLOOM_PER_G_TSTATE global run-queue: per-g wake state machine ----
+    /* ---- global run-queue: per-g wake state machine ----
      * A single atomic that makes the woken-g global run-queue safe for ANY
      * idle hub to drain (so a hub wedged in a blocking C call can't strand its
      * woken work) WITHOUT duplicate entries, double-resume, or lost wakes.  The
@@ -308,8 +308,8 @@ struct runloom_g {
      * separate invariants that could disagree.  Here they are the SAME
      * invariant: a g holds at most one runq entry exactly when it is QUEUED,
      * and exactly one hub owns it exactly when it is RUNNING, so there is no
-     * re-push and no duplicate.  Untouched by the default (per-hub-tstate)
-     * scheduler; valid only under RUNLOOM_PER_G_TSTATE.
+     * re-push and no duplicate.  Untouched by the single-thread
+     * scheduler; valid only under M:N.
      *
      * States and the (only) legal edges, each a CAS by the named actor:
      *
@@ -454,7 +454,7 @@ struct runloom_g {
     long long id;
     /* Monotonic-ns timestamp of the last state transition into a PARKED_*
      * state, stamped only when introspection timestamping is enabled
-     * (runloom_introspect_set_timestamps / RUNLOOM_INTROSPECT_TIME).  Lets the
+     * (runloom_introspect_set_timestamps).  Lets the
      * dump report "parked for 45.2s" to spot a wedged fiber.  -1 when
      * never stamped / tracking off. */
     long long state_since_ns;
@@ -867,7 +867,7 @@ void runloom_pystate_snap(runloom_pystate_snap_t *snap);
 void runloom_pystate_load(runloom_pystate_snap_t *snap);
 void runloom_pystate_snap_clear(runloom_pystate_snap_t *snap);
 
-/* Per-fiber-tstate mode (RUNLOOM_PER_G_TSTATE).  When on, runloom_pystate_snap
+/* Per-fiber-tstate mode (on for the life of M:N).  When on, runloom_pystate_snap
  * no-ops so each g's own tstate is never swapped out; mn_sched runs the
  * tstate-attach/detach path instead.  Set by mn_init, cleared by mn_fini. */
 void runloom_set_per_g_tstate_mode(int on);

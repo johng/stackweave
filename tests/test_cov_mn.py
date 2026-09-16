@@ -34,16 +34,10 @@ _DEVNULL = os.open(os.devnull, os.O_WRONLY)
 # (label, extra-env) -- each drives a distinct gated path through mn_sched.c.
 MODES = [
     ("default",      {}),
-    ("barrier_pct",  {"STACKWEAVE_MN_BARRIER": "1", "STACKWEAVE_MN_SEED": "7", "STACKWEAVE_MN_PCT": "8"}),
     ("gon_bulk",     {"STACKWEAVE_GON_BULK": "1"}),
     ("sysmon",       {"STACKWEAVE_SYSMON": "1", "STACKWEAVE_SYSMON_QUIET": "1",
                       "STACKWEAVE_SYSMON_MS": "8", "STACKWEAVE_COV_CPU": "40000000"}),
-    ("preempt",      {"STACKWEAVE_PREEMPT": "1", "STACKWEAVE_SYSMON": "1", "STACKWEAVE_SYSMON_QUIET": "1",
-                      "STACKWEAVE_PREEMPT_MS": "8", "STACKWEAVE_COV_CPU": "40000000"}),
-    ("idle_wake_off", {"STACKWEAVE_HUB_IDLE_WAKE": "0"}),
     ("stack_park_sweep", {"STACKWEAVE_STACK_PARK_SWEEP": "1", "STACKWEAVE_STACK_PARK_SWEEP_MS": "1"}),
-    ("world_yield",  {"STACKWEAVE_WORLD_YIELD_NS": "2000"}),
-    ("hub_affinity", {"STACKWEAVE_HUB_AFFINITY": "1"}),
     ("perg_tstate_warn", {"STACKWEAVE_PER_G_TSTATE": "1"}),   # gated off -> warn + default sched
     ("iouring_loop", {"STACKWEAVE_IOURING_LOOP": "1"}),
     ("deadlock_ms",  {"STACKWEAVE_DEADLOCK_MS": "50"}),

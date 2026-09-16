@@ -7,9 +7,7 @@
 # SIGSEGV in __tls_get_addr / _PyCode_New.  (Same crash class as greenlet's,
 # fixed upstream in greenlet PR #511 for 3.15.)  stackweave_c now ships the fix: the
 # GC frames anchor (module_gcframes.c.inc) makes parked frames GC-visible, so this
-# PASSES with TLBC ON -- the default.  To RE-ARM the crash for verification,
-# disable the anchor while forcing TLBC on:
-#   STACKWEAVE_TLBC=1 STACKWEAVE_GC_FRAMES=0 python3 p565_compileall_bytecode_purity.py
+# PASSES with TLBC ON -- the default.
 
 """big_100 / 565 -- compileall.compile_file bytecode PURITY + determinism under M:N.
 

@@ -87,101 +87,14 @@ static uint64_t runloom_steal_rand(int hub_id)
     return x;
 }
 
-/* gc-stop-the-world fairness.
- *
- * A fiber that loops a stop-the-world operation -- a tight `gc.collect()`
- * loop is the canonical case -- while it is the SOLE runnable g on its hub gets
- * re-run back-to-back by the loop below, holding the world stopped ~100% of the
- * time.  That starves fibers stranded on OTHER hubs: in default (per-hub-
- * tstate) mode a started fiber is hub-pinned (its suspended eval frame caches
- * its origin tstate via the snap dance, so it is NOT stealable) and lives in its
- * hub's local ready ring; if that hub is held SUSPENDED for the world-stop it can
- * never re-attach to drain the ring -> the stranded work never finishes -> the
- * stop-the-world looper never sees its exit condition -> whole-process deadlock.
- * (Observed as the intermittent hang in test_freethread_stress::
- * test_gc_stw_under_fiber_churn.)
- *
- * A cooperative turn should relinquish to the whole system, not just respin the
- * same g.  When this hub is about to re-run its sole runnable g AND a sibling hub
- * has unfinished work but is NOT running it, briefly DETACH this thread and sleep:
- * a detached thread counts as already-stopped, so the window lets the stalled
- * sibling start-the-world / re-attach and make progress before this hub stops the
- * world again.
- *
- * "Not running its work" = the sibling tstate is SUSPENDED (stopped for an active
- * world-stop) OR DETACHED with pending fibers (it just got released by a
- * start-the-world and is trying to re-attach, or is otherwise blocked off-CPU with
- * work owed).  The DETACHED-with-work case is essential: right after THIS hub's own
- * gc.collect() returns (its start-the-world set the siblings DETACHED), the sibling
- * has not re-attached yet, so a SUSPENDED-only test would miss the window and let
- * the monopoly continue (observed as a residual ~1/120 hang).  pending>0 keeps a
- * genuinely-idle sibling (no work) from ever arming the pause.
- *
- * Precisely targeted -- a busy multi-g hub short-circuits on the ready-count test
- * (a couple of relaxed loads); a lone yielder whose siblings are idle (pending==0)
- * or running (ATTACHED) never pays the pause. */
-static void runloom_mn_world_yield_if_monopolizing(runloom_hub_t *h)
-{
-    int i;
-    if (__atomic_load_n(&h->stopping, __ATOMIC_ACQUIRE)) return;
-    /* An offload hub's next act is to detach for a blocking call, so the
-     * courtesy pause would only delay it. */
-    if (runloom_hub_is_offload(h->id)) return;
-    /* Sole runnable g: exactly one in the ready ring and the own deque empty.
-     * Relaxed loads (as documented above): own-thread here, but the indices are
-     * relaxed-atomic for the cross-thread census -- keep every reader consistent. */
-    if ((__atomic_load_n(&h->sched.ready_tail, __ATOMIC_RELAXED)
-         - __atomic_load_n(&h->sched.ready_head, __ATOMIC_RELAXED)) != 1) return;
-    if (runloom_cldeque_size(&h->deque) != 0) return;
-    /* Offload hubs excluded (RUNLOOM_OFFLOAD_HUBS, mn_sched.c).  An offload hub
-     * running a blocking call is DETACHED with pending>0 -- byte for byte the
-     * arming condition below -- so leaving it in the scan would make EVERY
-     * general hub pause 100us on a loop, for the whole duration of EVERY
-     * offload.  It is not a monopolised sibling owed a timeslice; being
-     * detached with work is its steady state. */
-    for (i = 0; i < runloom_general_hub_count(); i++) {
-        int tss;
-        long pend;
-        if (i == h->id) continue;
-        /* Acquire load: a sibling hub publishes its tstate on its own thread
-         * (runloom_hub_main); NULL during that startup window -> attach-state
-         * -1 -> neither branch below fires (skip). */
-        tss  = runloom_tstate_attach_state((PyThreadState *)
-                   __atomic_load_n((void **)&runloom_hubs[i].tstate, __ATOMIC_ACQUIRE));
-        pend = __atomic_load_n(&runloom_hubs[i].pending, __ATOMIC_RELAXED);
-        if (tss == RUNLOOM_TS_SUSPENDED ||
-            (tss == RUNLOOM_TS_DETACHED && pend > 0)) {
-            static long long yield_ns = -1;
-            long long pause_ns = __atomic_load_n(&yield_ns, __ATOMIC_RELAXED);
-            PyThreadState *yts;
-            if (pause_ns < 0) {
-                const char *e = getenv("STACKWEAVE_WORLD_YIELD_NS");
-                pause_ns = (e != NULL) ? atoll(e) : 100000LL;   /* 100 us default */
-                if (pause_ns < 0) pause_ns = 0;
-                __atomic_store_n(&yield_ns, pause_ns, __ATOMIC_RELAXED);
-            }
-            if (pause_ns == 0) return;
-            runloom_delay_inject(RUNLOOM_DLY_WORLD_YIELD);
-            RUNLOOM_EVT(RUNLOOM_EVT_WORLD_YIELD, h, 0, pause_ns);
-            yts = PyEval_SaveThread();
-            runloom_sleep_ns(pause_ns);
-            PyEval_RestoreThread(yts);
-            return;
-        }
-    }
-}
-
-/* Hub thread main loop.  Phase C v2: runs the same snap/load dance
- * as runloom_sched_drain.  Each iteration:
- *   1. Pop a g (local FIFO of yielded gs first, then own deque of
- *      fresh gs, then steal from a neighbour's deque).
- *   2. Save hub's tstate into hub_snap (local var on hub_main's stack).
- *   3. If g has a saved snap, load it; else NULL datastack so g's
- *      first run gets its own root chunk (Phase B initial-run dance).
- *   4. Resume g.  g either runs to completion or yields.
- *   5. Restore hub_snap.  If g is still alive AND did not self-queue
- *      (raw runloom_coro_yield, no scheduler call), push it back to the
- *      local FIFO so it keeps making progress.
+/* Hub thread main loop.  Each iteration:
+ *   1. Pop a g (local FIFO of yielded gs first, then own deque of fresh gs,
+ *      then the global run-queue of woken gs, then steal from a neighbour's
+ *      deque).
+ *   2. Detach the hub's tstate, attach the g's OWN tstate, resume it, swap
+ *      back.  Every g owns a per-g PyThreadState, so it may resume on any hub.
+ *   3. Settle the g's wake state: done, parked off-queue (a later wake routes
+ *      it through the global run-queue), or yielded (stays on this hub's FIFO).
  *
  * Idle policy: when all hubs report pending=0 we still poll (the
  * caller may runloom_mn_fiber more work at any time).  Stop signal comes
@@ -374,7 +287,6 @@ static void runloom_mn_park_exit(runloom_hub_t *h)
 static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
 {
     runloom_hub_t *h = (runloom_hub_t *)arg;
-    runloom_pystate_snap_t hub_snap;
     PyThreadState *hts;
 
     /* Create this hub's PyThreadState ON THIS THREAD.  PyThreadState_New binds
@@ -408,35 +320,6 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
      * sigaltstack).  Must run BEFORE the first runloom_coro_resume. */
     runloom_coro_thread_init();
     runloom_tls_hub = h;
-
-#if defined(__linux__)
-    /* Lever #2: pin each hub thread to a fixed CPU core (RUNLOOM_HUB_AFFINITY=1,
-     * opt-in, default off).  Keeps the hub's working set -- and a pinned
-     * connection's data -- hot in one core's cache instead of letting the OS
-     * migrate the thread.  hub id -> core (id % ncpu).  On loopback only the
-     * cache-locality half is measurable; the NIC-RX-steering half needs a real
-     * NIC.  Best-effort: a failed pin just leaves the thread unpinned. */
-    {
-        /* Atomic load+store: hub threads race to first-init this static; the
-         * plain read/write was a (benign, same-value) TSan data race. */
-        static int aff_mode = -1;
-        int am = __atomic_load_n(&aff_mode, __ATOMIC_RELAXED);
-        if (am < 0) {
-            const char *e = getenv("STACKWEAVE_HUB_AFFINITY");
-            am = (e != NULL && *e != '0') ? 1 : 0;
-            __atomic_store_n(&aff_mode, am, __ATOMIC_RELAXED);
-        }
-        if (am) {
-            long ncpu = sysconf(_SC_NPROCESSORS_ONLN);
-            if (ncpu > 0) {
-                cpu_set_t set;
-                CPU_ZERO(&set);
-                CPU_SET((int)((long)h->id % ncpu), &set);
-                (void)pthread_setaffinity_np(pthread_self(), sizeof(set), &set);
-            }
-        }
-    }
-#endif
 
     /* Create the hub's per-thread io_uring ring.  Try
      * SINGLE_ISSUER (Linux 5.18+) + DEFER_TASKRUN (6.1+); the create
@@ -498,20 +381,13 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
      * explicit and unconditional so it no longer rides on io_uring. */
     (void)runloom_netpoll_hub_epoll_fd();
 
-    /* hub_snap is loop-invariant for the same reason sched_snap is in
-     * runloom_sched_drain: hub_main runs no Python work between
-     * iterations except via runloom_g_decref's tp_dealloc, where we
-     * explicitly restore + re-snap.  Hoisting the per-iter snap+load
-     * out of the loop is ~10 ns/yield on the M:N hot path. */
-    runloom_pystate_snap(&hub_snap);
-
     /* sched_yield fairness (see the pick block below).  ready_streak counts
      * consecutive ready-ring services; after starve_bound of them we force one
      * deque turn so a busy sched_yield loop can't starve never-run fibers.
      * Hub-local (this thread only).  starve_bound resolved once from env;
      * default 64, 0 disables (legacy ready-before-deque).  First touch across
      * hubs is a relaxed-atomic lazy-static loaded into the loop-invariant local
-     * `sbound` (all store the same value) -- same pattern as sweep_on below.
+     * `sbound` (all store the same value) -- same pattern as sweep_cfg below.
      * (Previously the read was plain while the store was atomic: a technical
      * C11 data race TSan flags, behaviourally benign but now removed.) */
     unsigned ready_streak = 0;
@@ -532,6 +408,7 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
     /* Per-hub kqueue load-balancing: cadence counter for the periodic
      * non-blocking self-pump below (see the loop top). */
     unsigned int self_pump_ctr = 0;
+    unsigned int forced_turns = 0;     /* alternates the forced turn's source (per-g mode) */
     (void)self_pump_ctr;
     /* Consecutive idle-pump iterations with no resumed g; drives the adaptive
      * idle-pump backoff (reset to 0 at the resume site below).  Thread-local to
@@ -597,19 +474,25 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
 #ifdef RUNLOOM_DBG_BADCORO
         int gsrc = 0, gvic = -1;   /* source-hunt: which queue delivered g */
 #endif
-#if defined(RUNLOOM_HAVE_KQUEUE)
-        /* PERIODIC NON-BLOCKING SELF-PUMP (per-hub kqueue load balancing).
-         * Each hub polls its OWN kqueue; the blocking pump below only runs when
-         * this hub goes idle.  Under load a hub stays busy running ready gs and
-         * never idles, so its OWN parkers' readiness (events sitting in its
-         * kqueue) would starve -- idle hubs can't help, the kqueue is private.
-         * Drain it with a non-blocking kevent(timeout=0) every N loop turns so a
-         * busy hub keeps its parkers flowing; woken gs land in sub_head/ready and
-         * are picked up immediately below.  This is the netpoll cadence Go's
-         * scheduler runs in findrunnable.  Cheap (one kevent per N turns) and
-         * compiled only on the per-hub-kqueue backend. */
-        if ((++self_pump_ctr & 0x3fu) == 0) (void)runloom_netpoll_pump(0);
-#endif
+        /* PERIODIC NON-BLOCKING SELF-PUMP.  The blocking pump below only runs
+         * when this hub goes idle.  Under load a hub stays busy running ready gs
+         * and never idles, so its parkers' readiness would starve: on the
+         * per-hub-kqueue backend because the kqueue is private and idle hubs
+         * cannot help, and on every backend when a fiber loops on sched_yield --
+         * the ring never drains, the hub never idles, and a parker waiting on
+         * this hub hangs (tests/test_iouring_cancel_close.py at H=1, and at H=2
+         * once the global run-queue placed the yield
+         * loop on the parker's hub).  Drain non-blockingly every N loop turns so
+         * a busy hub keeps its parkers flowing; woken gs land in sub_head/ready
+         * and are picked up immediately below.  This is the netpoll cadence
+         * Go's scheduler runs in findrunnable.  Cheap: one poll per N turns,
+         * and only while something is parked or in flight. */
+        if ((++self_pump_ctr & 0x3fu) == 0 &&
+            (runloom_netpoll_parked_count() > 0 || runloom_iouring_inflight() > 0)) {
+            (void)runloom_netpoll_pump(0);
+            if (h->iouring_ring != NULL)
+                runloom_iouring_ring_get_events(h->iouring_ring);
+        }
         /* Drain the submission list into the deque first.  Pushing to
          * the deque is owner-only, so we (the hub) move fresh gs from
          * external producers onto our deque before anyone else looks. */
@@ -669,25 +552,17 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                 last_wseq  = sub->next_wseq;
 #endif
                 RUNLOOM_NEXT_SET(sub, NULL, 2);   /* drain clear */
-                /* Route by state: fresh (no snap) -> Chase-Lev deque
-                 * (stealable by other hubs); woken (snap.valid) ->
-                 * local FIFO (hub-pinned, the netpoll-wake path).
+                /* Submitted gs go to the Chase-Lev deque, stealable by
+                 * other hubs.  (Woken gs never come through here: they
+                 * ride the global run-queue.)
                  *
                  * Note: in_sub_queue stays 1 throughout drain ->
                  * ready/deque -> pop -> resume.  hub_main clears it
                  * just before the actual coro resume, gating duplicate
                  * wake_gs against ANY queued state, not just the
                  * sub list. */
-                if (sub->snap.valid) {
-                    /* MNWAKE-TRACE: a woken (snap.valid) g drained from sub_head to
-                     * the local ready FIFO (model HubDrain).  Emitted ONLY here,
-                     * inside the non-empty drain branch -- the steady empty-poll
-                     * spin (sub_head==NULL) never reaches this, so the hot M:N path
-                     * is unperturbed.  One event per woken g; coalesced by the driver. */
-                    runloom_mnwake_trace_event("HUB_DRAIN", (unsigned long)(uintptr_t)sub, 0);
-                    runloom_sched_ready_push(&h->sched, sub);
-                } else if (__atomic_load_n(&sub->pin_hub1,
-                                          __ATOMIC_ACQUIRE) == h->id + 1) {
+                if (__atomic_load_n(&sub->pin_hub1,
+                                      __ATOMIC_ACQUIRE) == h->id + 1) {
                     /* Pinned to THIS hub: local ready ring, never the
                      * stealable deque. */
                     runloom_sched_ready_push(&h->sched, sub);
@@ -700,9 +575,7 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                      * rather than stealable, but are NEVER dropped: the
                      * previous code ignored the push return and silently
                      * dropped the g, orphaning one whose pending-inc was
-                     * already counted -> mn_run hung forever.  The resume
-                     * prologue handles a snap-invalid g from either queue
-                     * via the first-run install path. */
+                     * already counted -> mn_run hung forever. */
                     runloom_sched_ready_push(&h->sched, sub);
                 }
 #ifdef RUNLOOM_DBG_BADCORO
@@ -752,21 +625,15 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                                                      __ATOMIC_ACQUIRE))
                         continue;
                 }
-                if (runloom_use_global_runq()) {
-                    /* The timer is a wake, and under a global-runq mode the
-                     * sleep release left this g in wake_state PARKED.  Claim it
-                     * back to RUNNING through the state machine (it has no other
-                     * waker, so the CAS normally wins) and resume it hub-pinned
-                     * on the local FIFO.  If the CAS loses, a concurrent waker
-                     * (a g sleeping AND wakeable, e.g. a select-with-timeout)
-                     * already drove PARKED->QUEUED and enqueued it on the global
-                     * runq -- do NOT also push it here, or it would be scheduled
-                     * twice.  If introspection holds it SWEEPING (a stack dump
-                     * or an idle-stack madvise), hand the wake to the sweeper
-                     * exactly as wake_g does: SWEEPING -> SWEEPING_WOKEN, and
-                     * runloom_mn_sweep_claim_release enqueues it.  Dropping the
-                     * pop there lost the sleeper for good -- off the heap, on
-                     * no queue (fibers(stacks=True) under load lost 90 of 128). */
+                /* The timer is a wake, and the sleep release left this g in
+                 * wake_state PARKED.  Claim it back to RUNNING through the
+                 * state machine (it has no other waker, so the CAS normally
+                 * wins) and resume it hub-pinned on the local FIFO.  If the
+                 * CAS loses, a concurrent waker (a g sleeping AND wakeable,
+                 * e.g. a select-with-timeout) already drove PARKED->QUEUED and
+                 * enqueued it on the global runq -- do NOT also push it here,
+                 * or it would be scheduled twice. */
+                {
                     int pexp = RUNLOOM_WS_PARKED;
                     for (;;) {
                         if (pexp == RUNLOOM_WS_PARKED) {
@@ -792,8 +659,6 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                             break;   /* QUEUED / RUNNING* / SWEEPING_WOKEN: a waker owns it */
                         }
                     }
-                } else {
-                    runloom_sched_ready_push(&h->sched, woke);
                 }
             }
         }
@@ -825,10 +690,40 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
         g = NULL;
         if (sbound && ready_streak >= (unsigned)sbound) {
             ready_streak = 0;
-            g = (runloom_g_t *)runloom_cldeque_pop(&h->deque);  /* forced fresh turn */
+            /* A woken g lands on the GLOBAL run-queue, which the normal order
+             * below only pulls once ready ring AND deque are empty -- a
+             * sched_yield loop keeps the ring non-empty forever, so every woken
+             * fiber starved once spinners >= hubs.  The forced turn therefore
+             * alternates between that queue and a fresh deque g, so neither a
+             * woken fiber nor a never-run one can be starved by the other while
+             * the ring never drains. */
+            int runq_first = ((forced_turns++ & 1u) == 0);
+            if (runq_first) {
+                g = runloom_mn_global_runq_pull(h->id);
+                if (g != NULL) {
+                    RUNLOOM_COVER_HIT(RUNLOOM_COV_GLOBAL_RUNQ_PULL);
+                    from_runq = 1;
 #ifdef RUNLOOM_DBG_BADCORO
-            if (g) gsrc = 1;   /* sbound forced own-deque pop */
+                    gsrc = 4;      /* sbound forced global-runq pull */
 #endif
+                }
+            }
+            if (g == NULL) {
+                g = (runloom_g_t *)runloom_cldeque_pop(&h->deque);  /* forced fresh turn */
+#ifdef RUNLOOM_DBG_BADCORO
+                if (g) gsrc = 1;   /* sbound forced own-deque pop */
+#endif
+            }
+            if (g == NULL && !runq_first) {
+                g = runloom_mn_global_runq_pull(h->id);
+                if (g != NULL) {
+                    RUNLOOM_COVER_HIT(RUNLOOM_COV_GLOBAL_RUNQ_PULL);
+                    from_runq = 1;
+#ifdef RUNLOOM_DBG_BADCORO
+                    gsrc = 4;
+#endif
+                }
+            }
         }
         if (g == NULL) {
             g = runloom_sched_ready_pop(&h->sched);     /* local yielded/woken */
@@ -862,7 +757,7 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
             }
         }
         if (g == NULL) {
-          /* EXCLUSION 2 of 3 (see the RUNLOOM_OFFLOAD_HUBS block in mn_sched.c).
+          /* EXCLUSION 2 of 3 (see the offload-hubs block in mn_sched.c).
            * Both directions matter and they fail differently:
            *   - an OFFLOAD hub must never steal: a stolen general g would sit
            *     on a hub that is about to block in a syscall, i.e. exactly the
@@ -1215,7 +1110,7 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                          * one hand-off, never a hang. */
                         long hub_pending = __atomic_load_n(&h->pending,
                                                            __ATOMIC_RELAXED);
-                        if (hub_pending > 0 && runloom_hub_idle_wake_enabled()) {
+                        if (hub_pending > 0) {
                             int waited = 0;
                             RUNLOOM_RLOCK(&h->idle_lock, RUNLOOM_RANK_HUB_IDLE);
                             /* Announce BEFORE the final sub_head re-check so a
@@ -1266,16 +1161,11 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                              * ~2/3 with the re-attach inside the lock). */
                             if (waited) PyEval_RestoreThread(saved);
                         } else {
-                            /* Bare nanosleep: the idle condvar is disabled
-                             * (RUNLOOM_HUB_IDLE_WAKE=0), so NOTHING -- not a
-                             * cross-hub submit, not the wakep, not a foreign wake
-                             * -- can interrupt this sleep.  It must therefore
-                             * NEVER carry the idle backoff: cap it at the short
-                             * base so the hub re-polls within ~one base tick and a
-                             * submit/steal is seen promptly, never after the full
-                             * (uninterruptible) cap.  This is the ONE wait that the
-                             * wakep/eventfd signalling cannot make hang-safe, so it
-                             * stays tight regardless of the cap. */
+                            /* Nothing parked on this hub: a short bare nap.
+                             * Nothing can interrupt it, so it never carries the
+                             * idle backoff -- capped at the short base so the hub
+                             * re-polls within ~one base tick and a submit/steal
+                             * is seen promptly. */
                             long long nap_ns = (idle_ns > 500000LL)
                                                ? 500000LL : idle_ns;
                             saved = PyEval_SaveThread();
@@ -1311,441 +1201,208 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
          * backs off. */
         idle_streak = 0;
 
-        /* Phase B snap dance: load g's tstate slice; resume; if g
-         * completed, restore hub's tstate before any Python that
-         * might allocate frames.  hub_snap is hoisted out of the loop
-         * (see entry comment). */
+        /* Resume: swap the hub's tstate out, the g's own tstate in, resume,
+         * swap back.  The g's suspended eval frames reference g->tstate (not
+         * this hub's), so resuming on ANY hub is consistent -- which is exactly
+         * what makes a stolen woken g safe here. */
         {
             int self_queued;
-
-            if (runloom_get_per_g_tstate_mode()) {
-                /* ---- per-g-tstate path (RUNLOOM_PER_G_TSTATE) ----
-                 * Swap the hub's tstate out, the g's own tstate in, resume,
-                 * swap back.  The g's suspended eval frames reference
-                 * g->tstate (not this hub's), so resuming on ANY hub is
-                 * consistent -- which is exactly what makes a stolen woken g
-                 * safe here.  No snap dance (snap no-ops under this mode). */
-                PyThreadState *hub_ts;
-                int parked_offqueue;
-                /* CLAIM the g for this hub.  A from_runq g arrived via an entry
-                 * that holds a queue ref and put it in wake_state QUEUED; CAS
-                 * QUEUED->RUNNING to take ownership.  This CAS CANNOT lose: the
-                 * entry we pulled is the queue's sole reference to this g
-                 * (at-most-one-entry) and only its holder runs this CAS -- so
-                 * there is no contention and no re-push (the old design's
-                 * livelock).  Gs from the deque / local FIFO / a neighbour steal
-                 * are already RUNNING by the state-machine invariant (fresh gs
-                 * spawn RUNNING; a yield leaves the g RUNNING), so they need no
-                 * claim. */
-                if (from_runq) {
-                    int qexp = RUNLOOM_WS_QUEUED;
-                    if (!__atomic_compare_exchange_n(&g->wake_state, &qexp,
-                                                     RUNLOOM_WS_RUNNING, 0,
-                                                     __ATOMIC_ACQ_REL,
-                                                     __ATOMIC_ACQUIRE)) {
-                        /* Not QUEUED: a queued g is parked-waiting and never
-                         * done, so this should not happen.  Stay leak-safe by
-                         * dropping the queue ref and skipping. */
-                        runloom_g_decref(g);   /* queue ref */
-                        continue;
-                    }
-                    RUNLOOM_WS_NOTE(RUNLOOM_WS_QUEUED, RUNLOOM_WS_RUNNING);
-                }
-                __atomic_store_n(&g->in_sub_queue, 0, __ATOMIC_RELEASE);
-                if (g->coro == NULL || g->tstate == NULL ||
-                    __atomic_load_n(&g->done, __ATOMIC_ACQUIRE)) {
-                    /* Dead under our claim (shouldn't happen: a QUEUED g is
-                     * parked, not done; a from_runq=0 g is freshly owned).  Stay
-                     * leak-safe: a claimed runq g goes back to PARKED and drops
-                     * its queue ref. */
-                    if (from_runq) {
-                        RUNLOOM_WS_NOTE(RUNLOOM_WS_RUNNING, RUNLOOM_WS_PARKED);
-                        __atomic_store_n(&g->wake_state, RUNLOOM_WS_PARKED,
-                                         __ATOMIC_RELEASE);
-                        runloom_g_decref(g);   /* queue ref */
-                    }
+            PyThreadState *hub_ts;
+            int parked_offqueue;
+            /* CLAIM the g for this hub.  A from_runq g arrived via an entry
+             * that holds a queue ref and put it in wake_state QUEUED; CAS
+             * QUEUED->RUNNING to take ownership.  This CAS CANNOT lose: the
+             * entry we pulled is the queue's sole reference to this g
+             * (at-most-one-entry) and only its holder runs this CAS -- so
+             * there is no contention and no re-push (the old design's
+             * livelock).  Gs from the deque / local FIFO / a neighbour steal
+             * are already RUNNING by the state-machine invariant (fresh gs
+             * spawn RUNNING; a yield leaves the g RUNNING), so they need no
+             * claim. */
+            if (from_runq) {
+                int qexp = RUNLOOM_WS_QUEUED;
+                if (!__atomic_compare_exchange_n(&g->wake_state, &qexp,
+                                                 RUNLOOM_WS_RUNNING, 0,
+                                                 __ATOMIC_ACQ_REL,
+                                                 __ATOMIC_ACQUIRE)) {
+                    /* Not QUEUED: a queued g is parked-waiting and never
+                     * done, so this should not happen.  Stay leak-safe by
+                     * dropping the queue ref and skipping. */
+                    runloom_g_decref(g);   /* queue ref */
                     continue;
                 }
-                hub_ts = PyEval_SaveThread();        /* detach hub tstate */
-                /* Borrow the running hub's allocator BEFORE attaching g's tstate.
-                 * The per-g tstate then allocates on whichever hub runs it, so its
-                 * OWN heap stays empty and never migrates OS threads (removing the
-                 * _mi_page_retire teardown corruption).  Setting it BEFORE
-                 * RestoreThread is load-bearing on a CROSS-HUB resume: g->tstate's
-                 * _alloc_home still points at its PREVIOUS hub here, so any
-                 * allocation during/after attach would otherwise hit the prior
-                 * hub's heap on this hub's thread (mimalloc heap->thread_id != tid
-                 * abort).  No-op without the Py_TSTATE_ALLOC_HOME CPython patch
-                 * (patches/cpython31Xt-tstate-alloc-home.patch). */
-                runloom_iframe_borrow_alloc_home(g->tstate, hub_ts);
-                /* Perturbation seam (RUNLOOM_DELAY): widen the cross-hub
-                 * tstate-adopt window so a concurrent actor races the attach --
-                 * the migration-adopt reorder item 3 / the handoff path could
-                 * introduce.  No-op unless RUNLOOM_DELAY names this site. */
-                runloom_delay_inject(RUNLOOM_DLY_HANDOFF_ADOPT);
-                PyEval_RestoreThread(g->tstate);      /* attach g's own tstate */
-                /* Drops of this hub's objects now land on the FIBER's tstate,
-                 * whose eval loop merges them as it runs (runloom_iframe_brc_adopt). */
-                runloom_iframe_brc_adopt(g->tstate, hub_ts);
-                /* Deep-surface migration oracle (RUNLOOM_DBG_MIGRATE; zero-cost
-                 * otherwise).  The per-g tstate's mimalloc heap / brc / QSBR are
-                 * bound to the OS thread that first used them; running it on a
-                 * DIFFERENT hub thread without the abandon/adopt re-bind handshake
-                 * is the precise, early signature of the deferred _mi_page_retire
-                 * corruption that RunloomTstateMigration.tla proves the handshake
-                 * prevents.  Warn ONCE (don't abort -- this is a gated experimental
-                 * mode) with both thread ids so the missing re-bind is pinpointed
-                 * instead of surfacing as a random teardown SEGV.  A correct
-                 * handshake would update tstate_owner_tid on adopt, keeping it quiet. */
-                {
-                    /* Atomic lazy init: every hub thread reaches this on its
-                     * first per-g-tstate resume, so a plain `dbg < 0` read races
-                     * the first-init store across hubs.  Benign (same value) but
-                     * a real TSan data race -- caught by the pydebug+TSan build
-                     * once migration made this path reachable.  Same fix as the
-                     * ctx_copy static in runloom_g_entry. */
-                    static int dbg = -1;
-                    int dbgv = __atomic_load_n(&dbg, __ATOMIC_RELAXED);
-                    if (dbgv < 0) {
-                        const char *e = getenv("STACKWEAVE_DBG_MIGRATE");
-                        dbgv = (e != NULL && e[0] != '0' && e[0] != '\0') ? 1 : 0;
-                        __atomic_store_n(&dbg, dbgv, __ATOMIC_RELAXED);
-                    }
-                    if (dbgv) {
-                        unsigned long tid = (unsigned long)PyThread_get_thread_ident();
-                        if (g->tstate_owner_tid == 0) {
-                            g->tstate_owner_tid = tid;        /* first use: binds here */
-                        } else if (g->tstate_owner_tid != tid) {
-                            /* Same story as `dbg` above: several hubs can reach
-                             * this concurrently, so claim the single warning
-                             * with an exchange rather than a racing test-and-set
-                             * (which both races and can warn more than once). */
-                            static int warned = 0;
-                            if (__atomic_exchange_n(&warned, 1, __ATOMIC_RELAXED) == 0) {
-                                fprintf(stderr,
-                                    "[STACKWEAVE_DBG_MIGRATE] per-g PyThreadState used on "
-                                    "thread %lu but bound to %lu WITHOUT a mimalloc "
-                                    "abandon/adopt handshake -> _mi_page_retire "
-                                    "corruption is imminent (g id=%lld). See "
-                                    "src/patches/README.md.\n",
-                                    tid, g->tstate_owner_tid, (long long)g->id);
-                                fflush(stderr);
-                            }
-                            g->tstate_owner_tid = tid;        /* track the move */
-                        }
-                    }
-                }
-                h->sched.current = g;
-                runloom_tls_current_g = g;
-                runloom_tls_self_queued = 0;
-                runloom_tls_parked_offqueue = 0;
-                runloom_g_state_set(g, RUNLOOM_GST_RUNNING);   /* observational: now on-CPU */
-                runloom_hub_resume_begin(h, g);
-                runloom_coro_resume(g->coro);
-                runloom_hub_resume_end(h);
-                self_queued = runloom_tls_self_queued;
-                parked_offqueue = runloom_tls_parked_offqueue;
-                runloom_tls_self_queued = 0;
-                runloom_tls_parked_offqueue = 0;
-                runloom_tls_current_g = NULL;
-                h->sched.current = NULL;
-                /* Hub tstate back to the head of its bucket; drain what was
-                 * queued to the fiber while it ran.  Before the detach: the
-                 * bucket mutex and the merge need an attached tstate, and the
-                 * fiber's is the owner of what it holds. */
-                runloom_iframe_brc_release(g->tstate, hub_ts);
-                PyEval_SaveThread();                  /* detach g's tstate */
-                PyEval_RestoreThread(hub_ts);          /* reattach hub tstate */
-                /* Free what other hubs dropped on us while the fiber ran: the
-                 * brc merge queue is keyed to THIS hub's thread state, which
-                 * never runs bytecode (see runloom_iframe_service_merge_queue). */
-                runloom_iframe_service_merge_queue(hub_ts);
-                if (runloom_coro_done(g->coro)) {
-                    /* Done: the g did not park this resume (a resume ends in a
-                     * park OR completion, never both), so no parker is live and
-                     * wake_state is still RUNNING with no other entry.  Force-
-                     * unlink any stale parker, then drop both refs -- the slab
-                     * re-zeroes wake_state when it reallocs the g. */
-                    runloom_advice_record_g(g);   /* fold stack HWM (profiling) */
-                    runloom_g_state_set(g, RUNLOOM_GST_DONE);
-                    runloom_netpoll_force_unlink_g_parker(g);
-                    runloom_g_decref(g);                  /* scheduler ref */
-                    if (from_runq) runloom_g_decref(g);   /* queue ref */
-                    /* pending_complete LAST: the final decref may run a fiber_n
-                     * batch teardown (arena cursor reset).  mn_run returns when
-                     * global pending hits 0, so only mark complete AFTER teardown
-                     * -- else the next fiber_n's arena alloc races a not-yet-reset
-                     * cursor and falls back to the slow per-g path. */
-                    runloom_mn_pending_complete(h);
-                } else if (parked_offqueue) {
-                    /* Parked off-queue (netpoll/chan/sleep): a wake_g will route
-                     * the g back here.  End ownership now -- AFTER the tstate
-                     * detach above, which is what closes the commit->detach
-                     * window: while RUNNING, a wake only set RUNNING_WOKEN and
-                     * never enqueued, so no other hub could attach this live
-                     * tstate.  CAS RUNNING->PARKED so a later wake enqueues it.
-                     * If a wake landed during the window (RUNNING_WOKEN), enqueue
-                     * exactly once now instead of parking -- the wake is not
-                     * lost and stays a single entry. */
-                    int rexp = RUNLOOM_WS_RUNNING;
-                    if (__atomic_compare_exchange_n(&g->wake_state, &rexp,
-                                                    RUNLOOM_WS_PARKED, 0,
-                                                    __ATOMIC_ACQ_REL,
-                                                    __ATOMIC_ACQUIRE)) {
-                        RUNLOOM_WS_NOTE(RUNLOOM_WS_RUNNING, RUNLOOM_WS_PARKED);
-                        if (from_runq) runloom_g_decref(g);   /* old queue ref */
-                    } else {
-                        /* rexp == RUNNING_WOKEN.  Re-arm a single entry: incref
-                         * the new one, drop the old (net zero for from_runq;
-                         * first entry for from_runq=0). */
-                        RUNLOOM_WS_NOTE(RUNLOOM_WS_RUNNING_WOKEN, RUNLOOM_WS_QUEUED);
-                        __atomic_store_n(&g->wake_state, RUNLOOM_WS_QUEUED,
-                                         __ATOMIC_RELEASE);
-                        runloom_g_incref(g);                  /* new queue ref */
-                        runloom_mn_woken_enqueue(g);          /* own deque, else global runq */
-                        if (from_runq) runloom_g_decref(g);   /* old queue ref */
-                    }
-                } else {
-                    /* Cooperative yield_current (already on the local FIFO) or a
-                     * raw runloom_coro_yield: the g stays runnable and hub-pinned,
-                     * still owned by this hub, so it ends at RUNNING.  A store is
-                     * safe -- a yielding g holds no live parker, so no wake_g can
-                     * fire to race it.  yield_current already pushed itself to
-                     * the FIFO; a raw yield (self_queued==0) did not, so push it
-                     * here. */
-                    RUNLOOM_WS_NOTE(RUNLOOM_WS_RUNNING, RUNLOOM_WS_RUNNING);
-                    __atomic_store_n(&g->wake_state, RUNLOOM_WS_RUNNING,
+                RUNLOOM_WS_NOTE(RUNLOOM_WS_QUEUED, RUNLOOM_WS_RUNNING);
+            }
+            __atomic_store_n(&g->in_sub_queue, 0, __ATOMIC_RELEASE);
+            if (g->coro == NULL || g->tstate == NULL ||
+                __atomic_load_n(&g->done, __ATOMIC_ACQUIRE)) {
+                /* Dead under our claim (shouldn't happen: a QUEUED g is
+                 * parked, not done; a from_runq=0 g is freshly owned).  Stay
+                 * leak-safe: a claimed runq g goes back to PARKED and drops
+                 * its queue ref. */
+                if (from_runq) {
+                    RUNLOOM_WS_NOTE(RUNLOOM_WS_RUNNING, RUNLOOM_WS_PARKED);
+                    __atomic_store_n(&g->wake_state, RUNLOOM_WS_PARKED,
                                      __ATOMIC_RELEASE);
-                    if (from_runq) runloom_g_decref(g);       /* old queue ref */
-                    if (!self_queued) runloom_sched_ready_push(&h->sched, g);
+                    runloom_g_decref(g);   /* queue ref */
                 }
                 continue;
             }
-
-            /* Default (per-hub-tstate) scheduler resume + release.  The steal-
-             * woken snap-migration variant that used to share this branch (a
-             * QUEUED->RUNNING claim here, a RUNNING_WOKEN release below) has been
-             * removed: it was reachable only when runloom_use_global_runq() was
-             * true, but that returns per-g-tstate mode, which takes the branch
-             * ABOVE -- so it was dead in every mode (per-g uses its own tstate,
-             * not the snap).  The remaining `if (from_runq)` guards below are
-             * likewise inert here (from_runq is set only under global-runq mode);
-             * they are LEFT in place -- never firing -- rather than surgically
-             * excised from this CBMC-verified refcount-lifetime path
-             * (tools/verify/cbmc/sched_qref_cbmc.c). */
-
-            if (g->snap.valid) {
-                runloom_pystate_load(&g->snap);
-            } else {
-                runloom_first_run_install_datastack();
-                {
-                    PyThreadState *ts = PyThreadState_GET();
-                    ts->current_frame = NULL;
+            hub_ts = PyEval_SaveThread();        /* detach hub tstate */
+            /* Borrow the running hub's allocator BEFORE attaching g's tstate.
+             * The per-g tstate then allocates on whichever hub runs it, so its
+             * OWN heap stays empty and never migrates OS threads (removing the
+             * _mi_page_retire teardown corruption).  Setting it BEFORE
+             * RestoreThread is load-bearing on a CROSS-HUB resume: g->tstate's
+             * _alloc_home still points at its PREVIOUS hub here, so any
+             * allocation during/after attach would otherwise hit the prior
+             * hub's heap on this hub's thread (mimalloc heap->thread_id != tid
+             * abort).  No-op without the Py_TSTATE_ALLOC_HOME CPython patch
+             * (patches/cpython31Xt-tstate-alloc-home.patch). */
+            runloom_iframe_borrow_alloc_home(g->tstate, hub_ts);
+            /* Perturbation seam (RUNLOOM_DELAY): widen the cross-hub
+             * tstate-adopt window so a concurrent actor races the attach --
+             * the migration-adopt reorder item 3 / the handoff path could
+             * introduce.  No-op unless RUNLOOM_DELAY names this site. */
+            runloom_delay_inject(RUNLOOM_DLY_HANDOFF_ADOPT);
+            PyEval_RestoreThread(g->tstate);      /* attach g's own tstate */
+            /* Drops of this hub's objects now land on the FIBER's tstate,
+             * whose eval loop merges them as it runs (runloom_iframe_brc_adopt). */
+            runloom_iframe_brc_adopt(g->tstate, hub_ts);
+            /* Deep-surface migration oracle (RUNLOOM_DBG_MIGRATE; zero-cost
+             * otherwise).  The per-g tstate's mimalloc heap / brc / QSBR are
+             * bound to the OS thread that first used them; running it on a
+             * DIFFERENT hub thread without the abandon/adopt re-bind handshake
+             * is the precise, early signature of the deferred _mi_page_retire
+             * corruption that RunloomTstateMigration.tla proves the handshake
+             * prevents.  Warn ONCE (don't abort -- this is a gated experimental
+             * mode) with both thread ids so the missing re-bind is pinpointed
+             * instead of surfacing as a random teardown SEGV.  A correct
+             * handshake would update tstate_owner_tid on adopt, keeping it quiet. */
+            {
+                /* Atomic lazy init: every hub thread reaches this on its
+                 * first per-g-tstate resume, so a plain `dbg < 0` read races
+                 * the first-init store across hubs.  Benign (same value) but
+                 * a real TSan data race -- caught by the pydebug+TSan build
+                 * once migration made this path reachable.  Same fix as the
+                 * ctx_copy static in runloom_g_entry. */
+                static int dbg = -1;
+                int dbgv = __atomic_load_n(&dbg, __ATOMIC_RELAXED);
+                if (dbgv < 0) {
+                    const char *e = getenv("STACKWEAVE_DBG_MIGRATE");
+                    dbgv = (e != NULL && e[0] != '0' && e[0] != '\0') ? 1 : 0;
+                    __atomic_store_n(&dbg, dbgv, __ATOMIC_RELAXED);
+                }
+                if (dbgv) {
+                    unsigned long tid = (unsigned long)PyThread_get_thread_ident();
+                    if (g->tstate_owner_tid == 0) {
+                        g->tstate_owner_tid = tid;        /* first use: binds here */
+                    } else if (g->tstate_owner_tid != tid) {
+                        /* Same story as `dbg` above: several hubs can reach
+                         * this concurrently, so claim the single warning
+                         * with an exchange rather than a racing test-and-set
+                         * (which both races and can warn more than once). */
+                        static int warned = 0;
+                        if (__atomic_exchange_n(&warned, 1, __ATOMIC_RELAXED) == 0) {
+                            fprintf(stderr,
+                                "[STACKWEAVE_DBG_MIGRATE] per-g PyThreadState used on "
+                                "thread %lu but bound to %lu WITHOUT a mimalloc "
+                                "abandon/adopt handshake -> _mi_page_retire "
+                                "corruption is imminent (g id=%lld). See "
+                                "src/patches/README.md.\n",
+                                tid, g->tstate_owner_tid, (long long)g->id);
+                            fflush(stderr);
+                        }
+                        g->tstate_owner_tid = tid;        /* track the move */
+                    }
                 }
             }
-
             h->sched.current = g;
             runloom_tls_current_g = g;
             runloom_tls_self_queued = 0;
-            /* Clear queued flag right before resume so a wake_g that
-             * fires during this g's execution (e.g., a netpoll pump
-             * processing an event for the parker g is about to link
-             * inside wait_fd) can enqueue g via submit.  The 1->0 exchange
-             * also tells us whether THIS entry held the default-path queue
-             * ref (taken in hub_submit) so we can drop it exactly once when
-             * the entry is fully consumed below. */
-            int had_qref = (__atomic_exchange_n(&g->in_sub_queue, 0,
-                                                __ATOMIC_ACQ_REL) == 1);
-            /* Defensive: pop a stale queue entry?  Two failure modes
-             * for the queue under M:N + free-threaded:
-             *
-             *   coro == NULL: g was already decref'd to 0; runloom_g_decref
-             *      already ran the pending_global decrement; just skip.
-             *
-             *   done == 1, coro != NULL: g_entry set done before the
-             *      asm trampoline returned to its original caller hub,
-             *      but THIS hub popped a duplicate queue entry for
-             *      the same g (stale wake_g raced with completion).
-             *      The original hub still owes the decrement -- it
-             *      will run completion when its coro_resume returns.
-             *      We must NOT decrement here (would double-count) and
-             *      must NOT re-resume (would re-run the asm trampoline
-             *      against a coro whose user frames already unwound).
-             *      Skip without decrementing.
-             *
-             * In both cases skipping does not lose work: the original
-             * processing path owns the decrement. */
-            RUNLOOM_G_ASSERT_NOT(g, RUNLOOM_GST_BIT(RUNLOOM_GST_FREED));
-            RUNLOOM_EVT(RUNLOOM_EVT_G_POP, g, h, 0);
-            /* Deferred first-run install (default scheduler): the coro + guarded
-             * stack are created HERE, on the hub that RUNS the fiber, not at spawn
-             * on the (monopolized) producer hub -- so a tight spawn loop doesn't
-             * cold-mmap a stack per spawn (the front-load wedge).  Gated on a fresh
-             * VALID g (coro deferred, not done, owner + entry set) so a dead/stale
-             * entry still falls through to the skip below.  OOM here: complete the
-             * fiber (it never ran -> no datastack/parker/HWM to drain) so mn_run's
-             * pending count still reaches 0 instead of hanging. */
-            if (g->coro == NULL && g->owner != NULL
-                && (g->callable != NULL || g->c_entry != NULL)
-                && !__atomic_load_n(&g->done, __ATOMIC_ACQUIRE)) {
-                g->coro = runloom_coro_new(g->req_stack_size, runloom_g_entry, g);
-                if (g->coro == NULL) {
-                    if (g->callable != NULL) {     /* surface OOM to a Python fiber */
-                        Py_INCREF(PyExc_MemoryError);
-                        g->error = PyExc_MemoryError;
-                    }
-                    runloom_g_state_set(g, RUNLOOM_GST_DONE);
-                    __atomic_store_n(&g->done, 1, __ATOMIC_RELEASE);
-                    h->sched.current = NULL;
-                    runloom_tls_current_g = NULL;
-                    runloom_g_decref(g);                  /* scheduler ref */
-                    if (from_runq) runloom_g_decref(g);   /* queue ref */
-                    if (had_qref) runloom_g_decref(g);    /* queue ref */
-                    runloom_mn_pending_complete(h);
-                    continue;
-                }
-            }
-            if (g->coro == NULL ||
-                __atomic_load_n(&g->done, __ATOMIC_ACQUIRE)) {
-                h->sched.current = NULL;
-                runloom_tls_current_g = NULL;
-                if (from_runq) runloom_g_decref(g);   /* global-runq queue ref */
-                if (had_qref) runloom_g_decref(g);    /* default queue ref */
-                continue;
-            }
-            {
-            /* Resume the value we validate (one load of g->coro, never a reload
-             * at the call site).  A validly-spawned, validly-queued g ALWAYS has
-             * owner set + an entry fn (callable or c_entry) + a 16-aligned
-             * canonical coro.
-             *
-             * DEFENSE-IN-DEPTH (proven non-load-bearing): the arm64 crash this
-             * once caught -- a queue entry pointing at a FREED-then-reused g
-             * struct (owner=NULL / garbage coro -> SIGSEGV in coro_resume) -- is
-             * now eliminated at the source.  The crasher was a stale wake_g (the
-             * netpoll dup-wake) reaching hub_submit with a pointer to an already-
-             * freed g whose struct had been returned to the OS and reused by a
-             * non-runloom malloc (the [BADG] dumps showed garbage magic, not the
-             * live/dead runloom canaries).  Two fixes close it: (1) hub_submit takes
-             * the queue ref via runloom_g_try_incref BEFORE touching the g, so a
-             * stale wake on a still-VALID freed g (refcount 0) bails [CBMC:
-             * tools/verify/cbmc/sched_qref_cbmc.c]; (2) runloom_g_slab_free no longer
-             * frees g STRUCTS to the OS, so try_incref always reads a real
-             * refcount instead of garbage on reused memory.  Validated: 0/16
-             * connect-storm crashes on arm64 with this block compiled OUT, BADG
-             * dumps drop from 3/10 dangerous cases to 0/10.  The block is kept as
-             * a cheap (a few comparisons) crash-resistance assert for any future
-             * weak-memory regression; on the happy path it never fires.  Skipping
-             * a flagged entry is safe (drop the queue ref + continue, like the
-             * coro==NULL / done case above): a real g ran via its valid entry. */
-            runloom_coro_t *cp = g->coro;
-            if (g->owner == NULL ||
-                (g->callable == NULL && g->c_entry == NULL) ||
-                cp == NULL || ((uintptr_t)cp >> 47) != 0 ||
-                ((uintptr_t)cp & 0xf) != 0 || (uintptr_t)cp < 0x10000) {
-#ifdef RUNLOOM_DBG_BADCORO
-                /* Source-hunt dump (off by default).  Post-fix this should never
-                 * print; magic distinguishes live (600dc0de) / slab-freed (dead)
-                 * / OS-reused (other) memory, done splits completed (benign) from
-                 * the once-dangerous non-completed case. */
-                char dbuf[256];
-                int dm = snprintf(dbuf, sizeof dbuf,
-                    "[BADG] done=%d magic=%x owner=%p coro=%p call=%p centry=%p src=%d g=%p\n",
-                    (int)__atomic_load_n(&g->done, __ATOMIC_ACQUIRE), g->magic,
-                    (void *)g->owner, (void *)cp, (void *)g->callable,
-                    (void *)g->c_entry, gsrc, (void *)g);
-                if (dm > 0) (void)write(2, dbuf, (size_t)dm);
-#endif
-                h->sched.current = NULL;
-                runloom_tls_current_g = NULL;
-                if (from_runq) runloom_g_decref(g);   /* global-runq queue ref */
-                if (had_qref) runloom_g_decref(g);    /* default queue ref */
-                continue;
-            }
+            runloom_tls_parked_offqueue = 0;
             runloom_g_state_set(g, RUNLOOM_GST_RUNNING);   /* observational: now on-CPU */
-            /* MNWAKE-TRACE: the hub runs a ready g (model HubResume).  Emitted for
-             * EVERY resume; the driver keeps only those that close a foreign-wake
-             * episode (a preceding FOREIGN_WAKE for this g), dropping first-run /
-             * cooperative-yield resumes -- so a RESUME with no durable sub_head
-             * append is a resume-without-a-wake (the M:N lost-wakeup class). */
-            runloom_mnwake_trace_event("RESUME", (unsigned long)(uintptr_t)g, 0);
             runloom_hub_resume_begin(h, g);
-            runloom_coro_resume(cp);
-            }
+            runloom_coro_resume(g->coro);
             runloom_hub_resume_end(h);
             self_queued = runloom_tls_self_queued;
+            parked_offqueue = runloom_tls_parked_offqueue;
             runloom_tls_self_queued = 0;
-            runloom_tls_parked_offqueue = 0;   /* reset the park flag for next g */
+            runloom_tls_parked_offqueue = 0;
             runloom_tls_current_g = NULL;
             h->sched.current = NULL;
-
-            /* Drop THIS entry's default queue ref now that the entry is fully
-             * consumed (the g was resumed).  One site covers every post-resume
-             * outcome below (done / parked / yielded / re-queued): a g that
-             * re-queued itself during the resume took a NEW queue ref via its
-             * fresh hub_submit, so this drops only the old entry's ref.  Drops to
-             * the spawn ref (not zero) for a still-live g, so the reads below are
-             * safe; the done branch's scheduler decref then frees it.  from_runq
-             * (global-runq) gs have had_qref==0 and keep their own accounting. */
-            if (had_qref) runloom_g_decref(g);
-
+            /* Hub tstate back to the head of its bucket; drain what was
+             * queued to the fiber while it ran.  Before the detach: the
+             * bucket mutex and the merge need an attached tstate, and the
+             * fiber's is the owner of what it holds. */
+            runloom_iframe_brc_release(g->tstate, hub_ts);
+            PyEval_SaveThread();                  /* detach g's tstate */
+            PyEval_RestoreThread(hub_ts);          /* reattach hub tstate */
+            /* Free what other hubs dropped on us while the fiber ran: the
+             * brc merge queue is keyed to THIS hub's thread state, which
+             * never runs bytecode (see runloom_iframe_service_merge_queue). */
+            runloom_iframe_service_merge_queue(hub_ts);
             if (runloom_coro_done(g->coro)) {
+                /* Done: the g did not park this resume (a resume ends in a
+                 * park OR completion, never both), so no parker is live and
+                 * wake_state is still RUNNING with no other entry.  Force-
+                 * unlink any stale parker, then drop both refs -- the slab
+                 * re-zeroes wake_state when it reallocs the g. */
                 runloom_advice_record_g(g);   /* fold stack HWM (profiling) */
                 runloom_g_state_set(g, RUNLOOM_GST_DONE);
-                /* Drain g's chunks, restore hub's tstate so the decref
-                 * (potentially calling Python tp_dealloc) allocates on
-                 * the hub's chunk -- not on a NULL datastack that
-                 * would otherwise leak when the next iter overwrites.
-                 * Re-snap so the next completion path / hub exit can
-                 * load again. */
-                runloom_drain_g_datastack();
-                runloom_pystate_load(&hub_snap);
-                /* Force-unlink any netpoll parker still referencing g.
-                 * If wait_fd's safety unlink missed (because a wake
-                 * path bypassed the netpoll dispatcher AND the safety
-                 * check's structural test couldn't see the leak), the
-                 * parker would survive into stack-pool reuse and
-                 * resurrect this just-freed g via a future pump
-                 * dispatch.  This call covers that gap. */
                 runloom_netpoll_force_unlink_g_parker(g);
                 runloom_g_decref(g);                  /* scheduler ref */
                 if (from_runq) runloom_g_decref(g);   /* queue ref */
-                /* pending_complete LAST -- see the sibling completion site:
-                 * the final decref may run a fiber_n batch teardown (arena reset),
-                 * which must be visible before mn_run observes pending == 0. */
+                /* pending_complete LAST: the final decref may run a fiber_n
+                 * batch teardown (arena cursor reset).  mn_run returns when
+                 * global pending hits 0, so only mark complete AFTER teardown
+                 * -- else the next fiber_n's arena alloc races a not-yet-reset
+                 * cursor and falls back to the slow per-g path. */
                 runloom_mn_pending_complete(h);
-                runloom_pystate_snap(&hub_snap);
-            } else if (!self_queued) {
-                /* Raw runloom_coro_yield() -- g didn't go through
-                 * sched_yield to push itself.  Keep it alive on the
-                 * local FIFO.  tstate still has g's state from after
-                 * resume; that's fine -- next iter's g_next->snap
-                 * load overwrites. */
-                runloom_sched_ready_push(&h->sched, g);
-            } else if (runloom_g_state_in(g, RUNLOOM_GST_MASK_PARKED)) {
-                /* g parked on a waiter (netpoll/chan/sleep/park_safe)
-                 * and won't run again until woken: drop its now-idle
-                 * stack pages.  No-op unless RUNLOOM_STACK_PARK_DONTNEED=1.
-                 * Gated on the PARKED states so a cooperative sched_yield
-                 * (also self_queued, but re-queued + resuming shortly)
-                 * doesn't pay an immediate re-fault.
-                 *
-                 * Safe under M:N: a woken g routes back to THIS (owning)
-                 * hub's non-stealable local FIFO, so this hub is the sole
-                 * resumer -- the madvise happens-before the next resume on
-                 * one thread.  Default-OFF is a throughput choice, not a
-                 * safety one (see runloom_coro_park doc in coro.h). */
-                runloom_coro_park(g->coro);
+            } else if (parked_offqueue) {
+                /* Parked off-queue (netpoll/chan/sleep): a wake_g will route
+                 * the g back here.  End ownership now -- AFTER the tstate
+                 * detach above, which is what closes the commit->detach
+                 * window: while RUNNING, a wake only set RUNNING_WOKEN and
+                 * never enqueued, so no other hub could attach this live
+                 * tstate.  CAS RUNNING->PARKED so a later wake enqueues it.
+                 * If a wake landed during the window (RUNNING_WOKEN), enqueue
+                 * exactly once now instead of parking -- the wake is not
+                 * lost and stays a single entry. */
+                int rexp = RUNLOOM_WS_RUNNING;
+                if (__atomic_compare_exchange_n(&g->wake_state, &rexp,
+                                                RUNLOOM_WS_PARKED, 0,
+                                                __ATOMIC_ACQ_REL,
+                                                __ATOMIC_ACQUIRE)) {
+                    RUNLOOM_WS_NOTE(RUNLOOM_WS_RUNNING, RUNLOOM_WS_PARKED);
+                    if (from_runq) runloom_g_decref(g);   /* old queue ref */
+                } else {
+                    /* rexp == RUNNING_WOKEN.  Re-arm a single entry: incref
+                     * the new one, drop the old (net zero for from_runq;
+                     * first entry for from_runq=0). */
+                    RUNLOOM_WS_NOTE(RUNLOOM_WS_RUNNING_WOKEN, RUNLOOM_WS_QUEUED);
+                    __atomic_store_n(&g->wake_state, RUNLOOM_WS_QUEUED,
+                                     __ATOMIC_RELEASE);
+                    runloom_g_incref(g);                  /* new queue ref */
+                    runloom_mn_woken_enqueue(g);          /* own deque, else global runq */
+                    if (from_runq) runloom_g_decref(g);   /* old queue ref */
+                }
+            } else {
+                /* Cooperative yield_current (already on the local FIFO) or a
+                 * raw runloom_coro_yield: the g stays runnable and hub-pinned,
+                 * still owned by this hub, so it ends at RUNNING.  A store is
+                 * safe -- a yielding g holds no live parker, so no wake_g can
+                 * fire to race it.  yield_current already pushed itself to
+                 * the FIFO; a raw yield (self_queued==0) did not, so push it
+                 * here. */
+                RUNLOOM_WS_NOTE(RUNLOOM_WS_RUNNING, RUNLOOM_WS_RUNNING);
+                __atomic_store_n(&g->wake_state, RUNLOOM_WS_RUNNING,
+                                 __ATOMIC_RELEASE);
+                if (from_runq) runloom_g_decref(g);       /* old queue ref */
+                if (!self_queued) runloom_sched_ready_push(&h->sched, g);
             }
-            /* remaining sched_yield path: g pushed itself, tstate has
-             * g's state, no work needed here. */
         }
-        /* Relinquish the world if re-running a sole g while a sibling is
-         * stopped for the world (breaks the gc-stw-churn monopoly deadlock). */
-        runloom_mn_world_yield_if_monopolizing(h);
     }
-    /* Restore hub's tstate before the thread exits. */
-    runloom_pystate_load(&hub_snap);
     runloom_tls_hub = NULL;
     /* Tear down the hub's iouring ring.  Unregister from netpoll FIRST
      * so the pump can't dispatch a CQE to a freed ring; THEN destroy.

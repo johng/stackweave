@@ -461,7 +461,7 @@ static PyObject *m_mn_init(PyObject *self, PyObject *args, PyObject *kw)
 {
     static char *kwlist[] = {"n", "offload_hubs", NULL};
     int n = 0;
-    int offload_hubs = -1;      /* -1 = no opinion -> RUNLOOM_OFFLOAD_HUBS */
+    int offload_hubs = 0;       /* extra hubs reserved for blocking offload */
     (void)self;
     if (!PyArg_ParseTupleAndKeywords(args, kw, "|ii", kwlist, &n, &offload_hubs))
         return NULL;
@@ -567,7 +567,7 @@ static PyObject *m_mn_run(PyObject *self, PyObject *unused)
     Py_ssize_t completed;
     (void)self; (void)unused;
     completed = runloom_mn_run();
-    /* mn_run returns -1 with an exception set when RUNLOOM_DEADLOCK=raise and
+    /* mn_run returns -1 with an exception set when deadlock mode is raise and
      * the deadlock census fired -- propagate it instead of masking it as a
      * completed-count of -1. */
     if (PyErr_Occurred()) return NULL;
@@ -588,7 +588,7 @@ static PyObject *m_mn_hub_count(PyObject *self, PyObject *unused)
 }
 
 /* offload_fiber(fn, stack_size=0): spawn fn on a reserved OFFLOAD hub, where a
- * blocking call may run without stranding anyone.  See the RUNLOOM_OFFLOAD_HUBS
+ * blocking call may run without stranding anyone.  See the offload-hubs
  * block in mn_sched.c. */
 static PyObject *m_mn_offload_fiber(PyObject *self, PyObject *args, PyObject *kw)
 {
@@ -759,10 +759,9 @@ static PyObject *m_fiber_grow(PyObject *self, PyObject *const *args,
                 Py_XDECREF(cnt_o);
                 Py_XDECREF(sz_o);
                 if (frozen) {
-                    /* learned size, no Python frame, DEFERRED stack alloc (lazy
-                     * path) so a tight front-load loop doesn't cold-mmap per spawn */
+                    /* learned size, no Python frame */
                     Py_DECREF(store);
-                    return runloom_mn_fiber_grown(fn, size);
+                    return runloom_mn_fiber(fn, size);
                 }
             }
             Py_XDECREF(store);

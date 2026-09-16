@@ -55,12 +55,31 @@
 int runloom_iouring_loop_enabled(void)
 {
     static int v = -1;
+    static int per_g_noted = 0;
     int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
     if (cur < 0) {
         const char *e = getenv("STACKWEAVE_IOURING_LOOP");
         cur = (e != NULL && *e != '0' && *e != '\0') ? 1 : 0;
         if (runloom_sim_enabled()) cur = 0;
         __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
+    }
+    /* BROKEN UNDER MIGRATION, so ignored in every M:N run (migration is always
+     * on; per-g-tstate mode is set from mn_init until the hubs are joined).
+     * The loop backend's whole design pins a fiber to the hub whose ring it
+     * submitted on -- the ring is SINGLE_ISSUER, the multishot buffer ring is
+     * returned to by "its pinned echo fibers", and loop_recv/loop_send re-read
+     * the CURRENT hub's ring on every call.  A migrated fiber resumes on
+     * another hub and the next call lands on the wrong ring: exact-once echo
+     * across 192 connections returned 0 correct payloads at H=1 and hung at
+     * H=2.  The code is kept so it can be made migration-safe; the strict
+     * xfails in tests/test_cov95_iouring_loopbuf.py track the gap. */
+    if (cur && runloom_get_per_g_tstate_mode()) {
+        if (__atomic_exchange_n(&per_g_noted, 1, __ATOMIC_RELAXED) == 0)
+            fprintf(stderr, "[stackweave] STACKWEAVE_IOURING_LOOP ignored: the "
+                            "io_uring loop backend is broken under cross-hub "
+                            "migration (hub-ring affinity does not survive "
+                            "migration); using the default backend\n");
+        return 0;
     }
     return cur;
 }

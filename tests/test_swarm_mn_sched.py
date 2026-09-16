@@ -26,8 +26,6 @@ FAIRNESS under the conditions that break a lock-free work-stealing scheduler:
   * serve() under a connection STORM + accept/connect FAULT INJECTION.
   * ARGUMENT VALIDATION / error branches and edge values of the public mn_*
     surface (enumerated empirically: see the probes that built this file).
-  * The gated-off migratable warn path (STACKWEAVE_PER_G_TSTATE without
-    STACKWEAVE_ALLOW_UNSAFE_MIGRATION -> warn + run the safe default scheduler).
 
 Crash-prone cases run in a SUBPROCESS so a SIGSEGV is contained and observed as
 a negative returncode; hang-prone cases use hang_guard / finite deadlock budgets;
@@ -300,15 +298,13 @@ def test_work_stealing_integrity_no_lost_or_dup_under_imbalance():
 
 
 # Same integrity check WITH every detector mode on -- the lock-free deque under
-# concurrent sysmon/handoff/preempt scanning of hub state.
+# concurrent sysmon/handoff scanning of hub state.
 @mn
 def test_work_stealing_integrity_under_all_detectors():
     modes = {
         "STACKWEAVE_SYSMON": "1", "STACKWEAVE_SYSMON_QUIET": "1", "STACKWEAVE_SYSMON_MS": "5",
         "STACKWEAVE_HANDOFF": "1", "STACKWEAVE_HANDOFF_POOL": "2",
-        "STACKWEAVE_PREEMPT": "1", "STACKWEAVE_PREEMPT_MS": "5",
-        "STACKWEAVE_STACK_PARK_SWEEP": "1", "STACKWEAVE_STACK_PARK_SWEEP_MS": "1",
-        "STACKWEAVE_WORLD_YIELD_NS": "2000",
+        "STACKWEAVE_STACK_PARK_SWEEP_MS": "1",
     }
     p = _run_script(_STEAL_INTEGRITY, modes, timeout=90)
     _assert_no_crash(p, "work-steal integrity (all detectors)")
@@ -551,11 +547,7 @@ def test_all_modes_at_once_under_hostile_workload_no_crash_no_hang():
     modes = {
         "STACKWEAVE_SYSMON": "1", "STACKWEAVE_SYSMON_QUIET": "1", "STACKWEAVE_SYSMON_MS": "5",
         "STACKWEAVE_HANDOFF": "1", "STACKWEAVE_HANDOFF_POOL": "3",
-        "STACKWEAVE_PREEMPT": "1", "STACKWEAVE_PREEMPT_MS": "5",
-        "STACKWEAVE_STACK_PARK_SWEEP": "1", "STACKWEAVE_STACK_PARK_SWEEP_MS": "1",
-        "STACKWEAVE_WORLD_YIELD_NS": "2000",
-        "STACKWEAVE_MN_BARRIER": "1", "STACKWEAVE_MN_SEED": "13", "STACKWEAVE_MN_PCT": "6",
-        "STACKWEAVE_HUB_IDLE_WAKE": "0",
+        "STACKWEAVE_STACK_PARK_SWEEP_MS": "1",
     }
     p = _run_script(_HOSTILE, modes, timeout=120)
     _assert_no_crash(p, "all-modes hostile")
@@ -601,8 +593,7 @@ def test_fini_raced_against_inflight_gs_under_detectors():
     modes = {
         "STACKWEAVE_SYSMON": "1", "STACKWEAVE_SYSMON_QUIET": "1", "STACKWEAVE_SYSMON_MS": "5",
         "STACKWEAVE_HANDOFF": "1", "STACKWEAVE_HANDOFF_POOL": "2",
-        "STACKWEAVE_PREEMPT": "1", "STACKWEAVE_PREEMPT_MS": "5",
-        "STACKWEAVE_STACK_PARK_SWEEP": "1", "STACKWEAVE_STACK_PARK_SWEEP_MS": "1",
+        "STACKWEAVE_STACK_PARK_SWEEP_MS": "1",
     }
     p = _run_script(_FINI_RACE, modes, timeout=120)
     _assert_no_crash(p, "fini race")
@@ -902,53 +893,7 @@ def test_serve_under_io_fault_injection_no_crash(site, spec):
 
 
 # ==========================================================================
-# 11. GATED-OFF MIGRATABLE WARN PATH (no crash; runs the safe default)
-# ==========================================================================
-_MIGRATE_WARN = r'''
-import sys; sys.path.insert(0, "src")
-import stackweave, stackweave_c as rc
-from stackweave.sync import WaitGroup
-def main():
-    wg = WaitGroup(); wg.add(200)
-    def w():
-        rc.sched_yield(); wg.done()
-    for _ in range(200):
-        rc.mn_fiber(w)
-    wg.wait()
-stackweave.run(4, main)
-sys.stdout.write("MIGRATE_WARN_OK\n")
-'''
-
-
-@mn
-@pytest.mark.parametrize("flag", ["STACKWEAVE_PER_G_TSTATE", "STACKWEAVE_STEAL_WOKEN"])
-def test_gated_off_migratable_warns_and_runs_default(flag):
-    # Whether the migratable mode is GATED OFF depends on the interpreter: it
-    # needs BOTH optional CPython patches (see src/patches/).  Either way the
-    # workload must complete and must NOT crash -- that is the invariant.
-    # (We NEVER set STACKWEAVE_ALLOW_UNSAFE_MIGRATION -- on an under-patched
-    # interpreter that path is known-crash.)
-    p = _run_script(_MIGRATE_WARN, {flag: "1"}, timeout=40)
-    _assert_no_crash(p, "gated-off %s" % flag)
-    assert "MIGRATE_WARN_OK" in p.stdout, (
-        "%s did not run to completion:\n%s\n%s"
-        % (flag, p.stdout, p.stderr[-800:]))
-    if stackweave.migration_available():
-        # Fully patched: migration is supported, so it ACTIVATES silently.
-        # Warning here would be a false alarm on a correct production build.
-        assert "GATED OFF" not in p.stderr, (
-            "%s was gated off on a fully-patched interpreter (%r):\n%s"
-            % (flag, stackweave.migration_status(), p.stderr[-800:]))
-    else:
-        # Missing a half -> warn to stderr and run the safe default scheduler,
-        # naming the gap so the user knows which patch to add.
-        assert "GATED OFF" in p.stderr, (
-            "gated-off %s did not emit the warn diagnostic (%r):\n%s"
-            % (flag, stackweave.migration_status(), p.stderr[-800:]))
-
-
-# ==========================================================================
-# 12. CRASH CONTAINMENT: deliberate guard-page overflow on a hub is CLASSIFIED
+# 11. CRASH CONTAINMENT: deliberate guard-page overflow on a hub is CLASSIFIED
 # ==========================================================================
 _HUB_OVERFLOW = r'''
 import sys; sys.path.insert(0, "src")
@@ -972,7 +917,7 @@ def test_hub_guard_page_overflow_is_classified_not_silent():
 
 
 # ==========================================================================
-# 13. SLOW-RETURN: cooperative overlap must not collapse to serialization
+# 12. SLOW-RETURN: cooperative overlap must not collapse to serialization
 # ==========================================================================
 @mn
 def test_parallel_blocking_offload_overlaps_not_serialized():
@@ -1089,7 +1034,7 @@ def test_cpu_parallelism_speedup_across_hubs():
 
 
 # ==========================================================================
-# 14. FOREIGN-OS-THREAD: mn_fiber from a raw (non-hub, non-fiber) thread
+# 13. FOREIGN-OS-THREAD: mn_fiber from a raw (non-hub, non-fiber) thread
 # ==========================================================================
 @mn
 def test_mn_fiber_from_foreign_thread_is_rejected_not_crash():
@@ -1154,7 +1099,7 @@ def test_raw_thread_observes_run_completes_in_process():
 
 
 # ==========================================================================
-# 15. fiber_n BULK SPAWN INTEGRITY (indexed + non-indexed) under M:N
+# 14. fiber_n BULK SPAWN INTEGRITY (indexed + non-indexed) under M:N
 # ==========================================================================
 @mn
 def test_fiber_n_bulk_indexed_every_index_runs_exactly_once():
@@ -1204,7 +1149,7 @@ def test_fiber_n_bulk_noindex_runs_n_fibers():
 
 
 # ==========================================================================
-# 16. INTROSPECTION CONSISTENCY WHILE HUBS ARE BUSY (lock-free atomic reads)
+# 15. INTROSPECTION CONSISTENCY WHILE HUBS ARE BUSY (lock-free atomic reads)
 # ==========================================================================
 @mn
 def test_hub_states_consistent_while_gs_park_and_run():
@@ -1233,7 +1178,7 @@ def test_hub_states_consistent_while_gs_park_and_run():
 
 
 # ==========================================================================
-# 17. SPAWN-PATH FAULT INJECTION under M:N (the spawn core's OWN error branch)
+# 16. SPAWN-PATH FAULT INJECTION under M:N (the spawn core's OWN error branch)
 #     -- the existing file injects TCP_*/FD faults via serve(); it never
 #     injects the M:N SPAWN faults that hit the scheduler's spawn core itself.
 # ==========================================================================
@@ -1294,10 +1239,10 @@ def test_mn_spawn_g_fault_is_clean_error_not_crash(spec):
 
 
 @mn
-def test_mn_spawn_g_fault_under_fiber_n_bulk_no_crash():
-    # fiber_n's BULK arena path (STACKWEAVE_GON_BULK=1) is a DISTINCT spawn path; an
-    # alloc fault during a bulk spawn must fall back / error cleanly, never
-    # corrupt the shared arena (which would crash other hubs).
+def test_mn_spawn_g_fault_under_fiber_n_no_crash():
+    # fiber_n called from INSIDE a fiber loops the spawn core in C; an alloc
+    # fault mid-loop must surface as a clean error, never corrupt shared spawn
+    # state (which would crash other hubs) or leak a hub.
     script = r'''
 import sys; sys.path.insert(0, "src")
 import stackweave_c as rc
@@ -1312,20 +1257,19 @@ except (MemoryError, RuntimeError) as e:
     err = type(e).__name__
     n = -1
 rc.mn_fini()
-sys.stdout.write("GON_BULK_FAULT_OK err=%r completed=%d hubs=%d\n"
+sys.stdout.write("GON_FAULT_OK err=%r completed=%d hubs=%d\n"
                  % (err, n, rc.mn_hub_count()))
 '''
-    p = _run_script(script, {"STACKWEAVE_GON_BULK": "1",
-                             "STACKWEAVE_FAULT_SPAWN_G": "always:12"}, timeout=40)
-    _assert_no_crash(p, "SPAWN_G under fiber_n bulk")
-    assert "GON_BULK_FAULT_OK" in p.stdout, (
-        "SPAWN_G fault under fiber_n bulk crashed/hung:\n%s\n%s"
+    p = _run_script(script, {"STACKWEAVE_FAULT_SPAWN_G": "always:12"}, timeout=40)
+    _assert_no_crash(p, "SPAWN_G under fiber_n")
+    assert "GON_FAULT_OK" in p.stdout, (
+        "SPAWN_G fault under fiber_n crashed/hung:\n%s\n%s"
         % (p.stdout, p.stderr[-1200:]))
-    assert "hubs=0" in p.stdout, "fiber_n-bulk fault leaked a hub:\n%s" % p.stdout
+    assert "hubs=0" in p.stdout, "fiber_n fault leaked a hub:\n%s" % p.stdout
 
 
 # ==========================================================================
-# 18. max_fibers ADMISSION GATE under M:N (held-live fibers trip the cap;
+# 17. max_fibers ADMISSION GATE under M:N (held-live fibers trip the cap;
 #     completion RELEASES the slot -- the conservation ledger the FV models)
 #     -- the existing file tests max_fibers nowhere; cov tests cover only the
 #     single-thread fiber() gate.  Under M:N a spawn that returns immediately
@@ -1405,7 +1349,7 @@ def test_max_fibers_slot_released_on_completion_no_ratchet():
 
 
 # ==========================================================================
-# 19. fiber_n EDGE VALUES + bulk-path integrity (n=0/negative no-op; bulk indexed)
+# 19. fiber_n EDGE VALUES (n=0/negative no-op; bad-type n)
 # ==========================================================================
 @mn
 def test_fiber_n_zero_and_negative_is_noop_not_hang_or_crash():
@@ -1438,40 +1382,8 @@ def test_fiber_n_non_int_n_raises_typeerror():
         rc.mn_fini()
 
 
-@mn
-def test_fiber_n_bulk_path_indexed_integrity():
-    # STACKWEAVE_GON_BULK=1 is the arena fast-path -- a different spawn path than
-    # the default per-g fiber_n.  Every index must run exactly once (set-equality
-    # over the index, not a count), proving the bulk arena assigns each slot a
-    # unique, correct index across hubs.
-    script = r'''
-import sys; sys.path.insert(0, "src")
-import stackweave, stackweave_c as rc
-from stackweave.sync import WaitGroup
-def main():
-    N = 1000
-    seen = bytearray(N)
-    wg = WaitGroup(); wg.add(N)
-    def w(i):
-        if 0 <= i < N:
-            seen[i] = 1
-        wg.done()
-    rc.fiber_n(w, N, 0, True)        # indexed bulk spawn
-    wg.wait()
-    miss = N - sum(seen)
-    sys.stdout.write("GON_BULK_IDX_OK\n" if miss == 0 else
-                     "GON_BULK_IDX_LOST miss=%d\n" % miss)
-stackweave.run(6, main)
-'''
-    p = _run_script(script, {"STACKWEAVE_GON_BULK": "1"}, timeout=40)
-    _assert_no_crash(p, "fiber_n bulk indexed integrity")
-    assert "GON_BULK_IDX_OK" in p.stdout, (
-        "fiber_n bulk path lost/duplicated an index:\n%s\n%s"
-        % (p.stdout, p.stderr[-800:]))
-
-
 # ==========================================================================
-# 20. BUFFERED-CHANNEL + select() CROSS-HUB WAKE INTEGRITY
+# 19. BUFFERED-CHANNEL + select() CROSS-HUB WAKE INTEGRITY
 #     -- the existing file only checks UNBUFFERED rendezvous and a plain
 #     Mutex; the buffered send-park-on-full wake and the select() multi-wait
 #     wake are distinct cross-hub wake paths.
@@ -1579,7 +1491,7 @@ def test_select_cross_hub_wake_integrity():
 
 
 # ==========================================================================
-# 21. PREEMPTION lifecycle + a non-yielding CPU hog must NOT wedge a hub
+# 20. PREEMPTION lifecycle + a non-yielding CPU hog must NOT wedge a hub
 #     forever (a one-hub world where the only way a sibling runs is preemption)
 # ==========================================================================
 @mn
@@ -1598,13 +1510,12 @@ def test_preempt_init_fini_lifecycle_is_idempotent_and_validated():
 
 
 @mn
-def test_cpu_hog_plus_sibling_on_one_hub_both_complete_under_preempt():
-    # ONE hub, a non-yielding CPU hog + a later sibling.  Under STACKWEAVE_PREEMPT
-    # the hog is sliced so BOTH complete within a bounded time.  This is the
-    # property (no permanent wedge), not an ordering claim -- the sysmon's
-    # cooperative recovery can also interleave on one hub, so we only assert
-    # both run and the run terminates (hang_guard catches a true wedge).  Driven
-    # in a subprocess so the preempt env is isolated and a wedge is contained.
+def test_cpu_hog_plus_sibling_on_one_hub_both_complete():
+    # ONE hub, a non-yielding CPU hog + a later sibling.  There is no M:N
+    # preemption (migration mode), so the sibling waits for the hog's burst to
+    # end -- the property is that BOTH complete within a bounded time (no
+    # permanent wedge), not an ordering claim.  Driven in a subprocess so a
+    # wedge is contained.
     script = r'''
 import sys; sys.path.insert(0, "src")
 import stackweave_c as rc
@@ -1630,12 +1541,11 @@ rc.mn_fini()
 sys.stdout.write("PREEMPT_HOG_OK flags=%r completed=%d hubs=%d\n"
                  % (bytes(flags), n, rc.mn_hub_count()))
 '''
-    p = _run_script(script, {"STACKWEAVE_PREEMPT": "1", "STACKWEAVE_PREEMPT_MS": "8"},
-                    timeout=60)
-    _assert_no_crash(p, "cpu hog + sibling under preempt")
+    p = _run_script(script, {}, timeout=60)
+    _assert_no_crash(p, "cpu hog + sibling on one hub")
     assert "PREEMPT_HOG_OK" in p.stdout, (
-        "a non-yielding CPU hog wedged its hub forever (sibling starved) "
-        "under preemption:\n%s\n%s" % (p.stdout, p.stderr[-1200:]))
+        "a non-yielding CPU hog wedged its hub forever (sibling starved):"
+        "\n%s\n%s" % (p.stdout, p.stderr[-1200:]))
     line = [ln for ln in p.stdout.splitlines() if ln.startswith("PREEMPT_HOG_OK")][0]
     assert "flags=b'\\x01\\x01'" in line, (
         "the sibling did not complete behind the CPU hog: %s" % line)
@@ -1643,7 +1553,7 @@ sys.stdout.write("PREEMPT_HOG_OK flags=%r completed=%d hubs=%d\n"
 
 
 # ==========================================================================
-# 22. mn_run RE-ENTRANCY: a SECOND spawn+run cycle on the SAME live hub pool
+# 21. mn_run RE-ENTRANCY: a SECOND spawn+run cycle on the SAME live hub pool
 #     (the existing file always pairs one mn_init with one mn_run; the public
 #     contract allows spawn/run, spawn-again/run-again on a pool kept alive)
 # ==========================================================================
@@ -1670,7 +1580,7 @@ def test_mn_run_then_spawn_again_then_run_again_same_pool():
 
 
 # ==========================================================================
-# 23. HALF-DEADLOCK / DEADLOCK_MS budget: progress-making work must NOT
+# 22. HALF-DEADLOCK / DEADLOCK_MS budget: progress-making work must NOT
 #     false-fire the M:N census in RAISE mode (the existing file checks a busy
 #     loop + a sleeper, but not a MIX of parked-and-woken fibers nor a short
 #     custom STACKWEAVE_DEADLOCK_MS budget where a transient quiescence is benign)
@@ -1695,6 +1605,7 @@ def main():
     wg.wait()
     sys.stdout.write("HALF_DEADLOCK_OK\n")
 
+rc.set_deadlock_mode(2)                 # raise mode: a false fire would raise
 stackweave.run(4, main)
 '''
 
@@ -1702,7 +1613,7 @@ stackweave.run(4, main)
 @mn
 def test_half_deadlock_does_not_false_fire_in_raise_mode():
     p = _run_script(_HALF_DEADLOCK,
-                    {"STACKWEAVE_DEADLOCK": "raise", "STACKWEAVE_DEADLOCK_MS": "50"},
+                    {"STACKWEAVE_DEADLOCK_MS": "50"},
                     timeout=40)
     _assert_no_crash(p, "half-deadlock no false-fire")
     assert "HALF_DEADLOCK_OK" in p.stdout and "DEADLOCK" not in p.stderr, (
@@ -1728,9 +1639,10 @@ def main():
         rc.mn_fiber(w)
     wg.wait()
     sys.stdout.write("SLEEP_BUDGET_OK\n")
+rc.set_deadlock_mode(2)                 # raise mode: a false fire would raise
 stackweave.run(4, main)
 '''
-    p = _run_script(script, {"STACKWEAVE_DEADLOCK": "raise", "STACKWEAVE_DEADLOCK_MS": "30"},
+    p = _run_script(script, {"STACKWEAVE_DEADLOCK_MS": "30"},
                     timeout=40)
     _assert_no_crash(p, "short deadlock_ms sleepers")
     assert "SLEEP_BUDGET_OK" in p.stdout, (
@@ -1739,7 +1651,7 @@ stackweave.run(4, main)
 
 
 # ==========================================================================
-# 24. mn_init EDGE VALUES the dispatch layer must handle (bool, overflow)
+# 23. mn_init EDGE VALUES the dispatch layer must handle (bool, overflow)
 # ==========================================================================
 @mn
 def test_mn_init_bool_true_is_accepted_as_one_hub():
@@ -1767,7 +1679,7 @@ def test_mn_init_huge_int_raises_overflow_not_crash():
 
 # ==========================================================================
 # 25. SPAWN STORM RESOURCE LIMIT: a very large single fiber_n + a deep many-fiber
-#     burst must complete with EXACT set-equality (no slab/arena corruption at
+#     burst must complete with EXACT set-equality (no slab corruption at
 #     scale) -- the existing file's fiber_n tests stop at 512.
 # ==========================================================================
 _BIG_GON = r'''
@@ -1793,19 +1705,17 @@ stackweave.run(8, main)
 
 
 @mn
-@pytest.mark.parametrize("bulk", ["0", "1"])
-def test_large_fiber_n_set_equality_at_scale(bulk):
-    # Run the 20k-index fiber_n on BOTH the per-g path (GON_BULK=0) and the bulk
-    # arena path (GON_BULK=1); every index must run exactly once on both.
-    p = _run_script(_BIG_GON, {"STACKWEAVE_GON_BULK": bulk}, timeout=90)
-    _assert_no_crash(p, "big fiber_n (bulk=%s)" % bulk)
+def test_large_fiber_n_set_equality_at_scale():
+    # Run the 20k-index fiber_n; every index must run exactly once.
+    p = _run_script(_BIG_GON, {}, timeout=90)
+    _assert_no_crash(p, "big fiber_n")
     assert "BIG_GON_OK" in p.stdout, (
-        "fiber_n at scale (bulk=%s) lost/dup'd an index:\n%s\n%s"
-        % (bulk, p.stdout, p.stderr[-1000:]))
+        "fiber_n at scale lost/dup'd an index:\n%s\n%s"
+        % (p.stdout, p.stderr[-1000:]))
 
 
 # ==========================================================================
-# 26. mn_hub_states FIELD INTEGRITY while a hub is WEDGED in a blocking offload
+# 25. mn_hub_states FIELD INTEGRITY while a hub is WEDGED in a blocking offload
 #     (handoff) -- running_g / dwell_ms / blocked_at must be reportable without
 #     crashing the lock-free atomic reader while a hub is mid-blocking-call.
 # ==========================================================================
@@ -1852,7 +1762,7 @@ def test_hub_states_readable_while_hub_blocked_in_offload():
 
 
 # ==========================================================================
-# 27. CROSS-HUB WAKE INTEGRITY UNDER ALL DETECTORS + HANDOFF (the wake paths
+# 26. CROSS-HUB WAKE INTEGRITY UNDER ALL DETECTORS + HANDOFF (the wake paths
 #     re-checked while every state-scanner concurrently mutates hub state) --
 #     the existing file runs the WORK-STEAL integrity under detectors but not
 #     the unbuffered cross-hub WAKE integrity under the same hostile detectors.
@@ -1862,10 +1772,7 @@ def test_cross_hub_wake_integrity_under_all_detectors():
     modes = {
         "STACKWEAVE_SYSMON": "1", "STACKWEAVE_SYSMON_QUIET": "1", "STACKWEAVE_SYSMON_MS": "5",
         "STACKWEAVE_HANDOFF": "1", "STACKWEAVE_HANDOFF_POOL": "3",
-        "STACKWEAVE_PREEMPT": "1", "STACKWEAVE_PREEMPT_MS": "5",
-        "STACKWEAVE_STACK_PARK_SWEEP": "1", "STACKWEAVE_STACK_PARK_SWEEP_MS": "1",
-        "STACKWEAVE_WORLD_YIELD_NS": "2000",
-        "STACKWEAVE_HUB_IDLE_WAKE": "0",
+        "STACKWEAVE_STACK_PARK_SWEEP_MS": "1",
     }
     p = _run_script(_CROSSHUB_WAKE, modes, timeout=90)
     _assert_no_crash(p, "cross-hub wake (all detectors)")
@@ -1875,7 +1782,7 @@ def test_cross_hub_wake_integrity_under_all_detectors():
 
 
 # ==========================================================================
-# 28. mn_fini WHILE a hub is mid-blocking-offload (a worker thread holds the
+# 27. mn_fini WHILE a hub is mid-blocking-offload (a worker thread holds the
 #     fiber's job record); teardown must join the blockpool cleanly, not UAF
 #     the in-flight stack-job (the blockpool_job FV model's runtime analogue).
 # ==========================================================================

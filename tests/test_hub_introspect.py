@@ -22,8 +22,7 @@ import stackweave
 import stackweave_c
 from stackweave import inspect as gi
 
-HUB_KEYS = {"id", "state", "running_g", "dwell_ms", "pending",
-            "preempt_requested", "instrumented", "blocked_at"}
+HUB_KEYS = {"id", "state", "running_g", "dwell_ms", "pending", "blocked_at"}
 
 # A blocking (non-cooperative) C call, long enough to outlast the ~50 ms sysmon
 # wedge budget while a sampler fiber inspects the hubs.

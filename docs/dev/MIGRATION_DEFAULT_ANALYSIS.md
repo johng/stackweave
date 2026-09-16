@@ -1,6 +1,9 @@
 # Migration mode as the default: where the cost moves
 
 Status: analysis, 2026-09-15. Written against `fibre-hubs` (de94a1e5).
+Update 2026-09-25: migration is now the ONLY M:N mode (PR #23), so the opt-in
+wording below is historical; sections 0b, 1, 2 and the sleeper gap in 4 are
+still open and tracked in that PR's review.
 Nothing here is implemented unless a later section says so.
 
 Migration mode (`STACKWEAVE_MIGRATION=1` / `stackweave.enable_migration()`) gives

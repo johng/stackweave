@@ -137,8 +137,7 @@ NSLOTS = 4
 # memory -> per-thread mimalloc free-list corruption -> SIGSEGV.  stackweave_c's GC
 # frames anchor (module_gcframes.c.inc) now makes parked frames GC-visible, so the
 # arm PASSES with TLBC ON (the default) and is a live REGRESSION GUARD.  Set
-# PYGO_P524_CLASS_ARM=0 to skip it, or RE-ARM the crash for verification by
-# disabling the anchor while forcing TLBC on: STACKWEAVE_TLBC=1 STACKWEAVE_GC_FRAMES=0.
+# PYGO_P524_CLASS_ARM=0 to skip it.
 CLASS_ARM = os.environ.get("PYGO_P524_CLASS_ARM", "1") != "0"
 
 # Run the (heavier) FORWARDREF fake-globals arm every Nth inner iteration so the
