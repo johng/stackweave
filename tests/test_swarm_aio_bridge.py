@@ -2448,7 +2448,6 @@ except BaseException as e:
 # stackweave's foreign-thread -> loop wake path is fixed.
 @pytest.mark.parametrize("mode", [
     {"STACKWEAVE_SYSMON": "1", "STACKWEAVE_SYSMON_QUIET": "1", "STACKWEAVE_SYSMON_MS": "8"},
-    {"STACKWEAVE_PREEMPT": "1", "STACKWEAVE_PREEMPT_MS": "8"},
     {"STACKWEAVE_HANDOFF": "1", "STACKWEAVE_HANDOFF_POOL": "2"},
 ])
 def test_env_gated_modes_under_aio_echo(mode):

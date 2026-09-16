@@ -19,15 +19,15 @@ double runloom_sched_monotonic_seconds(void)
  * combined.  Each PY_VERSION_HEX gate matches greenlet's GREENLET_PY*
  * branches.
  */
-/* Per-fiber PyThreadState mode (RUNLOOM_PER_G_TSTATE).  When the M:N
- * scheduler runs in this mode, each fiber owns its own PyThreadState,
+/* Per-fiber PyThreadState mode.  While the M:N
+ * scheduler runs (always in this mode), each fiber owns its own PyThreadState,
  * so the per-g "snap" (which swaps execution-state fields in/out of a
  * shared per-hub tstate) is redundant and MUST NOT run -- snapping would
  * clear context/top_frame/exc out of the g's own live tstate.  Making
  * runloom_pystate_snap a no-op here (leaving snap->valid = 0) transparently
  * disables the snap at every park primitive that calls it; load and
  * snap_clear already no-op on !valid, so the whole snap machinery stands
- * down.  Set by runloom_mn_init when the flag is on, cleared at runloom_mn_fini.
+ * down.  Set by runloom_mn_init, cleared at runloom_mn_fini.
  * Stays 0 for the single-thread scheduler path. */
 static int runloom_per_g_tstate_mode = 0;
 void runloom_set_per_g_tstate_mode(int on) { runloom_per_g_tstate_mode = on ? 1 : 0; }
@@ -42,7 +42,7 @@ int  runloom_get_per_g_tstate_mode(void)   { return runloom_per_g_tstate_mode; }
  * catches the corruption at its SOURCE -- the moment a non-exception / freed
  * object is snapped out of, or restored into, the tstate's exception fields --
  * which happens far more often than the rare fault, turning a multi-hour repro
- * into a prompt, precisely-located abort (the RUNLOOM_CRASH handler then prints
+ * into a prompt, precisely-located abort (the crash handler, if installed, then prints
  * the C backtrace + Python stack at the detection point).  current_exception and
  * exc_state.exc_value are ALWAYS NULL or a live PyExceptionInstance by CPython
  * invariant, so a value that fails PyExceptionInstance_Check is corruption.
@@ -71,7 +71,7 @@ static void runloom_dbg_check_excobj(PyObject *o, const char *where)
             "instance (ob_type=%p refcnt=%zd) -- STALE/CORRUPT exception state\n",
             where, (void *)o, (void *)Py_TYPE(o), (Py_ssize_t)Py_REFCNT(o));
         fflush(stderr);
-        abort();   /* RUNLOOM_CRASH handler (if armed) dumps C + Python stack here */
+        abort();   /* crash handler (if installed) dumps C + Python stack here */
     }
 }
 
@@ -225,7 +225,7 @@ void runloom_pystate_snap(runloom_pystate_snap_t *snap)
      * linecache path-string data), and the inheriting fiber's next `raise` walks
      * the dangling exc_info in _PyErr_GetTopmostException -> wild deref of
      * path-string bytes (the p69_traceback_integrity / p69b SIGSEGV, only with
-     * RUNLOOM_PREEMPT on -- cooperative yields never fire mid-extract_tb).
+     * preemption on -- cooperative yields never fire mid-extract_tb).
      *
      * Resetting the HEAD to the tstate-embedded base (a stable, never-freed
      * address) makes a non-loading inheritor walk a sane chain.  Ref-neutral:

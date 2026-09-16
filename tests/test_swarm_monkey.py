@@ -1368,7 +1368,6 @@ def test_fault_injection_always_backs_off_bounded():
 @mn_only
 @pytest.mark.parametrize("env", [
     {"STACKWEAVE_SYSMON": "1", "STACKWEAVE_SYSMON_QUIET": "1", "STACKWEAVE_SYSMON_MS": "8"},
-    {"STACKWEAVE_PREEMPT": "1", "STACKWEAVE_PREEMPT_MS": "8"},
     {"STACKWEAVE_HANDOFF": "1", "STACKWEAVE_HANDOFF_POOL": "2"},
 ])
 def test_monkey_lock_workload_under_env_gated_mode(env):

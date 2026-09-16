@@ -22,9 +22,9 @@ def _run(code, env_extra):
     env = dict(os.environ)
     env["PYTHON_GIL"] = "0"
     env["STACKWEAVE_SYSMON"] = "0"
-    env["STACKWEAVE_DEADLOCK"] = "off"
     env["PYTHONPATH"] = "src" + os.pathsep + env.get("PYTHONPATH", "")
     env.update(env_extra)
+    code = "import stackweave_c as _c0; _c0.set_deadlock_mode(0)\n" + code
     p = subprocess.run([sys.executable, "-c", code], env=env,
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                        timeout=60)

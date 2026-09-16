@@ -164,32 +164,13 @@ static PyTypeObject RunloomGCFramesAnchorType = {
 #endif  /* RUNLOOM_GCFRAMES_ANCHOR */
 
 /* Initialise the anchor.  Called from PyInit_stackweave_c after the Coro/G types are
- * ready and the introspect registry is inited.  Returns 0 on success (including
- * the no-op non-FT / disabled cases), -1 on a hard CPython error. */
+ * ready and the introspect registry is inited (the anchor walks that registry,
+ * so it must be live first).  Returns 0 on success (including the no-op non-FT
+ * case), -1 on a hard CPython error. */
 static int runloom_gcframes_init(PyObject *m)
 {
 #if defined(RUNLOOM_GCFRAMES_ANCHOR)
-    const char *e;
     PyObject *anchor;
-    e = getenv("STACKWEAVE_GC_FRAMES");
-    if (e != NULL && e[0] == '0' && e[1] == '\0') {
-        /* Explicitly disabled (A/B + emergency escape hatch).  The anchor stays
-         * absent; runtime.py's TLBC interlock then keeps the PYTHON_TLBC=0
-         * re-exec, since "anchor off + TLBC on" is the crashy configuration. */
-        runloom_gcframes_on = 0;
-        return 0;
-    }
-    /* The registry is now memory-safety load-bearing: an ablated registry
-     * (RUNLOOM_GREG_OFF) would leave the walk blind.  Rather than corrupt, refuse
-     * to activate -- the interlock then keeps TLBC off (safe, slow).  A proper
-     * "GREG_OFF loses to the anchor" override is a follow-up. */
-    if (!runloom_greg_is_linked()) {
-        PySys_WriteStderr("[stackweave] STACKWEAVE_GREG_OFF blinds the GC frames anchor; "
-                          "not activating it (TLBC stays gated off). "
-                          "Unset STACKWEAVE_GREG_OFF to enable TLBC.\n");
-        runloom_gcframes_on = 0;
-        return 0;
-    }
     if (PyType_Ready(&RunloomGCFramesAnchorType) < 0) {
         return -1;
     }

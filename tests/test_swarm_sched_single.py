@@ -983,8 +983,7 @@ def main():
     rc.sched_yield(); rc.sched_yield(); rc.sched_yield()
 rc.fiber(main); rc.run()
 '''
-    p = _subproc(script, env_extra={"STACKWEAVE_DEADLOCK": "warn",
-                                    "PYTHONUNBUFFERED": "1"}, timeout=20)
+    p = _subproc(script, env_extra={"PYTHONUNBUFFERED": "1"}, timeout=20)
     out = p.stdout + p.stderr
     assert "park:future" in out, out
     assert "park:sync" in out, "default park inherited the prior wait reason\n" + out

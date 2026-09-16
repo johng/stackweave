@@ -10,10 +10,8 @@ corruption -> SIGSEGV (big_100 p565/p524).  stackweave_c ships the fix: a GC-tra
 fiber registry and visits every parked chain so those referents are credited.
 
 The definitive oracle is p565/p524 themselves: they PASS with the anchor on and
-SIGSEGV with it off (STACKWEAVE_GC_FRAMES=0) -- the A/B that attributes the fix to
-the anchor rather than to luck/timing.  The p565 PASS arm here is the routine
-regression guard; the SIGSEGV attribution arm is opt-in (STACKWEAVE_TLBC_GC_TEETH=1)
-so the routine suite does not deliberately crash a subprocess / drop cores.
+used to SIGSEGV without it.  The anchor is now unconditional, so the p565 PASS
+arm here is the regression guard.
 
 A NOTE on why there is no pure-Python weakref oracle: constructing a
 deferred-ONLY-referenced object reliably needs the many-fiber, code-object churn
@@ -72,36 +70,14 @@ def test_gc_freeze_keeps_anchor_thawed_and_collect_clean():
         gc.unfreeze()
 
 
-def test_gc_frames_env_disables_anchor():
-    # STACKWEAVE_GC_FRAMES=0 must disable the anchor AND, via the interlock, be a
-    # config the runtime treats as "TLBC unsafe".  Checked in a subprocess so the
-    # setting takes effect at extension import.
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH=_SRC, STACKWEAVE_GC_FRAMES="0")
-    out = subprocess.run(
-        [sys.executable, "-c",
-         "import stackweave_c as rc; "
-         "print(rc.gc_frames_active, hasattr(rc, 'gc_frames_anchor'))"],
-        env=env, cwd=_REPO, timeout=60,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    assert out.returncode == 0, out.stdout.decode("utf-8", "replace")
-    assert out.stdout.decode().split() == ["0", "False"]
-
-
-def _run_big100(prog, extra_env, hubs, duration, timeout, no_core=False):
+def _run_big100(prog, extra_env, hubs, duration, timeout):
     env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH=_SRC)
     env.update(extra_env)
-    preexec = None
-    if no_core and hasattr(os, "fork"):
-        import resource
-
-        def preexec():
-            resource.setrlimit(resource.RLIMIT_CORE, (0, 0))  # no core on SIGSEGV
-
     p = subprocess.run(
         [sys.executable, os.path.join(_REPO, "tests", "big_100", prog),
          "--hubs", str(hubs), "--duration", str(duration)],
         env=env, cwd=_REPO, timeout=timeout,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, preexec_fn=preexec)
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     return p.returncode, p.stdout.decode("utf-8", "replace")
 
 
@@ -110,21 +86,6 @@ def test_p565_passes_tlbc_on_with_anchor():
     # compileall churn that used to crash now runs clean.  If the anchor ever
     # regresses, this SIGSEGVs (rc != 0) within ~2s.
     rc0, out = _run_big100(
-        "p565_compileall_bytecode_purity.py", {"STACKWEAVE_TLBC": "1"},
+        "p565_compileall_bytecode_purity.py", {},
         hubs=8, duration=8, timeout=90)
     assert rc0 == 0 and "VERDICT       : PASS" in out, out[-2500:]
-
-
-@pytest.mark.skipif(
-    os.environ.get("STACKWEAVE_TLBC_GC_TEETH") != "1",
-    reason="attribution arm deliberately SIGSEGVs a subprocess; "
-           "opt in with STACKWEAVE_TLBC_GC_TEETH=1")
-def test_p565_crashes_tlbc_on_with_anchor_off():
-    # A3 attribution: the SAME program with the anchor disabled must crash,
-    # proving the anchor -- not a timing shift -- is what makes TLBC-on safe.
-    rc0, out = _run_big100(
-        "p565_compileall_bytecode_purity.py",
-        {"STACKWEAVE_TLBC": "1", "STACKWEAVE_GC_FRAMES": "0"},
-        hubs=8, duration=30, timeout=90, no_core=True)
-    # subprocess returns the negative signal number on a fatal signal.
-    assert rc0 in (-11, 139), (rc0, out[-2000:])

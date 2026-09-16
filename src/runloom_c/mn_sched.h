@@ -29,30 +29,19 @@
  *   it.  pump() runs in any hub when its local queue is empty and
  *   wakes whichever hub's g was parked.
  *
- *   Goroutine placement.  There are now TWO modes; the default is the one
- *   this header originally described, and migration is opt-in on top of it.
- *
- *   DEFAULT (stock CPython, no flag).  A g is created on a hub and runs ONLY
- *   on that hub.  Greenlets / our coros have absolute stack pointers that tie
- *   them to a single OS thread.  Work-stealing steals only READY ("fresh",
- *   snap.valid==0) fibers -- they have NEVER run, so there is no stack/tstate
- *   to migrate: the stealer runs them clean from the start on its OWN tstate,
- *   and if such a fiber later parks it parks AND resumes on that same hub.
- *   A woken fiber goes to its origin hub's local FIFO, never the stealable
- *   deque.  No migration of a suspended fiber, ever.
- *
- *   MIGRATION (opt-in: RUNLOOM_MIGRATION=1 / runloom.enable_migration()).
- *   Each fiber carries its OWN PyThreadState, so a suspended fiber is no
- *   longer bound to one hub: a woken fiber is pushed to the process-global
- *   run-queue and resumed by whichever hub drains it (see the global-runq
- *   block in mn_sched_runq.c.inc).  That is what lets an idle hub rescue the
- *   woken work of a hub wedged in a blocking C call -- the failure the
- *   default mode cannot recover from.  Fresh-fiber work-stealing is unchanged
- *   and still runs alongside it.  A wake performed on a general hub thread
- *   skips the global queue: the g goes onto the waker's own deque (Go-style
- *   local wake, runloom_mn_woken_enqueue) where the waker's hub or any idle
- *   thief picks it up; the global queue serves foreign-thread wakers, offload
- *   hub wakers, pinned fibers, replay, and a full deque.
+ *   Goroutine placement: MIGRATION, always on.  Each fiber carries its OWN
+ *   PyThreadState, so a suspended fiber is not bound to one hub.  A wake
+ *   performed on a general hub thread pushes the g onto the waker's own deque
+ *   (Go-style local wake, runloom_mn_woken_enqueue), where the waker's hub or
+ *   any idle thief picks it up; the process-global run-queue (see the
+ *   global-runq block in mn_sched_runq.c.inc) serves the wakes with nowhere
+ *   local to go -- foreign-thread wakers, offload-hub wakers, pinned fibers,
+ *   replay, and a full deque -- and is drained by whichever hub gets there
+ *   first.  Either way an idle hub can rescue the woken work of a hub wedged
+ *   in a blocking C call.  Fresh fibers are placed on a hub's stealable deque
+ *   and work-stealing runs alongside.  (The per-hub-tstate mode, where a g ran
+ *   only on its origin hub and only fresh fibers were stolen, has been
+ *   removed.)
  *
  *   Why migration needs a patched interpreter.  In STOCK free-threaded
  *   CPython it is unsound, for two independent reasons, and either alone
@@ -69,10 +58,10 @@
  *       Py_TSTATE_EXEC_HOME.  An arm64 SIGSEGV that looks benign on x86-TSO,
  *       so it survives local x86 review and only dies on weak memory.
  *   Both patches, the build recipe, and the measured validation live in
- *   src/patches/README.md.  runloom.migration_available() reports whether
- *   this build has both; with both, migration enables with no override.
- *   Missing either, a migration request is GATED OFF (warn + run the default
- *   scheduler) unless RUNLOOM_ALLOW_UNSAFE_MIGRATION=1 -- dev/fuzzing only.
+ *   src/patches/README.md.  Nothing checks for them at runtime: build the
+ *   extension against a patched interpreter with both features defined (the
+ *   setup.py install gate refuses a pip install without them).  Missing
+ *   either, migration still runs and can crash under churn at H>=2.
  *
  *   Historical note: the old "handoff-rescue" pool (run a wedged hub's fibers
  *   on a standby thread) was REMOVED (2026-06) because it migrated suspended
@@ -99,16 +88,14 @@
  * that includes mn_sched.h. */
 struct runloom_iouring_ring;
 
-/* offload_hubs: how many hubs to reserve for blocking offload.  -1 = consult
- * RUNLOOM_OFFLOAD_HUBS (the default); >=0 overrides it.  An explicit argument
- * wins so a library can ask for what its own code needs without requiring its
- * host to set an environment variable.  See runloom_mn_offload_fiber. */
+/* offload_hubs: how many EXTRA hubs to reserve for blocking offload (<= 0 =
+ * none).  See runloom_mn_offload_fiber. */
 int runloom_mn_init(int n_threads, int offload_hubs);
 /* stack_size: per-fiber C-stack override in bytes; 0 = the hub default.
  * Use a larger value for a g that runs a deep, non-yielding C burst (cold
  * imports, terminfo/OpenSSL init) that the copy-grow can't rescue mid-burst. */
 PyObject *runloom_mn_fiber(PyObject *callable, size_t stack_size);
-/* Spawn on a RESERVED OFFLOAD hub (RUNLOOM_OFFLOAD_HUBS), where a blocking call
+/* Spawn on a RESERVED OFFLOAD hub (mn_init offload_hubs), where a blocking call
  * may run without stranding the g's woken on a general hub.  Raises
  * RuntimeError when none are reserved -- it never silently falls back to a
  * general hub.  runloom_mn_offload_hub_count() reports how many exist (0 =
@@ -128,17 +115,11 @@ PyObject *runloom_mn_fiber_pinned(PyObject *callable, size_t stack_size,
                                   int hub_id);
 
 /* Confine `g`'s resumes to hub `hub_id` (<0 clears).  Returns 0, or -1 with a
- * Python error set.  Exposed as G.pin(hub).  A cross-hub target is only sound
- * under a migration mode, so elsewhere it raises RuntimeError; pinning to its
- * own hub is always legal.  Pin contract: runloom_mn_fiber_pinned above. */
+ * Python error set.  Exposed as G.pin(hub).  Any live hub is a legal target:
+ * every fiber owns its PyThreadState, so it can resume anywhere.  Pin
+ * contract: runloom_mn_fiber_pinned above. */
 int runloom_mn_pin_for_wake(runloom_g_t *g, int hub_id);
 
-/* Like runloom_mn_fiber but `size` is a grow-down LEARNED size: spawn it down the
- * deferred (lazy) stack-alloc path so a tight front-load loop doesn't cold-mmap a
- * guarded stack per spawn -- the alloc lands on the consumer hub where the pool
- * recycles -- while still installing exactly `size`.  For internal right-sizing
- * only (the C-side frozen grow-down), never a user pin. */
-PyObject *runloom_mn_fiber_grown(PyObject *callable, size_t size);
 /* Bulk-spawn n fibers all running `callable`, looping the spawn core in C
  * (skips n Python->C dispatches + per-call arg parsing).  indexed != 0 calls
  * each as callable(i) for i in 0..n-1 (per-fiber arg); 0 calls callable().
@@ -230,12 +211,10 @@ int  runloom_sysmon_hub_attach_state(struct runloom_hub *h, PyThreadState *hts);
 typedef struct runloom_hub_info {
     int       id;                 /* dense hub index 0..count-1 */
     long long running_g;          /* goid of the g currently being resumed */
-    int       has_running_g;      /* 0 if idle / sysmon instrumentation off */
+    int       has_running_g;      /* 0 if idle */
     double    dwell_ms;           /* how long the current resume has run, or 0 */
     int       attach_state;       /* RUNLOOM_TS_DETACHED/ATTACHED/SUSPENDED, -1 unknown */
     long      pending;            /* gs owned + queued on this hub */
-    int       preempt_requested;  /* sysmon has asked this hub to yield */
-    int       instrumented;       /* 1 if sysmon resume-tracking is live */
     char      blocked_at[192];    /* "qualname (file:line)" best-effort, or "" */
 } runloom_hub_info_t;
 
@@ -267,6 +246,7 @@ void runloom_mn_worker_tstate_delete(PyThreadState *ts);
  * SINGLE_ISSUER of its ring -- submits the ASYNC_CANCEL at its loop top.
  * Returns 1 if accepted, 0 if the slot is busy (best-effort, dropped). */
 int runloom_mn_hub_request_iouring_cancel(void *hub_opaque, void *op);
+int runloom_mn_hub_retract_iouring_cancel(void *hub_opaque, void *op);
 
 /* Map a hub_opaque (as returned by runloom_mn_current_hub_opaque, or
  * stashed on a parker/g) to the dense 0..hub_count-1 hub id.  Returns
@@ -308,8 +288,7 @@ runloom_sched_t *runloom_mn_current_sched(void);
  * routes them to the deque (if g is fresh) or local FIFO (if yielded). */
 void runloom_mn_wake_g(void *hub_opaque, runloom_g_t *g);
 
-/* Idle-stack-sweep handshake for RUNLOOM_PER_G_TSTATE (no-op-safe to call in
- * either mode; the sweep caller gates them on per-g-tstate).  try_claim CASes
+/* Idle-stack-sweep handshake for the per-g wake state machine.  try_claim CASes
  * the g's wake_state PARKED -> SWEEPING and returns 1 if it won exclusive
  * ownership of the g's stack for an MADV_DONTNEED, 0 if the g was concurrently
  * woken/owned (skip it).  claim_release ends that ownership: SWEEPING -> PARKED,

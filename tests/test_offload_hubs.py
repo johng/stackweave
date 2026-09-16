@@ -1,16 +1,13 @@
-"""Dedicated offload hubs (mn_init(offload_hubs=K) / STACKWEAVE_OFFLOAD_HUBS).
+"""Dedicated offload hubs (mn_init(offload_hubs=K) / run(..., offload_hubs=K)).
 
 The mechanism: reserve K hubs at the tail of runloom_hubs[], exclude them from
-general placement / stealing / sysmon preemption / the monopoly-yield scan, and
-run blocking calls there as ordinary fibers.  That lets `monkey.offload` reuse
-the scheduler (spawn, submit, channel, wake_g) instead of the bespoke thread
-pool + self-pipe + result-box protocol, and -- because nothing ever migrates
-between hubs -- it needs no CPython tstate patches.  See the STACKWEAVE_OFFLOAD_HUBS
-block in src/runloom_c/mn_sched.c.
+general placement / stealing / the monopoly-yield scan, and run blocking calls
+there as ordinary fibers.  That lets `monkey.offload` reuse the scheduler (spawn,
+submit, channel, wake_g) instead of the bespoke thread pool + self-pipe +
+result-box protocol.  See the offload-hubs block in src/runloom_c/mn_sched.c.
 
 These run IN-PROCESS: `offload_hubs` is an mn_init argument, so K can vary per
-run().  (The STACKWEAVE_OFFLOAD_HUBS env fallback is resolved once per process and
-could not be varied without re-execing a subprocess per case.)
+run().
 
 `time.sleep` is the stand-in for a blocking call: it releases the tstate, so a
 hub sitting in it is DETACHED-with-work, exactly like a blocking syscall.

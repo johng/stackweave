@@ -266,8 +266,6 @@ static void runloom_mn_hub_submit(runloom_hub_t *h, runloom_g_t *g)
  * mn_sched.h and the pin_hub1 field comment in runloom_sched.h. */
 int runloom_mn_pin_for_wake(runloom_g_t *g, int hub_id)
 {
-    void *park_hub;
-    int home;
     if (g == NULL) {
         PyErr_SetString(PyExc_RuntimeError, "pin(): dead fiber handle");
         return -1;
@@ -289,24 +287,6 @@ int runloom_mn_pin_for_wake(runloom_g_t *g, int hub_id)
     if (hub_id < 0) {                    /* clear the pin */
         runloom_mn_global_runq_repin(g, 0);
         return 0;
-    }
-
-    park_hub = (void *)__atomic_load_n(&g->park_hub, __ATOMIC_ACQUIRE);
-    home = runloom_mn_hub_id_of(park_hub);
-    if (home < 0 && g == runloom_tls_current_g && runloom_tls_hub != NULL)
-        home = runloom_tls_hub->id;
-
-    // Fail if cross hub migrations are not enabled
-    if (!runloom_use_global_runq() && home != hub_id) {
-        PyErr_Format(PyExc_RuntimeError,
-            "pin(%d): the default scheduler cannot resume a fiber on a hub "
-            "other than its own (%d) -- a woken fiber is hub-pinned by design, "
-            "so this pin would be silently ignored rather than honoured.  Start "
-            "the runtime with stackweave.enable_migration() on an interpreter "
-            "carrying both CPython patches (see stackweave.migration_status()) to "
-            "target another hub.",
-            hub_id, home);
-        return -1;
     }
 
     runloom_mn_global_runq_repin(g, hub_id + 1);
@@ -440,6 +420,7 @@ void runloom_mn_wake_g(void *hub_opaque, runloom_g_t *g)
     runloom_mn_hub_submit((runloom_hub_t *)hub_opaque, g);
 }
 
+static void runloom_mn_kick_hub_all_modes(runloom_hub_t *h);   /* below */
 int runloom_mn_hub_request_iouring_cancel(void *hub_opaque, void *op)
 {
     runloom_hub_t *h = (runloom_hub_t *)hub_opaque;
@@ -449,13 +430,24 @@ int runloom_mn_hub_request_iouring_cancel(void *hub_opaque, void *op)
     if (!__atomic_compare_exchange_n((intptr_t *)&h->iouring_cancel_op, &expected, cop, 0,
                                      __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
         return 0;   /* a cancel is already pending for this hub (best-effort) */
-    /* Wake the hub if idle-parked so it drains the mailbox promptly. */
-    if (__atomic_load_n(&h->idle_waiting, __ATOMIC_ACQUIRE)) {
-        RUNLOOM_RLOCK(&h->idle_lock, RUNLOOM_RANK_HUB_IDLE);
-        runloom_cond_signal(&h->idle_cond);
-        RUNLOOM_RUNLOCK(&h->idle_lock, RUNLOOM_RANK_HUB_IDLE);
-    }
+    /* Kick the hub out of WHATEVER wait it is in (ring / pump / idle condvar)
+     * so it drains the mailbox promptly. */
+    runloom_mn_kick_hub_all_modes(h);
     return 1;
+}
+/* Withdraw a cancel deposited by runloom_mn_hub_request_iouring_cancel that
+ * the hub has not drained yet.  `op` lives on the requesting fiber's C stack,
+ * so a fiber whose op completed on its own MUST retract before its frame dies
+ * or the hub would later read a dead frame.  Returns 1 if withdrawn, 0 if the
+ * hub had already taken it (it then reads a still-live op, or a stale one it
+ * ignores via op->wait). */
+int runloom_mn_hub_retract_iouring_cancel(void *hub_opaque, void *op)
+{
+    runloom_hub_t *h = (runloom_hub_t *)hub_opaque;
+    intptr_t expected = (intptr_t)op;
+    if (h == NULL || op == NULL) return 0;
+    return __atomic_compare_exchange_n((intptr_t *)&h->iouring_cancel_op, &expected, 0, 0,
+                                       __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE) ? 1 : 0;
 }
 
 /* Kick a hub out of EVERY wait mode (pump epoll_wait / its own io_uring ring
@@ -536,7 +528,7 @@ void runloom_iouring_cancel_fd_all_hubs(int fd)
 void runloom_iouring_cancel_fd_all_hubs(int fd) { (void)fd; }
 #endif
 
-/* Idle-stack-sweep handshake (RUNLOOM_PER_G_TSTATE).  An idle hub about to
+/* Idle-stack-sweep handshake.  An idle hub about to
  * MADV_DONTNEED a long-parked g's below-SP stack pages must hold the g
  * un-resumable for the madvise's duration, or another hub could pull a wake and
  * resume the g into pages the kernel is concurrently zeroing.  try_claim CASes

@@ -315,39 +315,18 @@ void runloom_g_entry(void *user)
         }
     }
 
-    /* Per-fiber contextvars context.  In the default shared-hub-tstate mode
-     * every fiber starts on the SAME ts->context object, so one fiber's
-     * ContextVar.set() mutates it for every sibling -- the per-g swap saves and
-     * restores the context POINTER, not a private copy of the contents.  Give
-     * each fiber its own copy of the spawn-time context, exactly as asyncio
-     * runs each Task in copy_context(), so a set() stays fiber-local.
-     * Skipped under per-g-tstate mode, where each fiber already owns a
-     * distinct tstate (and thus a distinct context) -- copying there is a pure
-     * waste.  On OOM we leave the shared context in place (leaky across
-     * siblings, but correct for this fiber and never a crash).
-     *
-     * RUNLOOM_NO_CTX_COPY=1 skips this entirely: the copy is one PyContext
-     * alloc + gc-track PER fiber (the freelist drains after a handful, so a
-     * 1M fan-out pays ~1M real allocs), and a workload that never calls
-     * ContextVar.set() in a fiber sees zero behavioural difference.  Opt-in
-     * because skipping it DOES break contextvar isolation for code that relies
-     * on it (asyncio Task semantics) -- so it's a per-run promise, not a default.
-     * Read once, cached. */
-    {
-    /* Atomic load too (store was already atomic): the plain `ctx_copy < 0` /
-     * `ctx_copy` reads raced the store across hub threads first-init'ing it
-     * (benign same-value, but a TSan data race at runloom_g_entry). */
-    static int ctx_copy = -1;
-    int cc = __atomic_load_n(&ctx_copy, __ATOMIC_RELAXED);
-    if (cc < 0) {
-        const char *e = getenv("STACKWEAVE_NO_CTX_COPY");
-        cc = (e && *e == '1') ? 0 : 1;
-        __atomic_store_n(&ctx_copy, cc, __ATOMIC_RELAXED);
-    }
-    /* Skip only for a fiber with its OWN tstate (an M:N hub fiber under
-     * migration); a single-thread fiber on any other thread still needs the
-     * private context even while an M:N run is live (the flag is global). */
-    if (cc && !(runloom_get_per_g_tstate_mode() && runloom_mn_current_sched() != NULL)) {
+    /* Per-fiber contextvars context.  On the single-thread scheduler every
+     * fiber starts on the SAME ts->context object, so one fiber's
+     * ContextVar.set() would mutate it for every sibling -- the per-g swap saves
+     * and restores the context POINTER, not a private copy of the contents.
+     * Give each fiber its own context, exactly as asyncio runs each Task in
+     * copy_context(), so a set() stays fiber-local.  Skipped only for a fiber
+     * with its OWN tstate (an M:N hub fiber), which already has a distinct
+     * context; a single-thread fiber on any other thread still needs the
+     * private context even while an M:N run is live (the mode flag is global).
+     * On OOM we leave the shared context in place (leaky across siblings, but
+     * correct for this fiber and never a crash). */
+    if (!(runloom_get_per_g_tstate_mode() && runloom_mn_current_sched() != NULL)) {
         PyThreadState *cts = PyThreadState_GET();
         /* Give this fiber a PRIVATE, EMPTY context as its baseline (p460).
          *
@@ -389,7 +368,6 @@ void runloom_g_entry(void *user)
         } else {
             PyErr_Clear();
         }
-    }
     }
 
     runloom_delay_inject(RUNLOOM_DLY_G_ENTRY);
@@ -790,7 +768,7 @@ void runloom_g_decref(runloom_g_t *g)
     if (new_count <= 0) {
         runloom_pystate_snap_clear(&g->snap);
         if (g->tstate != NULL) {
-            /* per-g tstate (RUNLOOM_PER_G_TSTATE): g is done + detached, so its
+            /* per-g tstate (M:N): g is done + detached, so its
              * tstate is current on no thread.  Clear+Delete frees its
              * datastack/frames/exc.  Mirrors mn_fini's hub-tstate teardown,
              * which also clears non-current tstates with the caller's tstate
@@ -800,14 +778,13 @@ void runloom_g_decref(runloom_g_t *g)
              * =================== UNPATCHED-INTERPRETER CRASH ===================
              * If you arrived here from a SEGV backtrace that goes
              *   PyThreadState_Clear -> _PyMem_AbandonDelayed -> ... -> _mi_page_retire
-             * you forced a migratable mode on an interpreter that LACKS the
-             * alloc-home patch -- i.e. RUNLOOM_ALLOW_UNSAFE_MIGRATION=1 enabled it
-             * despite runloom.migration_available() being False.  This crash is
+             * you ran M:N on an interpreter that LACKS the alloc-home patch, or
+             * built this extension without -DPy_TSTATE_ALLOC_HOME -- migration is
+             * always on and nothing checks for the patch.  This crash is
              * CHARACTERIZED and FIXED by the alloc-home patch (src/patches/
              * README.md); do not re-derive it.
              *
-             * What it is: this Clear is NOT the cause.  Under RUNLOOM_PER_G_TSTATE
-             * (and RUNLOOM_STEAL_WOKEN / RUNLOOM_MIGRATION, which map to it) a
+             * What it is: this Clear is NOT the cause.  Under migration a
              * fiber's per-g PyThreadState -- carrying its OWN mimalloc heap + QSBR
              * delayed-free state -- migrates across OS hub threads as the fiber
              * moves hub->hub.  Free-threaded CPython binds a tstate's allocator to
@@ -818,25 +795,36 @@ void runloom_g_decref(runloom_g_t *g)
              *
              * Fingerprint: intermittent SEGV, ONLY at H>=2 (needs real migration --
              * H=1 is always clean), ONLY under allocation churn (e.g.
-             * test_chan_queue MPMC).  The DEFAULT scheduler (all flags off) never
-             * takes this path and is unaffected.
+             * test_chan_queue MPMC).  The single-thread scheduler never takes
+             * this path and is unaffected.
              *
              * THE FIX -- alloc-home (Py_TSTATE_ALLOC_HOME).  Each per-g tstate
              * borrows the RUNNING hub's allocator on every resume
              * (runloom_iframe_borrow_alloc_home, hub_main per-g branch), so its own
              * heap stays empty and never migrates OS threads -- no _mi_page_retire
-             * corruption.  With BOTH patches present (migration_available()) the
-             * mode enables with no override and this path is SOUND; the crash above
-             * is reachable ONLY via the RUNLOOM_ALLOW_UNSAFE_MIGRATION dev/fuzzing
-             * escape hatch on an under-patched interpreter.  Do NOT try to "fix" it
+             * corruption.  With BOTH patches present this path is SOUND; the
+             * crash above is reachable ONLY on an under-patched interpreter or an
+             * extension built without the patch defines.  Do NOT try to "fix" it
              * here (teardown) or by reordering Clear/Delete -- unpatched, the pages
              * are already corrupt by the time we reach this line; the fix is the
              * patch, not this teardown.
              * ==================================================================*/
-            runloom_sysmon_tstate_retire_wait(g->tstate);   /* sysmon may be reading it */
-            PyThreadState_Clear(g->tstate);
-            PyThreadState_Delete(g->tstate);
-            g->tstate = NULL;
+            if (Py_IsFinalizing()) {
+                /* Interpreter finalization owns every non-main tstate from
+                 * here on: Py_FinalizeEx sets finalizing, then
+                 * _PyThreadState_RemoveExcept + _PyThreadState_DeleteList
+                 * Clear each one, per-g tstates included.  A g deallocated
+                 * from a hub tstate's biased-refcount merge inside that walk
+                 * lands here with g->tstate already cleared, so a second
+                 * Clear unlinks an unlinked brc node (SIGSEGV in
+                 * Py_FinalizeEx).  Forget it. */
+                g->tstate = NULL;
+            } else {
+                runloom_sysmon_tstate_retire_wait(g->tstate);   /* sysmon may be reading it */
+                PyThreadState_Clear(g->tstate);
+                PyThreadState_Delete(g->tstate);
+                g->tstate = NULL;
+            }
         }
         if (g->arena) {
             /* Bulk-arena g: the g, its coro and its stack are slices of a batch

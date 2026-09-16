@@ -7,18 +7,17 @@ p76's finding (FINDINGS BUG #8): interleaving the two switchers historically
 CRASHED -- either cooperatively (yielding to the stackweave scheduler while control
 sits on a greenlet's C-stack) or preemptively (a preemptive goroutine switch
 landing in the middle of a greenlet switch).  p76 therefore ran with preemption
-DISABLED (STACKWEAVE_PREEMPT=0) AND drove each greenlet tree to completion
-ATOMICALLY (no stackweave scheduling point between two greenlet switches).
+DISABLED AND drove each greenlet tree to completion ATOMICALLY (no stackweave
+scheduling point between two greenlet switches).
 
-This session's measured result on CPython 3.14.4t + current stackweave (the probes
-that back these assertions, re-run below as tests): the coexistence is now
-ROBUST.  The atomic p76 pattern passes WITH preemption ON -- the improvement over
-p76 -- and even the historically-worst case, cooperatively yielding to the
-stackweave scheduler from WITHIN a switched-in greenlet, now completes cleanly
-(measured: 128 goroutines x 8 hubs x 20 iterations, preemption on AND off, 8 runs
-each, zero crashes).  We assert both the safe/atomic ordering and the now-passing
-interleaved ordering, and note the improvement rather than silently relying on
-STACKWEAVE_PREEMPT=0.
+Measured on CPython 3.14.4t (the probes that back these assertions, re-run below
+as tests): the coexistence is now ROBUST.  The atomic p76 pattern passes, and
+even the historically-worst case, cooperatively yielding to the stackweave
+scheduler from WITHIN a switched-in greenlet, now completes cleanly (measured:
+128 goroutines x 8 hubs x 20 iterations, 8 runs, zero crashes).  We assert both
+the safe/atomic ordering and the now-passing interleaved ordering.  (M:N has no
+wall-clock preemption any more -- migration mode stands it down -- so the old
+preempt-on/off pairs are one case each.)
 
 Isolation strategy:
   * SINGLE-THREAD (run(1)) greenlet nesting runs IN-PROCESS via the raw
@@ -359,14 +358,13 @@ SCENARIOS = {
 }
 
 
-def run_mn_scenario(name, preempt=True, timeout=90):
+def run_mn_scenario(name, timeout=90):
     """Launch a scenario in a PYTHON_TLBC=0 subprocess (this file as entry point).
-    Returns (returncode, stdout+stderr).  preempt=False sets STACKWEAVE_PREEMPT=0."""
+    Returns (returncode, stdout+stderr)."""
     env = dict(os.environ)
     env["PYTHON_GIL"] = "0"
     env["PYTHON_TLBC"] = "0"          # preset -> no stackweave self-re-exec
     env["PYTHONPATH"] = REPO_SRC + os.pathsep + env.get("PYTHONPATH", "")
-    env["STACKWEAVE_PREEMPT"] = "1" if preempt else "0"
     proc = subprocess.run(
         [sys.executable, os.path.abspath(__file__), name],
         env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -374,57 +372,41 @@ def run_mn_scenario(name, preempt=True, timeout=90):
     return proc.returncode, proc.stdout.decode("utf-8", "replace")
 
 
-def assert_scenario(name, preempt):
-    rc_code, out = run_mn_scenario(name, preempt=preempt)
+def assert_scenario(name):
+    rc_code, out = run_mn_scenario(name)
     token = "RESULT %s ok=True" % name
     assert rc_code == 0, (
-        "M:N greenlet scenario %s (preempt=%s) child exited %d (crash/signal if "
-        "negative):\n%s" % (name, preempt, rc_code, out))
+        "M:N greenlet scenario %s child exited %d (crash/signal if "
+        "negative):\n%s" % (name, rc_code, out))
     assert token in out, (
-        "M:N greenlet scenario %s (preempt=%s) did not report ok=True:\n%s"
-        % (name, preempt, out))
+        "M:N greenlet scenario %s did not report ok=True:\n%s" % (name, out))
 
 
 @pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
-def test_mn_independent_greenlet_trees_preempt_on():
-    """Many goroutines each running independent greenlet trees, atomically -- WITH
-    preemption ON.  This is the improvement over p76 (which required
-    STACKWEAVE_PREEMPT=0): the atomic ordering is now robust under preemption."""
-    assert_scenario("mn_atomic_trees", preempt=True)
-
-
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
-def test_mn_independent_greenlet_trees_preempt_off():
-    """Same torture with the p76-safe STACKWEAVE_PREEMPT=0 ordering -- the original
-    guarantee still holds."""
-    assert_scenario("mn_atomic_trees", preempt=False)
+def test_mn_independent_greenlet_trees():
+    """Many goroutines each running independent greenlet trees, atomically."""
+    assert_scenario("mn_atomic_trees")
 
 
 @pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_mn_greenlet_trees_interleaved_with_chan():
     """greenlet switches interleaved with channel send/recv across hubs."""
-    assert_scenario("mn_chan_interleave", preempt=True)
+    assert_scenario("mn_chan_interleave")
 
 
 @pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_mn_greenlet_raise_across_switch():
     """A greenlet raising across a switch inside each of many parallel goroutines."""
-    assert_scenario("mn_raise", preempt=True)
+    assert_scenario("mn_raise")
 
 
 @pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
-def test_mn_yield_from_inside_greenlet_preempt_on():
+def test_mn_yield_from_inside_greenlet():
     """FINDINGS BUG #8 case: cooperatively yielding to the stackweave scheduler from
     inside a switched-in greenlet, interleaved with greenlet switches, across many
-    hubs, WITH preemption ON.  Historically crashed; asserted here to now complete
-    cleanly (subprocess-isolated so any regression is a captured child crash)."""
-    assert_scenario("mn_yield_inside", preempt=True)
-
-
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
-def test_mn_yield_from_inside_greenlet_preempt_off():
-    """Same BUG #8 case with STACKWEAVE_PREEMPT=0."""
-    assert_scenario("mn_yield_inside", preempt=False)
+    hubs.  Historically crashed; asserted here to now complete cleanly
+    (subprocess-isolated so any regression is a captured child crash)."""
+    assert_scenario("mn_yield_inside")
 
 
 # ---------------------------------------------------------------------------

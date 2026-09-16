@@ -47,6 +47,19 @@
  * tools/verify/tla/RunloomMNControl.tla.  Mechanism + scope: tools/mn_controlled/README.md.
  * Zero cost when RUNLOOM_MN_SEED is unset.
  * ==================================================================== */
+
+/* TODO(migration): re-implement the controlled scheduler for migration mode.
+ * Migration routes every woken fiber through the global run-queue, which any hub
+ * pulls from outside the seeded baton's order, so same-seed runs diverge (linz
+ * battery, mn-sim byte digests, simfd M:N smoke).  Until global-runq pulls are
+ * brought under the baton, the controller -- STACKWEAVE_MN_SEED and everything
+ * that rides on it (MN_BARRIER / MN_PCT / MN_SCHEDULE / MN_FANOUT /
+ * MN_PREEMPT_FRAMES / MN_TRACE, native mn-sim STACKWEAVE_SIM_MN) -- stays compiled
+ * in but DISABLED: mn_init refuses a seeded run instead of silently losing
+ * determinism.  Build with -DRUNLOOM_MN_CTRL=1 to work on it. */
+#ifndef RUNLOOM_MN_CTRL
+#define RUNLOOM_MN_CTRL 0
+#endif
 typedef struct {
     int          enabled;
     int          n;
@@ -520,7 +533,7 @@ static void runloom_mn_ctrl_try_grant(void)
                          * instant's wave has, by construction, no wake source
                          * (settled + clock unmoved), so refusing a second
                          * wave leaves it parked -> has_wakeable_work says NOT
-                         * wakeable -> the RUNLOOM_DEADLOCK census fires its
+                         * wakeable -> the deadlock census fires its
                          * LOUD dump/raise -- the diagnostic the DST promises,
                          * instead of a silent CPU-burning livelock.  Reset at
                          * arm (fresh run). */
@@ -579,6 +592,7 @@ static void runloom_mn_ctrl_init(int n)
     runloom_mn_ctrl.tracelen = 0;
     runloom_mn_ctrl.tracecap = 0;
     runloom_mn_ctrl.tracepath[0] = '\0';
+    if (!RUNLOOM_MN_CTRL) return;   /* disabled: see TODO(migration) above */
     if (seed == NULL || seed[0] == '\0' || n <= 0) return;
     runloom_mn_ctrl.want = (int *)PyMem_Calloc((size_t)n, sizeof(int));
     runloom_mn_ctrl.seen = (uint64_t *)PyMem_Calloc((size_t)n, sizeof(uint64_t));
@@ -1110,20 +1124,18 @@ static void runloom_mn_ctrl_stage_flush(runloom_hub_t *h)
 
 RUNLOOM_INLINE void runloom_hub_resume_begin(runloom_hub_t *h, runloom_g_t *g)
 {
-    if (__builtin_expect(runloom_sysmon_enabled, 0)) {
-        /* Relaxed-atomic like its two siblings below: the sysmon thread reads
-         * resume_g concurrently for the wedge log (best-effort sample). */
-        __atomic_store_n((void **)&h->resume_g, (void *)g, __ATOMIC_RELAXED);
-        /* RELEASE: sysmon's hazard-pointer read acquires it (see
-         * runloom_sysmon_hub_attach_state).  g->tstate is already attached on
-         * this thread here (hub_main attaches it before resume_begin). */
-        __atomic_store_n((void **)&h->resume_tstate,
-                         (void *)(g->tstate != NULL ? g->tstate : h->tstate),
-                         __ATOMIC_RELEASE);
-        __atomic_add_fetch(&h->resume_seq, 1, __ATOMIC_RELAXED);
-        __atomic_store_n(&h->resume_start_ns, runloom_monotonic_ns(),
-                         __ATOMIC_RELAXED);
-    }
+    /* Relaxed-atomic like its two siblings below: the sysmon thread reads
+     * resume_g concurrently for the wedge log (best-effort sample). */
+    __atomic_store_n((void **)&h->resume_g, (void *)g, __ATOMIC_RELAXED);
+    /* RELEASE: sysmon's hazard-pointer read acquires it (see
+     * runloom_sysmon_hub_attach_state).  g->tstate is already attached on
+     * this thread here (hub_main attaches it before resume_begin). */
+    __atomic_store_n((void **)&h->resume_tstate,
+                     (void *)(g->tstate != NULL ? g->tstate : h->tstate),
+                     __ATOMIC_RELEASE);
+    __atomic_add_fetch(&h->resume_seq, 1, __ATOMIC_RELAXED);
+    __atomic_store_n(&h->resume_start_ns, runloom_monotonic_ns(),
+                     __ATOMIC_RELAXED);
     /* controlled mode: block until this hub holds the execution baton */
     runloom_mn_ctrl_acquire(h->id);
     runloom_mn_preempt_ctr = 0;     /* fresh frame budget for this segment */
@@ -1133,14 +1145,12 @@ RUNLOOM_INLINE void runloom_hub_resume_begin(runloom_hub_t *h, runloom_g_t *g)
  * stops counting this hub as "in a resume". */
 RUNLOOM_INLINE void runloom_hub_resume_end(runloom_hub_t *h)
 {
-    if (__builtin_expect(runloom_sysmon_enabled, 0)) {
-        __atomic_store_n(&h->resume_start_ns, 0, __ATOMIC_RELAXED);
-        /* Cleared BEFORE this g can complete and free its tstate: completion
-         * (runloom_g_decref -> runloom_sysmon_tstate_retire_wait) is program-
-         * ordered after this on the hub thread, and a cross-hub last decref
-         * happens-after via the refcount's acq_rel. */
-        __atomic_store_n((void **)&h->resume_tstate, (void *)NULL, __ATOMIC_RELEASE);
-    }
+    __atomic_store_n(&h->resume_start_ns, 0, __ATOMIC_RELAXED);
+    /* Cleared BEFORE this g can complete and free its tstate: completion
+     * (runloom_g_decref -> runloom_sysmon_tstate_retire_wait) is program-
+     * ordered after this on the hub thread, and a cross-hub last decref
+     * happens-after via the refcount's acq_rel. */
+    __atomic_store_n((void **)&h->resume_tstate, (void *)NULL, __ATOMIC_RELEASE);
     /* Publish this segment's deferred cross-hub submits ATOMICALLY (per target)
      * before releasing the baton, so the next round sees a complete batch -- the
      * deterministic-replay fix for the partial-snapshot residual.  No-op (NULL
@@ -1184,7 +1194,7 @@ static RUNLOOM_TLS int runloom_tls_fastpath_streak = 0;
  * microseconds. */
 #define RUNLOOM_YIELD_FASTPATH_BOUND 64
 
-/* RUNLOOM_PREEMPT eval-frame wrapper (see the block near runloom_preempt_enabled).
+/* Preemption eval-frame wrapper (armed by the sysmon watchdog, see mn_sched_sysmon.c.inc).
  * Chains to the previous eval-frame func (normally _PyEval_EvalFrameDefault) so
  * it composes with any other installed wrapper; _PyInterpreterFrame is opaque
  * (passed straight through). */
@@ -1333,9 +1343,9 @@ static int runloom_mn_liveness_pending_cb(void *arg)
 
 /* Install the preemption eval-frame wrapper on `interp` ONCE for the process
  * lifetime.  Install runs in mn_init after runloom_sysmon_config (so
- * runloom_preempt_enabled is set) and BEFORE any fiber runs Python.  No-op unless
- * RUNLOOM_PREEMPT.  Capturing the previous func means we chain rather
- * than clobber a wrapper someone else installed.
+ * runloom_preempt_enabled is set) and BEFORE any fiber runs Python.  Capturing
+ * the previous func means we chain rather than clobber a wrapper someone else
+ * installed.
  *
  * INSTALL-ONCE, NEVER-UNINSTALL.  Toggling interp->eval_frame on every
  * mn_init/mn_fini cycle is a data race against EVERY other Python thread: a
@@ -1375,15 +1385,4 @@ static void runloom_preempt_install(PyInterpreterState *interp)
                      __ATOMIC_RELEASE);
     _PyInterpreterState_SetEvalFrameFunc(interp, runloom_preempt_eval_frame);
     runloom_preempt_installed = 1;
-}
-
-/* Intentionally a NO-OP.  The preempt eval-frame hook is installed once for the
- * process lifetime (see runloom_preempt_install) and is NEVER swapped back: the
- * per-session restore was the write half of the interp->eval_frame data race
- * (mn_fini storing the default -- i.e. NULL -- while a foreign thread dispatched
- * a frame).  Because the hook passes straight through when no hub is active
- * (runloom_tls_hub == NULL), there is nothing to restore between sessions. */
-static void runloom_preempt_uninstall(PyInterpreterState *interp)
-{
-    (void)interp;
 }

@@ -68,7 +68,7 @@ def expect(body, sentinel="OK", timeout=30):
             "  under ~has_wakeable_work, so unreachable-but-registered work\n"
             "  hangs without a word.\n"
             "  Reproduce:  PYTHON_GIL=0 PYTHONPATH=src {1} -c '<body>'\n"
-            "  More signal: STACKWEAVE_DEADLOCK=raise, and gdb -p <pid> once wedged;\n"
+            "  More signal: stackweave_c.set_deadlock_mode(2), and gdb -p <pid> once wedged;\n"
             "              stackweave.stats() from a live fiber shows whether the\n"
             "              fibers actually COMPLETED (mn_completed_total).\n"
             "--- child stdout ---\n{2}\n--- child stderr ---\n{3}".format(

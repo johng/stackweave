@@ -9,12 +9,12 @@ safe ordering: interleaving the two stack switchers crashes (FINDINGS BUG #8).
 Stresses: greenlet's C-stack switching coexisting with goroutine stacks at the
 boundary; verifies the non-interleaving case works.
 
-Preemption is disabled here: a preemptive goroutine switch can also fall in the
-middle of a greenlet switch and crash (FINDINGS BUG #8), so greenlet coexistence
-requires preemption off AND no cooperative yield mid-greenlet-sequence.
+There is no M:N preemption to disable: a preemptive goroutine switch falling in
+the middle of a greenlet switch could crash (FINDINGS BUG #8), and migration mode
+has none, so greenlet coexistence needs only no cooperative yield
+mid-greenlet-sequence.
 """
 import os
-os.environ.setdefault("STACKWEAVE_PREEMPT", "0")   # must be set before mn_init
 
 import harness          # noqa: E402
 import stackweave          # noqa: E402

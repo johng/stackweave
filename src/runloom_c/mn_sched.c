@@ -91,7 +91,7 @@
 #endif
 
 /* ---- per-g wake_state FSM transition table (OBSERVATIONAL) -------------------
- * The provably-total transition relation for the RUNLOOM_PER_G_TSTATE global-runq
+ * The provably-total transition relation for the global-runq
  * per-g wake_state (runloom_sched.h:236-285), identical to the CBMC-proven table
  * in tools/verify/cbmc/wake_state_fsm_cbmc.c.  Six states x five events.  Cells with no
  * legal transition are RUNLOOM_FSM_INVALID (-1).  This table never DRIVES the
@@ -230,7 +230,7 @@ typedef struct runloom_hub {
      * init -> first idle sweep fires immediately).  Rate-limits the
      * O(parked) walk under RUNLOOM_STACK_PARK_SWEEP. */
     double               last_sweep_s;
-    /* ---- sysmon (Group B) progress instrumentation, RUNLOOM_SYSMON only ----
+    /* ---- sysmon (Group B) progress instrumentation ----
      * resume_start_ns: monotonic-ns when this hub entered its current
      * runloom_coro_resume; 0 between resumes (idle / looping).  The sysmon
      * watchdog reads it to spot a hub stuck inside a non-yielding blocking
@@ -238,9 +238,9 @@ typedef struct runloom_hub {
      * wrap).  resume_g is the g being resumed, for the wedge log line.
      * resume_seq bumps every resume start so the watchdog can tell "same
      * stuck resume" from "made progress" without racing on the ns value.
-     * Written by the hub only when runloom_sysmon_enabled (predicted-not-taken
-     * off the hot path); read RELAXED by the watchdog (a stale read just
-     * delays/!duplicates a report -- harmless for a watchdog). */
+     * Written by the hub on every resume (sysmon always runs); read RELAXED
+     * by the watchdog (a stale read just delays/!duplicates a report --
+     * harmless for a watchdog). */
     alignas(RUNLOOM_CACHELINE) volatile long long   resume_start_ns;
     volatile long        resume_seq;
     runloom_g_t            *resume_g;
@@ -302,7 +302,7 @@ static runloom_hub_t *runloom_hubs = NULL;
 static int runloom_hub_count = 0;
 static volatile long runloom_mn_spawn_counter = 0;
 
-/* ---- Dedicated offload hubs (RUNLOOM_OFFLOAD_HUBS, default 0 = off) ----
+/* ---- Dedicated offload hubs (mn_init offload_hubs=K, default 0 = off) ----
  *
  * The LAST K hubs of runloom_hubs[] are reserved to run blocking calls as
  * ordinary fibers, so `offload` can reuse the scheduler (spawn, submit,
@@ -310,16 +310,15 @@ static volatile long runloom_mn_spawn_counter = 0;
  * protocol in runloom/monkey/_base.py -- which is where every logged bug in
  * that subsystem lives (big_100 #4, p92, p23/p17).
  *
- * WHY A HUB AND NOT A GENERAL HUB.  Blocking a general hub strands every g
- * WOKEN while it blocks: the wake routes to the origin hub's owner-drained
- * submission list, which a blocked hub never drains (see the global-runq block
- * in mn_sched_runq.c.inc, which names libc getaddrinfo as the classic case).
- * Rescuing those needs cross-hub migration of a suspended fiber, which is
- * unsound without the CPython tstate patches (src/patches/README.md;
- * runloom.migration_available()).  A DEDICATED hub sidesteps it entirely: the
- * offload fiber is born here and dies here, the CALLER never leaves its own
- * (unblocked) hub, and the result travels back over a normal channel.  Nothing
- * migrates, so this works on stock CPython.
+ * WHY A HUB AND NOT A GENERAL HUB.  Blocking a general hub takes it out of
+ * service for the length of the call (woken gs are not stranded -- they go to
+ * the global run-queue, which any hub drains -- but everything only that hub
+ * runs waits).  A DEDICATED hub keeps blocking calls off the general hubs: the
+ * offload fiber is spawned here, the CALLER stays on its own (unblocked) hub,
+ * and the result travels back over a normal channel.  KNOWN GAP: a woken
+ * offload fiber goes to the global run-queue like any other, so it can resume
+ * on a general hub, and an offload hub can pull general work from that queue
+ * (see the offload invariant in CLAUDE.md).
  *
  * It also sidesteps the netpoll question: an offload hub's parker pool and
  * epoll stay empty (offload fibers make blocking C calls, they do not park on
@@ -373,23 +372,6 @@ RUNLOOM_INLINE int runloom_hub_is_offload(int id)
            id >= runloom_general_hub_count();
 }
 
-/* RUNLOOM_OFFLOAD_HUBS: how many hubs to reserve.  Default 0 -- the feature is
- * OFF and every path below reduces to exactly its previous behaviour, which is
- * what makes this safe to land in a verified scheduler.  Read once. */
-static int runloom_offload_hubs_env(void)
-{
-    static int v = -1;
-    int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
-    if (cur < 0) {
-        const char *e = getenv("STACKWEAVE_OFFLOAD_HUBS");
-        cur = (e != NULL) ? atoi(e) : 0;
-        if (cur < 0) cur = 0;
-        if (cur > RUNLOOM_OFFLOAD_HUBS_MAX) cur = RUNLOOM_OFFLOAD_HUBS_MAX;
-        __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
-    }
-    return cur;
-}
-
 /* Monotonic M:N "session generation".  Bumped each time the hub pool is torn
  * down (runloom_mn_fini) or abandoned in a forked child (reset_after_fork).  A
  * RunloomG handle stamps the value live at its creation; RunloomG.wake compares
@@ -409,25 +391,6 @@ static uint64_t runloom_mn_gen = 0;
 uint64_t runloom_mn_generation_get(void)
 {
     return __atomic_load_n(&runloom_mn_gen, __ATOMIC_ACQUIRE);
-}
-
-/* BUG #10 throughput: is the per-hub idle condvar wake enabled?  Default ON; set
- * RUNLOOM_HUB_IDLE_WAKE=0 to fall back to the plain idle nanosleep (A/B / escape
- * hatch).  An idle hub that owns parked gs waits on its per-hub condvar instead
- * of a plain nanosleep, so a cross-hub hub_submit signals it awake in ~us
- * instead of stranding the woken g for idle_ns (the cap that held the contended
- * cooperative Lock at ~10K ops/s).  The wait is TIMED (idle_ns), so a missed
- * signal degrades to the old latency for one hand-off -- never a hang. */
-static int runloom_hub_idle_wake_enabled(void)
-{
-    static int v = -1;
-    int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
-    if (cur < 0) {
-        const char *e = getenv("STACKWEAVE_HUB_IDLE_WAKE");
-        cur = (e != NULL && e[0] == '0') ? 0 : 1;
-        __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
-    }
-    return cur;
 }
 
 /* Serializes the hubs' one-time PyThreadState_New at startup.  Each hub creates

@@ -263,12 +263,10 @@ static PyMethodDef module_methods[] = {
     {"get_stack_scrub", m_get_stack_scrub, METH_NOARGS,
      "Return whether recycled-stack scrubbing is enabled."},
     {"mn_init",     (PyCFunction)m_mn_init, METH_VARARGS | METH_KEYWORDS,
-     "mn_init(n=cpus, offload_hubs=-1): start N hub threads.  Returns the "
+     "mn_init(n=cpus, offload_hubs=0): start N hub threads.  Returns the "
      "total hub count.  offload_hubs reserves that many EXTRA hubs (added to "
      "N, never carved out of it) on which a blocking call may run as an "
-     "ordinary fiber -- see offload_fiber.  -1 consults STACKWEAVE_OFFLOAD_HUBS; "
-     "an explicit value overrides it, so a library can ask for what its own "
-     "code needs without requiring its host to set an environment variable."},
+     "ordinary fiber -- see offload_fiber."},
     {"mn_fiber",       (PyCFunction)m_mn_fiber, METH_VARARGS | METH_KEYWORDS,
      "mn_fiber(callable, stack_size=0, hub=-1): spawn a fiber on a round-robin "
      "hub.  stack_size>0 overrides the hub's small default C-stack (bytes) for "
@@ -303,7 +301,7 @@ static PyMethodDef module_methods[] = {
      "blocking call without stranding fibers woken on a general hub.  The "
      "result comes back the ordinary way (channel/WaitGroup), so no bespoke "
      "completion protocol is involved.  Raises RuntimeError if no offload hubs "
-     "are reserved -- set STACKWEAVE_OFFLOAD_HUBS before mn_init."},
+     "are reserved -- pass offload_hubs=K to mn_init."},
     {"offload_hub_count", m_mn_offload_hub_count, METH_NOARGS,
      "offload_hub_count(): how many hubs are reserved for blocking offload "
      "(0 = feature off).  Also the bound on concurrent blocking calls: a "
@@ -312,7 +310,7 @@ static PyMethodDef module_methods[] = {
      "mn_hub_states() -> list[dict].  A snapshot of every M:N hub: id, state "
      "('detached'/'attached'/'suspended'), running_g (goid being resumed, or "
      "None), dwell_ms (how long that resume has run), pending (gs on the hub), "
-     "preempt_requested, instrumented, and blocked_at (the Python call site of "
+     "and blocked_at (the Python call site of "
      "a DETACHED-wedged hub's blocking call, best-effort).  Lock-free atomic "
      "reads; see stackweave.inspect.hubs() for the friendly view + a py-spy command."},
     {"preempt_init", m_preempt_init, METH_VARARGS,
@@ -337,7 +335,7 @@ static PyMethodDef module_methods[] = {
      "fibers() -> list[dict].  A snapshot of every live fiber: "
      "id, state ('io-wait'/'sleep'/'chan-wait'/'running'/...), blocked_on "
      "class, fd + events (when io-wait), wake_in (when sleeping), age (when "
-     "STACKWEAVE_INTROSPECT_TIME tracking is on), refcount, noyield, owner.  "
+     "set_introspect_timestamps(True) is on), refcount, noyield, owner.  "
      "Cheap; safe to poll from a watchdog fiber."},
     {"fiber_count", m_fiber_count, METH_NOARGS,
      "fiber_count() -> int.  Number of live fibers."},
@@ -357,8 +355,7 @@ static PyMethodDef module_methods[] = {
     {"set_introspect_timestamps", m_introspect_timestamps, METH_O,
      "set_introspect_timestamps(bool): when True, stamp each fiber's "
      "park time so fibers()/dump report 'age' (how long it has been "
-     "wedged).  Off by default (one vDSO clock read per park); also via "
-     "STACKWEAVE_INTROSPECT_TIME=1."},
+     "wedged).  Off by default (one vDSO clock read per park)."},
     {"reset_after_fork", m_reset_after_fork, METH_NOARGS,
      "reset_after_fork() -> None.  Reset every stackweave subsystem to a clean "
      "single-process state after os.fork() -- abandons the (now-dead) M:N "
@@ -378,8 +375,8 @@ static PyMethodDef module_methods[] = {
      "set_deadlock_mode(0|1|2): 0=off, 1=warn (print the fiber dump), "
      "2=raise RuntimeError when the scheduler quiesces with fibers still "
      "blocked on channels/parks (Go's 'all fibers are asleep - deadlock!'). "
-     "Default 1; also via STACKWEAVE_DEADLOCK=off|warn|raise.  Single-thread "
-     "scheduler only; aio's clean stop is excluded."},
+     "Default 1.  Applies to the single-thread scheduler and the M:N "
+     "census; aio's clean stop is excluded."},
     {"get_deadlock_mode", m_get_deadlock_mode, METH_NOARGS,
      "get_deadlock_mode() -> int.  Current deadlock-detection mode."},
     {"count_deadlocked", m_count_deadlocked, METH_NOARGS,
@@ -492,7 +489,7 @@ PyMODINIT_FUNC PyInit_stackweave_c(void)
     PyObject *m;
     const char *scrub_env;
     runloom_diag_init();          /* parses RUNLOOM_DEBUG once; cheap; idempotent */
-    runloom_introspect_init();    /* fiber registry lock; reads RUNLOOM_INTROSPECT_TIME */
+    runloom_introspect_init();    /* fiber registry lock */
     runloom_coro_pre_swap = runloom_coro_rearm_stackprot;  /* 3.14: re-arm fiber C-stack limit on every resume */
     scrub_env = getenv("STACKWEAVE_STACK_SCRUB");   /* opt-in recycled-stack wipe */
     if (scrub_env && scrub_env[0] && scrub_env[0] != '0') {
@@ -594,36 +591,6 @@ PyMODINIT_FUNC PyInit_stackweave_c(void)
         PyModule_AddIntConstant(m, "WR_QUEUE",     RUNLOOM_WR_QUEUE)     < 0) {
         Py_DECREF(m);
         return NULL;
-    }
-    /* Capability probes for cross-hub fiber migration.  Migration needs BOTH
-     * optional CPython patches, because they fix independent halves of the same
-     * problem:
-     *   alloc_home_available -- Py_TSTATE_ALLOC_HOME: a migrated fiber allocates
-     *     on the hub now running it, so no per-fiber mimalloc heap migrates OS
-     *     threads (the _mi_page_retire teardown corruption).
-     *   exec_home_available  -- Py_TSTATE_EXEC_HOME: _PyThreadState_GET() and
-     *     _Py_ThreadId() stay non-cacheable, so a resumed fiber cannot keep
-     *     using the ORIGIN hub's thread state or resolve biased-refcount
-     *     ownership against a stale thread id (a use-after-free).
-     * Either alone is insufficient; the scheduler's interlock requires both for
-     * the un-overridden production path, else migration stays behind
-     * RUNLOOM_ALLOW_UNSAFE_MIGRATION.  The Python layer reads these in
-     * runloom.migration_available()/enable_migration().  Both are defined in
-     * runloom_iframe.c (extern, same pattern as runloom_immortalize in
-     * module_run.c.inc). */
-    {
-        extern int runloom_alloc_home_active(void);
-        extern int runloom_exec_home_active(void);
-        if (PyModule_AddIntConstant(m, "alloc_home_available",
-                                    runloom_alloc_home_active()) < 0) {
-            Py_DECREF(m);
-            return NULL;
-        }
-        if (PyModule_AddIntConstant(m, "exec_home_available",
-                                    runloom_exec_home_active()) < 0) {
-            Py_DECREF(m);
-            return NULL;
-        }
     }
     /* GC frames anchor: makes parked-fiber frames visible to the free-threaded
      * collector so TLBC (the specializing interpreter) can run without the

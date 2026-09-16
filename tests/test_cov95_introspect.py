@@ -19,11 +19,9 @@ Regions DRIVEN here (uncovered line -> how):
             eight are parked we ``dump_fibers`` into a pipe and assert every
             ``park:<reason>`` label appears in the output -- proof each arm ran.
 
-  L185      ``runloom_introspect_set_timestamps(1)`` inside
-            ``runloom_introspect_init`` when ``STACKWEAVE_INTROSPECT_TIME`` is set.
-            Read ONCE at module import -> subprocess with the env, asserting
-            ``get_introspect_timestamps()`` is True AND that a real park then
-            reports a non-None ``age`` (proving the stamping the line enabled is
+  timestamps ``set_introspect_timestamps(True)`` in a fresh process,
+            asserting ``get_introspect_timestamps()`` is True AND that a real
+            park then reports a non-None ``age`` (proving the stamping is
             actually live, not just the flag).
 
   L194-195  ``STACKWEAVE_MAX_GOROUTINES`` env parse + ``runloom_set_max_fibers`` in
@@ -145,18 +143,18 @@ def test_dump_labels_every_dark_wait_reason():
 
 
 # --------------------------------------------------------------------------
-# L185: runloom_introspect_set_timestamps(1) inside runloom_introspect_init,
-# gated by STACKWEAVE_INTROSPECT_TIME.  Read once at module import -> subprocess.
-# We assert (a) get_introspect_timestamps() is True (the line ran) AND (b) a
-# real PARKED_SAFE fiber, observed via fibers(), reports a non-None `age` --
-# proving the env-enabled stamping is genuinely live end to end.
+# set_introspect_timestamps(True) in a fresh process.  We assert (a)
+# get_introspect_timestamps() is True AND (b) a real PARKED_SAFE fiber,
+# observed via fibers(), reports a non-None `age` -- proving the stamping is
+# genuinely live end to end.
 # --------------------------------------------------------------------------
 _TS_CHILD = r"""
 import os, sys
 sys.path.insert(0, 'src')
 import stackweave_c as rc
 
-assert rc.get_introspect_timestamps() is True, "STACKWEAVE_INTROSPECT_TIME did not turn on tracking"
+rc.set_introspect_timestamps(True)
+assert rc.get_introspect_timestamps() is True, "set_introspect_timestamps did not turn on tracking"
 
 seen = {}
 def main():
@@ -183,17 +181,16 @@ sys.stdout.write("INTROSPECT_TIME_OK\n")
 """
 
 
-def test_introspect_time_env_enables_age_tracking():
-    env = dict(os.environ, STACKWEAVE_INTROSPECT_TIME="1",
-               PYTHON_GIL="0", PYTHONPATH="src")
+def test_introspect_timestamps_enable_age_tracking():
+    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
     # Make sure the cap env doesn't leak in from a parent run and skew this.
     env.pop("STACKWEAVE_MAX_GOROUTINES", None)
     try:
         p = subprocess.run([PY, "-c", _TS_CHILD], cwd=REPO, env=env,
                            capture_output=True, text=True, timeout=200)
     except subprocess.TimeoutExpired:
-        pytest.skip("INTROSPECT_TIME subprocess timed out (shared-box contention)")
-    assert p.returncode == 0, "STACKWEAVE_INTROSPECT_TIME child failed rc=%d\n%s" % (
+        pytest.skip("introspect-timestamps subprocess timed out (shared-box contention)")
+    assert p.returncode == 0, "introspect-timestamps child failed rc=%d\n%s" % (
         p.returncode, p.stderr[-1500:])
     assert "INTROSPECT_TIME_OK" in p.stdout, (p.stdout, p.stderr[-800:])
 
@@ -244,7 +241,6 @@ def test_max_fibers_env_installs_admission_gate():
     cap = 6
     env = dict(os.environ, STACKWEAVE_MAX_GOROUTINES=str(cap),
                PYTHON_GIL="0", PYTHONPATH="src")
-    env.pop("STACKWEAVE_INTROSPECT_TIME", None)
     try:
         p = subprocess.run([PY, "-c", _MAXG_CHILD.format(cap=cap)],
                            cwd=REPO, env=env, capture_output=True, text=True,
@@ -289,7 +285,6 @@ sys.stdout.write("MAX_GOROUTINES_BAD_OK\n")
 def test_max_fibers_env_invalid_is_unlimited():
     env = dict(os.environ, STACKWEAVE_MAX_GOROUTINES="notanumber",
                PYTHON_GIL="0", PYTHONPATH="src")
-    env.pop("STACKWEAVE_INTROSPECT_TIME", None)
     try:
         p = subprocess.run([PY, "-c", _MAXG_BAD_CHILD], cwd=REPO, env=env,
                            capture_output=True, text=True, timeout=200)

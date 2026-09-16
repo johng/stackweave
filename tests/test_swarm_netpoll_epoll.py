@@ -1504,9 +1504,7 @@ stackweave.run(4, main)
 @pytest.mark.skipif(not FT, reason="M:N env modes need GIL-disabled build")
 @pytest.mark.parametrize("mode_env", [
     {"STACKWEAVE_SYSMON": "1", "STACKWEAVE_SYSMON_QUIET": "1", "STACKWEAVE_SYSMON_MS": "8"},
-    {"STACKWEAVE_PREEMPT": "1", "STACKWEAVE_PREEMPT_MS": "8"},
     {"STACKWEAVE_HANDOFF": "1", "STACKWEAVE_HANDOFF_POOL": "2"},
-    {"STACKWEAVE_HUB_IDLE_WAKE": "0"},
     {"STACKWEAVE_STACK_PARK_SWEEP": "1", "STACKWEAVE_STACK_PARK_SWEEP_MS": "1"},
     {"STACKWEAVE_DEADLOCK_MS": "50"},
     {"STACKWEAVE_READY_STARVE_BOUND": "2"},

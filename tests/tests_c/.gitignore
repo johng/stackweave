@@ -11,7 +11,6 @@ bench_server_runloom-ubsan
 # scripts; the .c / .sh sources stay tracked).
 test_stall_steal
 test_stall_pool
-test_preempt
 test_blockpool
 test_cldeque
 test_cldeque_lifo

@@ -29,8 +29,10 @@ Regions DRIVEN here (uncovered gcov line -> how):
              code present in a ring at dump time.  We drive a workload that emits
              twelve distinct ops (channel park/wake, netpoll fd link/unlink/
              timeout, M:N submit/pop, coro acquire/release, g transition/decref/
-             complete) and assert each label appears in the dump.  CAL_FREEZE,
-             WORLD_YIELD, PARKER_FORCE each get a dedicated mode test.
+             complete) and assert each label appears in the dump.  CAL_FREEZE
+             and PARKER_FORCE each get a dedicated mode test (WORLD_YIELD is
+             never emitted: the monopoly world-yield went with the per-hub
+             scheduler).
   L224-252   runloom_diag_dump per-thread ring walk (header + newest-first event
              loop) -- the body that only runs when a ring has events.
   L405-409   runloom_gilstate_trace body  -> STACKWEAVE_GILSTATE_TRACE=<path>.
@@ -108,7 +110,7 @@ def _child_env(**extra):
     env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
     for k in ("STACKWEAVE_DEBUG_DIAG", "STACKWEAVE_DEBUG", "STACKWEAVE_DELAY",
               "STACKWEAVE_DELAY_MAX_NS", "STACKWEAVE_GILSTATE_TRACE",
-              "STACKWEAVE_MN_EVENTS", "STACKWEAVE_WORLD_YIELD_NS"):
+              "STACKWEAVE_MN_EVENTS"):
         env.pop(k, None)
     env.update(extra)
     return env
@@ -291,73 +293,6 @@ def test_ring_dump_covers_cal_freeze_arm():
     p = _run_child(_CAL_FREEZE_CHILD, env)
     assert p.returncode == 0, "cal-freeze child rc=%d\n%s" % (p.returncode, p.stderr[-1500:])
     assert "CAL_FREEZE_OK" in p.stdout, (p.stdout, p.stderr[-800:])
-
-
-# --------------------------------------------------------------------------
-# L196 (op_name WORLD_YIELD) + the WORLD_YIELD monopoly emit it labels.
-#
-# When STACKWEAVE_WORLD_YIELD_NS is set, an M:N hub that detaches for a foreign
-# thread's stop-the-world (a native thread's gc.collect()) emits
-# RUNLOOM_EVT_WORLD_YIELD on the monopoly world-yield.  A native OS thread
-# spinning gc.collect() against an M:N workload forces it; the dump must carry
-# the WORLD_YIELD label.
-# --------------------------------------------------------------------------
-_WORLD_YIELD_CHILD = r"""
-import os, sys, gc, threading, tempfile, time
-sys.path.insert(0, 'src')
-import stackweave_c as rc
-
-stop = [False]
-def native_gc():
-    # a genuine OS thread (captured before any patch) forcing stop-the-world GC
-    while not stop[0]:
-        gc.collect()
-
-def w():
-    for _ in range(20):
-        rc.sched_yield()
-
-def attempt():
-    # One short M:N run under the native STW churn, then dump + check the ring.
-    # A WORLD_YIELD only lands if a hub world-yields to a foreign STW DURING this
-    # window, so it is probabilistic per run -- especially on a loaded box -- and
-    # the diag ring is fixed-size, so a single long run would scroll the event
-    # off.  We therefore retry short runs until the event is captured (below).
-    def main():
-        for _ in range(80):
-            rc.mn_fiber(w)
-    rc.mn_init(4); rc.mn_fiber(main); rc.mn_run(); rc.mn_fini()
-    fd, path = tempfile.mkstemp()
-    rc._diag_dump(fd); os.close(fd)
-    data = open(path).read(); os.unlink(path)
-    return "WORLD_YIELD" in data
-
-t = threading.Thread(target=native_gc, daemon=True)
-t.start()
-# Bounded retry: a world-yield reliably fires within a few short runs; cap at
-# ~20s so a genuine "world-yield never arms" regression still fails (with a
-# count) rather than hanging, and a loaded box no longer false-fails.
-ok = False
-tries = 0
-deadline = time.time() + 20.0
-while time.time() < deadline:
-    tries += 1
-    if attempt():
-        ok = True
-        break
-stop[0] = True
-t.join(timeout=5)
-assert ok, ("WORLD_YIELD label absent under monopoly STW after %d run(s) in ~20s "
-            "(world-yield never armed -- a real regression, not a load flake)" % tries)
-sys.stdout.write("WORLD_YIELD_OK tries=%d\n" % tries)
-"""
-
-
-def test_ring_dump_covers_world_yield_arm():
-    env = _child_env(STACKWEAVE_DEBUG_DIAG="ring", STACKWEAVE_WORLD_YIELD_NS="3000")
-    p = _run_child(_WORLD_YIELD_CHILD, env)
-    assert p.returncode == 0, "world-yield child rc=%d\n%s" % (p.returncode, p.stderr[-2000:])
-    assert "WORLD_YIELD_OK" in p.stdout, (p.stdout, p.stderr[-1000:])
 
 
 # --------------------------------------------------------------------------
