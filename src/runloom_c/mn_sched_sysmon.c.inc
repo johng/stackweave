@@ -152,7 +152,15 @@ static RUNLOOM_THREAD_RET runloom_sysmon_main(void *arg)
             runloom_sysmon_tick_ns = runloom_sysmon_tick_base_ns << (idle_streak < 3 ? (int)idle_streak : 3);
             if (cap > 0 && runloom_sysmon_tick_ns > cap) runloom_sysmon_tick_ns = cap;
         }
-        runloom_sleep_ns(runloom_sysmon_tick_ns);
+        /* Wait out the tick on the cond, not a bare sleep, so stop_join can cut
+         * it short.  The stop re-check sits under the same lock stop_join sets
+         * the flag under, so a stop between the loop test and the wait cannot
+         * lose its signal.  A spurious or early return just rescans. */
+        runloom_mutex_lock(&runloom_sysmon_lock);
+        if (!__atomic_load_n(&runloom_sysmon_stop, __ATOMIC_ACQUIRE))
+            runloom_cond_timedwait_ns(&runloom_sysmon_cond, &runloom_sysmon_lock,
+                                      runloom_sysmon_tick_ns);
+        runloom_mutex_unlock(&runloom_sysmon_lock);
     }
     free(w_seq);
     free(w_start);
@@ -242,11 +250,18 @@ static void runloom_sysmon_spawn(void)
 {
     if (!runloom_sysmon_enabled) return;
     runloom_sysmon_stop = 0;
+    /* (Re)initialised here rather than statically: no watchdog is alive at this
+     * point (the previous one was joined, or died with a fork), and a fork
+     * child may have inherited the lock held. */
+    runloom_mutex_init(&runloom_sysmon_lock);
+    runloom_cond_init(&runloom_sysmon_cond);
     if (runloom_thread_create(&runloom_sysmon_thread, runloom_sysmon_main, NULL) == 0) {
         runloom_sysmon_running = 1;
     } else {
         fprintf(stderr, "[RUNLOOM_SYSMON] watchdog thread spawn failed; "
                         "stall detection disabled\n");
+        runloom_cond_destroy(&runloom_sysmon_cond);
+        runloom_mutex_destroy(&runloom_sysmon_lock);
     }
 }
 
@@ -255,7 +270,15 @@ static void runloom_sysmon_spawn(void)
 static void runloom_sysmon_stop_join(void)
 {
     if (!runloom_sysmon_running) return;
+    /* Set + signal under the lock the watchdog re-checks the flag under (see
+     * the wait at the bottom of runloom_sysmon_main), so the join below
+     * returns promptly instead of after the watchdog's current tick. */
+    runloom_mutex_lock(&runloom_sysmon_lock);
     __atomic_store_n(&runloom_sysmon_stop, 1, __ATOMIC_RELEASE);
+    runloom_cond_signal(&runloom_sysmon_cond);
+    runloom_mutex_unlock(&runloom_sysmon_lock);
     runloom_thread_join(runloom_sysmon_thread);
     runloom_sysmon_running = 0;
+    runloom_cond_destroy(&runloom_sysmon_cond);
+    runloom_mutex_destroy(&runloom_sysmon_lock);
 }

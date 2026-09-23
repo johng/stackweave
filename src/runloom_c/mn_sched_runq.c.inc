@@ -414,6 +414,12 @@ static long long runloom_sysmon_tick_base_ns = 10LL * 1000000LL; /* unbacked-off
 static runloom_thread_t runloom_sysmon_thread;
 static int       runloom_sysmon_running = 0;   /* 1 once the thread is spawned */
 static volatile int runloom_sysmon_stop = 0;
+/* Interruptible inter-tick wait: stop_join signals the cond under the lock so
+ * the join returns at once instead of waiting out the watchdog's current tick
+ * (up to wedge_ns/2 = 25 ms once idle backoff has kicked in -- i.e. at the end
+ * of every run()).  Initialised per spawn, destroyed after the join. */
+static runloom_mutex_t runloom_sysmon_lock;
+static runloom_cond_t  runloom_sysmon_cond;
 
 /* ---- ATTACHED/CPU preemption (RUNLOOM_PREEMPT, default OFF) ----
  *
