@@ -74,7 +74,7 @@ print('BACKEND', rc.netpoll_backend())
 # The test runs this in SIMULATION mode -- test_mn_sim_bytes sets
 #   SIM_ENV = {"STACKWEAVE_SIM": "1", "STACKWEAVE_SIM_MN": "1"}
 # and passes it through mn_digest.hermetic_env (which strips every inherited
-# RUNLOOM_* knob first, then pins PYTHON_GIL / PYTHONHASHSEED / PYTHONPATH).
+# STACKWEAVE_* knob first, then pins PYTHON_GIL / PYTHONHASHSEED / PYTHONPATH).
 # The FIRST version of this probe omitted that and therefore exercised the REAL
 # netpoll path: it passed on macos-14 (run 33943464165) while the test failed
 # 5/5 there, which told us only that the probe was wrong.  Sim mode is the
@@ -105,7 +105,7 @@ VARIANTS = [
 
 
 def run(name, preamble, extra_env):
-    # Mirror hermetic_env: strip inherited RUNLOOM_* so the parent's knobs
+    # Mirror hermetic_env: strip inherited STACKWEAVE_* so the parent's knobs
     # cannot contaminate the child, then pin exactly what the test pins.
     env = {k: v for k, v in os.environ.items() if not k.startswith("STACKWEAVE_")}
     env["PYTHON_GIL"] = "0"

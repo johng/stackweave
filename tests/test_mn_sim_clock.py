@@ -7,7 +7,7 @@ rc._logical_ns reads the EXACT census ns under controlled M:N, and
 ctrl_arm/sim_reset zero every plane so back-to-back in-process runs are
 bit-identical.
 
-Subprocesses use mn_digest.hermetic_env (strips inherited RUNLOOM_*); asserts
+Subprocesses use mn_digest.hermetic_env (strips inherited STACKWEAVE_*); asserts
 on printed output only (mn fiber exceptions are swallowed).
 """
 import os

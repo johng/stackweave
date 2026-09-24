@@ -81,7 +81,7 @@ chase (see the structured report's `exclusions` for the precise category):
     SIGSEGVs and kills the process.  CRASHONLY.
   * L180-181 (crash_thread_arm: munmap after a sigaltstack() failure) --
     sigaltstack only fails on a malformed stack_t (ss_size < MINSIGSTKSZ); the
-    code computes a valid size and there is no RUNLOOM_FAULT_ hook for
+    code computes a valid size and there is no STACKWEAVE_FAULT_ hook for
     sigaltstack, so the failure arm is unreachable without editing src.
     DEFENSIVE.
   * L507-558 (the entire #else _WIN32 path: runloom_crash_veh + the Windows

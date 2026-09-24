@@ -102,7 +102,7 @@ class TestBatonDeterminism:
 
 class TestSimMnFence:
     def run_snippet(self, code, extra_env):
-        # hermetic_env strips inherited RUNLOOM_* -- several sim test modules
+        # hermetic_env strips inherited STACKWEAVE_* -- several sim test modules
         # set os.environ["STACKWEAVE_SIM"] at import, so an in-process
         # `pytest tests/` run would otherwise contaminate these subprocesses
         # (e.g. test_plain_mn_unaffected would trip the fence it asserts absent).

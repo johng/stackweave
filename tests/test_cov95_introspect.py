@@ -58,7 +58,7 @@ structured report's `exclusions` for the precise category of each):
     crash handler, which re-raises the fatal signal; the process dies before
     gcov flushes.  CRASHONLY.
   * L553-554 (``runloom_fiber_snapshot`` malloc-fail cleanup) -- the raw
-    ``malloc`` there has no RUNLOOM_FAULT_ hook / interposer site.  OOM.
+    ``malloc`` there has no STACKWEAVE_FAULT_ hook / interposer site.  OOM.
 """
 import os
 import subprocess

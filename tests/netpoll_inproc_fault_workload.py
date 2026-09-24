@@ -2,7 +2,7 @@
 test_win_netpoll_faultinject.py).
 
 Parks a fiber on a never-readable socket with a deadline.  The pump polls
-that socket every iteration, so an injected poll/submit fault (RUNLOOM_FAULT_<SITE>,
+that socket every iteration, so an injected poll/submit fault (STACKWEAVE_FAULT_<SITE>,
 see netpoll.c) lands on a LIVE code path.  The fiber wakes via its deadline
 regardless of the fault, so the workload always terminates -- the point is the
 runtime's RESPONSE to the fault (retry / 1 ms backoff / clean error), measured

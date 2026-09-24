@@ -26,7 +26,7 @@ so a timeout is contention, not a bug.
 Oracles are real (exact-once echo, byte-exact partial-buffer carry, exact EOF,
 two-buffer coalescing, single-thread vs M:N wake), not line-touch filler.
 
-Lines that need an allocator failure with no RUNLOOM_FAULT_ hook (ms_open
+Lines that need an allocator failure with no STACKWEAVE_FAULT_ hook (ms_open
 calloc, on_cqe malloc, ms_close cancel-op calloc), a kernel-delivered non-
 ENOBUFS/ECANCELED multishot error CQE (ms_on_cqe h->err, ms_recv sticky-error
 return), or are caller-gated "can't happen" guards (ms_recv h==NULL / n==0; the

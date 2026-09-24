@@ -36,7 +36,7 @@ skip() { echo "-- trace conformance (model vs the REAL extension) --"; \
 command -v java >/dev/null 2>&1 || skip "java not found (TLC needs it)"
 { [ -x "$PY" ] || command -v "$PY" >/dev/null 2>&1; } \
     || skip "free-threaded 3.13t python not found ($PY) -- set STACKWEAVE_PYTHON"
-ls "$ROOT"/src/runloom_c*.so >/dev/null 2>&1 \
+ls "$ROOT"/src/stackweave_c*.so >/dev/null 2>&1 \
     || skip "stackweave_c not built (python setup.py build_ext --inplace)"
 # Ensure the TLA jar (same source as run_tla.sh).  Download to a unique temp then
 # atomic rename, so a concurrent run_tla.sh fetch can't corrupt it.

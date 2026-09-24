@@ -7,7 +7,7 @@ The base file covers:
   - KQUEUE_CREATE once:<errno> surfaces as OSError.
 
 The kqueue backend carries compiled-in, env-gated fault points
-(RUNLOOM_FAULT_<SITE>="<once|always>:<errno>", read at the syscall site; see
+(STACKWEAVE_FAULT_<SITE>="<once|always>:<errno>", read at the syscall site; see
 src/runloom_c/netpoll_init.c.inc runloom_fault_inject).  Darwin/BSD have no
 syscall-injecting tracer that survives SIP, so this env gate is the ONLY way to
 drive the error paths.  Because the gate is read with getenv() at the live

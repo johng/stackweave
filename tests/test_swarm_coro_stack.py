@@ -1162,7 +1162,7 @@ def test_fault_injection_on_spawn_path_is_clean_error_not_crash(site):
     # stack machinery touches.  A 'once' fault mid spawn-storm must surface as a
     # clean MemoryError (or a benign partial run) and leave a consistent
     # structure -- never a SIGSEGV/abort and never a hang.
-    p = _subproc(_FAULT_SPAWN, env_extra={"RUNLOOM_FAULT_%s" % site: "once:12"},
+    p = _subproc(_FAULT_SPAWN, env_extra={"STACKWEAVE_FAULT_%s" % site: "once:12"},
                  timeout=25)
     assert p.returncode == 0, (
         "fault at %s crashed/hung the spawn path: rc=%r stderr=%r"

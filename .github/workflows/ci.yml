@@ -61,7 +61,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       build: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.f.outputs.build }}
-      run: ${{ github.event_name == 'workflow_dispatch' && 'true' || (steps.f.outputs.build == 'true' || steps.f.outputs.runloom == 'true') }}
+      run: ${{ github.event_name == 'workflow_dispatch' && 'true' || (steps.f.outputs.build == 'true' || steps.f.outputs.stackweave == 'true') }}
       # Deliberately NARROWER than `build`.  Rebuilding to check that a CI script
       # edit still works is cheap and worth doing; PUBLISHING a new interpreter
       # for it is not -- the binaries would be byte-identical to the last one.

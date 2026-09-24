@@ -6,7 +6,7 @@ to a fallible libc/syscall function in the (flattened) TU and wrap it so its
 return can be forced to a realistic failure at RUNTIME, one site at a time, via
 env STACKWEAVE_FI_ENABLED.  No hand-picked site list -- the site set is exactly
 "every fallible call clang's AST sees", which is the point (removes the human
-judgment the compiled-in RUNLOOM_FAULT_* sites carry).
+judgment the compiled-in STACKWEAVE_FAULT_* sites carry).
 
 Each matched call `f(args)` -> `RUNLOOM_FI_<T>(id, ERRNO, f(args))`, where the
 macro returns the failure value (-1 / NULL / MAP_FAILED) and sets errno when

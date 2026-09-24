@@ -36,7 +36,7 @@ echo "MSan interpreter: $PY"
 $SA "$PY" -c 'import sysconfig;print("GIL_DISABLED",sysconfig.get_config_var("Py_GIL_DISABLED"))'
 
 echo "=== build stackweave_c under MSan (clang -fsanitize=memory), driven by the clean build python ==="
-$RM -rf build/lib.* build/temp.* src/runloom_c*.so 2>/dev/null
+$RM -rf build/lib.* build/temp.* src/stackweave_c*.so 2>/dev/null
 env PYTHON_GIL=0 \
    CC=clang CXX=clang++ \
    CFLAGS="-fsanitize=memory -fsanitize-memory-track-origins=2 -fno-omit-frame-pointer -g -O1" \

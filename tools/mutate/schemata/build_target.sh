@@ -55,7 +55,7 @@ sed -i 's/static thread_local/static/g' "$FLAT"
 cp "$FLAT" "$SRC"                       # the flat file IS self-contained now
 
 echo "=== [4/4] build the whole extension ONCE ($NMUT mutants embedded) ==="
-$RM -f src/runloom_c*.so 2>/dev/null
+$RM -f src/stackweave_c*.so 2>/dev/null
 PYTHON_GIL=0 "$PY" setup.py build_ext --inplace > "$WT/mutant_build.log" 2>&1 \
   || { echo "BUILD FAILED -- see $WT/mutant_build.log"; tail -20 "$WT/mutant_build.log"; exit 1; }
 PYTHON_GIL=0 PYTHONPATH=src "$PY" -c "import stackweave_c" \

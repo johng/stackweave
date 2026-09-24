@@ -186,7 +186,7 @@ def payload_main(argv):
 # ---------------------------------------------------------------------------
 
 def hermetic_env(extra_env=None):
-    """The digest subprocess env: the caller's environment with EVERY RUNLOOM_*
+    """The digest subprocess env: the caller's environment with EVERY STACKWEAVE_*
     knob stripped, then exactly the pinned keys (+ any explicit extra_env).
 
     Stripping is load-bearing twice over (adversarial review findings): an

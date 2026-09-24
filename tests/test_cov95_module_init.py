@@ -70,7 +70,7 @@ report's `exclusions[]` for the precise category of each):
     arm is unobservable.  RACE.
   * module_g L148 (d == NULL) and L151-152 (PyDict_SetItemString error cleanup)
     -- PyDict_New / PyDict_SetItemString fail only under allocator failure; no
-    RUNLOOM_FAULT_ hook covers these raw CPython calls.  OOM.
+    STACKWEAVE_FAULT_ hook covers these raw CPython calls.  OOM.
   * module_init L436-437 (runloom_module_getattro: PyDict_GetItemRef < 0) --
     the key is the interned "__getattr__" and the dict is the module dict;
     the lookup fails only on a corrupt dict, with no fault hook.  DEFENSIVE.

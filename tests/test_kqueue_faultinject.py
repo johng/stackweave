@@ -2,7 +2,7 @@
 
 Darwin/BSD have no syscall-injecting tracer (dtruss/ktrace observe but cannot
 inject; DYLD_INSERT_LIBRARIES is SIP-fragile), so the kqueue backend carries
-compiled-in, env-gated fault points -- RUNLOOM_FAULT_<SITE>="<mode>:<errno>",
+compiled-in, env-gated fault points -- STACKWEAVE_FAULT_<SITE>="<mode>:<errno>",
 mode in {once, always}; see netpoll.c.  This harness drives every kqueue
 syscall stackweave issues and asserts the runtime handles each errno the Darwin
 kevent(2)/kqueue(2) man pages permit:

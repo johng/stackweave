@@ -118,7 +118,7 @@ def run_genmc(mutated_path, timeout, cap=4, harness="chase_lev_real.c"):
     if not genmc:
         return "BUILDFAIL", "genmc not found (set GENMC=/path/to/genmc)"
     mutant_dir = os.path.dirname(mutated_path)        # already holds the mutant cldeque.c
-    src_dir = os.path.join(ROOT, "src", "stackweave_c")
+    src_dir = os.path.join(ROOT, "src", "runloom_c")
     gdir = os.path.join(HERE, "genmc")
     try:
         shutil.copy(os.path.join(gdir, harness), mutant_dir)
@@ -256,7 +256,7 @@ TARGETS = {
         "mutate": os.path.join(HERE, "cbmc", "io_classify_cbmc.c"),
         "ops": [gen_relop],
         "run": lambda mut, to: run_cbmc(
-            ["cbmc", "{MUT}", "-I", os.path.join(ROOT, "src", "stackweave_c")],
+            ["cbmc", "{MUT}", "-I", os.path.join(ROOT, "src", "runloom_c")],
             mut, to),
         "timeout": 120,
     },
@@ -265,11 +265,11 @@ TARGETS = {
         # here.  Kept for the runner; use cldeque_genmc for real weak-memory teeth.
         # ON-DEMAND ONLY: ~242s per CBMC run, so a full MO sweep is overnight-scale.
         "engine": "cbmc",
-        "mutate": os.path.join(ROOT, "src", "stackweave_c", "cldeque.c"),
+        "mutate": os.path.join(ROOT, "src", "runloom_c", "cldeque.c"),
         "ops": [gen_moflip],
         "run": lambda mut, to: run_cbmc(
             ["cbmc", os.path.join(HERE, "cbmc", "cldeque_cbmc.c"), "{MUT}",
-             "-I", os.path.join(ROOT, "src", "stackweave_c"),
+             "-I", os.path.join(ROOT, "src", "runloom_c"),
              "-I", os.path.join(HERE, "cbmc", "stubs"),
              "-DRUNLOOM_CLDEQUE_CAP=4"], mut, to),
         "timeout": 600,
@@ -279,7 +279,7 @@ TARGETS = {
         # load-bearing (a proof hole), and a killed one proves the barrier needed.
         # ON-DEMAND ONLY: minutes per GenMC run; run with --target cldeque_genmc.
         "engine": "genmc",
-        "mutate": os.path.join(ROOT, "src", "stackweave_c", "cldeque.c"),
+        "mutate": os.path.join(ROOT, "src", "runloom_c", "cldeque.c"),
         "ops": [gen_moflip],
         "run": lambda mut, to: run_genmc(mut, to),
         "timeout": 900,
@@ -290,7 +290,7 @@ TARGETS = {
         # order really is RC11-redundant; a survivor there that FLIPS to killed
         # here means the weaker harness just didn't exercise it.  On-demand.
         "engine": "genmc",
-        "mutate": os.path.join(ROOT, "src", "stackweave_c", "cldeque.c"),
+        "mutate": os.path.join(ROOT, "src", "runloom_c", "cldeque.c"),
         "ops": [gen_moflip],
         "run": lambda mut, to: run_genmc(mut, to, harness="chase_lev_real2.c"),
         "timeout": 900,

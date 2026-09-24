@@ -35,7 +35,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
-SRC = os.path.join(ROOT, "src", "stackweave_c")
+SRC = os.path.join(ROOT, "src", "runloom_c")
 
 # Deliberately uncalled symbols.  EMPTY IS THE CORRECT STATE -- see the ratchet
 # note above.  Format: "name": "why it is uncalled and who is expected to call it".

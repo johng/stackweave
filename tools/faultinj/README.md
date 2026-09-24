@@ -18,4 +18,4 @@ python tools/fault_sweep.py                             # fail each Nth op in tu
 `tools/fault_sweep.py` is the orchestrator that uses this shim to fail each
 allocation/syscall in turn and classify the outcome (OK / GRACEFUL / CRASH /
 HANG). The Python-level analogue (fail each runloom-internal alloc site) lives in
-`RUNLOOM_FAULT_*` env knobs exercised by `tests/`.
+`STACKWEAVE_FAULT_*` env knobs exercised by `tests/`.

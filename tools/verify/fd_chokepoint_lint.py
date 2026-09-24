@@ -24,7 +24,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
-SRC = os.path.join(ROOT, "src", "stackweave_c")
+SRC = os.path.join(ROOT, "src", "runloom_c")
 
 # The ONLY files permitted to issue the registration-mutating syscall.  The end
 # state is a single entry (netpoll_register); shrink this list as call sites are

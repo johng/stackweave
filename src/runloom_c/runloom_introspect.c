@@ -496,6 +496,9 @@ static void emit(int fd, const char *buf, size_t len)
 #endif
 }
 
+/* emit() a string literal; the length comes from the literal itself. */
+#define EMIT_LIT(fd, lit) emit((fd), (lit), sizeof(lit) - 1)
+
 void runloom_dump_fibers_fd(int fd)
 {
     char buf[256];
@@ -508,7 +511,7 @@ void runloom_dump_fibers_fd(int fd)
     size_t i;
 
     if (!runloom_greg_inited) {
-        emit(fd, "[stackweave] fiber dump: registry not initialised\n", 48);
+        EMIT_LIT(fd, "[stackweave] fiber dump: registry not initialised\n");
         return;
     }
     for (i = 0; i < (size_t)RUNLOOM_GST__LAST; i++) counts[i] = 0;
@@ -518,7 +521,7 @@ void runloom_dump_fibers_fd(int fd)
         /* Contended -- almost certainly a spawn/teardown holding the lock
          * for a few instructions.  Do NOT fall back to any blocking lock
          * (this runs from a SIGQUIT handler); just report and bail. */
-        emit(fd, "[stackweave] fiber dump: registry busy, retry\n", 44);
+        EMIT_LIT(fd, "[stackweave] fiber dump: registry busy, retry\n");
         return;
     }
 
@@ -584,7 +587,7 @@ void runloom_dump_fibers_fd(int fd)
         }
         if (m > 0) emit(fd, buf, (size_t)m);
     }
-    emit(fd, "=== end fiber dump ===\n", 27);
+    EMIT_LIT(fd, "=== end fiber dump ===\n");
     RUNLOOM_RUNLOCK(&runloom_greg_lock, RUNLOOM_RANK_GREG);
 }
 

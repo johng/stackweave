@@ -66,7 +66,7 @@ explicit shell env var shows through, since it overrides optimize()).
 
 ## Power users
 
-The trades are just a friendly layer over the runtime's `RUNLOOM_*` env vars (see
+The trades are just a friendly layer over the runtime's `STACKWEAVE_*` env vars (see
 [Resource limits & internals](resource-limits.md)). An **explicit env var still
 wins** over `optimize()` — so if you export `STACKWEAVE_STACK_MADV=free` yourself,
 that sticks. You never *need* the raw vars; they're the escape hatch under the

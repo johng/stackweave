@@ -102,7 +102,7 @@ echo "  suppressions     : $SUPP_EFF"
 echo "-- building instrumented extension (-fsanitize=thread -O1) --"
 # Clean build/lib.* too: with a stale cached .so there, setuptools skips
 # compilation entirely and just copies it (a non-instrumented .so sneaks in).
-$RM -f src/runloom_c*.so
+$RM -f src/stackweave_c*.so
 $RM -rf build/temp.tsan build/lib.*
 # setarch -R: in full-interpreter mode BUILD_PY is itself TSan-instrumented and
 # would abort under ASLR while running setup.py; harmless for a normal BUILD_PY.
@@ -111,7 +111,7 @@ STACKWEAVE_EXTRA_LDFLAGS="-fsanitize=thread" \
     "$BUILD_PY" setup.py build_ext --inplace --build-temp build/temp.tsan \
     >/tmp/runloom_tsan_ext_build.log 2>&1 \
     || { echo "  BUILD FAILED -- see /tmp/runloom_tsan_ext_build.log"; tail -20 /tmp/runloom_tsan_ext_build.log; exit 2; }
-ldd src/runloom_c*.so | grep -q tsan \
+ldd src/stackweave_c*.so | grep -q tsan \
     && echo "  build OK (links libtsan)" \
     || { echo "  ext is NOT instrumented (no libtsan in ldd)"; exit 2; }
 
@@ -179,7 +179,7 @@ if [ "${KEEP_TSAN_SO:-0}" != 1 ]; then
     echo "-- restoring a normal (non-TSan) extension --"
     # Clean ALL build artifacts: setuptools won't relink from a cached .o set,
     # so a partial clean leaves an instrumented .so behind (libtsan TLS error).
-    $RM -f src/runloom_c*.so
+    $RM -f src/stackweave_c*.so
     $RM -rf build/temp.* build/lib.*
     "$PYTHON" setup.py build_ext --inplace >/tmp/runloom_tsan_restore_build.log 2>&1 \
         && echo "  normal .so restored" \

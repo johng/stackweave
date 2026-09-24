@@ -19,7 +19,7 @@ include setup.py
 recursive-include src/runloom_c *.c *.h *.inc *.S
 
 # Type stubs + PEP 561 marker.
-include src/runloom_c.pyi
+include src/stackweave_c.pyi
 recursive-include src/stackweave *.pyi
 include src/stackweave/py.typed
 

@@ -53,7 +53,7 @@ CHAN_CAPS = [0, 0, 1, 2, 8]           # 0 == unbuffered handoff (the contended p
 
 # Findings keywords the parent scans a worker's stderr for (beyond a nonzero exit).
 FINDING_PATTERNS = (
-    "[RUNLOOM_DBG", "AddressSanitizer", "ThreadSanitizer", "runtime error:",
+    "[STACKWEAVE_DBG", "AddressSanitizer", "ThreadSanitizer", "runtime error:",
     "Assertion", "self_check", "SELF_CHECK", "MISMATCH", "LEAK", "Traceback",
     "Fatal Python error", "Segmentation",
 )

@@ -12,7 +12,7 @@
 #   ./scripts/install.sh --editable       # pip install -e .
 #   PYTHON=python3.12 ./scripts/install.sh  # build against a specific interp
 #
-# Honours all RUNLOOM_* env vars consumed by setup.py.
+# Honours all STACKWEAVE_* env vars consumed by setup.py.
 
 set -eu
 

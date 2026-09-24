@@ -9,7 +9,7 @@ from Cython.Build import cythonize
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
-INC = os.path.join(REPO, "src", "stackweave_c")
+INC = os.path.join(REPO, "src", "runloom_c")
 
 if not os.path.exists(os.path.join(INC, "runloom_tcp_capi.h")):
     sys.exit("cannot find runloom_tcp_capi.h under %s -- build stackweave_c first" % INC)

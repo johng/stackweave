@@ -42,7 +42,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
-SRC = os.path.join(ROOT, "src", "stackweave_c")
+SRC = os.path.join(ROOT, "src", "runloom_c")
 
 # UAPI headers whose feature macros we police, and the macro-name prefixes that
 # identify a "feature gate" (vs an ordinary internal macro).  Add rows as new

@@ -135,7 +135,7 @@ class StackweaveTask(_RunloomFutureMixin, asyncio.Task):
                 if _TASK_STACK else stackweave_c.fiber(body, fifo=True)
             self._body = None                   # break the task->_body->self cycle
         except BaseException as e:
-            # Driver spawn failed (genuine ENOMEM, or RUNLOOM_FAULT_SPAWN_*).  We
+            # Driver spawn failed (genuine ENOMEM, or STACKWEAVE_FAULT_SPAWN_*).  We
             # are registered in asyncio.all_tasks() + _PG_ALL_TASKS but have NO
             # fiber, so nothing can run or settle this task -- a registered
             # _g=None task wedges loop.close()'s _cancel_outstanding_tasks gather

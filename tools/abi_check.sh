@@ -24,7 +24,7 @@ BASE="$ROOT/tools/abi_baseline.abi"
 command -v abidw  >/dev/null 2>&1 || { echo "abi_check: abidw absent (apt install abigail-tools). SKIP."; exit 0; }
 command -v abidiff >/dev/null 2>&1 || { echo "abi_check: abidiff absent (apt install abigail-tools). SKIP."; exit 0; }
 
-SO="$(ls "$ROOT"/src/runloom_c*.so 2>/dev/null | grep -v 'td-' | head -1)"
+SO="$(ls "$ROOT"/src/stackweave_c*.so 2>/dev/null | grep -v 'td-' | head -1)"
 [ -n "$SO" ] || { echo "abi_check: no built ext .so (build it first). SKIP."; exit 0; }
 echo "abi_check: ext = $(basename "$SO")"
 

@@ -9,7 +9,7 @@ LOG=stall_pool_test.log
 exec > "$LOG" 2>&1
 echo "=== stall pool test $(date -Is) ==="
 PY=/home/x/.pyenv/versions/3.14.4t
-SO="$SRC/runloom_c.cpython-313t-x86_64-linux-gnu.so"
+SO="$SRC/stackweave_c.cpython-313t-x86_64-linux-gnu.so"
 
 echo "--- build ---"
 cc -g -O2 -Wall -Wextra -Wno-unused-parameter \

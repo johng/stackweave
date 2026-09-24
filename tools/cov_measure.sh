@@ -22,7 +22,7 @@ COVOUT="build/coverage"
 
 echo "[cov] python: $PYTHON"
 command -v gcov >/dev/null 2>&1 || { echo "[cov] gcov not found -- install gcc/gcov; cannot measure coverage"; exit 2; }
-$RM -rf "$OBJDIR" "$COVOUT" build/temp.* build/lib.* src/runloom_c*.so 2>/dev/null
+$RM -rf "$OBJDIR" "$COVOUT" build/temp.* build/lib.* src/stackweave_c*.so 2>/dev/null
 mkdir -p "$COVOUT"
 
 echo "[cov] building instrumented extension (-O0 --coverage) ..."
@@ -126,7 +126,7 @@ echo "[cov] ===== raw per-file (all TUs) ====="
 "$PYTHON" tools/cov_summary.py "$COVOUT"
 
 echo "[cov] restoring a NORMAL (non-instrumented) .so ..."
-$RM -rf build/temp.* src/runloom_c*.so 2>/dev/null
+$RM -rf build/temp.* src/stackweave_c*.so 2>/dev/null
 "$PYTHON" setup.py build_ext --inplace > "$COVOUT/rebuild_normal.log" 2>&1 \
     && echo "[cov] normal .so restored" \
     || { echo "[cov] WARN: normal rebuild failed -- see $COVOUT/rebuild_normal.log"; tail -15 "$COVOUT/rebuild_normal.log"; }

@@ -1,5 +1,5 @@
 """stackweave.optimize(*goals, max_fibers): one call, named trade-offs, that maps to
-the internal RUNLOOM_* tuning knobs.  Pins the contract: valid goals, precedence
+the internal STACKWEAVE_* tuning knobs.  Pins the contract: valid goals, precedence
 (secure > memory > latency > throughput), shell-env wins, and that the runtime
 still runs after a call.
 """

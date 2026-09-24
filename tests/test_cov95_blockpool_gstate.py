@@ -25,7 +25,7 @@ genuine "can't happen" invariant, not dead-on-bug code.
 UNREACHABLE-from-a-test lines are NOT faked; they are catalogued in the
 structured report's exclusions[] (the never-called runloom_blockpool_fini and
 its worker-stop path, the cond_init/thread_create OOM-cleanup branches that
-have no RUNLOOM_FAULT_ hook, the unused public runloom_g_state_cas/_get, and
+have no STACKWEAVE_FAULT_ hook, the unused public runloom_g_state_cas/_get, and
 the abort() crash guard).
 """
 import os

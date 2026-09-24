@@ -1,6 +1,6 @@
 """Adversarial stress of the M:N scheduler + epoll backend -- NOT the happy path.
 
-Weaponises the runtime's built-in fault-injection points (RUNLOOM_FAULT_<SITE>=
+Weaponises the runtime's built-in fault-injection points (STACKWEAVE_FAULT_<SITE>=
 once|always:<errno>) and the env-gated scheduler modes to manufacture the
 conditions that break lock-free schedulers: a spawn that fails mid-storm
 (admission-slot backout), I/O syscalls that error under a running workload,

@@ -33,7 +33,7 @@ those; we manufacture the conditions those tests don't:
   * subprocess_exec pipe bridging + communicate + wait + nonzero exit + signal;
   * an exception raised INSIDE a protocol callback (data_received /
     datagram_received / connection_made) routes to the exception handler, no crash;
-  * fault injection (RUNLOOM_FAULT_*) mid-I/O -> a clean Python error, never a SEGV;
+  * fault injection (STACKWEAVE_FAULT_*) mid-I/O -> a clean Python error, never a SEGV;
   * a guard-page overflow inside a data_received callback is CLASSIFIED, not silent;
   * many-concurrent-connection echo stress under the loop.
 

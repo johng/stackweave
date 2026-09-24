@@ -38,7 +38,7 @@ command -v gcov >/dev/null 2>&1 || { echo "[cov] gcov not found -- install gcc/g
 RM="$(command -v safe-rm || echo rm)"
 OBJDIR="build/temp.coverage"
 COVOUT="build/coverage"
-$RM -rf "$OBJDIR" "$COVOUT" build/temp.* build/lib.* src/runloom_c*.so 2>/dev/null
+$RM -rf "$OBJDIR" "$COVOUT" build/temp.* build/lib.* src/stackweave_c*.so 2>/dev/null
 mkdir -p "$COVOUT"
 
 echo "[cov] building instrumented extension (-O0 --coverage) ..."

@@ -1,7 +1,7 @@
 """stackweave.optimize() -- pick the trade-off(s) you care about and the runtime
 sets the underlying knobs for you.
 
-The point: you should never have to learn the raw RUNLOOM_* tuning env vars.
+The point: you should never have to learn the raw STACKWEAVE_* tuning env vars.
 Call nothing and you get smart automatic defaults; call optimize() with one or
 more *named trades* and the runtime leans that way.  Each name says exactly what
 you are spending and buying:

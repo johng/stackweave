@@ -58,7 +58,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
-SRC_C = os.path.join(ROOT, "src", "stackweave_c")
+SRC_C = os.path.join(ROOT, "src", "runloom_c")
 BASELINE = os.path.join(HERE, "tsan_gold_baseline.json")
 
 # What TSan actually instruments when it builds the extension.

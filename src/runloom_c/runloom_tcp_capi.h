@@ -56,12 +56,12 @@ typedef struct {
     void       (*fd_close)(int fd);
 } RunloomTCPCAPI;
 
-#define RUNLOOM_TCP_CAPI_CAPSULE_NAME "runloom_c.__tcp_capi__"
+#define RUNLOOM_TCP_CAPI_CAPSULE_NAME "stackweave_c.__tcp_capi__"
 
 /* serve(handler=<PyCapsule of this name>) custom C handler: a capsule wrapping a
  * void(*)(void *arg) (arg = the accepted connection fd, cast through intptr_t)
  * makes serve() spawn the handler as a tstate-free c_entry fiber per connection
  * (runloom_mn_fiber_c) -- the all-C echo's fast path with custom logic. */
-#define RUNLOOM_C_HANDLER_CAPSULE_NAME "runloom_c.c_handler"
+#define RUNLOOM_C_HANDLER_CAPSULE_NAME "stackweave_c.c_handler"
 
 #endif /* RUNLOOM_TCP_CAPI_H */

@@ -3,7 +3,7 @@
 The Linux campaign (test_netpoll_faultinject.py) forces epoll_wait / epoll_ctl
 to fail with chosen errnos via strace's `-e inject=`.  Windows has no strace, so
 the Windows netpoll backends carry compiled-in, env-gated injection points
-(RUNLOOM_FAULT_<SITE> = "<mode>:<wsa_code>", mode in {once, always}; see
+(STACKWEAVE_FAULT_<SITE> = "<mode>:<wsa_code>", mode in {once, always}; see
 netpoll.c).  Same questions a model checker can't answer -- these are kernel
 error contracts, not memory-model races:
 

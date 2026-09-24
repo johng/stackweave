@@ -40,7 +40,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))          # repo root
-SRC_C = os.path.join(ROOT, "src", "stackweave_c")
+SRC_C = os.path.join(ROOT, "src", "runloom_c")
 
 # Files/dirs whose comments + prose we scan for citations.
 SCAN_DIRS = [HERE]                                     # tools/verify/**

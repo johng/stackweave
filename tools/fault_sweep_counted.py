@@ -2,7 +2,7 @@
 """fault_sweep_counted.py -- SQLite-style counted-exhaustive anomaly sweep.
 
 For each stackweave fault site, fail the Nth reach of that site (the runtime's
-RUNLOOM_FAULT_<SITE>="nth:N:CODE" mode, netpoll_init.c.inc) for N = 1, 2, 3...
+STACKWEAVE_FAULT_<SITE>="nth:N:CODE" mode, netpoll_init.c.inc) for N = 1, 2, 3...
 and STOP when a clean run reports _fault_count(site) == 0: the workload reached
 the site fewer than N times, so EVERY reachable failure point in this workload
 has now been exercised -- the fixpoint that makes the sweep exhaustive rather

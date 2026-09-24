@@ -16,7 +16,7 @@ ulimit -n 400000 2>/dev/null
 
 OBJ=build/temp.kqcov
 COVOUT=build/kqcov
-rm -rf "$OBJ" "$COVOUT" src/runloom_c*.so build/lib.* ./*.gcov 2>/dev/null
+rm -rf "$OBJ" "$COVOUT" src/stackweave_c*.so build/lib.* ./*.gcov 2>/dev/null
 mkdir -p "$COVOUT"
 
 echo "[kqcov] building instrumented (-O0 --coverage) ..."

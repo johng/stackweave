@@ -27,7 +27,7 @@ self-contained):
     * L219-221 / L230-232 / L236: io_uring ring create / loop-arm / epoll-add
       FAILURE cleanups.  io_uring IS available on this box, so the create
       succeeds and the arm/add succeed; there is no env to force any of these to
-      fail (verified: no RUNLOOM_FAULT_* site touches the ring setup, and
+      fail (verified: no STACKWEAVE_FAULT_* site touches the ring setup, and
       `runloom_iouring_loop_hub_arm` only fails on a real eventfd()/submit
       shortfall).
     * L1013-1017 / L1066: the stale/duplicate-queue-entry defensive skips,

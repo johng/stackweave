@@ -129,7 +129,7 @@ PY
     OK\|*) : ;;
     *)
       _want="$(PYTHONPATH=src "$PYTHON" -c 'import _imp; print(_imp.extension_suffixes()[0])' 2>/dev/null)"
-      _have="$(ls -1 src/runloom_c*.so 2>/dev/null | tr '\n' ' ')"
+      _have="$(ls -1 src/stackweave_c*.so 2>/dev/null | tr '\n' ' ')"
       echo "check_all: the stackweave_c extension is not usable by this interpreter." >&2
       echo "" >&2
       echo "  interpreter : $PYTHON" >&2
