@@ -9,7 +9,11 @@ Goals:
       * x86_64 / aarch64 POSIX  -> asm fast-path (.S)
       * other POSIX archs        -> ucontext fallback
       * Windows                  -> Fibers (no .S)
+  - pip installs (bdist_wheel / editable_wheel) only onto a free-threaded
+    CPython built with the migration patches in src/patches/; see the
+    install-gate block below.  `build_ext --inplace` is not gated.
   - Honour user overrides:
+      STACKWEAVE_ALLOW_STOCK_CPYTHON=1  let pip build on an unpatched interpreter
       STACKWEAVE_BACKEND=ucontext   force ucontext on POSIX even if asm is available
       STACKWEAVE_NO_ASM=1           same as above
       STACKWEAVE_DEBUG=1            -O0 -g
@@ -373,6 +377,121 @@ class runloom_build_ext(_build_ext):
             super().run()
 
 
+# --------------------------------------------------------------------
+# Install gate: pip installs only onto a patched free-threaded CPython
+# --------------------------------------------------------------------
+# stackweave targets a free-threaded CPython built with BOTH migration patches
+# (src/patches/).  pip cannot tell that interpreter from a stock one: it derives
+# the CPython ABI tag from Py_GIL_DISABLED / Py_DEBUG alone, so both advertise
+# cp3NNt, and the patches export no symbol whose absence would fail the load --
+# an extension built for one and loaded on the other just disagrees with it
+# about the _PyThreadStateImpl layout.  So the gate lives here, on the two
+# commands pip drives: bdist_wheel (`pip install`) and editable_wheel
+# (`pip install -e`).  `setup.py build_ext --inplace` -- the dev/test path --
+# stays ungated so the suite keeps running on stock CPython.
+STACKWEAVE_ALLOW_STOCK_CPYTHON = os.environ.get("STACKWEAVE_ALLOW_STOCK_CPYTHON", "").strip() not in ("", "0", "no", "false")
+
+# (feature define, header under the include dir, text only the patched header
+# has) -- the same witnesses tools/ci/lib.sh:rl_verify_witnesses greps for, so a
+# pyconfig.h armed on an unpatched tree doesn't pass.
+_PATCH_FEATURES = (
+    ("Py_TSTATE_ALLOC_HOME", os.path.join("internal", "pycore_tstate.h"),
+     "_PyThreadStateImpl_AllocHome"),
+    ("Py_TSTATE_EXEC_HOME", "object.h", "_Py_TID_ASM"),
+)
+
+
+def _defined_macros(flags):
+    """Macro names a flag list -D's (`-DX` and `-DX=1` both count)."""
+    return {f[2:].split("=", 1)[0] for f in flags if f.startswith(("-D", "/D"))}
+
+
+def patched_cpython_problems():
+    """Why this interpreter can't take a stackweave install ([] if it can)."""
+    if not sysconfig.get_config_var("Py_GIL_DISABLED"):
+        return ["not a free-threaded build (Py_GIL_DISABLED is unset)"]
+    include = sysconfig.get_path("include")
+    try:
+        with open(sysconfig.get_config_h_filename()) as f:
+            installed_pyconfig = sysconfig.parse_config_h(f)
+    except OSError:
+        installed_pyconfig = {}
+    # The interpreter was compiled with a feature if its build-time pyconfig.h
+    # or configure CPPFLAGS defined it.  This extension sees it only through the
+    # installed pyconfig.h or flags setuptools passes on -- and setuptools never
+    # passes CONFIGURE_CPPFLAGS, so a CPPFLAGS-only interpreter needs the -D
+    # repeated here or the two disagree on the struct layout.
+    interp_defs = _defined_macros((sysconfig.get_config_var("CONFIGURE_CPPFLAGS") or "").split())
+    ext_defs = _defined_macros(STACKWEAVE_EXTRA_CFLAGS
+                               + os.environ.get("CFLAGS", "").split()
+                               + os.environ.get("CPPFLAGS", "").split())
+    problems = []
+    for flag, header, witness in _PATCH_FEATURES:
+        try:
+            with open(os.path.join(include, header), errors="replace") as f:
+                patched = witness in f.read()
+        except OSError:
+            patched = False
+        if not patched:
+            problems.append("%s: %s has no %s -- the headers are not patched"
+                            % (flag, header, witness))
+        elif not (sysconfig.get_config_var(flag) or flag in interp_defs):
+            problems.append("%s: the headers are patched but the interpreter was "
+                            "not built with it" % flag)
+        elif not (installed_pyconfig.get(flag) or flag in ext_defs):
+            problems.append("%s: the interpreter was built with it but its "
+                            "pyconfig.h does not define it, so this build would "
+                            "not see it -- add it to pyconfig.h or set "
+                            "STACKWEAVE_EXTRA_CFLAGS=-D%s" % (flag, flag))
+    return problems
+
+
+def require_patched_cpython(command):
+    problems = patched_cpython_problems()
+    if not problems:
+        return
+    if STACKWEAVE_ALLOW_STOCK_CPYTHON:
+        print("stackweave build: %s on an unpatched interpreter "
+              "(STACKWEAVE_ALLOW_STOCK_CPYTHON=1)" % command)
+        return
+    raise SystemExit(
+        "error: stackweave installs only onto a free-threaded CPython built with\n"
+        "its migration patches, and %s (%s) is not one:\n%s\n\n"
+        "Build one with the patches in src/patches/ (see src/patches/README.md at\n"
+        "https://github.com/johng/stackweave) and install with its pip.\n"
+        "Contributors building on stock CPython: `python setup.py build_ext\n"
+        "--inplace`, or set STACKWEAVE_ALLOW_STOCK_CPYTHON=1."
+        % (sys.executable, platform.python_version(),
+           "\n".join("  - " + p for p in problems)))
+
+
+try:
+    from setuptools.command.bdist_wheel import bdist_wheel as _bdist_wheel  # setuptools >= 70.1
+except ImportError:
+    try:
+        from wheel.bdist_wheel import bdist_wheel as _bdist_wheel
+    except ImportError:
+        _bdist_wheel = None
+try:
+    from setuptools.command.editable_wheel import editable_wheel as _editable_wheel  # setuptools >= 64
+except ImportError:
+    _editable_wheel = None
+
+cmdclass = {"build_ext": runloom_build_ext}
+if _bdist_wheel is not None:
+    class gated_bdist_wheel(_bdist_wheel):
+        def run(self):
+            require_patched_cpython("bdist_wheel")
+            super().run()
+    cmdclass["bdist_wheel"] = gated_bdist_wheel
+if _editable_wheel is not None:
+    class gated_editable_wheel(_editable_wheel):
+        def run(self):
+            require_patched_cpython("editable_wheel")
+            super().run()
+    cmdclass["editable_wheel"] = gated_editable_wheel
+
+
 _probe_compiler()
 
 # Headers and #included `.c.inc` fragments are not in `sources`, so editing one
@@ -404,5 +523,5 @@ setup(
     # checkers see stackweave as typed once it's installed.
     package_data={"stackweave": ["py.typed", "*.pyi"]},
     ext_modules=[ext],
-    cmdclass={"build_ext": runloom_build_ext},
+    cmdclass=cmdclass,
 )

@@ -10,6 +10,10 @@ Full derivations for the invariants below: [docs/dev/RUNTIME_GOTCHAS.md](docs/de
   shared-heap access that is NOT a stackweave bug. 3.13t builds remain available
   for p488 reproduction.)
 - Build `python setup.py build_ext --inplace`; run with `PYTHONPATH=src`.
+- `pip install` / `pip install -e` refuse any interpreter without both migration
+  patches (setup.py install gate), so they refuse the stock 3.14t above.
+  `build_ext --inplace` is ungated; set
+  `STACKWEAVE_ALLOW_STOCK_CPYTHON=1` to let pip through. Guard: `tests/test_install_gate.py`.
 - Run the suite via `tests/run_isolated.py` (one file/subprocess — in-process
   `pytest tests/` flakes on cross-file state leaks).
 
