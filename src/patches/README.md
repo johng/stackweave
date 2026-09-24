@@ -16,15 +16,18 @@ series — take the pair matching your interpreter:
 | target | allocation | execution |
 |---|---|---|
 | **CPython 3.14.4t** | `cpython314t-tstate-alloc-home.patch` | `cpython314t-tstate-exec-home.patch` |
+| **CPython 3.15.0rc2t** | `cpython315t-tstate-alloc-home.patch` | `cpython315t-tstate-exec-home.patch` |
 
-Both apply at **zero fuzz** (`patch -p1 -F0`) to their pinned release, and
+All four apply at **zero fuzz** (`patch -p1 -F0`) to their pinned release, and
 `tools/ci/check_patches.sh` enforces that in seconds. The cross-version deltas
 are not cosmetic: the patches were first written for 3.13 (removed with 3.13
 support; in git history), and 3.14 reordered `_PyThreadStateImpl` and rewrote the
 mimalloc page-reclaim path, so the 3.14 alloc-home patch **drops** two hunks
 upstream has since superseded and **adds** one relaxing an assert that alloc-home
-makes false. See each patch's `WHAT CHANGED` header. Applying another series'
-patch with `-F3` can fuzz superseded hunks back in and yield a silently wrong
+makes false. 3.15 moved `_Py_ThreadId` from `Include/object.h` to
+`Include/cpython/object.h`, so the 3.15 exec-home patch targets the new header
+(same asm transform). See each patch's `WHAT CHANGED` header. Applying another
+series' patch with `-F3` can fuzz superseded hunks back in and yield a silently wrong
 interpreter — so don't.
 
 `stackweave.migration_available()` is True only with both; `stackweave.migration_status()`
@@ -229,7 +232,7 @@ Migration is **off by default**. To enable it you need two things: build CPython
    ```sh
    tools/ci/build_patched_cpython.sh 3.14.4   # pins live in tools/ci/versions.env
    ```
-   By hand, for 3.14:
+   By hand, for 3.14 (use the `315` files on 3.15 — they are not interchangeable):
    ```sh
    cd cpython
    patch -p1 -F0 < .../patches/cpython314t-tstate-alloc-home.patch

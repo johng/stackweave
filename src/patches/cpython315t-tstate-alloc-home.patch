@@ -1,0 +1,194 @@
+# CPython 3.15t OPTIONAL feature patch: per-tstate allocation "home"
+#   build flag:  -DPy_TSTATE_ALLOC_HOME      (OFF by default)
+#   pinned to:   Python-3.15.0rc2  (applies at ZERO fuzz: patch -p1 -F0; so does rc1)
+#   series pair: this is the ALLOCATION half for the 3.15 series.  The matching
+#                EXECUTION half is cpython315t-tstate-exec-home.patch; migration
+#                needs BOTH.  Ports of cpython314t-tstate-alloc-home.patch -- NOT
+#                interchangeable (the 3.14 patch rejects on 3.15).
+#
+# Same feature, flag, and accessor API as the 3.14 patch -- see
+# cpython314t-tstate-alloc-home.patch for the full WHAT/WHY.
+#
+# WHAT CHANGED vs the 3.14 patch (both purely re-anchoring; no semantic change):
+#
+# 1. pycore_tstate.h -- 3.15 inserted `_PyInterpreterFrame base_frame;` right
+#    after `PyThreadState base;`, so the field-insert hunk needed new context.
+#    The `_alloc_home` field still sits immediately after `base` (before
+#    base_frame); the two accessors still follow `} _PyThreadStateImpl;`.
+#
+# 2. obmalloc.c -- 3.15 added two comment lines inside _PyObject_MiRealloc
+#    between the `_PyThreadState_GET()` and the `current_object_heap` read, so
+#    that one redirect hunk needed new context.  The other seven redirects and
+#    the relaxed _PyMem_mi_page_reclaimed assert (added for 3.14, kept by 3.15)
+#    are unchanged.  The debug-only `current_object_heap->debug_offset` read is
+#    deliberately NOT redirected -- it is not an allocation path, matching 3.14.
+#
+# ZERO IMPACT BY DEFAULT / ENABLE / rebuild-everything: identical to the 3.14
+# patch.  With Py_TSTATE_ALLOC_HOME undefined every redirect macro-expands back
+# to tstate->mimalloc and the field + accessors vanish.
+#
+# APPLY:  from the CPython source root:  patch -p1 -F0 < this-file
+# SCOPE:  Include/internal/{pycore_tstate.h,pycore_object_alloc.h}, Objects/obmalloc.c
+#
+--- a/Include/internal/pycore_object_alloc.h
++++ b/Include/internal/pycore_object_alloc.h
+@@ -17,7 +17,7 @@
+ static inline mi_heap_t *
+ _PyObject_GetAllocationHeap(_PyThreadStateImpl *tstate, PyTypeObject *tp)
+ {
+-    struct _mimalloc_thread_state *m = &tstate->mimalloc;
++    struct _mimalloc_thread_state *m = &_PyThreadStateImpl_AllocHome(tstate)->mimalloc;
+     if (_PyType_HasFeature(tp, Py_TPFLAGS_PREHEADER)) {
+         return &m->heaps[_Py_MIMALLOC_HEAP_GC_PRE];
+     }
+@@ -40,7 +40,7 @@
+ {
+ #ifdef Py_GIL_DISABLED
+     _PyThreadStateImpl *tstate = (_PyThreadStateImpl *)_PyThreadState_GET();
+-    struct _mimalloc_thread_state *m = &tstate->mimalloc;
++    struct _mimalloc_thread_state *m = &_PyThreadStateImpl_AllocHome(tstate)->mimalloc;
+     m->current_object_heap = _PyObject_GetAllocationHeap(tstate, tp);
+ #endif
+     void *mem = PyObject_Malloc(size);
+@@ -55,7 +55,7 @@
+ {
+ #ifdef Py_GIL_DISABLED
+     _PyThreadStateImpl *tstate = (_PyThreadStateImpl *)_PyThreadState_GET();
+-    struct _mimalloc_thread_state *m = &tstate->mimalloc;
++    struct _mimalloc_thread_state *m = &_PyThreadStateImpl_AllocHome(tstate)->mimalloc;
+     m->current_object_heap = _PyObject_GetAllocationHeap(tstate, tp);
+ #endif
+     void *mem = PyObject_Realloc(ptr, size);
+--- a/Include/internal/pycore_tstate.h
++++ b/Include/internal/pycore_tstate.h
+@@ -31,6 +31,23 @@
+     // semi-public fields are in PyThreadState.
+     PyThreadState base;
+ 
++#if defined(Py_GIL_DISABLED) && defined(Py_TSTATE_ALLOC_HOME)
++    /* The tstate whose per-thread ALLOCATOR (mimalloc heap + qsbr/page-reclaim)
++       the running OS thread borrows.  NULL (the common case) == "this tstate".
++
++       A migratable coroutine/fiber carries an execution-only tstate (portable
++       frames/exc/recursion) and, on every resume, points its alloc-home at the
++       OS-thread tstate now running it.  Its objects are then allocated on -- and
++       reclaimed by -- the running thread's own heap, decoupling portable
++       EXECUTION from thread-affine ALLOCATION.  Such a tstate carries no heap of
++       its own (no per-fiber heap pages; nothing extra for the GC to walk) and
++       can resume on any OS thread with no cross-thread heap hazard.
++
++       Opt-in: with Py_TSTATE_ALLOC_HOME undefined the field and every redirect
++       vanish and the build is byte-for-byte stock CPython. */
++    struct _PyThreadStateImpl *_alloc_home;
++#endif
++
+     // Embedded base frame - sentinel at the bottom of the frame stack.
+     // Used by profiling/sampling to detect incomplete stack traces.
+     _PyInterpreterFrame base_frame;
+@@ -110,6 +127,26 @@
+ #endif
+ } _PyThreadStateImpl;
+ 
++#if defined(Py_GIL_DISABLED) && defined(Py_TSTATE_ALLOC_HOME)
++/* The tstate whose allocator the running thread should use (see _alloc_home). */
++static inline _PyThreadStateImpl *
++_PyThreadStateImpl_AllocHome(_PyThreadStateImpl *tstate)
++{
++    _PyThreadStateImpl *home = tstate->_alloc_home;
++    return home != NULL ? home : tstate;
++}
++/* Borrow `home`'s allocator for `tstate` (home == tstate resets to self). */
++static inline void
++_PyThreadState_SetAllocHome(PyThreadState *tstate, PyThreadState *home)
++{
++    ((_PyThreadStateImpl *)tstate)->_alloc_home =
++        (home != tstate) ? (_PyThreadStateImpl *)home : NULL;
++}
++#else
++#  define _PyThreadStateImpl_AllocHome(tstate) (tstate)
++#endif
++
++
+ #ifdef __cplusplus
+ }
+ #endif
+--- a/Objects/obmalloc.c
++++ b/Objects/obmalloc.c
+@@ -212,7 +212,13 @@
+         if (mi_page_all_free(page)) {
+             assert(page->qsbr_node.next == NULL);
+             _PyThreadStateImpl *tstate = tstate_from_heap(mi_page_heap(page));
+-            assert(tstate == (_PyThreadStateImpl *)_PyThreadState_GET());
++            /* With Py_TSTATE_ALLOC_HOME the running tstate may be an
++               execution-only fiber tstate that BORROWS this heap, so the page's
++               owner is the running tstate's alloc home rather than the running
++               tstate itself.  Expands to the original assert when the feature is
++               off. */
++            assert(tstate == _PyThreadStateImpl_AllocHome(
++                                 (_PyThreadStateImpl *)_PyThreadState_GET()));
+             page->retire_expire = 0;
+             llist_insert_tail(&tstate->mimalloc.page_list, &page->qsbr_node);
+         }
+@@ -232,7 +238,7 @@
+     }
+ 
+     _PyThreadStateImpl *tstate = (_PyThreadStateImpl *)_PyThreadState_GET();
+-    struct llist_node *head = &tstate->mimalloc.page_list;
++    struct llist_node *head = &_PyThreadStateImpl_AllocHome(tstate)->mimalloc.page_list;
+     if (llist_empty(head)) {
+         return;
+     }
+@@ -261,7 +267,7 @@
+ {
+ #ifdef Py_GIL_DISABLED
+     _PyThreadStateImpl *tstate = (_PyThreadStateImpl *)_PyThreadState_GET();
+-    mi_heap_t *heap = &tstate->mimalloc.heaps[_Py_MIMALLOC_HEAP_MEM];
++    mi_heap_t *heap = &_PyThreadStateImpl_AllocHome(tstate)->mimalloc.heaps[_Py_MIMALLOC_HEAP_MEM];
+     return mi_heap_malloc(heap, size);
+ #else
+     return mi_malloc(size);
+@@ -273,7 +279,7 @@
+ {
+ #ifdef Py_GIL_DISABLED
+     _PyThreadStateImpl *tstate = (_PyThreadStateImpl *)_PyThreadState_GET();
+-    mi_heap_t *heap = &tstate->mimalloc.heaps[_Py_MIMALLOC_HEAP_MEM];
++    mi_heap_t *heap = &_PyThreadStateImpl_AllocHome(tstate)->mimalloc.heaps[_Py_MIMALLOC_HEAP_MEM];
+     return mi_heap_calloc(heap, nelem, elsize);
+ #else
+     return mi_calloc(nelem, elsize);
+@@ -285,7 +291,7 @@
+ {
+ #ifdef Py_GIL_DISABLED
+     _PyThreadStateImpl *tstate = (_PyThreadStateImpl *)_PyThreadState_GET();
+-    mi_heap_t *heap = &tstate->mimalloc.heaps[_Py_MIMALLOC_HEAP_MEM];
++    mi_heap_t *heap = &_PyThreadStateImpl_AllocHome(tstate)->mimalloc.heaps[_Py_MIMALLOC_HEAP_MEM];
+     return mi_heap_realloc(heap, ptr, size);
+ #else
+     return mi_realloc(ptr, size);
+@@ -303,7 +309,7 @@
+ {
+ #ifdef Py_GIL_DISABLED
+     _PyThreadStateImpl *tstate = (_PyThreadStateImpl *)_PyThreadState_GET();
+-    mi_heap_t *heap = tstate->mimalloc.current_object_heap;
++    mi_heap_t *heap = _PyThreadStateImpl_AllocHome(tstate)->mimalloc.current_object_heap;
+     return mi_heap_malloc(heap, nbytes);
+ #else
+     return mi_malloc(nbytes);
+@@ -315,7 +321,7 @@
+ {
+ #ifdef Py_GIL_DISABLED
+     _PyThreadStateImpl *tstate = (_PyThreadStateImpl *)_PyThreadState_GET();
+-    mi_heap_t *heap = tstate->mimalloc.current_object_heap;
++    mi_heap_t *heap = _PyThreadStateImpl_AllocHome(tstate)->mimalloc.current_object_heap;
+     return mi_heap_calloc(heap, nelem, elsize);
+ #else
+     return mi_calloc(nelem, elsize);
+@@ -335,7 +341,7 @@
+         return ptr;
+     }
+ 
+-    mi_heap_t *heap = tstate->mimalloc.current_object_heap;
++    mi_heap_t *heap = _PyThreadStateImpl_AllocHome(tstate)->mimalloc.current_object_heap;
+     void* newp = mi_heap_malloc(heap, nbytes);
+     if (newp == NULL) {
+         return NULL;
