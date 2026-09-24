@@ -77,6 +77,10 @@ git clone --depth 1 --branch "$STACKWEAVE_REF" "$STACKWEAVE_REPO_URL" "$LOCAL_WO
 for entry in $RELEASE_SSH_HOSTS; do
     target=$(printf '%s' "$entry" | cut -d'|' -f1)
     base=$(printf '%s' "$entry" | cut -d'|' -f2)
+    case "$(printf '%s' "$entry" | cut -d'|' -f3)" in
+        ""|posix) ;;
+        *) echo "!! $entry: only POSIX build hosts are supported (Windows was dropped)" >&2; exit 1 ;;
+    esac
     bdir="$base/runloom-build-$STAMP"
     REMOTE_CLEANUP="$REMOTE_CLEANUP
 $target|$bdir"

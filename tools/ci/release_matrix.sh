@@ -78,6 +78,10 @@ for entry in $RELEASE_SSH_HOSTS; do
     target="$(printf '%s' "$entry" | cut -d'|' -f1)"
     basedir="$(printf '%s' "$entry" | cut -d'|' -f2)"
     [ -z "$target" ] && continue
+    case "$(printf '%s' "$entry" | cut -d'|' -f3)" in
+        ""|posix) ;;
+        *) printf '[release] %s: only POSIX build hosts are supported (Windows was dropped)\n' "$entry" >&2; exit 1 ;;
+    esac
     [ -n "$STACKWEAVE_REPO_URL" ] || { printf '[release] STACKWEAVE_REPO_URL unset -- cannot build remotely\n' >&2; exit 1; }
 
     workdir="$basedir/rl-ci-$STAMP"

@@ -43,7 +43,7 @@ pytestmark = _hwm_pytest.mark.skipif(
     reason="stack HWM is reliable only with 4 KB pages")
 
 # The static _RELIABLE_HWM gate above predicts the "reports the whole stack
-# resident" failure from the backend and page size.  Hosted CI runners hit it
+# resident" failure from the page size.  Hosted CI runners hit it
 # anyway, with 4 KB pages: mincore reports which pages are RESIDENT, and that
 # equals "touched" only while the host is not under memory pressure.  On a
 # loaded shared runner the entire fiber stack can read resident and the probe

@@ -605,7 +605,7 @@ static void runloom_g_global_flush(void)
 /* ---- test-only hooks for the fork-deadlock regression test ----------------
  * Not used in production; exposed only as runloom_c._test_* for the regression
  * test that proves the after-fork balance-lock reset.  Kept here so they share
- * the (file-static) lock + ensure shim. */
+ * the (file-static) lock. */
 void runloom_g_global_test_hold_ns(long long ns)
 {
     runloom_mutex_lock(&runloom_g_global_lock);

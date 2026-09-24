@@ -9,9 +9,9 @@ regression suite (read/write/EOF/timer): ready-before-park, park-then-ready,
 write readiness, R|W subset, deadline/timeout, peer-close EOF, re-arm after
 consume (the edge-triggered drop class), and many concurrent waiters.
 
-This is the "are we doing it right?" suite: run it on any OS, force any backend
-with STACKWEAVE_NETPOLL=epoll|kqueue|select, and the SAME assertions must
-hold.  Backend-portable on purpose -- it asserts BEHAVIOUR through real sockets
+This is the "are we doing it right?" suite: run it on any OS (or on a build
+made with STACKWEAVE_NETPOLL=select to exercise the select fallback), and the
+SAME assertions must hold.  Backend-portable on purpose -- it asserts BEHAVIOUR through real sockets
 (socketpair) + stackweave_c.wait_fd, never a backend-specific internal.
 
 wait_fd(fd, events, timeout_ms) contract (verified against netpoll.c):
