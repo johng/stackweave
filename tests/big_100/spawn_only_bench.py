@@ -7,6 +7,10 @@ asm_make_ctx -> 1M stack-top faults on this thread) vs =1 (deferred to first
 resume on the hubs -> those faults skipped entirely here, since we never run).
 
 Run with: STACKWEAVE_GON_BULK=1 STACKWEAVE_GON_NOSUBMIT=1 [STACKWEAVE_GON_FRESH=0|1]
+
+BROKEN UNDER MIGRATION: STACKWEAVE_GON_BULK is ignored (the bulk builder allocates
+no per-g tstate; see tests/test_spawn_bulk_lifecycle.py), so fiber_n loops and
+this times the per-fiber spawn, with every fiber published and run.
 """
 import os
 import sys

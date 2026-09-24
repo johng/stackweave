@@ -761,7 +761,7 @@ int runloom_netpoll_wait_fd(int fd, int events, long long timeout_ns)
     }
 
     /* Committed to parking: stamp the dwell clock for the hub-idle
-     * stack-reclaim sweep (RUNLOOM_STACK_PARK_SWEEP).  Plain store -- only
+     * stack-reclaim sweep.  Plain store -- only
      * the sweep on this g's owning hub reads it, after this point. */
     park->park_ts = monotonic_ns();
 

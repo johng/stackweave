@@ -472,6 +472,9 @@ class Harness(object):
         # NEEDS hubs >= 8 -- with fewer, 1M goroutines funnel through too few
         # threads (materialization + cooperative I/O serialize) and it degrades
         # badly.  Below 8 we refuse the fast path and fall back to per-g spawn.
+        # BROKEN UNDER MIGRATION: the runtime ignores STACKWEAVE_GON_BULK (the bulk
+        # builder allocates no per-g tstate; tests/test_spawn_bulk_lifecycle.py),
+        # so this "fast path" is fiber_n's per-fiber loop until that is fixed.
         self._use_gon = (os.environ.get("STACKWEAVE_HARNESS_GON") == "1"
                          and os.environ.get("STACKWEAVE_GON_BULK") == "1")
 

@@ -97,7 +97,7 @@ int runloom_netpoll_fd_armed_count(void);
 /* DIAG: dump every parked parker (fd/g/hub/commit) to stderr. */
 void runloom_netpoll_dump_parkers(void);
 
-/* Hub-idle dwell-based stack reclaim (RUNLOOM_STACK_PARK_SWEEP).  The
+/* Hub-idle dwell-based stack reclaim.  The
  * calling hub madvises the idle stack pages of its OWN parkers whose
  * park has exceeded threshold_ns.  Safe only when called by the owning
  * hub while idle (see the netpoll.c definition).  Returns # reclaimed. */

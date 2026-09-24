@@ -32,10 +32,9 @@ from .. import runtime as _runtime
 #
 # This bridge DOES run TLS handshakes / OpenSSL key material on these stacks, so
 # a deployment that handles secrets should opt in -- one call, before run():
-#     stackweave.optimize("secure")          # or export STACKWEAVE_STACK_SCRUB=1
-# optimize("secure") applies it live (see stackweave/_optimize.py); the env var is
-# read by the C runtime at import (module_init.c.inc).  No-op on a stackweave_c too
-# old to expose the API.  See tools/security/FINDINGS.md S1 + coro.c
+#     stackweave.optimize("secure")          # or stackweave_c.set_stack_scrub(True)
+# optimize("secure") applies it live (see stackweave/_optimize.py).  No-op on a
+# stackweave_c too old to expose the API.  See tools/security/FINDINGS.md S1 + coro.c
 # runloom_stack_scrub.
 
 

@@ -38,10 +38,8 @@ model:
 backpressure ceiling on concurrent fibers.
 
 These trades are deliberately **safe** — none flips an experimental lever or a
-setting that can OOM-kill a RAM-tight host. The sharpest expert tricks (e.g.
-`STACKWEAVE_STACK_MADV=off` for zero reclaim syscalls *at the cost of no
-pressure-relief*) stay raw env vars with their own warnings; a friendly name
-should never hide a footgun.
+setting that can OOM-kill a RAM-tight host. The sharpest expert tricks stay raw
+env vars with their own warnings; a friendly name should never hide a footgun.
 
 > **The stack pool sizes itself.** Out of the box (any preset, or none) the depot
 > auto-caps to ~1.5× your live-fiber high-water-mark — clamped by `vm.max_map_count`
@@ -68,8 +66,8 @@ explicit shell env var shows through, since it overrides optimize()).
 
 The trades are just a friendly layer over the runtime's `STACKWEAVE_*` env vars (see
 [Resource limits & internals](resource-limits.md)). An **explicit env var still
-wins** over `optimize()` — so if you export `STACKWEAVE_STACK_MADV=free` yourself,
-that sticks. You never *need* the raw vars; they're the escape hatch under the
+wins** over `optimize()` — so if you export `STACKWEAVE_STACK_DEPOT_CAP=200000`
+yourself, that sticks. You never *need* the raw vars; they're the escape hatch under the
 hood.
 
 ## Examples

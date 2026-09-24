@@ -42,8 +42,9 @@ Args: N [H] [think_ms] [work_ms] [ramp_s] [warmup_s] [measure_s]
   warmup_s  run-but-don't-record window after the ramp completes
   measure_s steady-state window over which latencies + RSS are sampled
 
-Compare STACKWEAVE_STACK_PARK_SWEEP=1 vs unset to read off the RSS reclaim and
-its (expected ~0) tail-latency cost on a clean steady-state window.
+The dwell sweep is always on; vary STACKWEAVE_STACK_PARK_SWEEP_MS to read off
+the RSS reclaim and its (expected ~0) tail-latency cost on a clean steady-state
+window.
 """
 import os
 import resource

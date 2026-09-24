@@ -259,7 +259,7 @@ static PyMethodDef module_methods[] = {
      "set_stack_scrub(bool): when True, zero each fiber's stack as it is\n"
      "recycled so the next fiber to reuse it can't read the previous\n"
      "one's leftovers (TLS keys, request bodies).  Off by default (costs a\n"
-     "stack-sized memset per fiber completion).  Also via STACKWEAVE_STACK_SCRUB=1."},
+     "memset of each fiber's touched stack pages per completion)."},
     {"get_stack_scrub", m_get_stack_scrub, METH_NOARGS,
      "Return whether recycled-stack scrubbing is enabled."},
     {"mn_init",     (PyCFunction)m_mn_init, METH_VARARGS | METH_KEYWORDS,
@@ -487,14 +487,9 @@ static struct PyModuleDef runloom_c_module = {
 PyMODINIT_FUNC PyInit_stackweave_c(void)
 {
     PyObject *m;
-    const char *scrub_env;
     runloom_diag_init();          /* parses RUNLOOM_DEBUG once; cheap; idempotent */
     runloom_introspect_init();    /* fiber registry lock */
     runloom_coro_pre_swap = runloom_coro_rearm_stackprot;  /* 3.14: re-arm fiber C-stack limit on every resume */
-    scrub_env = getenv("STACKWEAVE_STACK_SCRUB");   /* opt-in recycled-stack wipe */
-    if (scrub_env && scrub_env[0] && scrub_env[0] != '0') {
-        runloom_coro_scrub_set(1);
-    }
     {
         /* GOTRACEBACK-style fiber dump on SIGQUIT. */
         const char *tb_env = getenv("STACKWEAVE_TRACEBACK");

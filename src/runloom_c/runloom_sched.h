@@ -914,9 +914,8 @@ void runloom_first_run_install_datastack(void);
  * NULL), gs that never went deep enough to have a reclaimable tail, and
  * on platforms without MADV_DONTNEED.
  *
- * Default-ON (RUNLOOM_DATASTACK_SWEEP=0 opts out), mirroring the master
- * RUNLOOM_STACK_PARK_SWEEP switch that gates the dwell sweep this rides in;
- * the sweep calls this per batched parker right after the C-stack madvise. */
+ * Runs whenever the dwell sweep it rides in does: the sweep calls this per
+ * batched parker right after the C-stack madvise. */
 void runloom_sched_madvise_datastack_idle(runloom_g_t *g);
 
 /* Decompose instrumentation for the datastack sweep (RUNLOOM_DATASTACK_DEBUG).

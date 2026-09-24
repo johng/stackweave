@@ -6,6 +6,9 @@ Compare STACKWEAVE_GON_FRESH=0 (frames written at spawn) vs =1 (frames written
 lazily on the owning hub at first resume, in parallel across 8 hubs).
 
 Run with: STACKWEAVE_GON_BULK=1 [STACKWEAVE_GON_FRESH=0|1]   (NO nosubmit here)
+
+BROKEN UNDER MIGRATION: STACKWEAVE_GON_BULK is ignored (the bulk builder allocates
+no per-g tstate; see tests/test_spawn_bulk_lifecycle.py), so fiber_n loops.
 """
 import os
 import sys

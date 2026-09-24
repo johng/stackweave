@@ -929,22 +929,40 @@ PyObject *runloom_mn_fiber_pinned(PyObject *callable, size_t stack_size,
  * Must be called from inside the M:N runtime (root or a fiber). */
 /* Read RUNLOOM_GON_BULK once: 1 = fiber_n uses the bulk-arena fast path.
  *
- * Incompatible with per-g-tstate (migration) mode for now: the bulk builder
- * memcpy's a template g per arena slot from parallel builder threads that hold
- * no PyThreadState, so it cannot call PyThreadState_New -- and every fiber in
- * per-g mode needs its own tstate before hub_main will run it (a g with
- * tstate == NULL is skipped as dead, so a bulk batch never ran).  Until the
- * batch grows a per-g tstate pass, per-g mode takes the loop path. */
+ * BROKEN UNDER MIGRATION, so IGNORED (known gap, strict xfail
+ * tests/test_spawn_bulk_lifecycle.py::test_gon_bulk_takes_bulk_path_under_migration):
+ * the bulk builder memcpy's a template g per arena slot from parallel builder
+ * threads that hold no PyThreadState, so it cannot call PyThreadState_New --
+ * and every M:N fiber needs its own tstate before hub_main will run it (a g
+ * with tstate == NULL is skipped as dead, so a bulk batch never ran; with this
+ * guard lifted, fiber_n(fn, 2000) on 4 hubs builds the batch and mn_run never
+ * returns -- the census reports a STALL with 2000 live fibers and an empty
+ * fiber dump, since bulk gs are not in the registry either).  Per-g
+ * mode is on for the life of every M:N run, so fiber_n always takes the
+ * per-fiber loop and says so once on stderr.  The bulk path below stays
+ * compiled for the day the batch grows a per-g tstate pass; drop the guard
+ * then and the xfail turns into an XPASS.  That fix must also register each
+ * bulk g with runloom_greg_link: the builder skips the fiber registry, and the
+ * parked-frame GC anchor (module_gcframes.c.inc) sees only registered fibers. */
 static int runloom_fibern_bulk_enabled(void)
 {
     static int v = -1;
+    static int per_g_noted = 0;
     int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
     if (cur < 0) {
         const char *e = getenv("STACKWEAVE_GON_BULK");
         cur = (e != NULL && *e != '0' && *e != '\0') ? 1 : 0;
         __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
     }
-    return cur && !runloom_get_per_g_tstate_mode();
+    if (cur && runloom_get_per_g_tstate_mode()) {
+        if (__atomic_exchange_n(&per_g_noted, 1, __ATOMIC_RELAXED) == 0)
+            fprintf(stderr, "[stackweave] STACKWEAVE_GON_BULK ignored: the bulk "
+                            "fiber_n builder allocates no per-g tstate, so it "
+                            "does not work under migration; fiber_n spawns "
+                            "one fiber at a time\n");
+        return 0;
+    }
+    return cur;
 }
 
 /* ---- fiber_n bulk-arena batch lifecycle ----
@@ -1085,7 +1103,7 @@ static int runloom_pcreate_threads(void)
 }
 typedef struct {
     char *garena; size_t gsz; const runloom_g_t *tmpl;
-    long long goid_base; int H; int pair_aff; long lo, hi;
+    long long goid_base; int H; long lo, hi;
     runloom_g_t *heads[64], *tails[64];
     long counts[64];
 } runloom_pcreate_arg_t;
@@ -1096,7 +1114,7 @@ static RUNLOOM_THREAD_RET runloom_pcreate_worker(void *p)
     for (h = 0; h < a->H; h++) { a->heads[h] = a->tails[h] = NULL; a->counts[h] = 0; }
     for (i = a->lo; i < a->hi; i++) {
         runloom_g_t *g = (runloom_g_t *)(a->garena + (size_t)i * a->gsz);
-        int hub = a->pair_aff ? (int)((i >> 1) % a->H) : (int)(i % a->H);
+        int hub = (int)(i % a->H);
         memcpy(g, a->tmpl, a->gsz);
         g->owner = &runloom_hubs[hub].sched;
         g->id    = a->goid_base + (long long)i;
@@ -1180,7 +1198,6 @@ static int runloom_mn_fiber_n_bulk(PyObject *callable, long n, size_t stack_size
 
         if (tmg) t0 = runloom_create_now_ns();
         if (!nofields) {
-            int pair_aff = 0;
             int P = runloom_pcreate_threads();
             int did_parallel = 0;
             if (P > 1 && n >= 4096) {            /* lever #1: parallel builders */
@@ -1191,7 +1208,7 @@ static int runloom_mn_fiber_n_bulk(PyObject *callable, long n, size_t stack_size
                 if (args != NULL) {
                     for (b = 0; b < P; b++) {
                         args[b].garena = garena; args[b].gsz = gsz; args[b].tmpl = &tmpl;
-                        args[b].goid_base = goid_base; args[b].H = H; args[b].pair_aff = pair_aff;
+                        args[b].goid_base = goid_base; args[b].H = H;
                         args[b].lo = (long)((long long)b * n / P);
                         args[b].hi = (long)((long long)(b + 1) * n / P);
                         if (runloom_thread_create(&th[b], runloom_pcreate_worker, &args[b]) != 0)
@@ -1222,7 +1239,7 @@ static int runloom_mn_fiber_n_bulk(PyObject *callable, long n, size_t stack_size
             if (!did_parallel) {
                 for (i = 0; i < n; i++) {
                     runloom_g_t *g = (runloom_g_t *)(garena + (size_t)i * gsz);
-                    hub = pair_aff ? (int)((i >> 1) % H) : (int)(i % H);
+                    hub = (int)(i % H);
                     memcpy(g, &tmpl, gsz);        /* <-- template memcpy */
                     g->owner = &runloom_hubs[hub].sched;
                     g->id    = goid_base + (long long)i;

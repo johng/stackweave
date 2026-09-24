@@ -8,9 +8,8 @@ live and the arena slots cycle spawn->complete->reuse -- the regime where Go's
 warm-stack free-list pays off and a fresh-VA bump cursor keeps re-faulting.  This is
 the realistic server shape (handle req -> spawn handler -> complete -> next).
 
-Measures total completions / wall.  Run it with STACKWEAVE_STACK_SCRUB=0 so the Exp-D
-scrub cost is out of the way and this isolates the fault/reuse cost.  Toggle the
-arena free-list with STACKWEAVE_STACK_ARENA_FREELIST."""
+Measures total completions / wall.  Toggle the stack arena with
+STACKWEAVE_STACK_ARENA=1."""
 import argparse
 import json
 import os
@@ -51,7 +50,6 @@ def main():
     rate = total / best
     rec = {"label": args.label, "hubs": args.hubs, "conc": args.conc, "n": total,
            "reps": args.reps, "seconds": best, "churn_per_s": rate,
-           "freelist": os.environ.get("STACKWEAVE_STACK_ARENA_FREELIST", ""),
            "arena": os.environ.get("STACKWEAVE_STACK_ARENA", "")}
     print("%-20s conc=%-6d %9.0f churn/s  (%.3fs / %d)" %
           (args.label, args.conc, rate, best, total), file=sys.stderr)
