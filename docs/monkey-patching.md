@@ -211,7 +211,7 @@ Two consequences worth knowing:
 `monkey.offload()` routes through offload hubs automatically whenever any are
 reserved, and falls back to the thread pool when none are -- so the default
 build behaves exactly as before. Reserve them with
-`stackweave.run(n, main, offload_hubs=K)` (or `STACKWEAVE_OFFLOAD_HUBS=K`).
+`stackweave.run(n, main, offload_hubs=K)`.
 
 The pool is not going away: it is still the only route for a caller outside any
 fiber (foreign OS threads must never park a non-existent fiber), for a

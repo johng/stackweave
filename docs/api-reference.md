@@ -160,12 +160,9 @@ See [Parallelism](parallelism.md).
 
 #### Offload hubs
 
-`mn_init(n, offload_hubs=K)` -- or `STACKWEAVE_OFFLOAD_HUBS=K` -- reserves K
-**extra** hubs, added to `n` and never carved out of it, on which a blocking
-call may run as an ordinary fiber. The argument wins over the environment
-variable: how many blocking slots you need is a property of what your code
-does, not of how the process was launched, and a library cannot set env vars
-for its host. `-1` (the default) means "no opinion" and consults the env.
+`mn_init(n, offload_hubs=K)` reserves K **extra** hubs, added to `n` and never
+carved out of it, on which a blocking call may run as an ordinary fiber. The
+default is 0 (none).
 
 Offload hubs are excluded from general placement, from work-stealing in both
 directions, from `sysmon` preemption, and from the monopoly-yield scan -- so no
@@ -250,8 +247,8 @@ Number of live fibers.
 
 One dict per M:N hub — the per-**hub** view: `id`, `state` (`detached` /
 `attached` / `suspended`), `running_g` (goid being resumed, or `None`),
-`dwell_ms` (how long that resume has run), `pending`, `preempt_requested`,
-`instrumented`, and `blocked_at` (best-effort Python call site of a
+`dwell_ms` (how long that resume has run), `pending`, and `blocked_at`
+(best-effort Python call site of a
 DETACHED-wedged hub's blocking call).  Lock-free atomic reads; `[]` when the M:N
 scheduler isn't running.  The friendly wrapper `stackweave.inspect.hubs()` adds a
 `stack_cmd` (`py-spy dump --pid <PID>`) per row, and `stackweave.inspect.print_hubs()`
@@ -273,7 +270,7 @@ handler and when the interpreter is wedged.
 #### `set_introspect_timestamps(bool)`
 
 Track each fiber's park time so `fibers()`/dumps report `age`.  Off
-by default (one clock read per park); also via `STACKWEAVE_INTROSPECT_TIME=1`.
+by default (one clock read per park).
 
 #### `install_traceback_signal(signum=SIGQUIT) → int`
 
@@ -292,7 +289,7 @@ guide](debugging.md#fork-safety).
 
 Deadlock detection: when the single-thread scheduler quiesces with
 fibers still blocked on channels/parks, mode 0=off, 1=warn (print the
-dump, default), 2=raise `RuntimeError`.  Also `STACKWEAVE_DEADLOCK=off|warn|raise`.
+dump, default), 2=raise `RuntimeError`.
 `count_deadlocked()` is the current chan/park-blocked count.
 
 #### `set_max_fibers(n)` / `get_max_fibers() → int` / `live_fibers() → int`
