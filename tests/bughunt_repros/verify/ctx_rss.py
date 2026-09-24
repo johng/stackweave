@@ -1,4 +1,4 @@
-import runloom, runloom.context as ctx, os
+import stackweave, stackweave.context as ctx, os
 def rss():
     with open('/proc/self/status') as f:
         for line in f:
@@ -11,4 +11,4 @@ def main():
         child, cancel = ctx.WithCancel(parent)
         cancel()
     print("children:", len(parent._children), "RSS growth KB:", rss() - base)
-runloom.run(1, main)
+stackweave.run(1, main)

@@ -1,9 +1,9 @@
-"""M:N scheduler — runloom's headline trick: use ALL your cores.
+"""M:N scheduler — stackweave's headline trick: use ALL your cores.
 
 With the GIL off, `run(n, main_fn)` spreads fibers across n hub threads —
 one per core — for genuine multi-core parallelism.  The whole
 mn_init / mn_fiber / mn_run / mn_fini envelope collapses into that single call;
-inside it, `runloom.fiber()` lands each fiber on a hub automatically.  Here we
+inside it, `stackweave.fiber()` lands each fiber on a hub automatically.  Here we
 fan out CPU-bound SHA-256 work (which releases the GIL while it hashes) and run
 it across every core, so the speedup over a single thread is near-linear.
 
@@ -19,7 +19,7 @@ import os
 import sys
 import time
 
-import runloom
+import stackweave
 
 NCPU = os.cpu_count() or 4
 NUM_TASKS = NCPU * 4
@@ -33,13 +33,13 @@ def work():
 
 def spawn_all():
     # Root fiber: fan out the CPU-bound workers.  Inside an M:N run,
-    # runloom.fiber() lands each one on a hub (round-robin) for us.
+    # stackweave.fiber() lands each one on a hub (round-robin) for us.
     for _ in range(NUM_TASKS):
-        runloom.fiber(work)
+        stackweave.fiber(work)
 
 def time_run(n_hubs):
     start = time.perf_counter()
-    runloom.run(n_hubs, spawn_all)   # collapses mn_init/mn_fiber/mn_run/mn_fini
+    stackweave.run(n_hubs, spawn_all)   # collapses mn_init/mn_fiber/mn_run/mn_fini
     return time.perf_counter() - start
 
 def main():

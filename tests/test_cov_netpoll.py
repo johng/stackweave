@@ -6,7 +6,7 @@ in the pump, register MOD-widen (a second direction on a live fd), the
 arm-cache release/unregister/cancel paths, the deadline heap (many timed
 parks), per-fd array growth (many fds), the io_uring global-ring eventfd drain
 in the pump, and the diag/dump surface (_dump_parkers / dump_fibers / _diag_dump
-/ verbose _self_check, plus RUNLOOM_NETPOLL_MAXFD).
+/ verbose _self_check, plus STACKWEAVE_NETPOLL_MAXFD).
 """
 import os
 import socket
@@ -14,8 +14,8 @@ import sys
 
 import pytest
 
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 from adv_util import hang_guard, needs_free_threading
 
 READ, WRITE = 1, 2
@@ -211,17 +211,17 @@ def test_epoll_diag_dump_while_parked():
 
 
 def test_epoll_netpoll_maxfd_env_subprocess():
-    # RUNLOOM_NETPOLL_MAXFD caps the diag fd scan (netpoll_diag_fd.c.inc).
+    # STACKWEAVE_NETPOLL_MAXFD caps the diag fd scan (netpoll_diag_fd.c.inc).
     script = (
         "import sys,os; sys.path.insert(0,'src');"
-        "import runloom_c as rc;"
+        "import stackweave_c as rc;"
         "rc.fiber(lambda: rc.stats());"
         "rc.run();"
         "rc.dump_fibers(os.open(os.devnull,os.O_WRONLY));"
         "rc._dump_parkers();"
         "sys.stdout.write('MAXFD_OK\\n')")
     import subprocess
-    env = dict(os.environ, RUNLOOM_NETPOLL_MAXFD="64", PYTHON_GIL="0", PYTHONPATH="src")
+    env = dict(os.environ, STACKWEAVE_NETPOLL_MAXFD="64", PYTHON_GIL="0", PYTHONPATH="src")
     p = subprocess.run([sys.executable, "-c", script], cwd=REPO, env=env,
                        capture_output=True, text=True, timeout=30)
     assert "MAXFD_OK" in p.stdout, (p.stdout, p.stderr[-500:])
@@ -232,7 +232,7 @@ def test_epoll_netpoll_maxfd_env_subprocess():
 # --------------------------------------------------------------------------
 @pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_epoll_cross_hub_pump_wake():
-    from runloom.sync import WaitGroup
+    from stackweave.sync import WaitGroup
     N = 60
     ch = rc.Chan(0)
     got = [0]
@@ -257,7 +257,7 @@ def test_epoll_cross_hub_pump_wake():
         wg.wait()
         ch.close()
     with hang_guard(40, "cross-hub pump wake"):
-        runloom.run(4, main)
+        stackweave.run(4, main)
     assert got[0] == N
 
 

@@ -4,7 +4,7 @@ Each round a worker sets up several event sources and `select`s for the first
 to fire:
   * a data Chan a helper goroutine sends to after a random delay,
   * a second data Chan a second helper may send to,
-  * a `runloom.time.After` timeout.
+  * a `stackweave.time.After` timeout.
 Exactly one source wins; the losers are abandoned (their helpers' sends land in
 1-buffered channels and are harmlessly dropped, or the timer self-closes).
 
@@ -16,12 +16,12 @@ Stresses: multi-way select, first-of-N resolution, no double-fire, no lost
 wakeup across competing park/wake sources.
 """
 import harness
-import runloom
-import runloom.time as rtime
+import stackweave
+import stackweave.time as rtime
 
 
 def helper(ch, delay, tok):
-    runloom.sleep(delay)
+    stackweave.sleep(delay)
     try:
         ch.try_send(tok)
     except Exception:
@@ -37,8 +37,8 @@ def worker(H, wid, rng, state):
     for _ in H.round_range():
         if not H.running():
             break
-        ch0 = runloom.Chan(1)
-        ch1 = runloom.Chan(1)
+        ch0 = stackweave.Chan(1)
+        ch1 = stackweave.Chan(1)
         # The winning branch is decided by WHICH source fires first, with all
         # three delays drawn from the same small window -- so under load only a
         # handful of rounds complete and the random timing reliably leaves one
@@ -62,7 +62,7 @@ def worker(H, wid, rng, state):
         H.fiber(helper, ch0, d0, b"0")
         H.fiber(helper, ch1, d1, b"1")
         timer = rtime.After(to)
-        idx, _payload = runloom.select(
+        idx, _payload = stackweave.select(
             [("recv", ch0), ("recv", ch1), ("recv", timer)])
         if idx == 0:
             w0[slot] += 1

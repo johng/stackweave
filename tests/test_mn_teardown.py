@@ -10,11 +10,11 @@ finishes starting -- i.e. exactly the trivial M:N programs below.  Was ~80% hang
 the fix detaches the main thread around the hub join.
 
 The hang has no FV model (it is a CPython-runtime STW/attach interaction, not a
-runloom lock-free algorithm); the gate is this stress -- a deadlock trips the
+stackweave lock-free algorithm); the gate is this stress -- a deadlock trips the
 suite timeout, so a green run IS the assertion.
 """
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
 
 def _trivial_cycle(nhubs):
@@ -22,15 +22,15 @@ def _trivial_cycle(nhubs):
 
     def runner():
         # Touch a cooperative primitive so the runner is a real (if instant) g.
-        mu = runloom_c.Mutex()
+        mu = stackweave_c.Mutex()
         with mu:
             pass
         box[0] = 1
 
-    runloom_c.mn_init(nhubs)
-    runloom_c.mn_fiber(runner)
-    runloom_c.mn_run()
-    runloom_c.mn_fini()
+    stackweave_c.mn_init(nhubs)
+    stackweave_c.mn_fiber(runner)
+    stackweave_c.mn_run()
+    stackweave_c.mn_fini()
     return box[0]
 
 
@@ -46,12 +46,12 @@ def test_repeated_trivial_mn_teardown():
 
 
 def test_trivial_mn_teardown_via_run():
-    # The public wrapper (runloom.run) takes the same mn_init/mn_run/mn_fini path.
+    # The public wrapper (stackweave.run) takes the same mn_init/mn_run/mn_fini path.
     for i in range(30):
         box = bytearray(1)
 
         def main():
             box[0] = 1
 
-        runloom.run((i % 4) + 1, main)
+        stackweave.run((i % 4) + 1, main)
         assert box[0] == 1, i

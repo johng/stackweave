@@ -83,7 +83,7 @@ torn slot before the universe-membership assert even fires.
 import random
 
 import harness
-import runloom
+import stackweave
 
 # Finite sentinel UNIVERSE: a fixed, recognizable set of values.  Any value a list
 # ever holds is drawn ONLY from here, so a value an iterator yields that is NOT in
@@ -169,7 +169,7 @@ def run_shifter_sequence(lst, wid, rng):
         key = CHURN_VALUES[rng.randrange(len(CHURN_VALUES))]
         shifter_step(lst, case, key, rng)
         cases.append((case, key))
-        runloom.yield_now()           # iterator/reversed resumes mid-memmove window
+        stackweave.yield_now()           # iterator/reversed resumes mid-memmove window
     return cases
 
 
@@ -192,7 +192,7 @@ def run_mutator(lst, wid, rng):
             lst.append(CHURN_VALUES[rng.randrange(len(CHURN_VALUES))])
         else:
             lst.pop()
-        runloom.yield_now()
+        stackweave.yield_now()
 
 
 def trip_once(gate, tripped):
@@ -226,7 +226,7 @@ def walk_forward(H, wid, lst, gate, tripped):
             if not parked and seen >= 2:
                 parked = True
                 trip_once(gate, tripped)  # release the SHIFTER/MUTATOR
-                runloom.yield_now()       # park with it_index live -> memmove lands
+                stackweave.yield_now()       # park with it_index live -> memmove lands
         return "clean"
     except RuntimeError:
         return "runtimeerror"
@@ -251,7 +251,7 @@ def walk_reversed(H, wid, lst, gate, tripped):
             if not parked and seen >= 2:
                 parked = True
                 trip_once(gate, tripped)
-                runloom.yield_now()
+                stackweave.yield_now()
         return "clean"
     except RuntimeError:
         return "runtimeerror"
@@ -279,12 +279,12 @@ def run_round_impl(H, wid, rng, slot, state):
     # Two gates: one per iterator, each tripped the instant before that iterator
     # parks.  The SHIFTER/MUTATOR wait on BOTH so their memmoves provably land
     # while at least one iterator is parked mid-walk.
-    fwd_gate = runloom.WaitGroup()
+    fwd_gate = stackweave.WaitGroup()
     fwd_gate.add(1)
-    rev_gate = runloom.WaitGroup()
+    rev_gate = stackweave.WaitGroup()
     rev_gate.add(1)
 
-    wg = runloom.WaitGroup()
+    wg = stackweave.WaitGroup()
     wg.add(4)
 
     # Per-fiber RNG seeds (a SHARED random.Random corrupts GIL-off -- each fiber
@@ -441,12 +441,12 @@ def worker(H, wid, rng, state):
 
 
 def setup(H):
-    # Built INSIDE the root (monkey.patch() already ran), so runloom.sync.Lock is
+    # Built INSIDE the root (monkey.patch() already ran), so stackweave.sync.Lock is
     # the cooperative M:N-safe lock.  The lock serializes the WRITERS (shifter +
     # mutator) so the oracle tests memory-safety + length agreement while the
     # iterators race UNLOCKED.
     H.state = {
-        "lock": runloom.sync.Lock(),
+        "lock": stackweave.sync.Lock(),
         "counts": {
             "fwd_clean": [0] * 1024,
             "rev_clean": [0] * 1024,

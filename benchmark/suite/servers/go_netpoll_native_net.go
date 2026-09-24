@@ -3,12 +3,12 @@
 //
 // Acceptors: by default the server opens N SO_REUSEPORT listeners (N =
 // GOMAXPROCS), one accept loop each, so the kernel load-balances incoming SYNs
-// across N accept queues -- the same architecture as runloom's per-hub reuseport
+// across N accept queues -- the same architecture as stackweave's per-hub reuseport
 // acceptors. This matters ONLY for connection-churn (accept in the hot loop); the
 // persistent req/s / bandwidth paths accept once at establishment and are
 // unaffected. Pass -acceptors 1 to reproduce the old single-Accept() baseline.
 //
-// -work N applies the SAME FNV-1a byte hash as the runloom work curve (identical
+// -work N applies the SAME FNV-1a byte hash as the stackweave work curve (identical
 // constants) N times over each chunk before echoing, folded into byte 0 so it
 // can't be elided. work=0 is the plain echo. This is the compiled/native
 // reference for the cross-runtime handler work curve (multi-core via GOMAXPROCS).

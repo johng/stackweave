@@ -16,7 +16,7 @@ are single-comparison functions of their argument and a module-global constant.
 So for ANY integer x the results are fully determined by a closed form we can
 compute independently, and they can NEVER change across a yield.
 
-WHERE M:N COULD BREAK IT (the gap this program probes).  runloom multiplexes
+WHERE M:N COULD BREAK IT (the gap this program probes).  stackweave multiplexes
 tens of thousands of goroutines over a few hubs with the GIL OFF.  A pure
 stdlib function is only "pure" if, under that scheduling, (a) the function
 OBJECT bound to `token.ISTERMINAL` still resolves to the same code, (b) the
@@ -40,7 +40,7 @@ WHY THE ORACLE IS LEGITIMATELY SINGLE-OWNER (verified against plain threads):
   constant).  We verified with a plain-threads control (8 OS threads, GIL on AND
   off, each folding the same closed-form checksum over random integers) that the
   predicate results are 100% deterministic and bit-identical -- 0 disagreements.
-  Under a correct runloom the same must hold, so the oracle PASSES on a correct
+  Under a correct stackweave the same must hold, so the oracle PASSES on a correct
   runtime (exit 0 when there is no bug).
 
 THE CLOSED FORM (computed independently of the token module, so the oracle is
@@ -79,7 +79,7 @@ FAIL ON: a token predicate returning a result that disagrees with the closed
 form, the ISTERMINAL/ISNONTERMINAL partition breaking, an EXACT_TOKEN_TYPES
 round-trip that does not resolve, or a fiber-local checksum that CHANGES across a
 yield.  All inputs are single-owner and all tables are read-only, so any such
-observation is a runloom desync (torn read / frame corruption / SIGSEGV), never
+observation is a stackweave desync (torn read / frame corruption / SIGSEGV), never
 documented Python semantics.
 
 Stresses: pure-function purity across hub migration + park/resume, torn read of a
@@ -91,7 +91,7 @@ across a yield.
 import token
 
 import harness
-import runloom
+import stackweave
 
 # The load-bearing constants, snapshotted at import into local names so the
 # closed form is computed independently of any per-call module attribute lookup.
@@ -231,9 +231,9 @@ def purity_check(H, wid, idx, rng, state):
 
     # YIELD: park so thousands of siblings drive the same predicates on other
     # hubs before this fiber's frame resumes.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0003)
+        stackweave.sleep(0.0003)
 
     sig2 = fold_actual(H, wid, probes)
     if sig2 is None:

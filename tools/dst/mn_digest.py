@@ -23,7 +23,7 @@ Usable both ways:
   * imported:   from mn_digest import run_digest
                 d = run_digest("cpu_yield", hubs=2, seed=12345)
   * subprocess: python mn_digest.py --workload cpu_yield --hubs 2
-                (RUNLOOM_MN_SEED comes from the env, as in a real repro)
+                (STACKWEAVE_MN_SEED comes from the env, as in a real repro)
 """
 import hashlib
 import os
@@ -164,7 +164,7 @@ def payload_main(argv):
         else:
             raise SystemExit("unknown arg: {0}".format(argv[i]))
     sys.path.insert(0, os.path.join(REPO, "src"))
-    import runloom_c as rc
+    import stackweave_c as rc
     try:
         order = WORKLOADS[workload](rc, hubs)
     except BaseException as e:
@@ -186,19 +186,19 @@ def payload_main(argv):
 # ---------------------------------------------------------------------------
 
 def hermetic_env(extra_env=None):
-    """The digest subprocess env: the caller's environment with EVERY RUNLOOM_*
+    """The digest subprocess env: the caller's environment with EVERY STACKWEAVE_*
     knob stripped, then exactly the pinned keys (+ any explicit extra_env).
 
     Stripping is load-bearing twice over (adversarial review findings): an
-    inherited RUNLOOM_SIM=1 -- which several sim test modules set via
+    inherited STACKWEAVE_SIM=1 -- which several sim test modules set via
     os.environ at IMPORT time, contaminating an in-process `pytest tests/`
     run at collection -- would trip the I0 mn_init fence inside every digest
-    child; and inherited schedule knobs (RUNLOOM_MN_PREEMPT_FRAMES,
-    RUNLOOM_LDFI_DROP, RUNLOOM_MN_TRACE, ...) would silently change WHICH
+    child; and inherited schedule knobs (STACKWEAVE_MN_PREEMPT_FRAMES,
+    STACKWEAVE_LDFI_DROP, STACKWEAVE_MN_TRACE, ...) would silently change WHICH
     schedule the suite freezes.  Deliberate knob-testing (e.g. I3's
-    "digests stay stable WITH RUNLOOM_IOURING_LOOP=1" re-run) passes the knob
+    "digests stay stable WITH STACKWEAVE_IOURING_LOOP=1" re-run) passes the knob
     explicitly via extra_env."""
-    env = {k: v for k, v in os.environ.items() if not k.startswith("RUNLOOM_")}
+    env = {k: v for k, v in os.environ.items() if not k.startswith("STACKWEAVE_")}
     env["PYTHON_GIL"] = "0"
     env["PYTHONHASHSEED"] = "0"                 # contract #26
     env["PYTHONPATH"] = os.path.join(REPO, "src")
@@ -220,7 +220,7 @@ def run_digest(workload, hubs, seed, timeout=60, python=None, extra_env=None,
     contradict the printed-output rule, which forbids trusting exit 0 as
     success, not surfacing a crash).  A hang raises subprocess.TimeoutExpired."""
     env = hermetic_env(extra_env)
-    env["RUNLOOM_MN_SEED"] = str(seed)
+    env["STACKWEAVE_MN_SEED"] = str(seed)
     cmd = [python or sys.executable, os.path.abspath(__file__),
            "--workload", workload, "--hubs", str(hubs)]
     p = subprocess.run(cmd, cwd=REPO, env=env, timeout=timeout,

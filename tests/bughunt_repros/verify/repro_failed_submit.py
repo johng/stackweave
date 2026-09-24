@@ -1,4 +1,4 @@
-import os, tempfile, runloom_c as rc
+import os, tempfile, stackweave_c as rc
 print('iouring available:', rc.iouring_available())
 assert rc.iouring_available()
 fd, path = tempfile.mkstemp()

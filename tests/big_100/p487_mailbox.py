@@ -33,7 +33,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified empirically, not assumed):
 
   We verified the analogous read-back invariant holds under PLAIN OS THREADS with
   the GIL ON *and* OFF (each OS thread's mailbox instance is independent), so the
-  oracle NEVER fires without runloom -- a wrong-message read is a true runloom M:N
+  oracle NEVER fires without stackweave -- a wrong-message read is a true stackweave M:N
   isolation signal, exit 0 when there is no bug.
 
 ORACLES:
@@ -65,7 +65,7 @@ import email
 import os
 
 import harness
-import runloom
+import stackweave
 
 # Bounded pool of distinct mbox files, built ONCE at setup and read-only forever
 # after.  At most POOL_CAP files regardless of --funcs (the disk-safety cap).
@@ -73,10 +73,10 @@ import runloom
 # Per-slot cooperative lock: the Python `mailbox` docs document that a mailbox
 # must be LOCKED before access if any other access to the SAME mailbox is
 # possible -- mailbox.mbox parses its table-of-contents with a sequence of small
-# file seek()/readline() calls, and under runloom's monkey.patch() those file
+# file seek()/readline() calls, and under stackweave's monkey.patch() those file
 # reads are OFFLOADED (cooperative), so two fibers reading the SAME file would
 # interleave mid-toc-parse -- documented-unsafe usage that fails identically
-# under any cooperative-I/O model (it is NOT a runloom isolation bug, the same
+# under any cooperative-I/O model (it is NOT a stackweave isolation bug, the same
 # class as the p473_glob / p486_zipfile false-failers).  We therefore serialize
 # access to a GIVEN pool file behind a per-slot cooperative lock so same-file
 # access is never interleaved (the documented-SAFE usage).  The LOAD-BEARING
@@ -113,7 +113,7 @@ def open_pool_mbox(path):
     """Open an EXISTING pool mbox read-only, robustly.
 
     create=False guarantees we never truncate the shared file (see lb_check).
-    Under runloom's offloaded (monkey.patch) file I/O, a transient offload-pool
+    Under stackweave's offloaded (monkey.patch) file I/O, a transient offload-pool
     hiccup at extreme over-scale / external load can make the underlying open()
     momentarily fail; mailbox surfaces that as NoSuchMailboxError.  The file
     PROVABLY exists (setup created it and nothing ever deletes it), so such a
@@ -136,7 +136,7 @@ def open_pool_mbox(path):
             # file missing under the same pressure.)  Back off cooperatively to
             # let the offload pool drain, then retry.
             if attempt < 7:
-                runloom.sleep(0.0005 * (attempt + 1))
+                stackweave.sleep(0.0005 * (attempt + 1))
     # Persistent transient under sustained saturation: skip this iteration
     # (return None) rather than false-fail; the file is not actually gone.
     return None
@@ -188,7 +188,7 @@ def setup(H):
         # Per-slot cooperative lock: serializes access to THIS file only (so a
         # same-file toc-parse is never interleaved by a sibling -- the documented-
         # safe mailbox usage); different slots stay fully concurrent.
-        _POOL.append((mbox_path, tuple(expected), runloom.sync.Lock()))
+        _POOL.append((mbox_path, tuple(expected), stackweave.sync.Lock()))
 
     H.state = {
         "pool_n": n,
@@ -232,9 +232,9 @@ def lb_check(H, wid, iteration, state):
     # different hub each time it reads (exercises migration around the per-
     # instance cache), without ever interleaving a sibling's read of the SAME
     # file mid-toc-parse (documented-unsafe).  DIFFERENT slots stay concurrent.
-    runloom.yield_now()
+    stackweave.yield_now()
     if iteration & 1:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
 
     with lock:
         mb = open_pool_mbox(mbox_path)
@@ -303,7 +303,7 @@ def leak_check(H, wid, iteration, state):
     mbox_path, _expected, lock = _POOL[slot]
     known = _known_subjects()
 
-    runloom.yield_now()
+    stackweave.yield_now()
     with lock:
         mb = open_pool_mbox(mbox_path)
         if mb is None:
@@ -400,6 +400,6 @@ if __name__ == "__main__":
                           "LOAD-BEARING: each fiber reads its pool slot across "
                           "yields and asserts every message's Subject+body is the "
                           "KNOWN pair for that slot (0 under plain threads GIL on "
-                          "AND off; a cross-slot message leak is the runloom M:N "
+                          "AND off; a cross-slot message leak is the stackweave M:N "
                           "cache-isolation bug).  MEASURED spurious-message "
                           "detector stays 0%")

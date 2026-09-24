@@ -15,7 +15,7 @@ WHERE M:N COULD BREAK IT (the gap this program probes).  The symbol-table pass
 threads a fair amount of C state through the compiler (the `struct symtable`, its
 `st_cur`/`st_stack`, the interned-name dict, the per-block symbol dicts) while it
 recursively descends the AST.  Under free-threaded 3.14t with the GIL off and
-runloom fibers migrating across hubs mid-parse, if any of that build-time state
+stackweave fibers migrating across hubs mid-parse, if any of that build-time state
 were shared/global rather than per-call, a fiber parsing SOURCE_A that yields (or
 is preempted) while a sibling parses SOURCE_B on another hub could observe a
 CORRUPTED table: a scope flag from the sibling's parse, an identifier that
@@ -71,7 +71,7 @@ import re
 import symtable
 
 import harness
-import runloom
+import stackweave
 
 # User identifiers in every generated source are tagged "vw<wid>_...".  A table
 # identifier matching this pattern whose captured wid != the owning fiber's wid is
@@ -190,9 +190,9 @@ def one_check(H, wid, idx, state):
 
     # YIELD: let siblings run the C symbol-table pass over DIFFERENT sources on
     # other hubs while this fiber's table object is live and about to be re-parsed.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0003)
+        stackweave.sleep(0.0003)
 
     # (1) OBJECT STABILITY: the first table (held across the yield) is immutable
     # once built; its fingerprint must be unchanged (no torn/mutated object).
@@ -279,4 +279,4 @@ if __name__ == "__main__":
                  "fingerprints the table, yields, then asserts (1) the same table "
                  "object is unchanged, (2) a re-parse of the same source is bit-"
                  "identical, (3) no foreign-wid identifier leaked in.  A fingerprint "
-                 "mismatch, torn table, or foreign identifier is the runloom bug")
+                 "mismatch, torn table, or foreign identifier is the stackweave bug")

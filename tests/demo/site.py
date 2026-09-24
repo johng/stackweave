@@ -18,11 +18,11 @@ are genuinely blocking (they park the owning hub thread on disk I/O).
 
 The visitor / request counters are shared mutable state touched from
 every hub thread, so with the GIL off they MUST be guarded -- a cooperative
-runloom.sync.Lock does that here.
+stackweave.sync.Lock does that here.
 
 Crash + hang diagnostics are armed at startup:
-  * runloom_c.install_crash_handler  -- fatal-signal reporter -> crash file + core
-  * runloom_c.install_traceback_signal -- `kill -QUIT` dumps all goroutines
+  * stackweave_c.install_crash_handler  -- fatal-signal reporter -> crash file + core
+  * stackweave_c.install_traceback_signal -- `kill -QUIT` dumps all goroutines
   * faulthandler                      -- Python-level backstop
   * a heartbeat goroutine             -- writes run/health.json every 2s so an
                                          external watchdog can spot a wedge.
@@ -35,8 +35,8 @@ import sqlite3
 import sys
 import time
 
-import runloom_c
-import runloom.sync as sync
+import stackweave_c
+import stackweave.sync as sync
 
 import mnweb
 
@@ -89,7 +89,7 @@ class Counters:
 
 
 # A write job is (kind, params).  kind in {"request", "visit", "flush"}.
-db_chan = runloom_c.Chan(4096)
+db_chan = stackweave_c.Chan(4096)
 counters = Counters()
 access_fp = None
 
@@ -145,7 +145,7 @@ def db_writer():
 def db_flusher():
     """Wake the writer every 250ms so pending rows commit even when idle."""
     while True:
-        runloom_c.sched_sleep(0.25)
+        stackweave_c.sched_sleep(0.25)
         try:
             db_chan.try_send(("flush", None))
         except Exception:
@@ -183,11 +183,11 @@ def heartbeat():
     while True:
         visitors, requests = counters.snapshot()
         try:
-            stats = runloom_c.stats()
+            stats = stackweave_c.stats()
         except Exception as exc:
             stats = {"error": repr(exc)}
         try:
-            hubs = runloom_c.mn_hub_states()
+            hubs = stackweave_c.mn_hub_states()
         except Exception as exc:
             hubs = [{"error": repr(exc)}]
         payload = {
@@ -204,7 +204,7 @@ def heartbeat():
         with open(tmp, "w") as fp:
             json.dump(payload, fp)
         os.replace(tmp, HEALTH_JSON)
-        runloom_c.sched_sleep(2.0)
+        stackweave_c.sched_sleep(2.0)
 
 
 # --------------------------------------------------------------------
@@ -219,7 +219,7 @@ PAGE = """<!doctype html>
 <style>body{{font-family:system-ui,sans-serif;max-width:42rem;margin:3rem auto;line-height:1.6}}
 code{{background:#f0f0f0;padding:.1rem .3rem;border-radius:.2rem}}</style></head>
 <body>
-<h1>mnweb &mdash; runloom M:N sync demo</h1>
+<h1>mnweb &mdash; stackweave M:N sync demo</h1>
 <p>Served by <code>{host}</code> at <code>{ip}</code> across <code>{hubs}</code> hub threads
 (GIL off, backend <code>{backend}</code>/<code>{netpoll}</code>).</p>
 <ul>
@@ -237,8 +237,8 @@ def index(req):
     n = counters.add_visit()
     db_chan.try_send(("visit", (time.time(), "anon",
                                 req.addr[0] if req.addr else "?")))
-    html = PAGE.format(host=HOSTNAME, ip=HOST_IP, hubs=runloom_c.mn_hub_count(),
-                       backend=runloom_c.backend(), netpoll=runloom_c.netpoll_backend(),
+    html = PAGE.format(host=HOSTNAME, ip=HOST_IP, hubs=stackweave_c.mn_hub_count(),
+                       backend=stackweave_c.backend(), netpoll=stackweave_c.netpoll_backend(),
                        visitors=n, requests=counters.snapshot()[1],
                        uptime=time.time() - START_TIME)
     return mnweb.Response(html, content_type="text/html; charset=utf-8")
@@ -276,7 +276,7 @@ def health(req):
 
 @app.route("/slow")
 def slow(req):
-    runloom_c.sched_sleep(0.5)
+    stackweave_c.sched_sleep(0.5)
     return "slept 0.5s\n"
 
 
@@ -288,8 +288,8 @@ def stats(req):
         "visitors": visitors, "requests_served": requests,
         "uptime_s": time.time() - START_TIME,
         "db_queue": len(db_chan),
-        "scheduler": runloom_c.stats(),
-        "hubs": runloom_c.mn_hub_states(),
+        "scheduler": stackweave_c.stats(),
+        "hubs": stackweave_c.mn_hub_states(),
     }
     return mnweb.Response(json.dumps(body, default=str) + "\n",
                           content_type="application/json")
@@ -314,7 +314,7 @@ def register_debug_routes():
         # classifies as handoff-recoverable: the process survives with a
         # stranded hub (service dead, heartbeat alive).  Exercises the
         # supervisor's HANG/wedge path.
-        runloom_c._crash_selftest_overflow()
+        stackweave_c._crash_selftest_overflow()
         return "unreachable\n"
 
     @app.route("/debug/wedge")
@@ -327,7 +327,7 @@ def register_debug_routes():
 
 
 def arm_diagnostics():
-    # NOTE: deliberately do NOT call faulthandler.enable() here.  runloom's
+    # NOTE: deliberately do NOT call faulthandler.enable() here.  stackweave's
     # crash handler chains out by restoring the PREVIOUS signal disposition
     # and re-executing the faulting instruction; if faulthandler owns that
     # disposition, under the multithreaded M:N runtime the chain-out does not
@@ -336,12 +336,12 @@ def arm_diagnostics():
     # makes a fault dump the goroutine registry + native backtrace and then
     # core + die cleanly, which is what we want for autonomous restarts.  The
     # Python stack is still recoverable from the core via `py-bt` in gdb.
-    runloom_c.set_introspect_timestamps(True)
-    level = os.environ.get("RUNLOOM_CRASH", "goroutine,backtrace")
-    runloom_c.install_crash_handler(level, CRASH_REPORT)
-    runloom_c.install_traceback_signal()        # kill -QUIT -> goroutine dump
+    stackweave_c.set_introspect_timestamps(True)
+    level = os.environ.get("STACKWEAVE_CRASH", "goroutine,backtrace")
+    stackweave_c.install_crash_handler(level, CRASH_REPORT)
+    stackweave_c.install_traceback_signal()        # kill -QUIT -> goroutine dump
     print("[site] diagnostics armed (crash handler={}, level={}, traceback signal=SIGQUIT)".format(
-        runloom_c.crash_handler_installed(), level), flush=True)
+        stackweave_c.crash_handler_installed(), level), flush=True)
 
 
 def main():

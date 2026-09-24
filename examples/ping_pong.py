@@ -11,7 +11,7 @@ Run:
 
 import os
 
-import runloom
+import stackweave
 
 # Free-threaded build: fan fibers across all cores (M:N scheduler).
 HUBS = os.cpu_count() or 4
@@ -34,10 +34,10 @@ def pong(from_ping, to_ping):
         to_ping.send("pong")
 
 def main():
-    a = runloom.Chan()       # ping -> pong  (unbuffered rendezvous)
-    b = runloom.Chan()       # pong -> ping
-    runloom.fiber(ping, a, b)
-    runloom.fiber(pong, a, b)
+    a = stackweave.Chan()       # ping -> pong  (unbuffered rendezvous)
+    b = stackweave.Chan()       # pong -> ping
+    stackweave.fiber(ping, a, b)
+    stackweave.fiber(pong, a, b)
 
 if __name__ == "__main__":
-    runloom.run(HUBS, main)
+    stackweave.run(HUBS, main)

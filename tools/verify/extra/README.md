@@ -19,7 +19,7 @@ absent, and runs the real check when installed.
 
 ## Runnable once the tool is installed
 
-- **`rr_chaos.sh`** — Mozilla **rr** `record --chaos` over a runloom workload, with
+- **`rr_chaos.sh`** — Mozilla **rr** `record --chaos` over a stackweave workload, with
   perfect deterministic replay + reverse execution. The fastest way to capture
   *and* root-cause the residual cross-file leaked-parker flake on the real M:N
   path. `sudo apt-get install rr` (+ `kernel.perf_event_paranoid<=1`, ptrace;
@@ -32,7 +32,7 @@ absent, and runs the real check when installed.
 
 ## Roadmap — heavier, higher-assurance engines
 
-Ordered by leverage. Each lists the runloom target, what it would prove beyond
+Ordered by leverage. Each lists the stackweave target, what it would prove beyond
 the current suite, and the install.
 
 1. **Ivy — parameterized / unbounded.** Re-express the wake/steal protocol so

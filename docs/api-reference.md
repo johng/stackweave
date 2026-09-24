@@ -1,13 +1,13 @@
 # API reference
 
-Every public symbol exported by runloom, organised by module.  This is
+Every public symbol exported by stackweave, organised by module.  This is
 a reference -- start with the [guides](index.md) if you're learning
 your way around.
 
-## `runloom_c` (C extension)
+## `stackweave_c` (C extension)
 
-The low-level scheduler API.  Most user code calls `runloom.fiber` and
-`runloom.run`; everything else is for advanced use.
+The low-level scheduler API.  Most user code calls `stackweave.fiber` and
+`stackweave.run`; everything else is for advanced use.
 
 ### Scheduler control
 
@@ -46,13 +46,13 @@ Other fibers run in the meantime.
 #### `sched_stop()`
 
 Signal the scheduler to exit its drain loop at the next safe point.
-Used internally by `runloom.aio` for early termination.
+Used internally by `stackweave.aio` for early termination.
 
 #### `sched_reset() → (int, int, int)`
 
 Drop everything queued in the scheduler (ready FIFO, sleep heap,
 netpoll-parked).  Returns `(n_ready, n_sleep, n_parked)`.  Used by
-`runloom.aio.run` for cleanup between runs.
+`stackweave.aio.run` for cleanup between runs.
 
 #### `park_self()`
 
@@ -86,11 +86,11 @@ half of the function-bound grow-down auto-sizer.
 
 #### `set_grow_down(enabled=True)` / `grow_down_enabled() → bool`
 
-(On `runloom`, not `runloom_c`.) Toggle the function-bound stack **grow-down**
-auto-sizer, which learns each `runloom.fiber()`-spawned function's real stack need
+(On `stackweave`, not `stackweave_c`.) Toggle the function-bound stack **grow-down**
+auto-sizer, which learns each `stackweave.fiber()`-spawned function's real stack need
 and reserves only that.  **On by default**, active under M:N (`run(n>1)`) only;
 single-thread `run(1)` keeps the fixed default.  Also disabled by
-`RUNLOOM_GROW_DOWN=0` in the environment.  A per-call `runloom.fiber(fn,
+`STACKWEAVE_GROW_DOWN=0` in the environment.  A per-call `stackweave.fiber(fn,
 stack_size=N)` pin always wins, and grow-down defers to the opt-in
 `enable_stack_autosize()` when that is explicitly enabled.  See
 [docs/stack-sizing.md](stack-sizing.md#automatic-grow-down-on-by-default-mn).
@@ -162,7 +162,7 @@ See [Parallelism](parallelism.md).
 
 #### Offload hubs
 
-`mn_init(n, offload_hubs=K)` -- or `RUNLOOM_OFFLOAD_HUBS=K` -- reserves K
+`mn_init(n, offload_hubs=K)` -- or `STACKWEAVE_OFFLOAD_HUBS=K` -- reserves K
 **extra** hubs, added to `n` and never carved out of it, on which a blocking
 call may run as an ordinary fiber. The argument wins over the environment
 variable: how many blocking slots you need is a property of what your code
@@ -181,7 +181,7 @@ general work can land on one and stall behind the block.
   bound on concurrent blocking calls: a blocked hub cannot run its scheduler
   loop, so K hubs carry K of them.
 
-`runloom.run(n, main_fn, offload_hubs=K)` threads the same argument through.
+`stackweave.run(n, main_fn, offload_hubs=K)` threads the same argument through.
 Hubs past the 64 per-hub parker pools share the default pool, as they always
 have -- which costs offload hubs nothing, since they never park on an fd.
 
@@ -189,16 +189,16 @@ The result comes back the ordinary way -- a channel or `WaitGroup` -- with the
 caller parked on its own (unblocked) hub:
 
 ```python
-ch = runloom.Chan(1)
-runloom_c.offload_fiber(lambda: ch.send(some_blocking_call()))
+ch = stackweave.Chan(1)
+stackweave_c.offload_fiber(lambda: ch.send(some_blocking_call()))
 result, alive = ch.recv()      # recv() is (value, ok), not a bare value
 ```
 
 Nothing migrates between hubs in this scheme, so unlike
-`RUNLOOM_PER_G_TSTATE` it needs no patched CPython
-(`runloom.migration_available()` is irrelevant here).
+`STACKWEAVE_PER_G_TSTATE` it needs no patched CPython
+(`stackweave.migration_available()` is irrelevant here).
 
-`runloom.monkey.offload()` routes through offload hubs automatically when any
+`stackweave.monkey.offload()` routes through offload hubs automatically when any
 are reserved, and falls back to the thread pool otherwise -- see
 [Monkey-patching](monkey-patching.md).
 
@@ -238,7 +238,7 @@ Snapshot of scheduler counters.  Keys: `ready`, `sleeping`,
 
 A Go-style fiber dump -- which fibers exist, what each is blocked
 on, and where in your code.  See the [Debugging guide](debugging.md) for
-the full picture (and the friendlier `runloom.inspect` wrappers).
+the full picture (and the friendlier `stackweave.inspect` wrappers).
 
 #### `fibers() → list[dict]`
 
@@ -258,14 +258,14 @@ One dict per M:N hub — the per-**hub** view: `id`, `state` (`detached` /
 `dwell_ms` (how long that resume has run), `pending`, `preempt_requested`,
 `instrumented`, and `blocked_at` (best-effort Python call site of a
 DETACHED-wedged hub's blocking call).  Lock-free atomic reads; `[]` when the M:N
-scheduler isn't running.  The friendly wrapper `runloom.inspect.hubs()` adds a
-`stack_cmd` (`py-spy dump --pid <PID>`) per row, and `runloom.inspect.print_hubs()`
+scheduler isn't running.  The friendly wrapper `stackweave.inspect.hubs()` adds a
+`stack_cmd` (`py-spy dump --pid <PID>`) per row, and `stackweave.inspect.print_hubs()`
 renders the table — see [debugging.md](debugging.md#what-is-each-hub-doing-hubs).
 
 #### `fiber_stack(id) → (callable_repr, [(file, line, func), ...])`
 
 Best-effort reconstructed Python stack of one fiber (deepest first).
-Full stack under the single-thread scheduler (`runloom.aio`) and per-g-tstate
+Full stack under the single-thread scheduler (`stackweave.aio`) and per-g-tstate
 M:N; withheld under default M:N (no safe way to freeze a hub-resumable
 fiber).
 
@@ -278,12 +278,12 @@ handler and when the interpreter is wedged.
 #### `set_introspect_timestamps(bool)`
 
 Track each fiber's park time so `fibers()`/dumps report `age`.  Off
-by default (one clock read per park); also via `RUNLOOM_INTROSPECT_TIME=1`.
+by default (one clock read per park); also via `STACKWEAVE_INTROSPECT_TIME=1`.
 
 #### `install_traceback_signal(signum=SIGQUIT) → int`
 
 Install a raw-C signal handler that dumps all fibers to stderr -- Go's
-`GOTRACEBACK` / `kill -QUIT`.  Also via `RUNLOOM_TRACEBACK=1`.  POSIX only.
+`GOTRACEBACK` / `kill -QUIT`.  Also via `STACKWEAVE_TRACEBACK=1`.  POSIX only.
 
 #### `reset_after_fork() → None`
 
@@ -297,22 +297,22 @@ guide](debugging.md#fork-safety).
 
 Deadlock detection: when the single-thread scheduler quiesces with
 fibers still blocked on channels/parks, mode 0=off, 1=warn (print the
-dump, default), 2=raise `RuntimeError`.  Also `RUNLOOM_DEADLOCK=off|warn|raise`.
+dump, default), 2=raise `RuntimeError`.  Also `STACKWEAVE_DEADLOCK=off|warn|raise`.
 `count_deadlocked()` is the current chan/park-blocked count.
 
 #### `set_max_fibers(n)` / `get_max_fibers() → int` / `live_fibers() → int`
 
 Backpressure: cap the live-fiber count (0 = unlimited).  Over the cap,
-spawn raises `RuntimeError`.  Also `RUNLOOM_MAX_GOROUTINES`.  Zero hot-path cost
+spawn raises `RuntimeError`.  Also `STACKWEAVE_MAX_GOROUTINES`.  Zero hot-path cost
 when unset.
 
 #### `set_introspect_timestamps(bool)` / `get_introspect_timestamps() → bool`
 
-Park-age tracking (enables the `age` field + `runloom.inspect.leaked()`).
+Park-age tracking (enables the `age` field + `stackweave.inspect.leaked()`).
 
 ### Crash reporting & stack tuning
 
-Exposed as friendlier wrappers on `runloom.inspect` (also as raw `runloom_c`
+Exposed as friendlier wrappers on `stackweave.inspect` (also as raw `stackweave_c`
 functions).  See the [Debugging guide](debugging.md#crash-reporting-sigsegv--sigbus)
 and [Stack sizing](stack-sizing.md).
 
@@ -322,7 +322,7 @@ Install a fatal-signal handler (SIGSEGV/SIGBUS/...) that, on a crash, classifies
 the fault against the per-fiber guard pages -- a fiber stack overflow is
 named and distinguished from a wild pointer -- and dumps the live-fiber
 registry, then chains to the default handler.  `level`:
-`on`/`all`/`backtrace`/`pystack`/`wait`/`gdb`/`off` (default from `RUNLOOM_CRASH`).
+`on`/`all`/`backtrace`/`pystack`/`wait`/`gdb`/`off` (default from `STACKWEAVE_CRASH`).
 `file` also appends the report there.  POSIX has the rich path; Windows uses a
 Vectored Exception Handler.
 
@@ -339,14 +339,14 @@ Adaptive auto-sizer: each fiber kind starts large and, once measured, its
 later fibers start at the learned size ("start large, learn down").
 In-memory only -- never persisted.  `prescan=True` also runs the cold-start
 optimizer (a deep-frame kind like `Decimal` starts big enough to survive its
-first run).  An explicit `stack_size=` always wins.  Also `RUNLOOM_STACK_AUTOSIZE=1`.
+first run).  An explicit `stack_size=` always wins.  Also `STACKWEAVE_STACK_AUTOSIZE=1`.
 
 ### Thread setup
 
 #### `thread_init()` / `thread_fini()`
 
 Per-OS-thread setup/teardown.  Called automatically; only invoke
-manually if you're embedding runloom in a non-main thread.
+manually if you're embedding stackweave in a non-main thread.
 
 ### Types
 
@@ -369,31 +369,31 @@ directly; `G` wraps a `Coro` plus scheduler metadata.
 
 ---
 
-## `runloom`
+## `stackweave`
 
-Top-level package.  Re-exports a Go-style API from `runloom.runtime`
+Top-level package.  Re-exports a Go-style API from `stackweave.runtime`
 (the original Python-only scheduler, kept for backward compatibility).
 
 ```python
-import runloom
+import stackweave
 
-runloom.fiber(fn)            # spawn (uses the C scheduler under the hood)
-runloom.yield_now()       # cooperative yield (give other fibers a turn)
-runloom.sleep(seconds)    # cooperative sleep
-runloom.run(n, main_fn=None)  # THE entry point. run main_fn with n hubs:
+stackweave.fiber(fn)            # spawn (uses the C scheduler under the hood)
+stackweave.yield_now()       # cooperative yield (give other fibers a turn)
+stackweave.sleep(seconds)    # cooperative sleep
+stackweave.run(n, main_fn=None)  # THE entry point. run main_fn with n hubs:
                           #   n=1 single-thread, n>1 M:N parallel across n
                           #   cores (needs 3.13t + GIL off; n>1 under the GIL
                           #   raises).  main_fn optional -> drain-only.
                           #   Collapses mn_init/mn_fiber/mn_run/mn_fini.
-runloom.current() → Goroutine
-runloom.backend() → str
+stackweave.current() → Goroutine
+stackweave.backend() → str
 ```
 
-For new code, prefer `runloom_c` (faster) or `runloom.sync` (richer API).
+For new code, prefer `stackweave_c` (faster) or `stackweave.sync` (richer API).
 
 ---
 
-## `runloom.inspect`
+## `stackweave.inspect`
 
 Runtime introspection -- the friendly wrappers over the fiber
 registry.  `fibers(stacks=)`, `count()`, `stack(id)`, `format(stacks=)`
@@ -404,32 +404,32 @@ registry.  `fibers(stacks=)`, `count()`, `stack(id)`, `format(stacks=)`
 [Debugging guide](debugging.md).
 
 ```python
-import runloom
+import stackweave
 print(gi.format(stacks=True))   # which fibers, and where they're stuck
 gi.install_dump_signal()        # kill -QUIT <pid> -> dump
 ```
 
 ---
 
-## `runloom.aio`
+## `stackweave.aio`
 
-Asyncio bridge.  See [runloom.aio](asyncio.md).
+Asyncio bridge.  See [stackweave.aio](asyncio.md).
 
 ```python
-runloom.aio.run(coro)                     # equivalent of asyncio.run
-runloom.aio.install()                     # set RunloomEventLoopPolicy globally
-runloom.aio.open_connection(host, port)   # async (reader, writer)
-runloom.aio.start_server(cb, host, port)  # async server with serve_forever()
+stackweave.aio.run(coro)                     # equivalent of asyncio.run
+stackweave.aio.install()                     # set StackweaveEventLoopPolicy globally
+stackweave.aio.open_connection(host, port)   # async (reader, writer)
+stackweave.aio.start_server(cb, host, port)  # async server with serve_forever()
 ```
 
 Classes:
 
-- `RunloomEventLoop` -- drop-in `asyncio.AbstractEventLoop` backed by
-  runloom's scheduler.
-- `RunloomEventLoopPolicy` -- sets `RunloomEventLoop` as the default loop.
-- `RunloomFuture` -- duck-typed Future with synchronous done-callback
+- `StackweaveEventLoop` -- drop-in `asyncio.AbstractEventLoop` backed by
+  stackweave's scheduler.
+- `StackweaveEventLoopPolicy` -- sets `StackweaveEventLoop` as the default loop.
+- `StackweaveFuture` -- duck-typed Future with synchronous done-callback
   dispatch.
-- `RunloomTask` -- `asyncio.Task` replacement that drives the coroutine
+- `StackweaveTask` -- `asyncio.Task` replacement that drives the coroutine
   inside a fiber.
 - `StreamReader` / `StreamWriter` -- asyncio-compatible stream
   interface, backed by `wait_fd`.
@@ -438,32 +438,32 @@ Classes:
 
 ---
 
-## `runloom.sync`
+## `stackweave.sync`
 
 No-`async`/`await` facade.  See [Sync API](sync-api.md).
 
 ```python
-runloom.sync.fiber(fn, *args, **kwargs)        # spawn with args
-runloom.sync.run(main_fn=None)              # drive scheduler
-runloom.sync.sleep(seconds)
-runloom.sync.yield_now()
-runloom.sync.current() → G
+stackweave.sync.fiber(fn, *args, **kwargs)        # spawn with args
+stackweave.sync.run(main_fn=None)              # drive scheduler
+stackweave.sync.sleep(seconds)
+stackweave.sync.yield_now()
+stackweave.sync.current() → G
 
-runloom.sync.Chan                            # re-export of runloom.Chan
-runloom.sync.select                          # re-export of runloom.select
-runloom.sync.park / wake                     # park_self + wake helpers
+stackweave.sync.Chan                            # re-export of stackweave.Chan
+stackweave.sync.select                          # re-export of stackweave.select
+stackweave.sync.park / wake                     # park_self + wake helpers
 
-runloom.sync.tcp_connect(host, port) → Socket
-runloom.sync.tcp_listen(host, port, *, backlog=128) → Socket
-runloom.sync.udp_endpoint(local_addr=None, remote_addr=None) → Socket
+stackweave.sync.tcp_connect(host, port) → Socket
+stackweave.sync.tcp_listen(host, port, *, backlog=128) → Socket
+stackweave.sync.udp_endpoint(local_addr=None, remote_addr=None) → Socket
 ```
 
 Synchronisation primitives matching `asyncio.*`:
 
-- `runloom.sync.Lock` -- cooperative mutex.
-- `runloom.sync.Event` -- set/clear/wait.
-- `runloom.sync.Condition` -- waiter + notifier on a lock.
-- `runloom.sync.Semaphore` -- bounded counting semaphore.
+- `stackweave.sync.Lock` -- cooperative mutex.
+- `stackweave.sync.Event` -- set/clear/wait.
+- `stackweave.sync.Condition` -- waiter + notifier on a lock.
+- `stackweave.sync.Semaphore` -- bounded counting semaphore.
 
 #### `Socket`
 
@@ -474,13 +474,13 @@ park cooperatively on `wait_fd`.  Standard `socket.socket` attributes
 
 ---
 
-## `runloom.time`
+## `stackweave.time`
 
 Go-style timers and tickers.
 
 #### `Sleep(seconds)`
 
-Cooperative sleep.  Alias for `runloom.sched_sleep`.
+Cooperative sleep.  Alias for `stackweave.sched_sleep`.
 
 #### `After(seconds) → Chan`
 
@@ -488,7 +488,7 @@ Returns a channel that will receive the current time after `seconds`.
 Equivalent of Go's `time.After`.
 
 ```python
-import runloom
+import stackweave
 
 after = t.After(1.0)
 # ... do work ...
@@ -517,7 +517,7 @@ Shorthand for `NewTicker(seconds).C` when you don't need to stop it
 
 ---
 
-## `runloom.monkey`
+## `stackweave.monkey`
 
 Stdlib monkey-patching.  See [Monkey-patching](monkey-patching.md).
 
@@ -526,7 +526,7 @@ Stdlib monkey-patching.  See [Monkey-patching](monkey-patching.md).
 Apply patches.  Default: all categories enabled.  Opt out:
 
 ```python
-runloom.monkey.patch(threading=False, dns=False)
+stackweave.monkey.patch(threading=False, dns=False)
 ```
 
 Categories: `socket`, `time`, `os`, `select`, `stdio`, `ssl`,

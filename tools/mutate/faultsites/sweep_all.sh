@@ -16,7 +16,7 @@
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 MAIN="$(cd "$HERE/../../.." && pwd)"
-PY="${RUNLOOM_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
+PY="${STACKWEAVE_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
 
 LIMIT=""
 if [ "${1:-}" = "--limit" ]; then LIMIT="--limit $2"; shift 2; fi
@@ -38,7 +38,7 @@ for tu in "${TUS[@]}"; do
     # non-zero exit from fault_sweep just means survivors were found; the report
     # is the deliverable, so don't fail the whole driver on survivors alone.
     "$PY" "$HERE/fault_sweep.py" "$tu" $LIMIT 2>&1 | tail -4
-    WT="${RUNLOOM_MUT_WORKTREE:-$HOME/projects/pygo-mutants}"
+    WT="${STACKWEAVE_MUT_WORKTREE:-$HOME/projects/pygo-mutants}"
     rep="$WT/src/runloom_c/${tu}.unchecked_errors.txt"
     [ -f "$rep" ] && echo "   survivors report: $rep"
 done

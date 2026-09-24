@@ -16,7 +16,7 @@ generator of that stale-dup-wake-on-a-DEAD-slot: the first wave wakes-and-frees
 the recv-parked goroutine; the second wave, fired BEFORE those woken g's have
 been joined, must NOT enqueue a wake against the now-DEAD parker.
 
-A CHILD runloom program builds many socketpairs, each with a recv-parked
+A CHILD stackweave program builds many socketpairs, each with a recv-parked
 goroutine, plus genuine in-flight bytes (a peer goroutine sends a chunk, then
 parks in its own recv) so the parked recv has a REAL completion to race the
 second wake against.  After printing DONE-MARKER it performs two back-to-back
@@ -61,9 +61,9 @@ SOCKS_PER_CHILD = 200
 CHILD = r'''
 import sys, os, socket, threading
 sys.path.insert(0, {src!r})
-import runloom
-import runloom.monkey
-runloom.monkey.patch()                     # cooperative socket I/O on the hubs
+import stackweave
+import stackweave.monkey
+stackweave.monkey.patch()                     # cooperative socket I/O on the hubs
 
 K = int(sys.argv[1]) if len(sys.argv) > 1 else 200
 
@@ -106,9 +106,9 @@ def main():
     for _ in range(K):
         a, b = socket.socketpair()
         track(a); track(b)
-        runloom.fiber(recv_parked, a)
-        runloom.fiber(peer, b)
-    runloom.sleep(0.05)                     # let every pair settle: parked + 1 chunk in flight
+        stackweave.fiber(recv_parked, a)
+        stackweave.fiber(peer, b)
+    stackweave.sleep(0.05)                     # let every pair settle: parked + 1 chunk in flight
     sys.stdout.write("DONE-MARKER\n"); sys.stdout.flush()
 
     # Re-entrant close STORM racing the join: signal stop, then fire TWO waves
@@ -134,7 +134,7 @@ def main():
     # return -> run() joins the woken goroutines; a stale dup-wake on a freed g
     # would SIGSEGV here, before MAIN-EXIT prints.
 
-runloom.run(4, main)
+stackweave.run(4, main)
 sys.stdout.write("MAIN-EXIT\n"); sys.stdout.flush()
 '''
 
@@ -220,7 +220,7 @@ def post(H):
 if __name__ == "__main__":
     harness.main("p305_double_shutdown_close_storm", body, setup=setup, post=post,
                  default_funcs=100,
-                 describe="child runloom fires a double/re-entrant close+"
+                 describe="child stackweave fires a double/re-entrant close+"
                           "shutdown(SHUT_RDWR) storm racing run()'s join over "
                           "many recv-parked goroutines with bytes in flight; "
                           "returncode>=0 (no -SIGSEGV/-SIGABRT) + no hang")

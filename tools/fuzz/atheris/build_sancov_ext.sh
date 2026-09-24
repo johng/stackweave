@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# build_sancov_ext.sh -- build runloom_c with SanitizerCoverage so the Atheris
+# build_sancov_ext.sh -- build stackweave_c with SanitizerCoverage so the Atheris
 # fuzzer (fuzz_api.py) gets REAL native C-coverage feedback, not just Python-level.
 #
 # Atheris instruments Python bytecode; the C ext is opaque to it UNLESS the ext is
@@ -15,7 +15,7 @@
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../../.." && pwd)"; cd "$ROOT"
-PY="${RUNLOOM_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
+PY="${STACKWEAVE_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
 SECS="${1:-20}"
 command -v clang >/dev/null 2>&1 || { echo "build_sancov_ext: clang absent. SKIP."; exit 0; }
 "$PY" -c "import atheris" 2>/dev/null || { echo "build_sancov_ext: atheris absent. SKIP."; exit 0; }

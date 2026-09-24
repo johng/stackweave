@@ -63,9 +63,9 @@ static int runloom_tcp_fault_armed(void)
 {
     static int cached = -1;
     if (cached < 0)
-        cached = (getenv("RUNLOOM_FAULT_TCP_SOCKET")  || getenv("RUNLOOM_FAULT_TCP_CONNECT") ||
-                  getenv("RUNLOOM_FAULT_TCP_ACCEPT")  || getenv("RUNLOOM_FAULT_TCP_RECV")    ||
-                  getenv("RUNLOOM_FAULT_TCP_SEND")) ? 1 : 0;
+        cached = (getenv("STACKWEAVE_FAULT_TCP_SOCKET")  || getenv("STACKWEAVE_FAULT_TCP_CONNECT") ||
+                  getenv("STACKWEAVE_FAULT_TCP_ACCEPT")  || getenv("STACKWEAVE_FAULT_TCP_RECV")    ||
+                  getenv("STACKWEAVE_FAULT_TCP_SEND")) ? 1 : 0;
     return cached;
 }
 #  define RUNLOOM_TCP_FINJ(site) (runloom_tcp_fault_armed() ? runloom_fault_inject(site) : 0)

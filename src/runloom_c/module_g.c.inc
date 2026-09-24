@@ -234,7 +234,7 @@ static PyGetSetDef RunloomG_getset[] = {
 
 static PyTypeObject RunloomGType = {
     PyVarObject_HEAD_INIT(NULL, 0)
-    "runloom_c.G",
+    "stackweave_c.G",
     sizeof(RunloomG),
     0,
     (destructor)RunloomG_dealloc,

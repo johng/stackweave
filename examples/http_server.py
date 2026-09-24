@@ -1,6 +1,6 @@
 """Tiny HTTP server — and stdlib clients that "just work".
 
-The selling point of runloom.monkey.patch(): code that was written to
+The selling point of stackweave.monkey.patch(): code that was written to
 block runs cooperatively, unchanged.  Here a hand-rolled HTTP/1.0
 server accepts connections in blocking style, while several
 urllib.request.urlopen() clients fetch from it concurrently — all on
@@ -14,14 +14,14 @@ from urllib.request import urlopen
 
 import os
 
-import runloom
+import stackweave
 
 # Free-threaded build: fan fibers across all cores (M:N scheduler).
 HUBS = os.cpu_count() or 4
 
-runloom.monkey.patch()
+stackweave.monkey.patch()
 
-BODY = b"Hello from runloom!\n"
+BODY = b"Hello from stackweave!\n"
 NUM_CLIENTS = 5
 
 def serve_one(conn):
@@ -40,7 +40,7 @@ def http_server(ready, n_requests):
     ready.send(s.getsockname()[1])        # tell main which port we got
     for _ in range(n_requests):
         conn, _ = s.accept()
-        runloom.fiber(serve_one, conn)          # one fiber per connection
+        stackweave.fiber(serve_one, conn)          # one fiber per connection
     s.close()
 
 def fetcher(fid, port, results):
@@ -48,17 +48,17 @@ def fetcher(fid, port, results):
     results.send((fid, body))
 
 def main():
-    ready = runloom.Chan(1)
-    runloom.fiber(http_server, ready, NUM_CLIENTS)
+    ready = stackweave.Chan(1)
+    stackweave.fiber(http_server, ready, NUM_CLIENTS)
     port = ready.recv()[0]
 
-    results = runloom.Chan(NUM_CLIENTS)
+    results = stackweave.Chan(NUM_CLIENTS)
     for fid in range(NUM_CLIENTS):
-        runloom.fiber(fetcher, fid, port, results)
+        stackweave.fiber(fetcher, fid, port, results)
 
     for _ in range(NUM_CLIENTS):
         fid, body = results.recv()[0]
         print("fetcher {0} got: {1}".format(fid, body.decode().strip()))
 
 if __name__ == "__main__":
-    runloom.run(HUBS, main)
+    stackweave.run(HUBS, main)

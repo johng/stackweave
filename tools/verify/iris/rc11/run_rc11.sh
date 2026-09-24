@@ -11,7 +11,7 @@
 #   opam install -y coq-gpfsl
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
-SW="${RUNLOOM_WEAKMEM_SWITCH:-runloom-weakmem}"
+SW="${STACKWEAVE_WEAKMEM_SWITCH:-runloom-weakmem}"
 
 echo "-- iRC11 / RC11 weak memory (gpfsl) --"
 if [ ! -d "$HOME/.opam/$SW/lib/coq/user-contrib/gpfsl" ]; then

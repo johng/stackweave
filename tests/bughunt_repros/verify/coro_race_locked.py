@@ -1,11 +1,11 @@
 import threading
-import runloom_c
+import stackweave_c
 
 def body():
     for _ in range(100000):
-        runloom_c.yield_()
+        stackweave_c.yield_()
 
-c = runloom_c.Coro(body)
+c = stackweave_c.Coro(body)
 lk = threading.Lock()
 
 def spin():

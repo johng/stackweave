@@ -17,7 +17,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-import runloom_c
+import stackweave_c
 
 ROUNDS = int(os.environ.get("ROUNDS", "8"))
 WORKERS_PER_ROUND = int(os.environ.get("WORKERS", "200"))
@@ -34,20 +34,20 @@ def maps_count():
 def worker():
     # Touch a little stack + yield once so it runs on (and completes on) a hub.
     buf = bytearray(1024)
-    runloom_c.sched_sleep(0.0)
+    stackweave_c.sched_sleep(0.0)
     buf[0] = 1
 
 
 def acceptor():
     for r in range(ROUNDS):
-        done = runloom_c.Chan(WORKERS_PER_ROUND)
+        done = stackweave_c.Chan(WORKERS_PER_ROUND)
 
         def w(ch=done):
             worker()
             ch.send(1)
 
         for _ in range(WORKERS_PER_ROUND):
-            runloom_c.mn_fiber(w)
+            stackweave_c.mn_fiber(w)
         for _ in range(WORKERS_PER_ROUND):
             done.recv()
         time.sleep(0.05)
@@ -56,10 +56,10 @@ def acceptor():
 
 def main():
     print("baseline maps={}".format(maps_count()), flush=True)
-    runloom_c.mn_init(4)
-    runloom_c.mn_fiber(acceptor)
-    runloom_c.mn_run()
-    runloom_c.mn_fini()
+    stackweave_c.mn_init(4)
+    stackweave_c.mn_fiber(acceptor)
+    stackweave_c.mn_run()
+    stackweave_c.mn_fini()
     print("final    maps={}  (climbing across rounds == the leak)".format(maps_count()), flush=True)
 
 

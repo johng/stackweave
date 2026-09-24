@@ -176,7 +176,7 @@ int main(void)
     }
 
     printf("preempt=%s N=%d hubs=%d stall=%dms responded=%ld/%d\n",
-           getenv("RUNLOOM_PREEMPT") ? getenv("RUNLOOM_PREEMPT") : "(off)",
+           getenv("STACKWEAVE_PREEMPT") ? getenv("STACKWEAVE_PREEMPT") : "(off)",
            N_WORKERS, NHUBS, STALL_MS, responded, N_WORKERS);
     int pass = (responded == N_WORKERS);
     printf("%s\n", pass ? "PASS: every worker ran -- no lost wake behind the CPU staller"

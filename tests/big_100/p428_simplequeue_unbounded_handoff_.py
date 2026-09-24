@@ -1,8 +1,8 @@
 """big_100 / 428 -- queue.SimpleQueue unbounded FIFO direct-handoff conservation.
 
 The subject is the cooperative ``queue.SimpleQueue`` -- after monkey.patch()
-every ``queue.SimpleQueue()`` is runloom's ``CoSimpleQueue``
-(src/runloom/monkey/queues.py:27).  It is the ONE queue in the cooperative
+every ``queue.SimpleQueue()`` is stackweave's ``CoSimpleQueue``
+(src/stackweave/monkey/queues.py:27).  It is the ONE queue in the cooperative
 stdlib with NO Condition / no internal lock: it hand-rolls TWO bare
 ``collections.deque``s and mutates them WITHOUT serialization --
 
@@ -33,7 +33,7 @@ by the racing pair:
   * (put) ``_items.append`` + ``_waiters.popleft`` (direct hand-off)  vs
   * (get) ``_items.popleft`` (fast path D->E) / ``_waiters.append`` + park.
 
-With the GIL off and runloom in M:N, producers on one hub and consumers on
+With the GIL off and stackweave in M:N, producers on one hub and consumers on
 another touch these UNGUARDED deques truly in parallel.  Three mutually-
 exclusive corruption modes, each made falsifiable below:
 
@@ -108,7 +108,7 @@ conservation reconciliation even closes.
 import queue
 
 import harness
-import runloom
+import stackweave
 
 # Finite sentinel UNIVERSE of payload values.  Every value a consumer ever takes
 # must decode into this space; a value outside it is a torn/garbage deque slot.
@@ -182,7 +182,7 @@ def run_producer(shared, pid_local):
     for seq in range(PER_PRODUCER):
         shared.put(encode(pid_local, seq))
         if (seq & 63) == 0:
-            runloom.yield_now()            # let consumers race the hand-off
+            stackweave.yield_now()            # let consumers race the hand-off
     return control_ok
 
 
@@ -217,17 +217,17 @@ def run_consumer(H, shared, mode, seen, guard, slot, dup_box):
                 try:
                     item = shared.get(block=True, timeout=0.05)
                 except queue.Empty:
-                    runloom.yield_now()
+                    stackweave.yield_now()
                     continue
             else:  # MODE_SPIN -- pure fast-path D->E hammering via get_nowait
                 try:
                     item = shared.get_nowait()
                 except queue.Empty:
-                    runloom.yield_now()
+                    stackweave.yield_now()
                     continue
         except queue.Empty:
             # A blocking get timed out: only legal if the round is winding down.
-            runloom.yield_now()
+            stackweave.yield_now()
             continue
         except IndexError:
             # A bare IndexError out of deque.popleft is the UNDERFLOW signature of
@@ -278,15 +278,15 @@ def run_round_impl(H, wid, rng, slot, state):
     received = state["received"]
     control = state["control"]
     dup_box = state["dup"]
-    guard = [runloom.sync.Lock() for _ in range(GUARD_SHARDS)]  # per-item shard
+    guard = [stackweave.sync.Lock() for _ in range(GUARD_SHARDS)]  # per-item shard
 
     shared = queue.SimpleQueue()           # CoSimpleQueue after monkey.patch()
     # Per-round delivery bitmap: one slot per live payload (single mark each).
     seen = [0] * UNIVERSE_SIZE
 
-    prod_wg = runloom.WaitGroup()
+    prod_wg = stackweave.WaitGroup()
     prod_wg.add(PRODUCERS)
-    cons_wg = runloom.WaitGroup()
+    cons_wg = stackweave.WaitGroup()
     cons_wg.add(CONSUMERS)
 
     control_box = [0] * PRODUCERS          # per-producer private-control conserved
@@ -409,11 +409,11 @@ def worker(H, wid, rng, state):
 
 def setup(H):
     # Built INSIDE the root (monkey.patch() already ran), so queue.SimpleQueue is
-    # the cooperative CoSimpleQueue and runloom.sync.Lock is M:N-safe.  `guard`
+    # the cooperative CoSimpleQueue and stackweave.sync.Lock is M:N-safe.  `guard`
     # makes the per-round `seen` mark+check exact WITHOUT guarding the queue's own
     # _items/_waiters mutation (that stays the unguarded race we probe).
     H.state = {
-        "guard": runloom.sync.Lock(),
+        "guard": stackweave.sync.Lock(),
         "offered": [0] * SLOTS,            # payloads put on the shared queue
         "received": [0] * SLOTS,           # real payloads taken off the shared queue
         "control": [0] * SLOTS,            # payloads conserved by private controls

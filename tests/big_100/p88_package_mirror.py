@@ -14,7 +14,7 @@ import socket
 import harness
 import httputil
 import netutil
-import runloom
+import stackweave
 
 NPKGS = 64
 
@@ -38,7 +38,7 @@ def setup(H):
                 if roll < 0.2:
                     return                      # drop: close without replying
                 if roll < 0.35:
-                    runloom.sleep(r.uniform(0.005, 0.05))
+                    stackweave.sleep(r.uniform(0.005, 0.05))
                 if path.startswith("/meta/"):
                     idx = int(path[6:])
                     httputil.send_response(
@@ -76,7 +76,7 @@ def fetch(H, host, port, path):
             sock.connect((host, port))
             return httputil.get(sock, path, keep_alive=False)
         except OSError:
-            runloom.sleep(0.003)        # dropped/flaky -> retry
+            stackweave.sleep(0.003)        # dropped/flaky -> retry
         finally:
             netutil.close_quiet(sock)
     return None

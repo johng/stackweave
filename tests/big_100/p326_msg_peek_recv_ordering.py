@@ -14,7 +14,7 @@ The unit under test (per record):
   2. The peer sends ONE known tag.  The READ wake fires; the receiver does
      `sock.recv(n, MSG_PEEK)` -> H.check(peeked == tag).  The data is NOT consumed
      -- the kernel receive queue still holds the full tag, the fd stays readable.
-  3. The receiver runloom.yield_now() + runloom.sleep(0) to FORCE a likely hub
+  3. The receiver stackweave.yield_now() + stackweave.sleep(0) to FORCE a likely hub
      change (so the fd is now wanted by a DIFFERENT hub's pool than the one whose
      epoll first armed it -- the exact cross-pool re-arm path).
   4. The receiver wait_fd-parks for READ AGAIN.  Because the data was never
@@ -67,21 +67,21 @@ import socket
 import sys
 
 import harness
-import runloom
+import stackweave
 
 # wait_fd is the generic-fd park primitive; detect + skip cleanly if absent so
 # the campaign treats a missing primitive as non-fatal (matches p313).
 try:
-    import runloom_c
-    _HAVE_WAITFD = hasattr(runloom_c, "wait_fd")
+    import stackweave_c
+    _HAVE_WAITFD = hasattr(stackweave_c, "wait_fd")
 except Exception:                       # pragma: no cover - import guard
-    runloom_c = None
+    stackweave_c = None
     _HAVE_WAITFD = False
 
 READ = 1                                # wait_fd events bitmask: 1 = readable
 # Positive sentinel returned on cancellation (NOT a "< 0" value -- a bare "ready
 # & READ" test would misread it, so compare explicitly, as p313 does).
-CANCELLED = getattr(runloom_c, "WAIT_FD_CANCELLED", 1 << 30) if runloom_c else (1 << 30)
+CANCELLED = getattr(stackweave_c, "WAIT_FD_CANCELLED", 1 << 30) if stackweave_c else (1 << 30)
 
 # Capture the RAW (unpatched) socket.recv / os.write / os.set_blocking BEFORE
 # harness's monkey.patch() makes recv COOPERATIVE.  We need a true non-blocking
@@ -148,7 +148,7 @@ def receiver(running, fd, sock, tag, counts, slot, done):
         got_first = False
         while running():
             try:
-                ready = runloom_c.wait_fd(fd, READ, FIRST_WAIT_MS)
+                ready = stackweave_c.wait_fd(fd, READ, FIRST_WAIT_MS)
             except OSError:
                 detail = "first-wait fd error"
                 done.send((False, detail)); return
@@ -173,7 +173,7 @@ def receiver(running, fd, sock, tag, counts, slot, done):
             # First readiness fired but nothing is actually queued yet (a rare
             # spurious wake): re-park once and re-peek before giving up.
             try:
-                runloom_c.wait_fd(fd, READ, FIRST_WAIT_MS)
+                stackweave_c.wait_fd(fd, READ, FIRST_WAIT_MS)
                 peeked = RAW_RECV(sock, TAG_LEN, socket.MSG_PEEK)
             except (BlockingIOError, OSError):
                 peeked = b""
@@ -190,9 +190,9 @@ def receiver(running, fd, sock, tag, counts, slot, done):
         #         M:N work-stealer a chance to resume it on a DIFFERENT hub -> the
         #         next wait_fd arms the fd in another hub's epoll pool (the
         #         cross-pool stale-arm path). -----------------------------------
-        runloom.yield_now()
-        runloom.sleep(0)
-        runloom.yield_now()
+        stackweave.yield_now()
+        stackweave.sleep(0)
+        stackweave.yield_now()
 
         # ---- 4. SECOND wait (THE UNIT UNDER TEST): park READ AGAIN on the
         #         still-undrained data.  Level-triggered + correctly migrated =>
@@ -203,7 +203,7 @@ def receiver(running, fd, sock, tag, counts, slot, done):
         while running() and probes <= SECOND_REPROBE_MAX:
             probes += 1
             try:
-                ready = runloom_c.wait_fd(fd, READ, SECOND_WAIT_MS)
+                ready = stackweave_c.wait_fd(fd, READ, SECOND_WAIT_MS)
             except OSError:
                 detail = "second-wait fd error"
                 done.send((False, detail)); return
@@ -244,7 +244,7 @@ def receiver(running, fd, sock, tag, counts, slot, done):
                 # the re-arm was genuinely lost AND the data somehow vanished this
                 # would spin to the cap and fall through to a shortfall -> H.fail.
                 try:
-                    runloom_c.wait_fd(fd, READ, SECOND_WAIT_MS)
+                    stackweave_c.wait_fd(fd, READ, SECOND_WAIT_MS)
                 except OSError:
                     break
                 continue
@@ -293,7 +293,7 @@ def peer(running, fd, tag):
             try:
                 n = os.write(fd, tag[sent:])
             except BlockingIOError:
-                runloom.yield_now()
+                stackweave.yield_now()
                 continue
             except OSError:
                 break
@@ -362,7 +362,7 @@ def driver(H, wid, rng, state):
 def setup(H):
     if not _HAVE_WAITFD:
         H.note_scale_limit(
-            "runloom_c.wait_fd unavailable -- cannot park on a raw fd; skipping "
+            "stackweave_c.wait_fd unavailable -- cannot park on a raw fd; skipping "
             "the MSG_PEEK re-arm ordering test")
         H.state = None
         return
@@ -384,7 +384,7 @@ def setup(H):
     H.state = {
         "pairs": pairs,
         # cap-1 done-Chans, one per worker (single producer / single consumer).
-        "done": [runloom.Chan(1) for _ in range(n)],
+        "done": [stackweave.Chan(1) for _ in range(n)],
         # Sharded readiness-source counters (one writer per slot; a shared += loses
         # increments GIL-off).  second_event: the migrated re-arm re-reported
         # immediately (correct).  second_timeout: a ceiling expired with data still

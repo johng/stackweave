@@ -1,4 +1,4 @@
-"""SWARM adversarial QA: the runloom.aio asyncio bridge (src/runloom/aio/).
+"""SWARM adversarial QA: the stackweave.aio asyncio bridge (src/stackweave/aio/).
 
 This file goes DEEPER than test_adv_aio / test_aio* / test_aio_net /
 test_aio_cancel_torture / test_aio_fd_reuse, which already cover the headline
@@ -33,7 +33,7 @@ those; we manufacture the conditions those tests don't:
   * subprocess_exec pipe bridging + communicate + wait + nonzero exit + signal;
   * an exception raised INSIDE a protocol callback (data_received /
     datagram_received / connection_made) routes to the exception handler, no crash;
-  * fault injection (RUNLOOM_FAULT_*) mid-I/O -> a clean Python error, never a SEGV;
+  * fault injection (STACKWEAVE_FAULT_*) mid-I/O -> a clean Python error, never a SEGV;
   * a guard-page overflow inside a data_received callback is CLASSIFIED, not silent;
   * many-concurrent-connection echo stress under the loop.
 
@@ -41,7 +41,7 @@ Crash-prone scenarios run in a SUBPROCESS so a SIGSEGV is contained + observed a
 a negative returncode.  Hang-prone scenarios wrap hang_guard / pass finite
 timeouts.  Slow-return uses assert_faster_than.
 
-Driven through runloom.aio.run() (its asyncio.run drop-in) -- no pytest-asyncio.
+Driven through stackweave.aio.run() (its asyncio.run drop-in) -- no pytest-asyncio.
 """
 import asyncio
 import gc
@@ -55,15 +55,15 @@ import time
 
 import pytest
 
-# TODO(runloom): QUARANTINE -- the foreign-OS-thread -> event-loop wake path
+# TODO(stackweave): QUARANTINE -- the foreign-OS-thread -> event-loop wake path
 # (call_soon_threadsafe from a ThreadPoolExecutor worker / run_coroutine_threadsafe)
 # has a lost-wakeup bug that hard-DEADLOCKS this file on free-threaded CI (both
 # 3.13t and 3.14t; reproduced on a Linux 2-core box, un-interruptible even by
-# SIGALRM).  The identical load under stock asyncio is clean, so it is runloom,
+# SIGALRM).  The identical load under stock asyncio is clean, so it is stackweave,
 # not CPython.  The deadlock is process-wide (poisons the loop for later tests),
 
-import runloom.aio as aio
-import runloom_c as rc
+import stackweave.aio as aio
+import stackweave_c as rc
 from adv_util import (hang_guard, assert_faster_than, raw_thread,
                       free_tcp_port_pair, RealBarrier)
 
@@ -682,8 +682,8 @@ def test_gather_first_exc_strands_next_run_accept_parker():
     this xfails until the teardown drains it independent of GC timing."""
     script = r"""
 import asyncio, time, sys
-import runloom.aio as aio
-import runloom_c as rc
+import stackweave.aio as aio
+import stackweave_c as rc
 
 def parked():
     return rc.stats().get("netpoll_parked", 0)
@@ -724,7 +724,7 @@ print("PARKED", p, flush=True)
 """
     with hang_guard(40, "gather-first strands next-run parker"):
         cp = _run_subprocess(script, timeout=30,
-                             env_extra={"RUNLOOM_GOROUTINE_PANIC": "silent"})
+                             env_extra={"STACKWEAVE_GOROUTINE_PANIC": "silent"})
     _assert_no_signal(cp)
     out = cp.stdout.decode(errors="replace")
     assert "PARKED 0" in out, (
@@ -1176,7 +1176,7 @@ def test_tls_streams_echo():
 def test_subprocess_exec_communicate_uppercase():
     script = r"""
 import asyncio, sys
-import runloom.aio as aio
+import stackweave.aio as aio
 async def body():
     proc = await asyncio.create_subprocess_exec(
         sys.executable, "-c",
@@ -1201,7 +1201,7 @@ print("RESULT", rc, out, err)
 def test_subprocess_exec_nonzero_exit_and_stderr():
     script = r"""
 import asyncio, sys
-import runloom.aio as aio
+import stackweave.aio as aio
 async def body():
     proc = await asyncio.create_subprocess_exec(
         sys.executable, "-c", "import sys;sys.stderr.write('boom');sys.exit(3)",
@@ -1227,7 +1227,7 @@ def test_subprocess_wait_for_long_child_with_timeout():
     fresh child (one subprocess aio.run per process; see the note above)."""
     script = r"""
 import asyncio, sys, time
-import runloom.aio as aio
+import stackweave.aio as aio
 async def body():
     proc = await asyncio.create_subprocess_exec(
         sys.executable, "-c", "import time;time.sleep(30)",
@@ -1268,7 +1268,7 @@ def test_second_subprocess_run_never_reaps_hangs():
     is killed by its own timeout and we observe only one RESULT line."""
     script = r"""
 import asyncio, sys
-import runloom.aio as aio
+import stackweave.aio as aio
 def run_one(tag):
     async def body():
         proc = await asyncio.create_subprocess_exec(
@@ -1346,7 +1346,7 @@ def test_exception_in_connection_made_does_not_crash_run():
     completes (the error is reported, the connection is dropped)."""
     script = r"""
 import asyncio, sys
-import runloom.aio as aio
+import stackweave.aio as aio
 class Cli(asyncio.Protocol):
     def connection_made(self, tr):
         raise RuntimeError("boom-in-connection_made")
@@ -1376,7 +1376,7 @@ aio.run(body())
 """
     with hang_guard(40, "exception in connection_made subproc"):
         cp = _run_subprocess(script, timeout=30,
-                             env_extra={"RUNLOOM_GOROUTINE_PANIC": "silent"})
+                             env_extra={"STACKWEAVE_GOROUTINE_PANIC": "silent"})
     _assert_no_signal(cp)
     assert b"OK" in cp.stdout, (
         "run did not complete:\n%s\n%s"
@@ -1399,7 +1399,7 @@ def test_fault_injection_does_not_crash(site, errno_):
     child does not die on a signal (a clean Python error is acceptable)."""
     script = r"""
 import asyncio, sys, socket
-import runloom.aio as aio
+import stackweave.aio as aio
 
 async def body():
     loop = asyncio.get_running_loop()
@@ -1436,14 +1436,14 @@ try:
     aio.run(body())
 except BaseException as e:
     # A fault that fires on the entry-task spawn (e.g. SPAWN_G once:ENOMEM hits
-    # the very first runloom_c.fiber before body() runs) surfaces as a CLEAN Python
+    # the very first stackweave_c.fiber before body() runs) surfaces as a CLEAN Python
     # exception out of aio.run -- acceptable per the mandate (no crash).
     if isinstance(e, (KeyboardInterrupt, SystemExit)):
         raise
     print("CLEAN-ERROR", type(e).__name__)
 """
-    env = {"RUNLOOM_FAULT_" + site: "once:%d" % errno_,
-           "RUNLOOM_GOROUTINE_PANIC": "silent"}
+    env = {"STACKWEAVE_FAULT_" + site: "once:%d" % errno_,
+           "STACKWEAVE_GOROUTINE_PANIC": "silent"}
     with hang_guard(40, "fault %s" % site):
         cp = _run_subprocess(script, timeout=30, env_extra=env)
     # The ONLY unacceptable outcome is a signal crash (SEGV/abort); a clean
@@ -1470,7 +1470,7 @@ def test_deep_recursion_in_data_received_is_classified_not_silent():
     script = r"""
 import asyncio, sys
 sys.setrecursionlimit(50_000_000)   # let the C stack overflow before RecursionError
-import runloom.aio as aio
+import stackweave.aio as aio
 
 def deep(n):
     if n <= 0:
@@ -1502,8 +1502,8 @@ async def body():
 
 aio.run(body())
 """
-    env = {"RUNLOOM_AIO_IO_STACK": str(64 * 1024),
-           "RUNLOOM_GOROUTINE_PANIC": "silent"}
+    env = {"STACKWEAVE_AIO_IO_STACK": str(64 * 1024),
+           "STACKWEAVE_GOROUTINE_PANIC": "silent"}
     with hang_guard(90, "guard-page in data_received"):
         try:
             cp = _run_subprocess(script, timeout=60, env_extra=env)
@@ -1524,7 +1524,7 @@ aio.run(body())
 # 18. Many concurrent echo connections under the create_server/create_connection
 #     transport stack (not just the streams path).
 # ==========================================================================
-# TODO(runloom): 60 concurrent loopback echo connections through the full
+# TODO(stackweave): 60 concurrent loopback echo connections through the full
 # create_server/create_connection transport stack intermittently stalls under the
 def test_many_concurrent_transport_echo_connections():
     N = 60
@@ -1764,7 +1764,7 @@ def test_rejected_noncoro_task_del_is_clean():
     ignored in __del__'); currently __del__ AttributeErrors on _pglogtb."""
     script = r"""
 import asyncio, gc, sys
-import runloom.aio as aio
+import stackweave.aio as aio
 async def body():
     loop = asyncio.get_running_loop()
     for _ in range(8):
@@ -1780,7 +1780,7 @@ print("DONE", flush=True)
 """
     with hang_guard(30, "rejected noncoro task __del__"):
         cp = _run_subprocess(script, timeout=20,
-                             env_extra={"RUNLOOM_GOROUTINE_PANIC": "silent"})
+                             env_extra={"STACKWEAVE_GOROUTINE_PANIC": "silent"})
     _assert_no_signal(cp)
     err = cp.stderr.decode(errors="replace")
     assert "Exception ignored in" not in err and "_pglogtb" not in err, (
@@ -2388,7 +2388,7 @@ def test_tls_streams_large_payload_exact():
 def test_more_fault_sites_no_crash(site, errno_):
     script = r"""
 import asyncio, sys
-import runloom.aio as aio
+import stackweave.aio as aio
 async def body():
     loop = asyncio.get_running_loop()
     class Echo(asyncio.Protocol):
@@ -2420,8 +2420,8 @@ except BaseException as e:
         raise
     print("CLEAN-ERROR", type(e).__name__)
 """
-    env = {"RUNLOOM_FAULT_" + site: "once:%d" % errno_,
-           "RUNLOOM_GOROUTINE_PANIC": "silent"}
+    env = {"STACKWEAVE_FAULT_" + site: "once:%d" % errno_,
+           "STACKWEAVE_GOROUTINE_PANIC": "silent"}
     with hang_guard(40, "fault %s" % site):
         cp = _run_subprocess(script, timeout=30, env_extra=env)
     _assert_no_signal(cp)
@@ -2438,7 +2438,7 @@ except BaseException as e:
 #      must not crash or corrupt the round-trips.  Run in a subprocess so the
 #      env mode is contained.
 # ==========================================================================
-# TODO(runloom): FOREIGN-THREAD LOST WAKEUP -- a genuine runloom bug, NOT a
+# TODO(stackweave): FOREIGN-THREAD LOST WAKEUP -- a genuine stackweave bug, NOT a
 # 3.13t/CPython issue.  run_in_executor's ThreadPoolExecutor workers finish, but
 # the marshal-back wake (call_soon_threadsafe from the foreign worker thread) is
 # intermittently lost: at the hang every executor + blockpool worker is idle-
@@ -2446,16 +2446,16 @@ except BaseException as e:
 # pumping netpoll but never resumes the fibers.  Reproduced on a Linux 2-core box
 # on BOTH 3.13t AND 3.14t (~13%); the same load under stock asyncio is 0/40 and
 # gc.disable() does not help -- so gh-116738/gh-137433 are falsified.  Skipped on
-# runloom's foreign-thread -> loop wake path is fixed.
+# stackweave's foreign-thread -> loop wake path is fixed.
 @pytest.mark.parametrize("mode", [
-    {"RUNLOOM_SYSMON": "1", "RUNLOOM_SYSMON_QUIET": "1", "RUNLOOM_SYSMON_MS": "8"},
-    {"RUNLOOM_PREEMPT": "1", "RUNLOOM_PREEMPT_MS": "8"},
-    {"RUNLOOM_HANDOFF": "1", "RUNLOOM_HANDOFF_POOL": "2"},
+    {"STACKWEAVE_SYSMON": "1", "STACKWEAVE_SYSMON_QUIET": "1", "STACKWEAVE_SYSMON_MS": "8"},
+    {"STACKWEAVE_PREEMPT": "1", "STACKWEAVE_PREEMPT_MS": "8"},
+    {"STACKWEAVE_HANDOFF": "1", "STACKWEAVE_HANDOFF_POOL": "2"},
 ])
 def test_env_gated_modes_under_aio_echo(mode):
     script = r"""
 import asyncio, sys
-import runloom.aio as aio
+import stackweave.aio as aio
 async def body():
     loop = asyncio.get_running_loop()
     class Echo(asyncio.Protocol):
@@ -2483,7 +2483,7 @@ async def body():
 print("RESULT", aio.run(body()), flush=True)
 """
     env = dict(mode)
-    env["RUNLOOM_GOROUTINE_PANIC"] = "silent"
+    env["STACKWEAVE_GOROUTINE_PANIC"] = "silent"
     try:
         # Generous budget: the body runs 8x loop.run_in_executor(burn)
         # (2M-iteration CPU bursts), so it is genuinely CPU-bound and gets
@@ -2516,14 +2516,14 @@ print("RESULT", aio.run(body()), flush=True)
 
 # ==========================================================================
 # A16. UNSAFE-MIGRATION flags must take the GATED-OFF warn path (NEVER set
-#      RUNLOOM_ALLOW_UNSAFE_MIGRATION).  The flag without the allow-key must warn
+#      STACKWEAVE_ALLOW_UNSAFE_MIGRATION).  The flag without the allow-key must warn
 #      to stderr and run the DEFAULT scheduler -- no crash, workload completes.
 # ==========================================================================
-@pytest.mark.parametrize("flag", ["RUNLOOM_PER_G_TSTATE", "RUNLOOM_STEAL_WOKEN"])
+@pytest.mark.parametrize("flag", ["STACKWEAVE_PER_G_TSTATE", "STACKWEAVE_STEAL_WOKEN"])
 def test_unsafe_migration_flag_gated_off_warns_not_crashes(flag):
     script = r"""
 import asyncio, sys
-import runloom.aio as aio
+import stackweave.aio as aio
 async def body():
     async def child(i):
         await asyncio.sleep(0.005)
@@ -2532,8 +2532,8 @@ async def body():
     return res == list(range(8))
 print("RESULT", aio.run(body()), flush=True)
 """
-    # Set the flag WITHOUT RUNLOOM_ALLOW_UNSAFE_MIGRATION -> gated-off warn path.
-    env = {flag: "1", "RUNLOOM_GOROUTINE_PANIC": "silent"}
+    # Set the flag WITHOUT STACKWEAVE_ALLOW_UNSAFE_MIGRATION -> gated-off warn path.
+    env = {flag: "1", "STACKWEAVE_GOROUTINE_PANIC": "silent"}
     with hang_guard(30, "gated-off %s" % flag):
         cp = _run_subprocess(script, timeout=20, env_extra=env)
     _assert_no_signal(cp)

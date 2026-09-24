@@ -1,5 +1,5 @@
 import socket
-import runloom
+import stackweave
 
 def main():
     srv = socket.socket(); srv.bind(("localhost", 0)); srv.listen(1)
@@ -10,5 +10,5 @@ def main():
         c = socket.socket()
         c.connect(("localhost", port))   # hostname
         print("connect succeeded WITHOUT patched getaddrinfo -> inline libc DNS on hub", flush=True)
-    runloom.fiber(f)
-runloom.monkey.patch(); runloom.run(2, main)
+    stackweave.fiber(f)
+stackweave.monkey.patch(); stackweave.run(2, main)

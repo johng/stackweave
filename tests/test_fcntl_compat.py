@@ -23,9 +23,9 @@ import tempfile
 import time
 import unittest
 
-import runloom
-import runloom.monkey
-import runloom_c
+import stackweave
+import stackweave.monkey
+import stackweave_c
 
 try:
     import fcntl
@@ -45,19 +45,19 @@ def _drive(fn):
         except BaseException as e:   # noqa: BLE001
             box[1] = e
 
-    runloom_c.fiber(runner)
-    runloom_c.run()
+    stackweave_c.fiber(runner)
+    stackweave_c.run()
     if box[1] is not None:
         raise box[1]
     return box[0]
 
 
 def setUpModule():
-    runloom.monkey.patch()
+    stackweave.monkey.patch()
 
 
 def tearDownModule():
-    runloom.monkey.unpatch()
+    stackweave.monkey.unpatch()
 
 
 def _tmpfile():
@@ -100,12 +100,12 @@ class TestFlock(unittest.TestCase):
                 fcntl.flock(fd_a, fcntl.LOCK_EX)
                 order.append("a-locked")
                 for _ in range(5):
-                    runloom.sleep(0.005)       # hold, cooperatively
+                    stackweave.sleep(0.005)       # hold, cooperatively
                 order.append("a-unlock")
                 fcntl.flock(fd_a, fcntl.LOCK_UN)
 
             def waiter():
-                runloom.sleep(0.002)           # let the holder grab it first
+                stackweave.sleep(0.002)           # let the holder grab it first
                 order.append("b-try")
                 fcntl.flock(fd_b, fcntl.LOCK_EX)   # blocks until a unlocks
                 order.append("b-locked")
@@ -114,14 +114,14 @@ class TestFlock(unittest.TestCase):
             def ticker():
                 while "b-locked" not in order:
                     ticks.append(1)
-                    runloom.sleep(0.003)
+                    stackweave.sleep(0.003)
 
-            runloom_c.fiber(holder)
-            runloom_c.fiber(waiter)
-            runloom_c.fiber(ticker)
+            stackweave_c.fiber(holder)
+            stackweave_c.fiber(waiter)
+            stackweave_c.fiber(ticker)
             t0 = time.monotonic()
             while "b-locked" not in order and time.monotonic() - t0 < 5:
-                runloom.sleep(0.005)
+                stackweave.sleep(0.005)
             os.close(fd_a); os.close(fd_b)
             return order, len(ticks)
 
@@ -197,9 +197,9 @@ class TestLockf(unittest.TestCase):
             def ticker():
                 for _ in range(20):
                     ticks.append(1)
-                    runloom.sleep(0.004)
+                    stackweave.sleep(0.004)
 
-            runloom_c.fiber(ticker)
+            stackweave_c.fiber(ticker)
             fcntl.lockf(fd, fcntl.LOCK_EX)  # blocks until the child releases
             acquired = True
             fcntl.lockf(fd, fcntl.LOCK_UN)

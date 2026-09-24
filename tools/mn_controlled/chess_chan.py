@@ -15,12 +15,12 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "..", "src"))
 os.environ.setdefault("PYTHON_GIL", "0")
-import runloom_c
+import stackweave_c
 
 M = int(os.environ.get("CHESS_M", "1"))
-runloom_c.mn_init(4)
-ch1 = runloom_c.Chan()
-ch2 = runloom_c.Chan()
+stackweave_c.mn_init(4)
+ch1 = stackweave_c.Chan()
+ch2 = stackweave_c.Chan()
 got = [0]
 
 
@@ -35,11 +35,11 @@ def cons(ch):
         got[0] += 1
 
 
-runloom_c.mn_fiber(lambda: prod(ch1))
-runloom_c.mn_fiber(lambda: cons(ch1))
-runloom_c.mn_fiber(lambda: prod(ch2))
-runloom_c.mn_fiber(lambda: cons(ch2))
-runloom_c.mn_run()
-runloom_c.mn_fini()
+stackweave_c.mn_fiber(lambda: prod(ch1))
+stackweave_c.mn_fiber(lambda: cons(ch1))
+stackweave_c.mn_fiber(lambda: prod(ch2))
+stackweave_c.mn_fiber(lambda: cons(ch2))
+stackweave_c.mn_run()
+stackweave_c.mn_fini()
 
 print("OK delivered=%d" % got[0])

@@ -1,6 +1,6 @@
 """Timeouts — race a result against a timer with select.
 
-runloom.time.After(d) returns a channel that fires once after d seconds.
+stackweave.time.After(d) returns a channel that fires once after d seconds.
 select-ing on both the real work and the timer gives you a timeout for
 free: whichever is ready first wins.  This is Go's canonical timeout
 idiom, no special API required.
@@ -11,21 +11,21 @@ Run:
 
 import os
 
-import runloom
+import stackweave
 
 # Free-threaded build: fan fibers across all cores (M:N scheduler).
 HUBS = os.cpu_count() or 4
 
 def slow_op(out, delay):
-    runloom.sleep(delay)
+    stackweave.sleep(delay)
     out.send("result after {0}s".format(delay))
 
 def with_timeout(delay, limit):
-    result = runloom.Chan(1)
-    runloom.fiber(slow_op, result, delay)
-    idx, payload = runloom.select([
+    result = stackweave.Chan(1)
+    stackweave.fiber(slow_op, result, delay)
+    idx, payload = stackweave.select([
         ("recv", result),                 # case 0: the work finished
-        ("recv", runloom.time.After(limit)), # case 1: the deadline fired
+        ("recv", stackweave.time.After(limit)), # case 1: the deadline fired
     ])
     if idx == 1:
         return "TIMEOUT after {0}s".format(limit)
@@ -36,4 +36,4 @@ def main():
     print(with_timeout(delay=0.30, limit=0.10))   # times out
 
 if __name__ == "__main__":
-    runloom.run(HUBS, main)
+    stackweave.run(HUBS, main)

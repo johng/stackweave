@@ -36,9 +36,9 @@ cached config vars, and writes only fiber-local objects (the caller's vars, the 
 res dict).  A standalone plain-threads control (8 OS threads each calling get_paths
 with its own unique-token vars, GIL on AND off) returns, for every thread, a dict that
 equals that thread's own closed-form expansion -- 0 cross-thread bleed.  Under a
-CORRECT runloom it must also hold.  A returned path that changes across a yield, or
+CORRECT stackweave it must also hold.  A returned path that changes across a yield, or
 that does not equal this fiber's independent recomputation (i.e. carries a sibling's
-token), is a runloom single-owner-object corruption / cross-fiber leak.
+token), is a stackweave single-owner-object corruption / cross-fiber leak.
 
 ORACLES:
   * LOAD-BEARING -- PATH-EXPANSION PURITY (worker, HARD, fail-fast).  Per iteration a
@@ -56,7 +56,7 @@ ORACLES:
         got2 == got1 == EXPECTED (bit-identical across the yield) and that EVERY value
         contains THIS fiber's token (no sibling token leaked in).
     Single-owner: vars_i and the returned dicts are fiber-local; a failure is a
-    runloom returned-object corruption / cross-fiber expansion leak, never documented
+    stackweave returned-object corruption / cross-fiber expansion leak, never documented
     Python semantics.
 
   * NON-VACUITY (post, HARD): the load-bearing arm actually ran (path_checks > 0).
@@ -79,7 +79,7 @@ non-single-owner globals; cross-fiber leak of expansion state.
 import os
 
 import harness
-import runloom
+import stackweave
 import sysconfig
 
 # The scheme we expand.  get_default_scheme() is 'posix_prefix' on Linux; on any
@@ -176,9 +176,9 @@ def path_check(H, wid, idx, state):
 
     # YIELD: let siblings run their own get_paths with DIFFERENT tokens.  If the
     # returned dict were shared/torn, a sibling's expansion would bleed in here.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0003)
+        stackweave.sleep(0.0003)
 
     # Second expansion with a fresh identical vars: must be bit-identical to the first
     # and to the closed form.
@@ -277,6 +277,6 @@ if __name__ == "__main__":
                  "the yield and equal to an independent closed-form recomputation "
                  "(every value must carry THIS fiber's token, never a sibling's).  A "
                  "dict that changes across the yield, diverges from the closed form, "
-                 "or carries a leaked sibling token is the runloom single-owner-object "
+                 "or carries a leaked sibling token is the stackweave single-owner-object "
                  "/ cross-fiber-leak bug.  The module's process-global config-var cache "
                  "+ scheme templates are read-only, so there is no shared-mutable arm")

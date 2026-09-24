@@ -3,7 +3,7 @@
 Kotlin runTest, for the runtime).
 
 "Did everything settle, or did we lose a wake?" is pygo's recurring bug
-signature. runloom_c._quiescent() makes it a DECIDABLE runtime query: is the
+signature. stackweave_c._quiescent() makes it a DECIDABLE runtime query: is the
 runtime SETTLED -- every live goroutine durably blocked (parked on a
 timer/channel/fd), nothing runnable -- so no progress happens until a timer fires
 or external I/O arrives?  {quiescent, live, parked, inflight}, sampled from an
@@ -29,9 +29,9 @@ def main():
     ap.add_argument("--nap", type=float, default=0.15)
     args = ap.parse_args()
 
-    import runloom
-    import runloom_c as rc
-    from runloom import monkey
+    import stackweave
+    import stackweave_c as rc
+    from stackweave import monkey
     monkey.patch()   # cooperative time.sleep -> PARKED_SLEEP (a timer park, not a hub block)
 
     obs = {"settle": None, "max_parked": 0, "samples": 0}
@@ -60,7 +60,7 @@ def main():
 
     mt = threading.Thread(target=monitor, daemon=True)
     mt.start()
-    runloom.run(args.hubs, main_fn)
+    stackweave.run(args.hubs, main_fn)
 
     settle = obs["settle"]
     print("quiescence_check: samples=%d max_parked=%d workers_done=%d settle=%r"

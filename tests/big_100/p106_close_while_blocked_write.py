@@ -24,7 +24,7 @@ import os
 import socket
 
 import harness
-import runloom
+import stackweave
 
 # Capture the RAW os entry points BEFORE the harness runs monkey.patch(): the
 # patched versions are cooperative (os.write parks on a full buffer instead of
@@ -62,7 +62,7 @@ def writer(H, sock, ready, done):
         if sock.fileno() < 0:                # the closer closed our fd
             done.send(1)
             return
-        runloom.sleep(0.001)                 # cooperative: frees the hub
+        stackweave.sleep(0.001)                 # cooperative: frees the hub
     done.send(2)
 
 
@@ -74,11 +74,11 @@ def unit(H, wid, rng, closed, woken):
             s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, BUFSZ)
         except OSError:
             pass
-    ready = runloom.Chan(1)
-    done = runloom.Chan(1)
+    ready = stackweave.Chan(1)
+    done = stackweave.Chan(1)
     H.fiber(writer, H, a, ready, done)
     ready.recv()                             # writer filled the buffer; blocked
-    runloom.sleep(0.002)
+    stackweave.sleep(0.002)
     closed[wid] += 1
     try:
         a.close()                            # cross-goroutine close of the write fd

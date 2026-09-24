@@ -1,6 +1,6 @@
 """Context — cancellation that fans out to every fiber.
 
-runloom.context mirrors Go's context.Context.  WithCancel returns a
+stackweave.context mirrors Go's context.Context.  WithCancel returns a
 context plus a cancel() function; calling cancel() closes ctx.done,
 which wakes *every* fiber select-ing on it at once (a closed
 channel never blocks a receive).  WithTimeout / WithDeadline cancel
@@ -12,14 +12,14 @@ Run:
 
 import os
 
-import runloom
+import stackweave
 
 # Free-threaded build: fan fibers across all cores (M:N scheduler).
 HUBS = os.cpu_count() or 4
 
 def worker(ctx, work, wid):
     while True:
-        idx, payload = runloom.select([
+        idx, payload = stackweave.select([
             ("recv", ctx.done),           # case 0: cancelled
             ("recv", work),               # case 1: a job to do
         ])
@@ -29,18 +29,18 @@ def worker(ctx, work, wid):
         print("worker {0} did job {1}".format(wid, payload[0]))
 
 def main():
-    ctx, cancel = runloom.context.WithCancel(runloom.context.Background())
-    work = runloom.Chan()               # unbuffered
+    ctx, cancel = stackweave.context.WithCancel(stackweave.context.Background())
+    work = stackweave.Chan()               # unbuffered
 
     for wid in range(2):
-        runloom.fiber(worker, ctx, work, wid)
+        stackweave.fiber(worker, ctx, work, wid)
 
     for job in range(4):
         work.send(job)                    # rendezvous with a free worker
 
     print("main: cancelling")
     cancel()                              # closes ctx.done -> wakes both workers
-    runloom.sleep(0.02)                      # let them observe the cancellation
+    stackweave.sleep(0.02)                      # let them observe the cancellation
 
 if __name__ == "__main__":
-    runloom.run(HUBS, main)
+    stackweave.run(HUBS, main)

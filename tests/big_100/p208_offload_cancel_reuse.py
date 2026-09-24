@@ -1,6 +1,6 @@
 """big_100 / 208 -- offload pool: cancel near completion, then reuse.
 
-Each goroutine submits blocking work via runloom.blocking(fn, payload) where fn
+Each goroutine submits blocking work via stackweave.blocking(fn, payload) where fn
 derives a deterministic result from its OWN payload (sha256 hexdigest).  Each
 submission is wrapped in a cancellable scope: a timer races the offload, and
 SOME submissions are abandoned (the goroutine moves on to a NEW offload) the
@@ -13,21 +13,21 @@ The hazards (FINDINGS #4 family):
   * the offload pool must not wedge (lost wakeup) -- forward progress never
     stalls (the harness watchdog catches a wedge).
 
-Because runloom.blocking parks the goroutine until the worker returns, a "cancel"
+Because stackweave.blocking parks the goroutine until the worker returns, a "cancel"
 here means: arrange for the offload to be slow, race it with a timer in a
 select, and when the timer wins, DROP that result and submit a new one.  We run
 the slow offload in a child goroutine that publishes its result on a channel, so
 the parent can select(result, timeout) and abandon cleanly.
 
-Stresses: runloom.blocking offload pool, park/wake on the blockpool wake, result
+Stresses: stackweave.blocking offload pool, park/wake on the blockpool wake, result
 ownership across cancel+resubmit, no lost wakeup.
 """
 import hashlib
 import struct
 
 import harness
-import runloom
-import runloom.time as rtime
+import stackweave
+import stackweave.time as rtime
 
 
 def hash_payload(payload):
@@ -50,7 +50,7 @@ def reference(payload):
 def offload_into(ch, payload):
     """Child goroutine: run the blocking hash, publish (payload, result)."""
     try:
-        res = runloom.blocking(hash_payload, payload)
+        res = stackweave.blocking(hash_payload, payload)
         ch.try_send((payload, res))
     except Exception:
         try:
@@ -71,7 +71,7 @@ def worker(H, wid, rng, state):
         payload = base + struct.pack("<I", seq) + bytes((seq * 7) & 0xFF
                                                          for _ in range(48))
         # cap-1 result channel; the child publishes there, we race a timer.
-        ch = runloom.Chan(1)
+        ch = stackweave.Chan(1)
         H.fiber(offload_into, ch, payload)
 
         # Sometimes give the offload a tiny deadline so the timer frequently
@@ -79,7 +79,7 @@ def worker(H, wid, rng, state):
         # completes.  Either way the result, IF taken, must match this payload.
         deadline = 0.0005 if (seq & 3) == 0 else 0.05
         timer = rtime.After(deadline)
-        idx, payload_ok = runloom.select([("recv", ch), ("recv", timer.c
+        idx, payload_ok = stackweave.select([("recv", ch), ("recv", timer.c
                                                           if hasattr(timer, "c")
                                                           else timer)])
         if idx == 0:
@@ -106,7 +106,7 @@ def worker(H, wid, rng, state):
             # no leak); we just never read it.  Submit a FRESH offload now.
             cancelled[wid & 1023] += 1
             fresh = base + struct.pack("<I", seq) + b"FRESH-RESUBMIT-PAYLOAD"
-            res = runloom.blocking(hash_payload, fresh)
+            res = stackweave.blocking(hash_payload, fresh)
             if not H.check(res == reference(fresh),
                            "resubmit result wrong wid={0} seq={1}".format(
                                wid, seq)):

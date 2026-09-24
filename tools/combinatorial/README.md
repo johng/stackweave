@@ -1,6 +1,6 @@
 # tools/combinatorial — config-matrix interaction testing
 
-runloom's runtime knobs multiply: netpoll backend × P-handoff × preemption ×
+stackweave's runtime knobs multiply: netpoll backend × P-handoff × preemption ×
 sysmon × … . Bugs hide in the *interactions*, not in any single setting, but
 the full cartesian product is wasteful to test and one-factor-at-a-time misses
 interactions entirely.
@@ -28,11 +28,11 @@ Also `scripts/check_all.sh combo`.
 ## Supported vs experimental factors
 
 The default (gating) matrix covers only knobs that are *meant* to work, so it
-stays a clean regression gate: `RUNLOOM_NETPOLL` (epoll/select/io_uring),
-`RUNLOOM_PREEMPT`, `RUNLOOM_SYSMON` — the cartesian config space reduced to a
+stays a clean regression gate: `STACKWEAVE_NETPOLL` (epoll/select/io_uring),
+`STACKWEAVE_PREEMPT`, `STACKWEAVE_SYSMON` — the cartesian config space reduced to a
 small pairwise covering array, all CLEAN.
 
-`--include-experimental` adds `RUNLOOM_STEAL_WOKEN` and `RUNLOOM_PER_G_TSTATE` (the
+`--include-experimental` adds `STACKWEAVE_STEAL_WOKEN` and `STACKWEAVE_PER_G_TSTATE` (the
 known-dead "Fix B" cross-hub-migration path). This is also the tool's own first
 success story: the very first pairwise run over the supported set *plus*
 `STEAL_WOKEN` immediately isolated a single-factor SIGSEGV — every failing

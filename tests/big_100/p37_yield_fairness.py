@@ -8,14 +8,14 @@ others barely run.
 Stresses: scheduler fairness across the M:N hubs.
 """
 import harness
-import runloom
+import stackweave
 
 
 def worker(H, wid, rng, state):
     # Per-worker counter lives in the harness ops shard (single-writer), which
     # IS the fairness signal we audit.
     while H.running():
-        runloom.yield_now()
+        stackweave.yield_now()
         H.op(wid)
 
 

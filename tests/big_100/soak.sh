@@ -9,7 +9,7 @@ cd "$(dirname "$0")"
 PY=~/.pyenv/versions/3.14.4t/bin/python3
 LOG=/tmp/soak/soak.log
 mkdir -p /tmp/soak
-export RUNLOOM_SYSMON_QUIET=1 PYTHON_GIL=0
+export STACKWEAVE_SYSMON_QUIET=1 PYTHON_GIL=0
 
 DUR=${SOAK_DUR:-8}
 HUBS=${SOAK_HUBS:-8}

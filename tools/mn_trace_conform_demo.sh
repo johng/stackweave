@@ -2,7 +2,7 @@
 # mn_trace_conform_demo.sh -- end-to-end TRACE CONFORMANCE for the controlled
 # baton: run the REAL scheduler, capture its Arrive/Rendezvous/Grant/Release
 # events, and have TLC validate them against the REAL RunloomMNControl.tla.
-# Connects runloom's core scheduler model to the binary.
+# Connects stackweave's core scheduler model to the binary.
 #
 #   real controlled-scheduler run   -> CONFORMS (MutualExclusion + BatonConsistent
 #                                       + DeterministicGrant hold)
@@ -11,27 +11,27 @@
 #                                       MutualExclusion forbids)
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
-PY="${RUNLOOM_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
+PY="${STACKWEAVE_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
 TR="$(mktemp /tmp/baton.XXXX.ndjson)"
 TR_BUG="$(mktemp /tmp/baton_bug.XXXX.ndjson)"
 
-WL='import sys; sys.path.insert(0,"src"); import runloom_c
-runloom_c.mn_init(3)
-ch = runloom_c.Chan()
+WL='import sys; sys.path.insert(0,"src"); import stackweave_c
+stackweave_c.mn_init(3)
+ch = stackweave_c.Chan()
 def recv():
     while True:
         v, ok = ch.recv()
         if not ok: break
-for _ in range(4): runloom_c.mn_fiber(recv)
+for _ in range(4): stackweave_c.mn_fiber(recv)
 def prod():
     for v in range(8): ch.send(v)
     ch.close()
-runloom_c.mn_fiber(prod)
-runloom_c.mn_run(); runloom_c.mn_fini()'
+stackweave_c.mn_fiber(prod)
+stackweave_c.mn_run(); stackweave_c.mn_fini()'
 
 echo "== trace conformance: RunloomMNControl.tla vs the real controlled baton =="
 echo "-- capture a real baton event trace (seeded controlled scheduler) --"
-RUNLOOM_MN_SEED="${RUNLOOM_MN_SEED:-7}" RUNLOOM_MN_EVENTS="$TR" \
+STACKWEAVE_MN_SEED="${STACKWEAVE_MN_SEED:-7}" STACKWEAVE_MN_EVENTS="$TR" \
     PYTHON_GIL=0 PYTHONPATH=src "$PY" -c "$WL" >/dev/null 2>&1
 # negative control: drop the first Release -> the holder keeps the baton
 awk 'BEGIN{d=0} /"a":"Release"/ && d==0 {d=1; next} {print}' "$TR" > "$TR_BUG"

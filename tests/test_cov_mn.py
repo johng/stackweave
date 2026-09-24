@@ -22,8 +22,8 @@ import sys
 
 import pytest
 
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 from adv_util import hang_guard, needs_free_threading
 
 FT = needs_free_threading()
@@ -34,21 +34,21 @@ _DEVNULL = os.open(os.devnull, os.O_WRONLY)
 # (label, extra-env) -- each drives a distinct gated path through mn_sched.c.
 MODES = [
     ("default",      {}),
-    ("barrier_pct",  {"RUNLOOM_MN_BARRIER": "1", "RUNLOOM_MN_SEED": "7", "RUNLOOM_MN_PCT": "8"}),
-    ("gon_bulk",     {"RUNLOOM_GON_BULK": "1"}),
-    ("sysmon",       {"RUNLOOM_SYSMON": "1", "RUNLOOM_SYSMON_QUIET": "1",
-                      "RUNLOOM_SYSMON_MS": "8", "RUNLOOM_COV_CPU": "40000000"}),
-    ("preempt",      {"RUNLOOM_PREEMPT": "1", "RUNLOOM_SYSMON": "1", "RUNLOOM_SYSMON_QUIET": "1",
-                      "RUNLOOM_PREEMPT_MS": "8", "RUNLOOM_COV_CPU": "40000000"}),
-    ("idle_wake_off", {"RUNLOOM_HUB_IDLE_WAKE": "0"}),
-    ("stack_park_sweep", {"RUNLOOM_STACK_PARK_SWEEP": "1", "RUNLOOM_STACK_PARK_SWEEP_MS": "1"}),
-    ("world_yield",  {"RUNLOOM_WORLD_YIELD_NS": "2000"}),
-    ("hub_affinity", {"RUNLOOM_HUB_AFFINITY": "1"}),
-    ("perg_tstate_warn", {"RUNLOOM_PER_G_TSTATE": "1"}),   # gated off -> warn + default sched
-    ("iouring_loop", {"RUNLOOM_IOURING_LOOP": "1"}),
-    ("deadlock_ms",  {"RUNLOOM_DEADLOCK_MS": "50"}),
-    ("ready_starve", {"RUNLOOM_READY_STARVE_BOUND": "2"}),
-    ("dbg_migrate",  {"RUNLOOM_DBG_MIGRATE": "1"}),
+    ("barrier_pct",  {"STACKWEAVE_MN_BARRIER": "1", "STACKWEAVE_MN_SEED": "7", "STACKWEAVE_MN_PCT": "8"}),
+    ("gon_bulk",     {"STACKWEAVE_GON_BULK": "1"}),
+    ("sysmon",       {"STACKWEAVE_SYSMON": "1", "STACKWEAVE_SYSMON_QUIET": "1",
+                      "STACKWEAVE_SYSMON_MS": "8", "STACKWEAVE_COV_CPU": "40000000"}),
+    ("preempt",      {"STACKWEAVE_PREEMPT": "1", "STACKWEAVE_SYSMON": "1", "STACKWEAVE_SYSMON_QUIET": "1",
+                      "STACKWEAVE_PREEMPT_MS": "8", "STACKWEAVE_COV_CPU": "40000000"}),
+    ("idle_wake_off", {"STACKWEAVE_HUB_IDLE_WAKE": "0"}),
+    ("stack_park_sweep", {"STACKWEAVE_STACK_PARK_SWEEP": "1", "STACKWEAVE_STACK_PARK_SWEEP_MS": "1"}),
+    ("world_yield",  {"STACKWEAVE_WORLD_YIELD_NS": "2000"}),
+    ("hub_affinity", {"STACKWEAVE_HUB_AFFINITY": "1"}),
+    ("perg_tstate_warn", {"STACKWEAVE_PER_G_TSTATE": "1"}),   # gated off -> warn + default sched
+    ("iouring_loop", {"STACKWEAVE_IOURING_LOOP": "1"}),
+    ("deadlock_ms",  {"STACKWEAVE_DEADLOCK_MS": "50"}),
+    ("ready_starve", {"STACKWEAVE_READY_STARVE_BOUND": "2"}),
+    ("dbg_migrate",  {"STACKWEAVE_DBG_MIGRATE": "1"}),
 ]
 
 
@@ -75,7 +75,7 @@ def test_mn_scheduler_mode(label, env):
 @pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 @pytest.mark.parametrize("hubs", [1, 2, 3, 8])
 def test_mn_varied_hub_counts(hubs):
-    from runloom.sync import WaitGroup
+    from stackweave.sync import WaitGroup
     N = 200
     done = bytearray(1)
     box = {"n": 0}
@@ -87,10 +87,10 @@ def test_mn_varied_hub_counts(hubs):
             finally:
                 wg.done()
         for _ in range(N):
-            runloom.fiber(w)        # dispatches: single-thread go for run(1), mn_fiber for run(N>1)
+            stackweave.fiber(w)        # dispatches: single-thread go for run(1), mn_fiber for run(N>1)
         wg.wait()
     with hang_guard(40, "mn hubs=%d" % hubs):
-        runloom.run(hubs, main)
+        stackweave.run(hubs, main)
 
 
 @pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
@@ -129,7 +129,7 @@ def test_mn_serve_echo():
                 L.close()
         rc.mn_fiber(client)
     with hang_guard(30, "serve echo"):
-        runloom.run(4, main)
+        stackweave.run(4, main)
     assert result.get("reply") == b"s:hi"
 
 
@@ -167,7 +167,7 @@ def test_mn_hubinfo_and_diag_introspection():
         rc._diag_dump(_DEVNULL)
         ch.close()                        # release
     with hang_guard(30, "mn hubinfo/diag"):
-        runloom.run(3, main)
+        stackweave.run(3, main)
     assert snap["hub_count"] == 3
     assert isinstance(snap["hubs"], list) and len(snap["hubs"]) == 3
     assert snap["self_check"] == 0

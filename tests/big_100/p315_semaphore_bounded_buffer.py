@@ -13,8 +13,8 @@ semaphores plus a guard around a shared ring:
                sem_empty.release()
 
 These are the cooperative counting semaphores (`threading.Semaphore` ->
-runloom.monkey.CoSemaphore: a true up/down semaphore, value 0 means "block until
-released"), NOT runloom.sync.Semaphore (which is a WEIGHTED *borrowing*
+stackweave.monkey.CoSemaphore: a true up/down semaphore, value 0 means "block until
+released"), NOT stackweave.sync.Semaphore (which is a WEIGHTED *borrowing*
 semaphore: its value is a fixed LIMIT and you can only release what you acquired,
 so Semaphore(0)+release() is illegal -- the wrong model for the full side of a
 bounded buffer).  The cooperative CoSemaphore is the one whose release() hands a
@@ -74,11 +74,11 @@ flag written under the guard vs the woken acquirer re-reading it across hubs) is
 a memory-ordering surface; a data-race report on the got_permit write/read is
 often the first signal before the conservation oracle even fires.
 """
-import threading      # patched -> runloom.monkey.CoSemaphore (cooperative)
+import threading      # patched -> stackweave.monkey.CoSemaphore (cooperative)
 
 import harness
-import runloom
-import runloom.sync as sync
+import stackweave
+import stackweave.sync as sync
 
 K = 4                       # ring capacity (== sem_empty initial permits)
 PRODUCERS = 3               # producer fibers per worker group
@@ -114,7 +114,7 @@ def poisoner(ring, present, sem_empty, sem_full, guard, count, drained, total):
             done = (drained[0] >= total)
         if done:
             break
-        runloom.yield_now()
+        stackweave.yield_now()
     for _ in range(count):
         sem_empty.acquire()
         with guard:
@@ -182,11 +182,11 @@ def worker(H, wid, rng, state):
                     H.fail("OVER-GRANT: {0} items in flight > K={1} (a PUT permit "
                            "handed out while the ring was full)".format(cur, K))
                     return
-                runloom.yield_now()
+                stackweave.yield_now()
 
         # Consumers + producers + poisoner are joined; the monitor is
         # fire-and-forget but always returns once mon_stop is set.
-        wg = runloom.WaitGroup()
+        wg = stackweave.WaitGroup()
         wg.add(PRODUCERS + 1 + CONSUMERS)
         H.fiber(monitor)
 
@@ -200,7 +200,7 @@ def worker(H, wid, rng, state):
         for ci in range(CONSUMERS):
             H.fiber(run_consumer, ci)
 
-        prod_wg = runloom.WaitGroup()
+        prod_wg = stackweave.WaitGroup()
         prod_wg.add(PRODUCERS)
 
         def run_producer(pid):

@@ -1,6 +1,6 @@
-# runloom_c — C coverage
+# stackweave_c — C coverage
 
-C-line coverage of the `runloom_c` extension, measured with **gcov** on a
+C-line coverage of the `stackweave_c` extension, measured with **gcov** on a
 free-threaded CPython 3.13t build, driven by the whole isolated test corpus.
 
 > Numbers are the **coverable surface**: `covered / (executable − excluded)`.
@@ -46,7 +46,7 @@ Linux epoll build and emit no gcov.
    subprocess, serially (clean per-process `.gcda` flush + merge; parallel would
    race the shared `.gcda`), plus `tools/mn_stress.py` for contended
    scheduler/netpoll paths. (`test_soak.py` skipped — pure repetition, no new
-   lines. A global `RUNLOOM_TCPCONN_IOURING`/`RUNLOOM_IOURING_LOOP` re-drive was
+   lines. A global `STACKWEAVE_TCPCONN_IOURING`/`STACKWEAVE_IOURING_LOOP` re-drive was
    tried and reverted — see *io_uring*.)
 3. **Aggregate** — `tools/cov_subsystem.py` sums gcov across each `.c` TU **and
    its `.c.inc` fragments** (gcov emits one report per source file; the real code
@@ -70,7 +70,7 @@ and a concrete reason.
 | OOM | 51 | alloc-failure cleanup unreachable even via the `faultinj` LD_PRELOAD / `strace -e inject` harnesses (the failure path then crashes/aborts before gcov flushes) |
 | RACE | 32 | a free-threaded interleaving with no deterministic trigger; a `for(;;)` commit-CAS retry latch gcov counts only under contention (enclosing function fully covered); or a non-atomic `-O0` gcov line-counter race on a line **proven to execute** (cldeque steal/pop tails; crash disarm body) |
 | DEAD | 19 | defined/exported but zero callers (proven by grep + `nm`) |
-| MIGRATION | 17 | gated on `RUNLOOM_ALLOW_UNSAFE_MIGRATION` / `per_g_tstate` mode — a known-crash mode this project forbids enabling |
+| MIGRATION | 17 | gated on `STACKWEAVE_ALLOW_UNSAFE_MIGRATION` / `per_g_tstate` mode — a known-crash mode this project forbids enabling |
 | CRASHONLY | 12 | runs only in the fatal-signal handler, which re-raises and dies before gcov flushes |
 | PLATFORM | 11 | `#ifdef`-out on Linux epoll, or needs an absent kernel/rlimit feature (pre-4.5 EPOLLEXCLUSIVE / MADV_FREE) |
 | SPAWNFAIL | 8 | OS-thread / `PyThreadState_New` failure cleanup; no fault hook |
@@ -87,7 +87,7 @@ the exclusion only when refutation failed. 12 originally-claimed exclusions were
 ## io_uring recv backpressure deadlock — FIXED
 
 While driving io_uring coverage we found a real bug: forcing recv through the
-opt-in io_uring backend (`RUNLOOM_TCPCONN_IOURING=1`) **deadlocked a backpressured
+opt-in io_uring backend (`STACKWEAVE_TCPCONN_IOURING=1`) **deadlocked a backpressured
 loopback transfer**. Under backpressure the kernel CQ ring overflows; excess
 completions go to the kernel's overflow backlog and do NOT re-signal the
 registered eventfd, so the scheduler slept forever in `epoll_wait` waiting for an

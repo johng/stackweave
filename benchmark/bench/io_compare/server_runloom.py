@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
-"""runloom server -- M:N stackful goroutines, multi-core via 3.13t free-threading.
+"""stackweave server -- M:N stackful goroutines, multi-core via 3.13t free-threading.
 
 Accept loop spawns one goroutine per connection; each goroutine loops:
-recv fixed REQ, runloom_c.sched_sleep(io_delay) (simulated backend/DB I/O,
+recv fixed REQ, stackweave_c.sched_sleep(io_delay) (simulated backend/DB I/O,
 parks the goroutine and lets the hub run others), send fixed RESP.  Sync
 straight-line code, no async/await coloring.  Driven by the external Go
 loadgen so it competes head-to-head with the Go and asyncio servers on the
 identical wire protocol.
 
-Usage: PYTHONPATH=<runloom>/src python3 server_runloom.py [host] [port] [io_ms] [H]
+Usage: PYTHONPATH=<stackweave>/src python3 server_runloom.py [host] [port] [io_ms] [H]
 """
 import os
 import resource
 import socket
 import sys
 
-sys.path.insert(0, os.environ.get("RUNLOOM_SRC", ""))
-import runloom_c
+sys.path.insert(0, os.environ.get("STACKWEAVE_SRC", ""))
+import stackweave_c
 
 REQ_LEN = 10
 RESP = b"200 " + b"x" * 1024 + b"\n"   # 1029 bytes
@@ -33,7 +33,7 @@ def _recv_exactly(sock, fd, n):
         try:
             chunk = sock.recv(n - len(out))
         except (BlockingIOError, InterruptedError):
-            runloom_c.wait_fd(fd, READ)
+            stackweave_c.wait_fd(fd, READ)
             continue
         except OSError:
             return b""
@@ -50,7 +50,7 @@ def _send_all(sock, fd, data):
         try:
             sent += sock.send(view[sent:])
         except (BlockingIOError, InterruptedError):
-            runloom_c.wait_fd(fd, WRITE)
+            stackweave_c.wait_fd(fd, WRITE)
         except OSError:
             return False
     return True
@@ -69,14 +69,14 @@ def server_conn(conn):
             if not req:
                 break
             if IO_S > 0:
-                runloom_c.sched_sleep(IO_S)
+                stackweave_c.sched_sleep(IO_S)
             if not _send_all(conn, fd, RESP):
                 break
     finally:
         try:
             f = conn.fileno()
             if f >= 0:
-                runloom_c.netpoll_unregister(f)
+                stackweave_c.netpoll_unregister(f)
         except (AttributeError, OSError, ValueError):
             pass
         try:
@@ -91,20 +91,20 @@ def accept_loop():
         try:
             conn, _ = listen_sock.accept()
         except (BlockingIOError, InterruptedError):
-            runloom_c.wait_fd(lfd, READ)
+            stackweave_c.wait_fd(lfd, READ)
             continue
         except OSError:
             break
         try:
-            runloom_c.netpoll_unregister(conn.fileno())
+            stackweave_c.netpoll_unregister(conn.fileno())
         except (AttributeError, OSError):
             pass
-        runloom_c.mn_fiber(lambda c=conn: server_conn(c))
+        stackweave_c.mn_fiber(lambda c=conn: server_conn(c))
 
 
 def main():
     global IO_S, listen_sock
-    if os.environ.get("RUNLOOM_GC_DISABLE"):
+    if os.environ.get("STACKWEAVE_GC_DISABLE"):
         import gc
         gc.disable()
     host = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
@@ -125,11 +125,11 @@ def main():
     print("runloom-server listening on %s io=%sms H=%d" %
           (listen_sock.getsockname(), IO_S * 1000, H), flush=True)
 
-    if runloom_c.mn_init(H) < 0:
+    if stackweave_c.mn_init(H) < 0:
         sys.stderr.write("mn_init failed\n")
         return 2
-    runloom_c.mn_fiber(accept_loop)
-    runloom_c.mn_run()
+    stackweave_c.mn_fiber(accept_loop)
+    stackweave_c.mn_run()
     return 0
 
 

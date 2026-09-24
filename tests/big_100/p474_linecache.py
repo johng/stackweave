@@ -5,7 +5,7 @@ entire file contents in the module-global linecache.cache dict keyed by
 filename.  The cache is a plain dict (not contextvar-backed, not thread-local):
 all goroutines / threads / fibers share ONE cache dict.
 
-WHERE M:N BREAKS IT (the gap this program catches).  Under runloom's M:N
+WHERE M:N BREAKS IT (the gap this program catches).  Under stackweave's M:N
 scheduler, many fibers ("goroutines") share ONE hub OS-thread and the same
 linecache.cache dict.  linecache.getline(filename, lineno) populates
 cache[filename] on first read and returns the cached line on subsequent reads.
@@ -17,7 +17,7 @@ getline return the WRONG line (B's content, or garbage).
 
 This is the shared-global-dict class: the cache dict assumes a single logical
 owner per filename and no concurrent mutation of the dict object.  That holds
-under run(1)/GIL and under plain OS threads, but a runloom M:N save/restore or
+under run(1)/GIL and under plain OS threads, but a stackweave M:N save/restore or
 cache-key desync across a yield would break it.
 
 BOUNDED POOL (root-cause fix -- DOES NOT create one temp file per fiber).
@@ -46,15 +46,15 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain threads):
   the shared linecache.cache returns each filename's OWN content -- the GIL or
   per-thread serialization keeps the dict reads/writes consistent.  So getline
   ALWAYS returns the right pool file's line; the bug does NOT fire there.  A
-  correct runloom MUST also keep each pool file's cached content intact across
-  fiber yields on the shared hub.  If runloom desyncs the shared cache across a
+  correct stackweave MUST also keep each pool file's cached content intact across
+  fiber yields on the shared hub.  If stackweave desyncs the shared cache across a
   yield (returns a sibling pool file's line, or garbage), the oracle fires
   (program exits 1, not 0).
 
 ORACLES:
   * LOAD-BEARING -- POOL-FILE-DISTINCT CACHE CONTENT (worker, HARD, fail-fast).
     Each fiber reads its assigned pool file (wid % N) via
-    linecache.getline(filename, lineno), YIELDS (runloom.yield_now/sleep) to let
+    linecache.getline(filename, lineno), YIELDS (stackweave.yield_now/sleep) to let
     siblings mutate the shared cache dict, then asserts a re-read returns the
     SAME known line for that pool file.  A read that returns a sibling pool
     file's marker (wrong POOL=), garbage, or a wrong line index is a cache
@@ -79,7 +79,7 @@ import shutil
 import tempfile
 
 import harness
-import runloom
+import stackweave
 
 # Reads per fiber per iteration (cache-hit reuse of the populated entry).
 READS_PER_ITER = 10
@@ -180,9 +180,9 @@ def load_bearing_check(H, wid, idx, state):
         return
 
     # Yield so siblings run and mutate the shared cache dict before we re-read.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0003)
+        stackweave.sleep(0.0003)
 
     # Re-read (cache hit) and assert it is STILL our pool file's known line.
     got2 = linecache.getline(filename, line_num)

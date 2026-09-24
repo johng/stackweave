@@ -251,7 +251,7 @@ runloom_sched_t *runloom_sched_get(void)
     if (__builtin_expect(s != NULL, 1)) return s;
     s = (runloom_sched_t *)PyMem_RawMalloc(sizeof(*s));
     if (s == NULL) {
-        Py_FatalError("runloom: per-thread scheduler allocation failed");
+        Py_FatalError("stackweave: per-thread scheduler allocation failed");
     }
     runloom_sched_init(s);                 /* sets stack_size = runloom_cal_default */
     runloom_tls_sched = s;
@@ -301,7 +301,7 @@ static int runloom_goroutine_panic_mode(void)
     static int v = -1;
     int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
     if (cur < 0) {
-        const char *e = getenv("RUNLOOM_GOROUTINE_PANIC");
+        const char *e = getenv("STACKWEAVE_GOROUTINE_PANIC");
         cur = (e != NULL && e[0] == 's') ? 0 :     /* silent */
               (e != NULL && e[0] == 'a') ? 2 :     /* abort  */
               1;                                    /* print (default) */
@@ -409,7 +409,7 @@ void runloom_g_entry(void *user)
     static int ctx_copy = -1;
     int cc = __atomic_load_n(&ctx_copy, __ATOMIC_RELAXED);
     if (cc < 0) {
-        const char *e = getenv("RUNLOOM_NO_CTX_COPY");
+        const char *e = getenv("STACKWEAVE_NO_CTX_COPY");
         cc = (e && *e == '1') ? 0 : 1;
         __atomic_store_n(&ctx_copy, cc, __ATOMIC_RELAXED);
     }
@@ -980,7 +980,7 @@ static PyObject *spawn_common(runloom_sched_t *s, PyObject *callable,
         int adm = runloom_fiber_admit();
         if (adm == 0) {
             PyErr_Format(PyExc_RuntimeError,
-                         "runloom: fiber limit (%ld) exceeded",
+                         "stackweave: fiber limit (%ld) exceeded",
                          runloom_get_max_fibers());
             return NULL;
         }

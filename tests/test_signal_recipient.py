@@ -46,7 +46,7 @@ needs_mn = pytest.mark.skipif(not FT, reason="M:N needs a GIL-disabled build")
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + "/src")
 try:
-    import runloom_c as _rc
+    import stackweave_c as _rc
     _IOURING = bool(_rc.iouring_available())
 except Exception:                                    # pragma: no cover
     _IOURING = False
@@ -65,7 +65,7 @@ needs_sigalrm = pytest.mark.skipif(
 _W1 = r'''
 import faulthandler, os, signal, socket, sys
 sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 
 POLL = 0.00002
 box = {}
@@ -81,7 +81,7 @@ def server():
     sc = L.accept()
     sc.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, (4096).to_bytes(4, "little"))
     # Deliberately unprotected, as the original workload has it: if this loop
-    # collects the interrupt it escapes the fiber entry and runloom reports it
+    # collects the interrupt it escapes the fiber entry and stackweave reports it
     # unraisable -- that print is the failure signature.
     try:
         while "done" not in box:
@@ -150,7 +150,7 @@ def test_parked_fiber_outranks_a_due_sleeper():
 _IOU = r"""
 import faulthandler, os, signal, socket, sys
 sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 box = {}
 def raiser(signum, frame):
     raise KeyboardInterrupt("alarm")
@@ -204,7 +204,7 @@ def test_signal_reaches_a_fiber_parked_on_io_uring():
        `PyErr_Occurred() ? NULL : ...` guard; the io_uring arms never got it,
        because defect 1 meant they were never once exercised.
     """
-    p = _run(_IOU, env_extra={"RUNLOOM_TCPCONN_IOURING": "1"})
+    p = _run(_IOU, env_extra={"STACKWEAVE_TCPCONN_IOURING": "1"})
     assert "SystemError" not in p.stderr, (
         "a delivered signal was overwritten by OSError in the io_uring arm\n%s"
         % p.stderr[-1500:])
@@ -222,9 +222,9 @@ def test_signal_reaches_a_fiber_parked_on_io_uring():
 _COPOLL = r'''
 import faulthandler, signal, socket, sys, time
 sys.path.insert(0, "src")
-import runloom_c as rc
-import runloom.monkey
-runloom.monkey.patch()
+import stackweave_c as rc
+import stackweave.monkey
+stackweave.monkey.patch()
 import selectors
 
 box = {}
@@ -303,9 +303,9 @@ def test_selector_outranks_a_dense_unrelated_sleeper():
 _HEAP = r"""
 import faulthandler, signal, socket, sys
 sys.path.insert(0, "src")
-import runloom_c as rc
-import runloom.monkey
-runloom.monkey.patch()
+import stackweave_c as rc
+import stackweave.monkey
+stackweave.monkey.patch()
 import selectors
 
 N = 60
@@ -399,7 +399,7 @@ def test_sleep_heap_survives_removing_a_signalled_sleeper():
 _MN = r'''
 import faulthandler, os, signal, socket, sys
 sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 
 HUBS = int(os.environ.get("MN_HUBS", "4"))
 box = {}
@@ -463,7 +463,7 @@ def test_signal_reaches_a_hub_fiber(hubs):
 def test_mn_signal_reaches_a_hub_fiber_parked_on_io_uring():
     """Same contract as the netpoll M:N test, but parked on a CQE.
 
-    `RUNLOOM_TCPCONN_IOURING=1` routes the same `recv` through the multishot
+    `STACKWEAVE_TCPCONN_IOURING=1` routes the same `recv` through the multishot
     io_uring path instead of netpoll, so this is the io_uring arm of M:N
     delivery.  Measured `who=out-of-mn_run` 5/5 before the fix.
 
@@ -486,7 +486,7 @@ def test_mn_signal_reaches_a_hub_fiber_parked_on_io_uring():
     under the wake_state machine; the in_sub_queue CAS in hub_submit
     otherwise), so the loser drops rather than double-queueing the g.
     """
-    p = _run(_MN, env_extra={"RUNLOOM_TCPCONN_IOURING": "1"}, timeout=120)
+    p = _run(_MN, env_extra={"STACKWEAVE_TCPCONN_IOURING": "1"}, timeout=120)
     assert "SystemError" not in p.stderr, (
         "a delivered signal was overwritten by OSError in the io_uring arm\n%s"
         % p.stderr[-1500:])
@@ -504,7 +504,7 @@ def test_mn_signal_reaches_a_hub_fiber_parked_on_io_uring():
 _MN_SINGLEOP = r'''
 import faulthandler, os, signal, socket, sys
 sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 HUBS = int(os.environ.get("MN_HUBS", "4"))
 box = {}
 def raiser(signum, frame):
@@ -572,7 +572,7 @@ def test_mn_signal_reaches_a_hub_fiber_parked_on_a_single_shot_op():
     Measured `who=out-of-mn_run finally_ran=False` before, 50/50
     `who=fiber finally_ran=True` after (10 runs each at 1/2/4/8/16 hubs).
     """
-    p = _run(_MN_SINGLEOP, env_extra={"RUNLOOM_TCPCONN_IOURING": "1"}, timeout=120)
+    p = _run(_MN_SINGLEOP, env_extra={"STACKWEAVE_TCPCONN_IOURING": "1"}, timeout=120)
     assert "SystemError" not in p.stderr, (
         "a delivered signal was overwritten by OSError in the io_uring arm\n%s"
         % p.stderr[-1500:])
@@ -585,14 +585,14 @@ def test_mn_signal_reaches_a_hub_fiber_parked_on_a_single_shot_op():
 _MN_POLL = r'''
 import faulthandler, os, signal, socket, sys
 sys.path.insert(0, "src")
-import runloom_c as rc
-# PATCH BEFORE SPAWNING.  monkey.patch() wraps runloom_c.mn_fiber, and that
+import stackweave_c as rc
+# PATCH BEFORE SPAWNING.  monkey.patch() wraps stackweave_c.mn_fiber, and that
 # wrapper is what bumps the thread-local counter _co_sleep_io tests; a fiber
 # spawned through the UNPATCHED mn_fiber never gets wrapped, so its reprobe
 # silently degrades to a plain sched_sleep and never registers as a signal
 # recipient.  An earlier version of this test patched inside the worker and so
 # never exercised CoPoll's sleep_io path at all.
-import runloom.monkey; runloom.monkey.patch()
+import stackweave.monkey; stackweave.monkey.patch()
 import selectors
 
 HUBS = int(os.environ.get("MN_HUBS", "4"))

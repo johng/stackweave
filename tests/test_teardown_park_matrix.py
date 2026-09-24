@@ -24,7 +24,7 @@ ENV = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
 
 
 def run_body(body, timeout=30):
-    script = ("import runloom_c as rc, runloom, socket, sys, os, threading\n"
+    script = ("import stackweave_c as rc, stackweave, socket, sys, os, threading\n"
               + textwrap.dedent(body))
     return subprocess.run([PY, "-c", script], env=ENV, capture_output=True,
                           timeout=timeout)
@@ -68,8 +68,8 @@ def expect(body, sentinel="OK", timeout=30):
             "  under ~has_wakeable_work, so unreachable-but-registered work\n"
             "  hangs without a word.\n"
             "  Reproduce:  PYTHON_GIL=0 PYTHONPATH=src {1} -c '<body>'\n"
-            "  More signal: RUNLOOM_DEADLOCK=raise, and gdb -p <pid> once wedged;\n"
-            "              runloom.stats() from a live fiber shows whether the\n"
+            "  More signal: STACKWEAVE_DEADLOCK=raise, and gdb -p <pid> once wedged;\n"
+            "              stackweave.stats() from a live fiber shows whether the\n"
             "              fibers actually COMPLETED (mn_completed_total).\n"
             "--- child stdout ---\n{2}\n--- child stderr ---\n{3}".format(
                 timeout, PY, _tail(exc.stdout), _tail(exc.stderr))
@@ -83,7 +83,7 @@ def test_cancel_all_parked_wakes_every_netpoll_waiter():
     # N fibers parked on sockets; cancel_all_parked must wake EVERY one with
     # ECANCELED, and run() must then exit.  A forgotten waiter -> timeout.
     expect("""
-        import runloom.monkey; runloom.monkey.patch()
+        import stackweave.monkey; stackweave.monkey.patch()
         N = 12; woke = [0]
         def body():
             socks = [socket.socketpair() for _ in range(N)]
@@ -135,7 +135,7 @@ def test_fork_child_usable_when_parent_has_parked_fiber():
     # state initialised; the child then forks and must run a fresh scheduler to
     # completion rather than inherit the parent's netpoll fd / arm cache and hang.
     expect("""
-        import runloom.monkey; runloom.monkey.patch()
+        import stackweave.monkey; stackweave.monkey.patch()
         # 1) run a workload in the parent that exercises + tears down netpoll
         def warm():
             rd, wr = socket.socketpair(); rd.setblocking(True)
@@ -162,14 +162,14 @@ def test_fork_child_usable_when_parent_has_parked_fiber():
 
 # ---- teardown vector: mn (multi-hub) run exits after waking parked fibers ----
 
-# TODO(runloom): this intermittently STRANDS (~2/5 locally) -- under M:N a hub can
+# TODO(stackweave): this intermittently STRANDS (~2/5 locally) -- under M:N a hub can
 # occasionally hang on a parked-but-woken fiber during run() teardown, so the
 # child never prints OK and the 30 s guard fires.  A real (pre-existing) teardown
 # race, not a patched-interpreter regression; reproduces on a dev box too.
 # check_all_fast until the strand is fixed.
 def test_mn_run_exits_after_parked_fibers_woken():
     # Under M:N, fibers park on a chan across hubs; a producer wakes them, and
-    # runloom.run(N) must return (not strand a hub on a parked-but-woken fiber).
+    # stackweave.run(N) must return (not strand a hub on a parked-but-woken fiber).
     expect("""
         N = 10; done = [0]
         # NOTE: `done` is a COMPLETION LATCH, not the thing under test, and it must
@@ -177,7 +177,7 @@ def test_mn_run_exits_after_parked_fibers_woken():
         # fibers on several hubs, concurrent increments LOSE updates, the
         # `while done[0] < ...` spin never terminates, and the test times out
         # looking exactly like a stranded fiber. Measured at 8 hubs: 13/30 hangs
-        # with the bare increment, 0/30 with this lock -- and runloom.stats()
+        # with the bare increment, 0/30 with this lock -- and stackweave.stats()
         # during a "hang" showed mn_completed_total == every fiber, i.e. nothing
         # was ever stranded. The scheduler was fine; the latch was lying.
         _dlk = threading.Lock()
@@ -191,7 +191,7 @@ def test_mn_run_exits_after_parked_fibers_woken():
                 for _ in range(N): ch.send(1)
             rc.mn_fiber(producer)
             while done[0] < N: rc.sched_sleep(0.003)
-        runloom.run(4, main_fn=body)
+        stackweave.run(4, main_fn=body)
         print("OK" if done[0] == N else "FAIL done=%d/%d" % (done[0], N))
     """)
 

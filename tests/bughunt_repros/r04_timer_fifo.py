@@ -1,7 +1,7 @@
 """Timer semantics: equal-deadline call_at callbacks must fire in FIFO
 (insertion) order, like asyncio's heap (counter tiebreak). Also call_soon FIFO."""
 import sys, asyncio
-import runloom.aio as aio
+import stackweave.aio as aio
 
 async def main():
     loop = asyncio.get_event_loop()

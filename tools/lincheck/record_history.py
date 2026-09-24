@@ -20,7 +20,7 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
-import runloom_c
+import stackweave_c
 
 T0 = time.monotonic_ns()
 
@@ -30,8 +30,8 @@ def now():
 
 
 def record(out_path, nhubs, nprod, nper, cap, nselect=0):
-    ch = runloom_c.Chan(cap)
-    done = runloom_c.Chan(nprod)             # buffered barrier: producers never block on it
+    ch = stackweave_c.Chan(cap)
+    done = stackweave_c.Chan(nprod)             # buffered barrier: producers never block on it
     nconsumers = nprod                       # balanced
     nselect = min(nselect, nconsumers)       # how many consumers receive via select(...)
     logs = {}                                # gid -> list of op records (per-goroutine)
@@ -78,10 +78,10 @@ def record(out_path, nhubs, nprod, nper, cap, nselect=0):
         # channels and must abort/clean up the never-firing one, which is
         # exactly where chan.c's four historical select bugs lived.
         log = logs[gid]
-        idle = runloom_c.Chan(1)             # never sent to / never closed
+        idle = stackweave_c.Chan(1)             # never sent to / never closed
         while True:
             t = now()
-            idx, res = runloom_c.select([("recv", ch), ("recv", idle)])
+            idx, res = stackweave_c.select([("recv", ch), ("recv", idle)])
             r = now()
             assert idx == 0, "idle select case fired (idx={0})".format(idx)
             v, ok = res
@@ -90,16 +90,16 @@ def record(out_path, nhubs, nprod, nper, cap, nselect=0):
             if not ok:
                 break
 
-    runloom_c.mn_init(nhubs)
+    stackweave_c.mn_init(nhubs)
     for p in range(nprod):
-        runloom_c.mn_fiber(lambda gid=p, base=p: producer(gid, base))
+        stackweave_c.mn_fiber(lambda gid=p, base=p: producer(gid, base))
     for c in range(nconsumers):
         fn = select_consumer if c < nselect else consumer
-        runloom_c.mn_fiber(lambda gid=nprod + c, fn=fn: fn(gid))
-    runloom_c.mn_fiber(lambda gid=nprod + nconsumers: closer(gid))
-    runloom_c.mn_run()
-    runloom_c.mn_fini()
-    assert runloom_c._self_check(0) == 0, "self_check failed after run"
+        stackweave_c.mn_fiber(lambda gid=nprod + c, fn=fn: fn(gid))
+    stackweave_c.mn_fiber(lambda gid=nprod + nconsumers: closer(gid))
+    stackweave_c.mn_run()
+    stackweave_c.mn_fini()
+    assert stackweave_c._self_check(0) == 0, "self_check failed after run"
 
     events = []
     for g in range(ngor):

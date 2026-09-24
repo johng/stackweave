@@ -1,6 +1,6 @@
 """Attribute the ~8.6kB/cycle leak: raw mn_init+mn_fini vs mn_run, and Python object counts."""
 import os, sys, gc
-import runloom, runloom_c
+import stackweave, stackweave_c
 
 MODE = sys.argv[1]
 ITERS = int(sys.argv[2]) if len(sys.argv) > 2 else 300
@@ -12,16 +12,16 @@ def rss_kb():
                 return int(line.split()[1])
 
 def cycle_initfini():
-    runloom_c.mn_init(4)
-    runloom_c.mn_fini()
+    stackweave_c.mn_init(4)
+    stackweave_c.mn_fini()
 
 def cycle_full():
-    runloom_c.mn_init(4)
-    runloom_c.mn_run()
-    runloom_c.mn_fini()
+    stackweave_c.mn_init(4)
+    stackweave_c.mn_run()
+    stackweave_c.mn_fini()
 
 def cycle_run1():
-    runloom_c.run()
+    stackweave_c.run()
 
 f = {"initfini": cycle_initfini, "full": cycle_full, "run1": cycle_run1}[MODE]
 

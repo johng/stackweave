@@ -52,7 +52,7 @@ struct runloom_g;
 typedef struct runloom_g runloom_g_t;
 
 /* Initialise the registry lock + read RUNLOOM_INTROSPECT_TIME.  Idempotent;
- * called from PyInit_runloom_c (Python path) and runloom_mn_init (C-harness
+ * called from PyInit_stackweave_c (Python path) and runloom_mn_init (C-harness
  * path), both single-threaded at the time of call. */
 void runloom_introspect_init(void);
 void runloom_introspect_fini(void);

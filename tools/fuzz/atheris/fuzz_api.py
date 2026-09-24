@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""fuzz_api.py -- coverage-guided (Atheris) fuzzing of the runloom C-API surface.
+"""fuzz_api.py -- coverage-guided (Atheris) fuzzing of the stackweave C-API surface.
 
 The adversarial-QA pass did a fixed 37-case bad-input sweep of the module API
 (negative sizes, bad fds, wrong types) and it found the Coro(stack_size=-1)
@@ -29,8 +29,8 @@ import sys
 import atheris
 
 with atheris.instrument_imports():
-    import runloom
-    import runloom_c
+    import stackweave
+    import stackweave_c
 
 
 def _noop():
@@ -48,32 +48,32 @@ def one_input(data):
                 # BOUNDED: Chan eagerly allocates buf[cap], so an unbounded fuzzed
                 # cap (~2^28) would request multi-GB and OOM the fuzzer (a false
                 # crash). The validation paths live at the small/negative end.
-                runloom_c.Chan(fdp.ConsumeIntInRange(-16, 8192))
+                stackweave_c.Chan(fdp.ConsumeIntInRange(-16, 8192))
             elif op == 1:
                 # the historical Coro(stack_size=-1) SIGSEGV class. Band the size so a
                 # huge value yields a clean MemoryError, not a real giant mmap.
                 ss = fdp.ConsumeIntInRange(-(1 << 40), 1 << 40)
-                c = runloom_c.Coro(_noop, ss)
+                c = stackweave_c.Coro(_noop, ss)
                 del c
             elif op == 2:
-                runloom.optimize(fdp.ConsumeUnicodeNoSurrogates(16))
+                stackweave.optimize(fdp.ConsumeUnicodeNoSurrogates(16))
             elif op == 3:
-                runloom.set_grow_down(fdp.ConsumeIntInRange(-2, 2))
+                stackweave.set_grow_down(fdp.ConsumeIntInRange(-2, 2))
             elif op == 4:
                 # Chan with a fuzzed non-int type sometimes (TypeError path)
-                runloom_c.Chan(fdp.ConsumeUnicodeNoSurrogates(4))
+                stackweave_c.Chan(fdp.ConsumeUnicodeNoSurrogates(4))
             elif op == 5:
                 # MachineCode misuse surface (test_adv_stack flagged it)
-                mc = getattr(runloom_c, "MachineCode", None)
+                mc = getattr(stackweave_c, "MachineCode", None)
                 if mc is not None:
                     mc(fdp.ConsumeBytes(fdp.ConsumeIntInRange(0, 32)))
             elif op == 6:
                 # optimize with a fuzzed non-str (TypeError path)
-                runloom.optimize(fdp.ConsumeInt(2))
+                stackweave.optimize(fdp.ConsumeInt(2))
             elif op == 7:
-                runloom_c.Coro(fdp.ConsumeInt(1), fdp.ConsumeIntInRange(0, 1 << 18))
+                stackweave_c.Coro(fdp.ConsumeInt(1), fdp.ConsumeIntInRange(0, 1 << 18))
             else:
-                runloom_c.Chan(fdp.ConsumeIntInRange(0, 4096))
+                stackweave_c.Chan(fdp.ConsumeIntInRange(0, 4096))
         except Exception:
             # A clean Python exception on malformed input is the CORRECT, expected
             # behavior. The bug class is a process crash, which libFuzzer catches

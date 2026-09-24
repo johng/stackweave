@@ -84,7 +84,7 @@ import struct
 import zlib
 
 import harness
-import runloom
+import stackweave
 import cancelutil
 
 # Frame: MAGIC, wid, seq, payload-length (big-endian), then payload, then crc32.
@@ -247,7 +247,7 @@ def run_writer(H, wid, rng, case, wfd, result):
             # Land the cancel a touch later, so a big backlog flush is already
             # parked deep in the slice loop when it fires.
             delay = rng.uniform(0.001, 0.006)
-        runloom.fiber(cancelutil.delayed_cancel, cancel, delay)
+        stackweave.fiber(cancelutil.delayed_cancel, cancel, delay)
 
     last_flushed = -1            # highest seq fully resident in _write_buf+pipe
     pending_unflushed = False
@@ -278,7 +278,7 @@ def run_writer(H, wid, rng, case, wfd, result):
                 bw.flush()              # cooperative drain; PARKS on a full pipe
                 committed_seq = last_flushed   # flush returned -> bytes are out
                 pending_unflushed = False
-                runloom.yield_now()     # interleave with the reader + siblings
+                stackweave.yield_now()     # interleave with the reader + siblings
 
         # End-of-stream handling per discipline.
         if case == DROP_NO_CLOSE:
@@ -346,7 +346,7 @@ def worker(H, wid, rng, state):
         # (single-writer-per-key -> race-free without a lock).
         result = {"clean_seq": -1, "committed_seq": -1, "corrupt": False}
 
-        wg = runloom.WaitGroup()
+        wg = stackweave.WaitGroup()
         wg.add(2)
 
         def do_reader(rfd=rfd, result=result):

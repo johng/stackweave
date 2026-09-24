@@ -13,8 +13,8 @@
 #
 # Configure in an UNTRACKED file (never committed): scripts/release_hosts.env
 # (same file scripts/collect_wheels.sh reads; copy scripts/release_hosts.env.example):
-#   RUNLOOM_REPO_URL   git URL to build from   (PROMPTED if unset)
-#   RUNLOOM_REF        branch/tag/sha          (default: main)
+#   STACKWEAVE_REPO_URL   git URL to build from   (PROMPTED if unset)
+#   STACKWEAVE_REF        branch/tag/sha          (default: main)
 #   RELEASE_SSH_HOSTS  space-separated "<target>|<base-dir>|<kind>" entries.
 #                      Only kind=posix hosts are used here -- there is no
 #                      free-threaded MSVC migration target, and the exec-home
@@ -49,8 +49,8 @@ ask() {   # ask VAR "prompt" "default"   -- no TTY means take the default, never
     [ -z "$ans" ] && ans="$def"
     eval "$1=\$ans"
 }
-ask RUNLOOM_REPO_URL "Repo URL to build from" ""
-ask RUNLOOM_REF      "Ref to build (branch/tag/sha)" "main"
+ask STACKWEAVE_REPO_URL "Repo URL to build from" ""
+ask STACKWEAVE_REF      "Ref to build (branch/tag/sha)" "main"
 [ -z "${RELEASE_SSH_HOSTS+set}" ] && ask RELEASE_SSH_HOSTS \
     "Remote build hosts 'target|dir|kind ...' (blank = this machine only)" ""
 : "${RELEASE_SSH_HOSTS:=}"
@@ -88,7 +88,7 @@ for entry in $RELEASE_SSH_HOSTS; do
         say "SKIP $target (windows): no free-threaded MSVC migration target; exec-home does not cover MSVC thread-id intrinsics"
         continue
     fi
-    [ -n "$RUNLOOM_REPO_URL" ] || { printf '[release] RUNLOOM_REPO_URL unset -- cannot build remotely\n' >&2; exit 1; }
+    [ -n "$STACKWEAVE_REPO_URL" ] || { printf '[release] STACKWEAVE_REPO_URL unset -- cannot build remotely\n' >&2; exit 1; }
 
     workdir="$basedir/rl-ci-$STAMP"
     REMOTE_CLEANUP="$REMOTE_CLEANUP
@@ -98,7 +98,7 @@ $target|$workdir"
     ssh "$target" "sh -eu -c '
         mkdir -p \"$workdir\"
         cd \"$workdir\"
-        git clone --depth 1 --branch \"$RUNLOOM_REF\" \"$RUNLOOM_REPO_URL\" repo
+        git clone --depth 1 --branch \"$STACKWEAVE_REF\" \"$STACKWEAVE_REPO_URL\" repo
         cd repo
         RL_CI_VERSIONS=\"${RL_CI_VERSIONS:-}\" RL_CI_RELEASE_PREFIX=\"$RL_CI_RELEASE_PREFIX\" tools/ci/ci.sh
     '" || { printf '[release] REMOTE BUILD FAILED on %s\n' "$target" >&2; exit 1; }

@@ -14,8 +14,8 @@ from decimal import Decimal
 
 import pytest
 
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
 import os as _hwm_os
 import pytest as _hwm_pytest
@@ -25,7 +25,7 @@ import pytest as _hwm_pytest
 # whole stack resident), so these HWM/advice/sizing tests can't measure precisely
 # there -- skip them (the diagnostic itself just over-reserves, which is safe).
 _RELIABLE_HWM = (_hwm_os.name == "posix"
-                 and runloom_c.backend() in ("fcontext-asm", "ucontext")
+                 and stackweave_c.backend() in ("fcontext-asm", "ucontext")
                  and _hwm_os.sysconf("SC_PAGESIZE") == 4096)
 pytestmark = _hwm_pytest.mark.skipif(
     not _RELIABLE_HWM,
@@ -47,13 +47,13 @@ def light():
     return 1
 
 
-START = 256 * 1024          # default RUNLOOM_STACK_AUTOSIZE_START
+START = 256 * 1024          # default STACKWEAVE_STACK_AUTOSIZE_START
 
 # Spawn-time stack floor: on free-threaded 3.14 every fiber stack is clamped up
 # to 256 KiB (RUNLOOM_FT314_MIN_STACK_SIZE, the p226 fix in 289ecb99 -- see
 # runloom_sched.h); elsewhere the auto-sizer's own 16 KiB floor is what shows.
 # Since the FT-3.14 floor EQUALS the default start, the learn-down tests below
-# raise the start above the floor (RUNLOOM_STACK_AUTOSIZE_START) so that
+# raise the start above the floor (STACKWEAVE_STACK_AUTOSIZE_START) so that
 # "start large, learn down" stays observable on the primary target.
 import sys as _floor_sys
 import sysconfig as _floor_sysconfig
@@ -65,28 +65,28 @@ BIG_START = 1024 * 1024     # a learn-down start comfortably above both floors
 
 @pytest.fixture(autouse=True)
 def _clean():
-    runloom_c.reset_stack_advice()
-    runloom.inspect.enable_stack_autosize(False)
-    runloom.inspect.enable_stack_advice(False)
+    stackweave_c.reset_stack_advice()
+    stackweave.inspect.enable_stack_autosize(False)
+    stackweave.inspect.enable_stack_advice(False)
     yield
-    runloom.inspect.enable_stack_autosize(False)
-    runloom.inspect.enable_stack_advice(False)
-    runloom_c.reset_stack_advice()
+    stackweave.inspect.enable_stack_autosize(False)
+    stackweave.inspect.enable_stack_advice(False)
+    stackweave_c.reset_stack_advice()
 
 
 def _batch(fns, n, stack=None):
     for _ in range(n):
         for fn in fns:
             if stack is None:
-                runloom_c.fiber(fn)
+                stackweave_c.fiber(fn)
             else:
-                runloom_c.fiber(fn, stack)
-    runloom_c.run()
+                stackweave_c.fiber(fn, stack)
+    stackweave_c.run()
 
 
 def _row(fn):
     name = "{0}.{1}".format(fn.__module__, fn.__qualname__)
-    for r in runloom_c.stack_advice():
+    for r in stackweave_c.stack_advice():
         if r["kind"].split(" (")[0] == name:
             return r
     return None
@@ -102,22 +102,22 @@ def _learned(hwm):
 
 # --------------------------------------------------------------------------- #
 def test_off_by_default():
-    assert runloom_c.stack_autosize_enabled() is False
+    assert stackweave_c.stack_autosize_enabled() is False
     # measure-only (no autosize): kinds run at the fixed program default, not a
     # per-kind started/learned size
-    runloom.inspect.enable_stack_advice(True)
+    stackweave.inspect.enable_stack_advice(True)
     _batch([heavy], 20)
-    assert _row(heavy)["reserved"] == runloom_c.get_stack_size()
+    assert _row(heavy)["reserved"] == stackweave_c.get_stack_size()
 
 
 def test_enable_implies_measurement():
-    runloom.inspect.enable_stack_autosize(True)
-    assert runloom_c.stack_autosize_enabled() is True
-    assert runloom_c.stack_advice_enabled() is True   # autosize implies advice
+    stackweave.inspect.enable_stack_autosize(True)
+    assert stackweave_c.stack_autosize_enabled() is True
+    assert stackweave_c.stack_advice_enabled() is True   # autosize implies advice
 
 
 def test_unseen_kind_starts_large():
-    runloom.inspect.enable_stack_autosize(True)
+    stackweave.inspect.enable_stack_autosize(True)
     _batch([heavy], 30)
     # every fiber in this first batch was spawned before any completed,
     # so they all started at the large default
@@ -128,8 +128,8 @@ def test_learn_down_on_next_batch(monkeypatch):
     # Start above the FT-3.14 spawn floor so the learned size is smaller than
     # the start and the shrink is observable (at the default 256 KiB start the
     # floor equals the start there and nothing can shrink).
-    monkeypatch.setenv("RUNLOOM_STACK_AUTOSIZE_START", str(BIG_START))
-    runloom.inspect.enable_stack_autosize(True)
+    monkeypatch.setenv("STACKWEAVE_STACK_AUTOSIZE_START", str(BIG_START))
+    stackweave.inspect.enable_stack_autosize(True)
     _batch([heavy], 30)                       # batch 1: all start large
     assert _row(heavy)["reserved"] == BIG_START
     hwm = _row(heavy)["max_hwm"]
@@ -141,8 +141,8 @@ def test_learn_down_on_next_batch(monkeypatch):
 
 
 def test_light_kind_learns_down_to_floor(monkeypatch):
-    monkeypatch.setenv("RUNLOOM_STACK_AUTOSIZE_START", str(BIG_START))
-    runloom.inspect.enable_stack_autosize(True)
+    monkeypatch.setenv("STACKWEAVE_STACK_AUTOSIZE_START", str(BIG_START))
+    stackweave.inspect.enable_stack_autosize(True)
     _batch([light], 20)                       # batch 1: start large
     _batch([light], 20)                       # batch 2: learned
     learned = _row(light)["reserved"]
@@ -152,7 +152,7 @@ def test_light_kind_learns_down_to_floor(monkeypatch):
 def test_explicit_stack_size_wins():
     # 1 MiB: above both stack floors and distinct from START and the 512 KiB
     # program default, so "reserved == it" can only mean the pin was honored.
-    runloom.inspect.enable_stack_autosize(True)
+    stackweave.inspect.enable_stack_autosize(True)
     _batch([heavy], 20, stack=1024 * 1024)    # explicit override
     assert _row(heavy)["reserved"] == 1024 * 1024  # autosizer did not touch it
 
@@ -162,21 +162,21 @@ def pinned_worker():
 
 
 def test_friendly_fiber_honors_stack_size():
-    # runloom.fiber(fn, stack_size=N) must PIN the fiber stack, not forward
+    # stackweave.fiber(fn, stack_size=N) must PIN the fiber stack, not forward
     # stack_size into fn (regression: the friendly wrapper used to swallow it
     # into **kwargs and pass it to the target, leaving the fiber on the
     # default stack).  Covers both the single-thread and M:N spawn paths.
     out = {}
 
     def main():
-        runloom.inspect.enable_stack_advice(True)
+        stackweave.inspect.enable_stack_advice(True)
         # 1 MiB: above the FT-3.14 256 KiB spawn floor (p226, 289ecb99) and
         # distinct from the 512 KiB default, so the value is unmistakably the pin.
-        runloom.fiber(pinned_worker, stack_size=1024 * 1024)
-        runloom.sleep(0.02)
+        stackweave.fiber(pinned_worker, stack_size=1024 * 1024)
+        stackweave.sleep(0.02)
         out["reserved"] = _row(pinned_worker)["reserved"]
 
-    runloom.run(4, main)
+    stackweave.run(4, main)
     assert out["reserved"] == 1024 * 1024
 
 
@@ -190,17 +190,17 @@ def plain_with_arg(x):
 
 
 def test_friendly_fiber_with_args_preserves_kind_and_prescan():
-    # runloom.fiber(fn, arg) wraps fn in an arg-binding lambda; __wrapped__ must
+    # stackweave.fiber(fn, arg) wraps fn in an arg-binding lambda; __wrapped__ must
     # make the auto-sizer key on fn (not the shared wrapper), so distinct targets
     # are distinct kinds AND the crypto prescan reaches them through the wrapper.
     def main():
-        runloom.inspect.enable_stack_autosize(True, prescan=True)
+        stackweave.inspect.enable_stack_autosize(True, prescan=True)
         for i in range(10):
-            runloom.fiber(crypto_with_arg, i)
-            runloom.fiber(plain_with_arg, i)
-        runloom.sleep(0.05)
+            stackweave.fiber(crypto_with_arg, i)
+            stackweave.fiber(plain_with_arg, i)
+        stackweave.sleep(0.05)
 
-    runloom.run(2, main)
+    stackweave.run(2, main)
     # not collapsed into the wrapper lambda -> each target is its own kind
     assert _row(crypto_with_arg) is not None
     assert _row(plain_with_arg) is not None
@@ -216,8 +216,8 @@ def test_friendly_fiber_with_args_preserves_kind_and_prescan():
 def test_env_start_size(monkeypatch):
     # 2 MiB: above the FT-3.14 spawn floor and distinct from START and the
     # 512 KiB default, so seeing it proves the env override was read.
-    monkeypatch.setenv("RUNLOOM_STACK_AUTOSIZE_START", str(2 * 1024 * 1024))
-    runloom.inspect.enable_stack_autosize(True)   # reads the env at enable time
+    monkeypatch.setenv("STACKWEAVE_STACK_AUTOSIZE_START", str(2 * 1024 * 1024))
+    stackweave.inspect.enable_stack_autosize(True)   # reads the env at enable time
     _batch([heavy], 10)
     assert _row(heavy)["reserved"] == 2 * 1024 * 1024
 
@@ -232,13 +232,13 @@ DECIMAL_COLD = 512 * 1024
 
 
 def test_prescan_off_by_default():
-    runloom.inspect.enable_stack_autosize(True)            # no prescan arg
+    stackweave.inspect.enable_stack_autosize(True)            # no prescan arg
     _batch([decimal_kind], 20)
     assert _row(decimal_kind)["reserved"] == START         # not bumped
 
 
 def test_prescan_bumps_a_fat_frame_kind():
-    runloom.inspect.enable_stack_autosize(True, prescan=True)
+    stackweave.inspect.enable_stack_autosize(True, prescan=True)
     _batch([decimal_kind, light], 20)
     # the Decimal kind cold-starts big enough to hold the 256K frame ...
     assert _row(decimal_kind)["reserved"] == DECIMAL_COLD
@@ -247,7 +247,7 @@ def test_prescan_bumps_a_fat_frame_kind():
 
 
 def test_prescan_does_not_bump_plain_kind():
-    runloom.inspect.enable_stack_autosize(True, prescan=True)
+    stackweave.inspect.enable_stack_autosize(True, prescan=True)
     _batch([heavy], 20)        # json -- not a fat-frame symbol
     assert _row(heavy)["reserved"] == START
 
@@ -257,7 +257,7 @@ def test_prescan_floor_holds_decimal():
     # cold-start size, even when its measured samples are shallow -- the deep
     # path the symbol signals stays protected (a Decimal kind that did a small
     # op this time could do a big-integer pow next time).
-    runloom.inspect.enable_stack_autosize(True, prescan=True)
+    stackweave.inspect.enable_stack_autosize(True, prescan=True)
     _batch([decimal_kind], 20)                  # batch 1: cold-start 512 KiB
     assert _row(decimal_kind)["reserved"] == DECIMAL_COLD
     assert _row(decimal_kind)["max_hwm"] * 4 < DECIMAL_COLD   # really used far less
@@ -286,7 +286,7 @@ def crypto_and_decimal():
 
 
 def test_prescan_crypto_cold_start_is_1mib():
-    runloom.inspect.enable_stack_autosize(True, prescan=True)
+    stackweave.inspect.enable_stack_autosize(True, prescan=True)
     _batch([crypto_kind, light], 20)
     assert _row(crypto_kind)["reserved"] == CRYPTO_COLD   # signing/encryption -> 1 MiB
     assert _row(light)["reserved"] == START                # a plain kind is untouched
@@ -294,7 +294,7 @@ def test_prescan_crypto_cold_start_is_1mib():
 
 def test_prescan_crypto_needs_prescan():
     # without the prescan arg the crypto heuristic does not fire
-    runloom.inspect.enable_stack_autosize(True)
+    stackweave.inspect.enable_stack_autosize(True)
     _batch([crypto_kind], 20)
     assert _row(crypto_kind)["reserved"] == START
 
@@ -302,7 +302,7 @@ def test_prescan_crypto_needs_prescan():
 def test_prescan_crypto_outranks_decimal():
     # a kind referencing BOTH a fat-frame symbol (Decimal, 256K) and a crypto
     # symbol gets the MAX cold start (crypto's 1 MiB), never the sum
-    runloom.inspect.enable_stack_autosize(True, prescan=True)
+    stackweave.inspect.enable_stack_autosize(True, prescan=True)
     _batch([crypto_and_decimal], 20)
     assert _row(crypto_and_decimal)["reserved"] == CRYPTO_COLD
 
@@ -311,7 +311,7 @@ def test_prescan_floor_holds_crypto():
     # The crypto heuristic floors at 1 MiB: a crypto kind that measures shallow
     # this run does NOT shrink below it, because the next op (bigger key, AEAD,
     # a different algorithm) may need the depth it didn't exercise.
-    runloom.inspect.enable_stack_autosize(True, prescan=True)
+    stackweave.inspect.enable_stack_autosize(True, prescan=True)
     _batch([crypto_kind], 20)                   # batch 1: cold-start 1 MiB
     assert _row(crypto_kind)["reserved"] == CRYPTO_COLD
     assert _row(crypto_kind)["max_hwm"] * 4 < CRYPTO_COLD     # really used far less
@@ -323,8 +323,8 @@ def test_non_prescan_kind_still_learns_down(monkeypatch):
     # The prescan floor is prescan-specific: a kind with no heavy-frame symbol
     # still shrinks toward its real usage.  Start above the FT-3.14 spawn floor
     # so the shrink is observable there too.
-    monkeypatch.setenv("RUNLOOM_STACK_AUTOSIZE_START", str(BIG_START))
-    runloom.inspect.enable_stack_autosize(True, prescan=True)
+    monkeypatch.setenv("STACKWEAVE_STACK_AUTOSIZE_START", str(BIG_START))
+    stackweave.inspect.enable_stack_autosize(True, prescan=True)
     _batch([heavy], 20)
     _batch([heavy], 20)
     assert _row(heavy)["reserved"] < BIG_START
@@ -333,18 +333,18 @@ def test_non_prescan_kind_still_learns_down(monkeypatch):
 def test_autosize_under_mn(monkeypatch):
     # Under M:N the hubs run concurrently with spawning, so a kind learns down
     # within a batch; use a second batch for a deterministic learned size.
-    monkeypatch.setenv("RUNLOOM_STACK_AUTOSIZE_START", str(BIG_START))
-    runloom.inspect.enable_stack_autosize(True)
-    runloom_c.mn_init(2)
+    monkeypatch.setenv("STACKWEAVE_STACK_AUTOSIZE_START", str(BIG_START))
+    stackweave.inspect.enable_stack_autosize(True)
+    stackweave_c.mn_init(2)
     try:
         for _ in range(20):
-            runloom_c.mn_fiber(heavy)        # batch 1: learn
-        runloom_c.mn_run()
+            stackweave_c.mn_fiber(heavy)        # batch 1: learn
+        stackweave_c.mn_run()
         for _ in range(20):
-            runloom_c.mn_fiber(heavy)        # batch 2: all start at the learned size
-        runloom_c.mn_run()
+            stackweave_c.mn_fiber(heavy)        # batch 2: all start at the learned size
+        stackweave_c.mn_run()
     finally:
-        runloom_c.mn_fini()
+        stackweave_c.mn_fini()
     row = _row(heavy)
     assert row["samples"] == 40
     # the spawn-time floor caps how far the learned size can be applied

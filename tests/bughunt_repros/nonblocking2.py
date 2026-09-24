@@ -29,8 +29,8 @@ which = sys.argv[2]
 if sys.argv[1] == "stock":
     (nb_recv if which == "nb" else timeout0)("stock %s:" % which)
 else:
-    import runloom
+    import stackweave
     def main():
-        runloom.fiber(lambda: (nb_recv if which == "nb" else timeout0)("patched %s:" % which))
-    runloom.monkey.patch()
-    runloom.run(2, main)
+        stackweave.fiber(lambda: (nb_recv if which == "nb" else timeout0)("patched %s:" % which))
+    stackweave.monkey.patch()
+    stackweave.run(2, main)

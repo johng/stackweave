@@ -250,7 +250,7 @@ static size_t runloom_fd_cap_target(void)
             target = (size_t)r.rlim_cur;
     }
 #endif
-    env = getenv("RUNLOOM_NETPOLL_MAXFD");
+    env = getenv("STACKWEAVE_NETPOLL_MAXFD");
     if (env != NULL && *env != '\0') {
         char *end = NULL;
         long v = strtol(env, &end, 10);
@@ -311,8 +311,8 @@ static void runloom_fd_cap_warn_once(int fd)
     if (__atomic_compare_exchange_n(&warned, &expected, 1, 0,
                                     __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
         fprintf(stderr,
-                "[runloom] fd %d exceeds preallocated netpoll capacity %zu; "
-                "raise RUNLOOM_NETPOLL_MAXFD (event dropped)\n",
+                "[stackweave] fd %d exceeds preallocated netpoll capacity %zu; "
+                "raise STACKWEAVE_NETPOLL_MAXFD (event dropped)\n",
                 fd, runloom_fd_pending_wake_cap);
     }
 }

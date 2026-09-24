@@ -32,7 +32,7 @@ slots cannot change, and a class's own `_tuplegetter` index is fixed at class-
 build time.  A plain-threads control (each thread building its own namedtuple with
 the same field names but distinct values, GIL on AND off) returns 100% correct
 field/index/_asdict/_replace results with zero cross-thread leaks; under a correct
-runloom it must also hold.
+stackweave it must also hold.
 
 WHICH ORACLE IS LOAD-BEARING, AND WHY:
 
@@ -48,7 +48,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY:
         the original in EVERY position except i, where it holds the sentinel;
       - the original instance is UNCHANGED by _replace (immutability preserved).
     Single-owner: the class and instance live in fiber-local variables, never
-    shared.  Any mismatch is a runloom tuple/descriptor isolation desync.
+    shared.  Any mismatch is a stackweave tuple/descriptor isolation desync.
 
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber stranded inside
     __getattribute__ / _tuplegetter.__get__ / _make never returns; caught here.
@@ -73,7 +73,7 @@ descriptor before the value/identity oracle even fires.
 import collections
 
 import harness
-import runloom
+import stackweave
 
 # Per-fiber field values are drawn from this band.  field i of wid's instance ==
 # wid*VALUE_SCALE + i, so every field of every fiber has a distinct value and a
@@ -125,9 +125,9 @@ def nt_check(H, wid, idx, state):
     baseline_ids = [id(inst[i]) for i in range(NFIELDS)]
 
     # YIELD: allow siblings to build/read their own conflicting namedtuples.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0003)
+        stackweave.sleep(0.0003)
 
     # ---- verify every field on the single-owner immutable instance ------------
     for i in range(NFIELDS):
@@ -262,4 +262,4 @@ if __name__ == "__main__":
                  "_replace(one=new) returns a NEW tuple equal in all-but-one slot "
                  "with the original unchanged.  A torn descriptor index, a torn "
                  "immutable-tuple slot read, a cross-fiber slot leak, or an "
-                 "_replace inheriting a sibling's slot is the runloom bug")
+                 "_replace inheriting a sibling's slot is the stackweave bug")

@@ -1,7 +1,7 @@
 """Per-fiber interpreter state: exception state, and trace/profile hooks.
 
 Ported from greenlet's suite (``test_greenlet.py::test_exc_state`` and
-``test_tracing.py``), because runloom's fibers have the same underlying hazard
+``test_tracing.py``), because stackweave's fibers have the same underlying hazard
 and none of it was covered: a fiber saves and restores a slice of
 ``PyThreadState`` across every switch (``runloom_sched_pystate.c.inc``), and
 until this file there was NO test touching ``exc_info`` / ``current_exception``
@@ -34,11 +34,11 @@ import sys
 import pytest
 
 sys.path.insert(0, "src")
-import runloom_c as rc  # noqa: E402
+import stackweave_c as rc  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
-# Exception state.  greenlet's test_exc_state, and then the cases runloom has
+# Exception state.  greenlet's test_exc_state, and then the cases stackweave has
 # that greenlet does not: a real park, and an exception crossing a park.
 # ---------------------------------------------------------------------------
 def test_in_flight_exception_is_not_visible_to_another_fiber():

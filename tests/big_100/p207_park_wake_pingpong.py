@@ -17,7 +17,7 @@ seq_cst store/load ordering, cross-hub wake delivery.
 import struct
 
 import harness
-import runloom
+import stackweave
 
 PINGS_PER_ROUND = 256
 
@@ -68,7 +68,7 @@ def worker(H, wid, rng, pairs):
 
 def setup(H):
     npairs = max(1, H.funcs // 2)
-    pairs = [(runloom.Chan(0), runloom.Chan(0)) for _ in range(npairs)]
+    pairs = [(stackweave.Chan(0), stackweave.Chan(0)) for _ in range(npairs)]
     for a, b in pairs:
         H.register_close(a)
         H.register_close(b)

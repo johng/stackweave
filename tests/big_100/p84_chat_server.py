@@ -14,7 +14,7 @@ import threading
 
 import harness
 import netutil
-import runloom
+import stackweave
 
 NROOMS = 64
 
@@ -27,8 +27,8 @@ def setup(H):
     H.state = {"port": srv.getsockname()[1], "host": srv.getsockname()[0]}
 
     def serve(conn):
-        outbound = runloom.Chan(128)
-        writer_done = runloom.Chan(1)
+        outbound = stackweave.Chan(128)
+        writer_done = stackweave.Chan(1)
         nick = None
         room = None
         started = False

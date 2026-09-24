@@ -1,12 +1,12 @@
 """Buffered channel FIFO order across wraparound + parked-sender refill order."""
-import runloom_c as rc
+import stackweave_c as rc
 
 def main():
     rc.run()
     return box.get("ok")
 
 # simpler: do everything in fibers
-import runloom
+import stackweave
 res = []
 def main2():
     ch = rc.Chan(3)

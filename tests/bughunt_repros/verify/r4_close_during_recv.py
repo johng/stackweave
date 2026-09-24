@@ -1,6 +1,6 @@
-# run: RUNLOOM_TCPCONN_IOURING=1 timeout 25 .venv/bin/python r4_close_during_recv.py flags
+# run: STACKWEAVE_TCPCONN_IOURING=1 timeout 25 .venv/bin/python r4_close_during_recv.py flags
 import socket, sys, time
-import runloom, runloom_c as rc
+import stackweave, stackweave_c as rc
 SCEN = sys.argv[1] if len(sys.argv) > 1 else "plain"
 def _port(lst):
     s = socket.socket(fileno=socket.dup(lst.fileno()))
@@ -11,7 +11,7 @@ def main():
     lst = rc.TCPConn.listen("127.0.0.1", 0); port = _port(lst); holder = {}
     def server():
         conn = lst.accept(); holder["srv"] = conn
-        runloom.sleep(6.0)   # raise to 60 to show the permanent hang
+        stackweave.sleep(6.0)   # raise to 60 to show the permanent hang
         conn.close(); lst.close()
     def receiver():
         c = rc.TCPConn.connect("127.0.0.1", port); holder["cli"] = c
@@ -23,7 +23,7 @@ def main():
             out["result"] = ("exc", type(e).__name__, str(e))
         out["dt"] = time.monotonic() - t0
     def closer():
-        runloom.sleep(0.5); holder["cli"].close()
+        stackweave.sleep(0.5); holder["cli"].close()
     rc.fiber(server); rc.fiber(receiver); rc.fiber(closer)
 rc.fiber(main); rc.run()
 print("scen=%s result=%r dt=%.2fs" % (SCEN, out.get("result"), out.get("dt", -1)))

@@ -1,14 +1,14 @@
 # Debugging & introspection
 
-When a runloom program hangs or misbehaves, the first question is always
-*which fibers exist and what is each one waiting on?*  runloom answers it
+When a stackweave program hangs or misbehaves, the first question is always
+*which fibers exist and what is each one waiting on?*  stackweave answers it
 the way Go does — a fiber dump — plus a structured API you can call
 from your own code or a watchdog.
 
 ## Quick look
 
 ```python
-import runloom
+import stackweave
 
 gi.count()                 # how many fibers are live
 print(gi.format(stacks=True))   # a formatted dump (string) -> log it
@@ -20,7 +20,7 @@ fiber, with the Python stack pinpointing where in *your* code it is
 parked:
 
 ```
-=== runloom fibers: 3 live ===
+=== stackweave fibers: 3 live ===
   running    1
   sleep      2
 
@@ -35,7 +35,7 @@ fiber 3 [io-wait, fd=12 R, age=30.1s]  <function accept_loop at 0x...>:
 
 ## The structured API
 
-`runloom.inspect.fibers()` (or `runloom.fibers()`) returns a list of
+`stackweave.inspect.fibers()` (or `stackweave.fibers()`) returns a list of
 dicts, one per live fiber:
 
 | key          | meaning |
@@ -59,7 +59,7 @@ Off by default (it costs one clock read per park).  Turn it on to populate
 `age` and spot a wedged fiber:
 
 ```python
-gi.enable_timestamps()       # or env RUNLOOM_INTROSPECT_TIME=1
+gi.enable_timestamps()       # or env STACKWEAVE_INTROSPECT_TIME=1
 ```
 
 ### Leak watchdog
@@ -86,35 +86,35 @@ loops) and old `sleep` fibers (tickers), so narrow `states` / raise
 
 ### When is the Python stack available?
 
-* **Single-thread scheduler (`runloom.aio`, the common case):** the full stack
+* **Single-thread scheduler (`stackweave.aio`, the common case):** the full stack
   of any parked fiber is reconstructed.  asyncio Tasks also expose
-  their own stack via the stock `Task.get_stack()`; runloom fills in the *raw*
+  their own stack via the stock `Task.get_stack()`; stackweave fills in the *raw*
   fibers (channel ops, the netpoll pump, accept loops) that
   `asyncio.all_tasks()` never sees.
 * **Default M:N scheduler:** a parked fiber can be resumed by its hub at
   any instant, so its stack is withheld (there is no safe way to freeze it);
   the structural fields above still tell the story.  Run with
-  `RUNLOOM_PER_G_TSTATE=1` to get full stacks under M:N (each fiber then
+  `STACKWEAVE_PER_G_TSTATE=1` to get full stacks under M:N (each fiber then
   owns a thread-state that can be claimed for the walk).
 * The **currently-running** fiber has no *saved* stack — use the normal
   `traceback` / `sys._getframe` for your own frames.
 
 ## What is each hub doing? (`hubs()`)
 
-`fibers()` is the per-fiber view; `runloom.inspect.hubs()` (or
-`runloom.hubs()`) is the per-**hub** view — the M:N scheduler threads — and the
+`fibers()` is the per-fiber view; `stackweave.inspect.hubs()` (or
+`stackweave.hubs()`) is the per-**hub** view — the M:N scheduler threads — and the
 first thing to look at when the answer to "it hung" is *which* hub and *on
 what*:
 
 ```python
-import runloom
-from runloom import inspect as gi
+import stackweave
+from stackweave import inspect as gi
 gi.print_hubs()          # one row per hub; wedged hubs flagged
 hs = gi.hubs()           # the same data as a list of dicts
 ```
 
 ```
-=== runloom hubs (4) ===
+=== stackweave hubs (4) ===
  id  label       running_g  dwell_ms pend  what
   0  running             1         0    1
   1  WEDGED/io        1025       150    1  cursor.execute (db.py:88)
@@ -158,7 +158,7 @@ lock-free atomic reads, so `hubs()` is cheap enough to poll from a watchdog.
 
 ```python
 gi.install_dump_signal()     # SIGQUIT -> fiber dump on stderr
-# or set env RUNLOOM_TRACEBACK=1 before import
+# or set env STACKWEAVE_TRACEBACK=1 before import
 ```
 
 This installs a **raw C** handler, so the dump fires even when the
@@ -175,13 +175,13 @@ kill -QUIT <pid>
 writes a structural dump (state histogram + per-fiber line, no Python
 stacks — touching Python objects from a signal handler is not safe) to
 stderr and lets the process continue.  The underlying primitive is
-`runloom.dump_fibers(fd)`, which is async-signal-safe-ish (it
+`stackweave.dump_fibers(fd)`, which is async-signal-safe-ish (it
 try-locks the registry and uses only `write(2)`).
 
 ## Crash reporting (`SIGSEGV` / `SIGBUS`)
 
 A fiber runs on a small, fixed C stack with a `PROT_NONE` **guard page**
-just below it, so the commonest hard crash in runloom is a **fiber stack
+just below it, so the commonest hard crash in stackweave is a **fiber stack
 overflow** — deep C recursion (a big `repr`, an OpenSSL/regex/JSON call, a
 recursive protocol callback) running off the low end of that stack and into the
 guard page.  By default that is a bare `Segmentation fault` with no clue which
@@ -191,20 +191,20 @@ The crash reporter turns it into a classified dump:
 
 ```python
 gi.install_crash_handler()       # or "all" / "wait" / "gdb" / ...
-# or set env RUNLOOM_CRASH=on (auto-installs at import — every crash dumps)
+# or set env STACKWEAVE_CRASH=on (auto-installs at import — every crash dumps)
 ```
 
 On a fault it maps the faulting address onto the guard pages and prints, e.g.:
 
 ```
-======================== runloom crash ========================
-[runloom] fatal SIGSEGV at address 0x7622eca18f30  (pid 48681, thread 0x7622ebbff6c0)
-[runloom] >>> GOROUTINE STACK OVERFLOW <<<
-[runloom]     fiber g1 ran off the low end of its 128 KiB C stack
-[runloom]     (the fault hit the guard page just below it).
-[runloom]     Fix: give it a bigger stack -- runloom_c.fiber(fn, stack_size=N), ...
-[runloom] this thread was executing fiber g1.
-=== runloom fiber dump: 1 live (default stack 128 KiB) ===
+======================== stackweave crash ========================
+[stackweave] fatal SIGSEGV at address 0x7622eca18f30  (pid 48681, thread 0x7622ebbff6c0)
+[stackweave] >>> GOROUTINE STACK OVERFLOW <<<
+[stackweave]     fiber g1 ran off the low end of its 128 KiB C stack
+[stackweave]     (the fault hit the guard page just below it).
+[stackweave]     Fix: give it a bigger stack -- stackweave_c.fiber(fn, stack_size=N), ...
+[stackweave] this thread was executing fiber g1.
+=== stackweave fiber dump: 1 live (default stack 128 KiB) ===
   ...
 ```
 
@@ -213,7 +213,7 @@ on that fiber; anything else (main/hub stack, heap, a stray pointer) is
 flagged as a non-fiber fault.  After the dump it **chains to the previous
 handler** so a core dump / correct exit code still follow.
 
-`level` (or the `RUNLOOM_CRASH` env value) selects behaviour, comma-separated:
+`level` (or the `STACKWEAVE_CRASH` env value) selects behaviour, comma-separated:
 
 | level        | effect                                                           |
 |--------------|------------------------------------------------------------------|
@@ -225,11 +225,11 @@ handler** so a core dump / correct exit code still follow.
 | `gdb`        | fork+exec `gdb -batch -ex 'thread apply all bt full'` on self    |
 | `off`        | uninstall                                                        |
 
-`RUNLOOM_CRASH_FILE` (or `install_crash_handler(file=...)`) appends the report
+`STACKWEAVE_CRASH_FILE` (or `install_crash_handler(file=...)`) appends the report
 to a file as well as stderr.  Call `install_crash_handler()` **before** starting
 the runtime so the scheduler hubs are armed as they spawn.
 
-It survives the very overflow it reports because every runloom OS thread (the
+It survives the very overflow it reports because every stackweave OS thread (the
 main thread, each scheduler hub, the blocking-offload workers) installs its own
 `sigaltstack`, so the handler runs on a separate stack when the fiber stack
 is exhausted.  Off by default — it does not hijack process-wide signal handlers
@@ -240,16 +240,16 @@ fiber registry and continues the search (the rich path is POSIX).
 
 Go reports `fatal error: all fibers are asleep - deadlock!` when the
 scheduler runs out of runnable work but fibers are still blocked on each
-other.  runloom does the same: if the single-thread scheduler quiesces — nothing
+other.  stackweave does the same: if the single-thread scheduler quiesces — nothing
 runnable, no timers, no I/O, no offload in flight — while fibers are still
 parked on a channel or a `park`, those fibers can never be woken, so it
 reports the deadlock with a fiber dump:
 
 ```
-runloom: DEADLOCK -- the scheduler ran out of work with 2 fiber(s) still
+stackweave: DEADLOCK -- the scheduler ran out of work with 2 fiber(s) still
 blocked on a channel/park and no way to wake them:
 
-=== runloom fibers: 2 live ===
+=== stackweave fibers: 2 live ===
   chan-wait  2
 fiber 1 [chan-wait] ...
 fiber 2 [chan-wait] ...
@@ -258,14 +258,14 @@ fiber 2 [chan-wait] ...
 Three modes (default **warn**):
 
 ```python
-import runloom
+import stackweave
 gi.set_deadlock_mode("warn")    # print the dump, keep going (default)
 gi.set_deadlock_mode("raise")   # raise RuntimeError out of run()
 gi.set_deadlock_mode("off")     # do nothing
 ```
 
-Also via env `RUNLOOM_DEADLOCK=off|warn|raise`.  This applies to the
-single-thread scheduler (which `runloom.aio` uses).  A clean `runloom.aio` shutdown
+Also via env `STACKWEAVE_DEADLOCK=off|warn|raise`.  This applies to the
+single-thread scheduler (which `stackweave.aio` uses).  A clean `stackweave.aio` shutdown
 goes through `sched_stop`, which is **excluded**, so a normal loop teardown
 with pending background tasks never trips the detector — only a genuine
 "everyone is blocked, nothing can make progress" quiescence does.
@@ -278,21 +278,21 @@ flood) can still exhaust memory.  An optional admission gate caps the number
 of live fibers:
 
 ```python
-import runloom
-gi.set_max_fibers(100_000)   # 0 = unlimited (default); env RUNLOOM_MAX_GOROUTINES
+import stackweave
+gi.set_max_fibers(100_000)   # 0 = unlimited (default); env STACKWEAVE_MAX_GOROUTINES
 ```
 
-Over the cap, `runloom.fiber` / the spawn raises `RuntimeError`, so the caller can
+Over the cap, `stackweave.fiber` / the spawn raises `RuntimeError`, so the caller can
 apply backpressure — retry after a yield, shed the request, or block the
 producer:
 
 ```python
 while True:
     try:
-        runloom.fiber(handle, conn)
+        stackweave.fiber(handle, conn)
         break
     except RuntimeError:
-        runloom.yield_now()         # let some finish, then retry
+        stackweave.yield_now()         # let some finish, then retry
 ```
 
 `gi.live_fibers()` reports the current count under the cap.  The gate has
@@ -310,16 +310,16 @@ lock to snapshot; call them from a watchdog as often as you like.
 ## Fork safety
 
 After `os.fork()` the child keeps only the forking thread — the M:N hub
-threads and the blocking-offload workers are gone.  runloom installs an
+threads and the blocking-offload workers are gone.  stackweave installs an
 `os.register_at_fork(after_in_child=...)` handler that resets the runtime in
 the child, so:
 
-* A child that runs the **single-thread scheduler / `runloom.aio`** works — this
+* A child that runs the **single-thread scheduler / `stackweave.aio`** works — this
   is the `multiprocessing` (fork) and pre-fork-server pattern.  The child
   gets its own netpoll fd and a clean scheduler.
-* A child that starts a **fresh `runloom.mn_init()`** works when the parent
+* A child that starts a **fresh `stackweave.mn_init()`** works when the parent
   never used M:N.
-* `runloom.mn_run()` / `runloom.run(1)` in the child **return** instead of
+* `stackweave.mn_run()` / `stackweave.run(1)` in the child **return** instead of
   hanging forever on the parent's dead hubs.
 
 **Not supported:** re-initialising the M:N scheduler *inside* a fork-child of

@@ -15,7 +15,7 @@
 #   RR_FLEET_TIMEOUT   per-run outer timeout s      (default: 120 -- rr+chaos+load)
 #   RR_FLEET_INNER     lifefuzz --timeout s         (default: 30)
 #   RR_FLEET_TRACE_CAP kept finding-traces/day      (default: 64)
-#   RUNLOOM_PYTHON     interpreter
+#   STACKWEAVE_PYTHON     interpreter
 #
 # Findings -> tools/soak/inbox.py (flock-serialised) + docs/dev/soak/inbox_artifacts/rr_fleet/<date>/.
 # Detach:  setsid nice -n 10 tools/soak/rr_fleet.sh >/dev/null 2>&1 &
@@ -29,17 +29,17 @@ set +e
 # launch hint above and survives restarts/reboots.
 renice -n 19 $$ >/dev/null 2>&1
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-PY="${RUNLOOM_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
+PY="${STACKWEAVE_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
 NCPU="$(nproc 2>/dev/null || echo 8)"
 W="${RR_FLEET_WORKERS:-$(( NCPU/3 < 24 ? NCPU/3 : 24 ))}"; [ "$W" -ge 1 ] || W=1
 TMO="${RR_FLEET_TIMEOUT:-120}"
 INNER="${RR_FLEET_INNER:-30}"
 CAP="${RR_FLEET_TRACE_CAP:-64}"
 cd "$ROOT"
-OUTBASE="${RUNLOOM_SOAK_DIR:-$HOME/runloom-soak}/inbox_artifacts/rr_fleet"
-SUM="${RUNLOOM_SOAK_DIR:-$HOME/runloom-soak}/forever_rrfleet_SUMMARY.txt"
-LOCK="${RUNLOOM_SOAK_DIR:-$HOME/runloom-soak}/.rr_fleet_inbox.lock"
-STAT="${RUNLOOM_SOAK_DIR:-$HOME/runloom-soak}/.rr_fleet_stats"; mkdir -p "$STAT"
+OUTBASE="${STACKWEAVE_SOAK_DIR:-$HOME/runloom-soak}/inbox_artifacts/rr_fleet"
+SUM="${STACKWEAVE_SOAK_DIR:-$HOME/runloom-soak}/forever_rrfleet_SUMMARY.txt"
+LOCK="${STACKWEAVE_SOAK_DIR:-$HOME/runloom-soak}/.rr_fleet_inbox.lock"
+STAT="${STACKWEAVE_SOAK_DIR:-$HOME/runloom-soak}/.rr_fleet_stats"; mkdir -p "$STAT"
 
 # --- availability gate (once) ------------------------------------------------
 if ! command -v rr >/dev/null 2>&1; then echo "rr not installed -- exit" | tee -a "$SUM"; exit 0; fi
@@ -65,10 +65,10 @@ worker() {                                       # $1 = worker id
     # "$PY" DIRECTLY -- do NOT put `env ...` inside `rr record`.  Under --chaos,
     # a recorded `env -> execve(python3)` occasionally wedges in the exec (glibc
     # ENOEXEC -> shell-script retry) for the whole run and gets SIGTERM'd at the
-    # outer timeout: a false rr-chaos-HANG that never reaches pygo.  RUNLOOM_TLBC=1
-    # keeps TLBC ON (safe via the GC frames anchor) while guaranteeing runloom.run()
+    # outer timeout: a false rr-chaos-HANG that never reaches pygo.  STACKWEAVE_TLBC=1
+    # keeps TLBC ON (safe via the GC frames anchor) while guaranteeing stackweave.run()
     # never self-re-execs (os.execv), which would wedge the recording the same way.
-    _RR_TRACE_DIR="$TR" PYTHON_GIL=0 PYTHONPATH="$ROOT/src" RUNLOOM_TLBC=1 \
+    _RR_TRACE_DIR="$TR" PYTHON_GIL=0 PYTHONPATH="$ROOT/src" STACKWEAVE_TLBC=1 \
         timeout -k 5 "$TMO" \
         rr record --chaos \
         "$PY" tools/lifefuzz/lifefuzz.py run "$seed" --timeout "$INNER" \

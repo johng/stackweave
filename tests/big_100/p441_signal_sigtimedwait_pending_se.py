@@ -1,7 +1,7 @@
 """big_100 / 441 -- RT-signal pending-queue conservation under M:N cooperative sigtimedwait.
 
-The subject is signal.sigtimedwait / sigwaitinfo, which runloom monkey-patches
-(src/runloom/monkey/signals.py) from a BLOCKING reap into a COOPERATIVE poll:
+The subject is signal.sigtimedwait / sigwaitinfo, which stackweave monkey-patches
+(src/stackweave/monkey/signals.py) from a BLOCKING reap into a COOPERATIVE poll:
 
     def _patched_sigtimedwait(sigset, timeout):
         ...
@@ -112,7 +112,7 @@ if not hasattr(signal, "SIGRTMIN"):
     sys.exit(0)
 
 import harness
-import runloom
+import stackweave
 
 # --- captured REAL OS-thread primitives (taken at module import, BEFORE
 # monkey.patch() runs inside harness.main) so the SENDER is a genuine OS thread
@@ -145,7 +145,7 @@ BLOCK_ALL = set(BAND) | {CTRL_SIG}
 
 # ---- process-wide block, set at IMPORT (before any hub thread spawns) ---------
 # pthread_sigmask is NOT monkey-patched, and this runs on the main thread before
-# runloom.run spawns the scheduler hubs, so every hub thread INHERITS the block.
+# stackweave.run spawns the scheduler hubs, so every hub thread INHERITS the block.
 # A blocked RT signal queues as pending (the sigwait contract) instead of running
 # the default action (which, with no handler, would terminate the process).
 signal.pthread_sigmask(signal.SIG_BLOCK, BLOCK_ALL)
@@ -312,10 +312,10 @@ def contended_round(H, wid, rng, state, slot):
                 if send_done.acquire(blocking=False):
                     send_done.release()
                     break
-                runloom.yield_now()
+                stackweave.yield_now()
                 empties = 0
             else:
-                runloom.yield_now()
+                stackweave.yield_now()
             continue
         empties = 0
         tag = validate_info(H, info, lo, hi_box[0])
@@ -388,10 +388,10 @@ def control_round(H, wid, rng, state, slot):
                     # short, which the reconcile below catches).
                     if len(got) >= sent_box[0]:
                         break
-                runloom.yield_now()
+                stackweave.yield_now()
                 empties = 0
             else:
-                runloom.yield_now()
+                stackweave.yield_now()
             continue
         empties = 0
         if info.si_code != SI_QUEUE or info.si_pid != PID:
@@ -475,11 +475,11 @@ def worker(H, wid, rng, state):
 
 
 def setup(H):
-    # Built INSIDE the root (monkey.patch() already ran), so runloom.sync.Lock()
+    # Built INSIDE the root (monkey.patch() already ran), so stackweave.sync.Lock()
     # is the cooperative M:N-safe lock.  The signal block itself was set at import,
     # before the hubs spawned, so every hub inherits it.
     H.state = {
-        "taglock": runloom.sync.Lock(),     # guards the monotone tag allocator
+        "taglock": stackweave.sync.Lock(),     # guards the monotone tag allocator
         "tagctr": [TAG_BASE],               # next unique tag to hand out
         "uni_lo": TAG_BASE,                 # universe lower bound (constant)
         "uni_hi": [TAG_BASE],               # universe high-water (monotone box)

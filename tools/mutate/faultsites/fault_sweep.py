@@ -2,7 +2,7 @@
 """fault_sweep.py <TU> [--tests ...] [--jobs J] [--timeout T] [--limit N]
 
 Exhaustive first-order fault sweep over a TU built by build_faultsites.sh.  For
-each fallible call site id: enable ONLY it (RUNLOOM_FI_ENABLED=id), run the test
+each fallible call site id: enable ONLY it (STACKWEAVE_FI_ENABLED=id), run the test
 subset.  A site is HANDLED (killed) if a test fails or hangs when its call is
 forced to fail; UNCHECKED (survived) if the whole subset stays green -- i.e. the
 runtime swallowed a real error there and NO test noticed.  The survivors are the
@@ -19,8 +19,8 @@ import subprocess
 import sys
 import concurrent.futures as cf
 
-WT = os.environ.get("RUNLOOM_MUT_WORKTREE", os.path.expanduser("~/projects/pygo-mutants"))
-PY = os.environ.get("RUNLOOM_PYTHON", os.path.expanduser("~/.pyenv/versions/3.14.4t/bin/python3"))
+WT = os.environ.get("STACKWEAVE_MUT_WORKTREE", os.path.expanduser("~/projects/pygo-mutants"))
+PY = os.environ.get("STACKWEAVE_PYTHON", os.path.expanduser("~/.pyenv/versions/3.14.4t/bin/python3"))
 
 # same name-affinity subsets as schemata/sweep.py -- tests that EXECUTE the TU.
 AFFINITY = {
@@ -39,7 +39,7 @@ AFFINITY = {
 
 def run_site(tu, sid, tests, timeout):
     env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src",
-               RUNLOOM_FI_ENABLED=str(sid))
+               STACKWEAVE_FI_ENABLED=str(sid))
     argv = [PY, "tests/run_isolated.py", "-j1"] + [t + ".py" for t in tests]
     try:
         p = subprocess.run(argv, cwd=WT, env=env, capture_output=True,

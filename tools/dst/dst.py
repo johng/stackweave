@@ -1,10 +1,10 @@
-"""Deterministic Simulation Testing (DST) for runloom's channel / scheduler core.
+"""Deterministic Simulation Testing (DST) for stackweave's channel / scheduler core.
 
-The single-thread cooperative scheduler (runloom_c.fiber + run) is deterministic:
+The single-thread cooperative scheduler (stackweave_c.fiber + run) is deterministic:
 for a fixed set of goroutines making fixed yield decisions, the run-queue
 order is fixed, so the whole execution is reproducible.  This harness drives
-REAL runloom channels/select on that scheduler while a seeded decision oracle
-chooses WHERE each goroutine yields (runloom_c.sched_yield) -- so a different
+REAL stackweave channels/select on that scheduler while a seeded decision oracle
+chooses WHERE each goroutine yields (stackweave_c.sched_yield) -- so a different
 seed explores a different interleaving, and the SAME seed reproduces an
 execution exactly.  A failing run therefore reduces to a single integer seed
 (the property the cross-file leaked-parker flake never had).
@@ -19,7 +19,7 @@ Two pluggable scheduling strategies:
                         ASPLOS'10).  This is the bounded-preemption adaptation
                         of PCT to cooperative yield insertion; full
                         priority-scheduler PCT needs scheduler control (the
-                        documented RUNLOOM_SIM C-hook extension).
+                        documented STACKWEAVE_SIM C-hook extension).
 
 Scope honesty: this is deterministic for the SINGLE-THREAD cooperative
 scheduler + channel/select logic.  Controlled interleaving of the multi-OS-
@@ -31,7 +31,7 @@ decision from one seed: it wraps a base strategy but overrides the yield decisio
 at one step, calling the base first so the rng stream stays aligned -- the two
 branches differ only at that step.  Exploring both branches at every decision
 (2*horizon runs) reaches executions the seed's own run pinned one way, WITHOUT
-os.fork (forking mid runloom_c.run() on an fcontext stack would hang/SEGV): the
+os.fork (forking mid stackweave_c.run() on an fcontext stack would hang/SEGV): the
 seed is the snapshot, replay is the fork.  On the strict-FIFO control this reaches
 the bug from seeds whose own run is clean (see `branchsweep`).
 
@@ -49,14 +49,14 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # for simnet
 # Deterministic TIME (the second DST pillar): sched_sleep + loop.time() read the
-# logical clock, not the wall clock.  Set before runloom_c reads it.  The
+# logical clock, not the wall clock.  Set before stackweave_c reads it.  The
 # channel/timer scenarios don't sched_sleep, so they are unaffected; the sim-net
 # scenarios use it for deterministic delivery timing.
-os.environ.setdefault("RUNLOOM_LOGICAL_CLOCK", "1")
+os.environ.setdefault("STACKWEAVE_LOGICAL_CLOCK", "1")
 
 import random
 
-import runloom_c
+import stackweave_c
 
 
 # ---- scheduling strategies (the decision oracle) -------------------------
@@ -106,7 +106,7 @@ class ForcedAt(object):
     forced branches (yield / no-yield at step k) from one seed therefore differ
     ONLY at k and its downstream consequences.  Exploring both branches at every
     k costs 2*horizon runs and covers the decisions a single seed's run pinned
-    one way -- without os.fork (forking mid-runloom_c.run() on an fcontext stack
+    one way -- without os.fork (forking mid-stackweave_c.run() on an fcontext stack
     under free-threaded CPython would hang/SEGV); the seed IS the snapshot, replay
     IS the fork."""
 
@@ -137,7 +137,7 @@ class Sim(object):
         """A cooperative decision point inside a goroutine."""
         self.step += 1
         if self.strategy.should_yield(self.rng, self.step, gid):
-            runloom_c.sched_yield()
+            stackweave_c.sched_yield()
 
     def record(self, ev):
         self.events.append(ev)
@@ -146,12 +146,12 @@ class Sim(object):
         return hash(tuple(self.events))
 
 
-# ---- scenarios: real runloom goroutines with invariants ---------------------
+# ---- scenarios: real stackweave goroutines with invariants ---------------------
 # Each returns a list of "sent" facts; the harness checks conservation +
-# self_check after runloom_c.run() drains.
+# self_check after stackweave_c.run() drains.
 
 def scenario_unbuffered_handoff(sim):
-    ch = runloom_c.Chan()           # unbuffered: every send rendezvous-paired
+    ch = stackweave_c.Chan()           # unbuffered: every send rendezvous-paired
     n = 6
     received = []
 
@@ -170,9 +170,9 @@ def scenario_unbuffered_handoff(sim):
                 break
             received.append(v)
 
-    runloom_c.fiber(sender)
-    runloom_c.fiber(receiver)
-    runloom_c.run()
+    stackweave_c.fiber(sender)
+    stackweave_c.fiber(receiver)
+    stackweave_c.run()
     sim.record(("recv_order", tuple(received)))
     # unbuffered single sender/receiver: strict FIFO handoff, nothing lost
     assert received == list(range(n)), "handoff lost/reordered: {0}".format(received)
@@ -180,13 +180,13 @@ def scenario_unbuffered_handoff(sim):
 
 def scenario_buffered_mpmc(sim):
     cap = 3
-    ch = runloom_c.Chan(cap)
+    ch = stackweave_c.Chan(cap)
     nprod = 3
     per = 4
     sent = [p * 100 + i for p in range(nprod) for i in range(per)]
     total = nprod * per
     received = []
-    done = runloom_c.Chan()
+    done = stackweave_c.Chan()
 
     def producer(p):
         for i in range(per):
@@ -208,11 +208,11 @@ def scenario_buffered_mpmc(sim):
             received.append(v)
 
     for p in range(nprod):
-        runloom_c.fiber(lambda p=p: producer(p))
-    runloom_c.fiber(closer)
+        stackweave_c.fiber(lambda p=p: producer(p))
+    stackweave_c.fiber(closer)
     for c in range(2):
-        runloom_c.fiber(lambda c=c: consumer(c))
-    runloom_c.run()
+        stackweave_c.fiber(lambda c=c: consumer(c))
+    stackweave_c.run()
     sim.record(("recv_set", tuple(sorted(received))))
     # conservation: every produced value received exactly once (any order)
     assert sorted(received) == sorted(sent), \
@@ -221,8 +221,8 @@ def scenario_buffered_mpmc(sim):
 
 
 def scenario_select_race(sim):
-    a = runloom_c.Chan()
-    b = runloom_c.Chan()
+    a = stackweave_c.Chan()
+    b = stackweave_c.Chan()
     got = []
     n = 4
 
@@ -245,7 +245,7 @@ def scenario_select_race(sim):
             if open_b:
                 cases.append(("recv", b))
             # cases are (op, chan[, value]); r[0]=fired index, r[1]=(val, ok)
-            r = runloom_c.select(cases)
+            r = stackweave_c.select(cases)
             chan = cases[r[0]][1]
             val, ok = r[1]
             if ok:
@@ -255,10 +255,10 @@ def scenario_select_race(sim):
             else:
                 open_b = False
 
-    runloom_c.fiber(lambda: sender(a, 0))
-    runloom_c.fiber(lambda: sender(b, 1000))
-    runloom_c.fiber(selector)
-    runloom_c.run()
+    stackweave_c.fiber(lambda: sender(a, 0))
+    stackweave_c.fiber(lambda: sender(b, 1000))
+    stackweave_c.fiber(selector)
+    stackweave_c.run()
     sim.record(("select_set", tuple(sorted(got))))
     want = sorted([i for i in range(n)] + [1000 + i for i in range(n)])
     assert sorted(got) == want, "select lost/dup: got {0}".format(sorted(got))
@@ -304,9 +304,9 @@ def scenario_sim_echo(sim):
         sim.record(("echo", tuple(back)))
         c.close()
 
-    runloom_c.fiber(server)
-    runloom_c.fiber(client)
-    runloom_c.run()
+    stackweave_c.fiber(server)
+    stackweave_c.fiber(client)
+    stackweave_c.run()
     srv.close()
 
 
@@ -326,7 +326,7 @@ def scenario_sim_lostwake(sim):
 
     def server():
         conn, _ = srv.accept()
-        runloom_c.sched_yield()                     # BUG: never sends, never closes
+        stackweave_c.sched_yield()                     # BUG: never sends, never closes
 
     def client():
         c = net.socket()
@@ -334,9 +334,9 @@ def scenario_sim_lostwake(sim):
         data = c.recv(1)                            # parks forever -> deadlock
         sim.record(("got", data))
 
-    runloom_c.fiber(server)
-    runloom_c.fiber(client)
-    runloom_c.run()
+    stackweave_c.fiber(server)
+    stackweave_c.fiber(client)
+    stackweave_c.run()
     srv.close()
 
 
@@ -355,7 +355,7 @@ def scenario_BUG_strict_order(sim):
     a buffered channel with TWO consumers -- which legitimately reorders.  So
     some interleavings violate it.  The harness must catch that and reproduce
     it from the seed; that is the proof its invariant checks have teeth."""
-    ch = runloom_c.Chan(2)
+    ch = stackweave_c.Chan(2)
     n = 6
     received = []
 
@@ -373,10 +373,10 @@ def scenario_BUG_strict_order(sim):
                 break
             received.append(v)
 
-    runloom_c.fiber(prod)
-    runloom_c.fiber(lambda: cons(0))
-    runloom_c.fiber(lambda: cons(1))
-    runloom_c.run()
+    stackweave_c.fiber(prod)
+    stackweave_c.fiber(lambda: cons(0))
+    stackweave_c.fiber(lambda: cons(1))
+    stackweave_c.run()
     sim.record(("order", tuple(received)))
     assert received == list(range(n)), "non-FIFO arrival: {0}".format(received)
 
@@ -397,19 +397,19 @@ def run_once(scenario, seed, strategy, horizon):
     strategy.reset(random.Random(seed ^ 0x5DEECE66D), horizon)
     # Instant lost-wake oracle: under the logical clock nothing rides wall time, so
     # a run that ends with an unwakeable parked fiber is a genuine deadlock, counted
-    # by runloom in microseconds -- no wall-clock timeout.  Deadlock mode stays WARN
+    # by stackweave in microseconds -- no wall-clock timeout.  Deadlock mode stays WARN
     # (1) so the scheduler still recovers from a TRANSIENT all-parked moment by
     # advancing the logical clock (a pending sim-delivery timer); only an
     # unrecoverable lost wake bumps the counter.
-    runloom_c.set_deadlock_mode(1)
-    dl0 = runloom_c.count_deadlocked()
+    stackweave_c.set_deadlock_mode(1)
+    dl0 = stackweave_c.count_deadlocked()
     err = None
     try:
         scenario(sim)
-        dl = runloom_c.count_deadlocked() - dl0
+        dl = stackweave_c.count_deadlocked() - dl0
         if dl > 0:
             err = "DEADLOCK ({0} unwakeable fiber(s) -- lost wake)".format(dl)
-        elif runloom_c._self_check(0) != 0:
+        elif stackweave_c._self_check(0) != 0:
             err = "self_check != 0"
     except Exception as exc:  # invariant violation or crash
         err = "{0}: {1}".format(type(exc).__name__, exc)

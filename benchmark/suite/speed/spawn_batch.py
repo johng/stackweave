@@ -2,14 +2,14 @@
 IN-SUITE on this box so the report cites a committed number instead of prose.
 
 For each N it times the end-to-end create+run+destroy of N no-op fibers two ways:
-  - naked : for _ in range(N): runloom.fiber(noop)   (one at a time)
-  - batch : runloom_c.fiber_n(noop, N)               (one bulk C call)
-under default config and under runloom.optimize("throughput") (warm-stack arena +
+  - naked : for _ in range(N): stackweave.fiber(noop)   (one at a time)
+  - batch : stackweave_c.fiber_n(noop, N)               (one bulk C call)
+under default config and under stackweave.optimize("throughput") (warm-stack arena +
 bulk + FRESH + parallel create). An n=0 empty-run baseline is subtracted to remove
 scheduler startup/teardown. rate = N / (wall - baseline), median of R reps.
 
 HONEST FRAMING: there is NO Go batch-spawn equivalent (Go has no bulk-spawn API),
-so this is a runloom *capability* measurement, NOT a Go comparison. The only
+so this is a stackweave *capability* measurement, NOT a Go comparison. The only
 like-for-like spawn comparison vs Go is naked single-spawn (spawn_curve.json),
 which Go wins. Run pinned to a single NUMA node (the cross-NUMA g-arena traffic
 otherwise dominates and is a pinning artifact, not a spawn cost).
@@ -20,8 +20,8 @@ import os
 import statistics
 import time
 
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
 
 def noop():
@@ -36,7 +36,7 @@ def _baseline(hubs, reps=3):
     ts = []
     for _ in range(reps):
         t0 = time.perf_counter()
-        runloom.run(hubs, _empty)
+        stackweave.run(hubs, _empty)
         ts.append(time.perf_counter() - t0)
     return min(ts)   # min = least startup noise
 
@@ -47,12 +47,12 @@ def measure(mode, n, hubs, base, reps):
         if mode == "naked":
             def root():
                 for _ in range(n):
-                    runloom.fiber(noop)
+                    stackweave.fiber(noop)
         else:
             def root():
-                runloom_c.fiber_n(noop, n)
+                stackweave_c.fiber_n(noop, n)
         t0 = time.perf_counter()
-        runloom.run(hubs, root)
+        stackweave.run(hubs, root)
         wall = time.perf_counter() - t0
         walls.append(wall)
         rates.append(n / max(wall - base, 1e-9))
@@ -70,7 +70,7 @@ def main():
     args = ap.parse_args()
     ns = [int(x) for x in args.ns.split(",")]
 
-    eff = runloom.optimize("throughput") if args.optimize == "throughput" else None
+    eff = stackweave.optimize("throughput") if args.optimize == "throughput" else None
     base = _baseline(args.hubs)
 
     rates = {}

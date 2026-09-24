@@ -11,7 +11,7 @@ outputs subject to hard, falsifiable STRUCTURAL laws that must hold regardless o
 concurrency.  compare_digest is a PURE C function (constant-time buffer compare).
 
 WHERE M:N COULD BREAK IT (the gap this program probes).  Under free-threaded
-CPython with the GIL off and runloom driving tens of thousands of goroutines
+CPython with the GIL off and stackweave driving tens of thousands of goroutines
 across >1 hubs, every secrets call funnels through the shared _sysrand and through
 os.urandom (a getrandom() syscall that may become a cooperative yield point under
 monkey.patch()).  If the M:N runtime torn-read the returned int/bytes object, or
@@ -48,11 +48,11 @@ ORACLES:
       - compare_digest: reflexive (a,a)->True, (a, equal-copy)->True,
         (a, one-byte-flipped)->False, symmetric.
     It records the pre-yield structural facts + compare_digest booleans, YIELDS
-    (runloom.yield_now / sleep) so siblings interleave through the shared _sysrand
+    (stackweave.yield_now / sleep) so siblings interleave through the shared _sysrand
     on other hubs, then RE-verifies every stored single-owner object is unchanged
     (len/value/round-trip bit-identical, compare_digest booleans identical) across
     the yield.  A value that changes, or that violates a range/length/round-trip
-    law, is the runloom torn-value / cross-fiber-leak bug.
+    law, is the stackweave torn-value / cross-fiber-leak bug.
 
   * MEASURED (report-only, NEVER fails): DISTINCTNESS tally.  Two successive
     token_bytes(n) in the same fiber are compared; a collision is recorded.  For
@@ -85,7 +85,7 @@ int, localizes the torn value before the structural law even closes.
 import base64
 
 import harness
-import runloom
+import stackweave
 
 # Character set token_hex is allowed to emit.  A char outside this set in a
 # token_hex string is a torn/corrupted byte in the produced str.
@@ -194,9 +194,9 @@ def secrets_check(H, wid, idx, secrets_mod, state):
         state["dups"][wid & 1023] += 1
 
     # ---- YIELD: let siblings churn through the shared _sysrand / os.urandom ----
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0003)
+        stackweave.sleep(0.0003)
 
     # ---- re-verify EVERY single-owner object is unchanged across the yield ----
     if len(b) != n or b != b_equal:
@@ -297,6 +297,6 @@ if __name__ == "__main__":
                  "purity, re-verifying every single-owner value is bit-identical "
                  "across a yield.  A randbelow(n)>=n, a token whose len/round-trip "
                  "breaks, a wrong/changed compare_digest, or a value that drifts "
-                 "across a yield is the runloom torn-value / cross-fiber-leak bug. "
+                 "across a yield is the stackweave torn-value / cross-fiber-leak bug. "
                  "MEASURED token-distinctness (report-only) proves the generators "
                  "produced varied output so the laws are not vacuous")

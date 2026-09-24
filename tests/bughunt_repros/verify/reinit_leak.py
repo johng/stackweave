@@ -1,4 +1,4 @@
-import runloom_c
+import stackweave_c
 
 def f(): pass
 
@@ -8,7 +8,7 @@ def vmsize_kb():
             if line.startswith('VmSize:'):
                 return int(line.split()[1])
 
-c = runloom_c.Coro(f)
+c = stackweave_c.Coro(f)
 before = vmsize_kb()
 for _ in range(1000):
     c.__init__(f)

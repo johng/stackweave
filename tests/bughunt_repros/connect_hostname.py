@@ -2,7 +2,7 @@
 with BLOCKING libc getaddrinfo inline on the hub thread -- bypassing the
 cooperative resolver and stalling every fiber on that hub for the DNS RTT."""
 import socket, sys, time, threading
-import runloom
+import stackweave
 
 def main():
     srv = socket.socket(); srv.bind(("127.0.0.1", 0)); srv.listen(1)
@@ -19,7 +19,7 @@ def main():
         except Exception as e:
             print("connect ->", type(e).__name__, e, flush=True)
         c.close(); srv.close()
-    runloom.fiber(f)
+    stackweave.fiber(f)
 
-runloom.monkey.patch()
-runloom.run(2, main)
+stackweave.monkey.patch()
+stackweave.run(2, main)

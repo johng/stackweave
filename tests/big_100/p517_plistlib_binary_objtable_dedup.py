@@ -12,7 +12,7 @@ second pass writes the table and an offset index; `loads()` reconstructs the
 graph by following those indices back to the single shared object.
 
 WHERE M:N COULD BREAK IT (the gap this program probes).  `_flatten` /
-`_BinaryPlistWriter` is PURE PYTHON, so runloom's preemption can interrupt a
+`_BinaryPlistWriter` is PURE PYTHON, so stackweave's preemption can interrupt a
 `dumps(FMT_BINARY)` call MID-ENCODE -- while the per-call ref map is half-built
 and the offset table is being laid down.  Each `dumps()` builds its OWN
 `_BinaryPlistWriter` (the ref map is call-local, not shared), so a correct
@@ -33,7 +33,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (single-owner, fail-fast):
   it to a single table entry with multiple index references (the exact machinery
   this program stresses).  The fiber then:
     - `dumps(graph, FMT_BINARY)` -> bytes  (build the dedup'd object table)
-    - YIELDS (runloom.yield_now / sleep) so siblings encode/decode concurrently
+    - YIELDS (stackweave.yield_now / sleep) so siblings encode/decode concurrently
       and a preempted mid-encode sibling reliably interleaves,
     - `loads(bytes)` -> recovered graph  (follow the object-index references back)
     - asserts `recovered == graph` (DEEP structural + value equality -- Python
@@ -47,7 +47,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (single-owner, fail-fast):
 
   The graph is SINGLE-OWNER: built in a fiber-local variable, dumped and loaded
   by the one fiber, never shared.  So a failure here is NOT the documented
-  shared-mutable-object race -- it is a runloom encode/decode isolation bug: a
+  shared-mutable-object race -- it is a stackweave encode/decode isolation bug: a
   reused-object dedup index that desynced across a park, or a cross-fiber leak of
   a half-built binary-plist object table.  On a correct runtime the oracle
   PASSES (the program exits 0 when there is no bug): plist dumps/loads is a pure
@@ -56,13 +56,13 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (single-owner, fail-fast):
   We verified the round-trip identity with a plain-threads control (8 OS threads,
   each round-tripping its own wid-tagged graph through FMT_BINARY and FMT_XML,
   GIL on AND off): 100% deep-equal, 0 foreign-wid leaves.  Under a correct
-  runloom it must also hold.
+  stackweave it must also hold.
 
 ORACLES:
   * LOAD-BEARING -- ROUND-TRIP + DEDUP IDENTITY (worker, HARD, fail-fast).  Deep
     `recovered == graph` plus a wid-tag walk of every recovered leaf, across a
     yield, for both FMT_BINARY (reused-object dedup table) and FMT_XML.  Single-
-    owner graph.  A failure is a runloom plist encode/decode isolation desync.
+    owner graph.  A failure is a stackweave plist encode/decode isolation desync.
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber stranded mid-`dumps`
     (parked inside the half-built writer and never re-woken) never returns; the
     watchdog + require_no_lost catch it.
@@ -89,7 +89,7 @@ import datetime
 import plistlib
 
 import harness
-import runloom
+import stackweave
 
 # Sustained round-trips per worker, bounded by H.running().  The mid-encode
 # preemption hazard only manifests under SUSTAINED churn -- many fibers
@@ -187,9 +187,9 @@ def round_trip(H, wid, fmt, state):
 
     # YIELD: allow siblings to encode/decode concurrently and a preempted
     # mid-`dumps` sibling to interleave before we decode.
-    runloom.yield_now()
+    stackweave.yield_now()
     if wid & 1:
-        runloom.sleep(0.0003)
+        stackweave.sleep(0.0003)
 
     recovered = plistlib.loads(data)
 
@@ -291,5 +291,5 @@ if __name__ == "__main__":
                  "dumps(FMT_BINARY) -> yield -> loads(); recovered MUST deep-equal "
                  "the graph AND every leaf MUST carry this fiber's wid.  A parallel "
                  "FMT_XML arm round-robins by wid.  A non-equal round-trip or a "
-                 "foreign-wid/collapsed-reused leaf is the runloom encode/decode "
+                 "foreign-wid/collapsed-reused leaf is the stackweave encode/decode "
                  "isolation bug")

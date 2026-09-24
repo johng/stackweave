@@ -80,7 +80,7 @@ import gc
 import weakref
 
 import harness
-import runloom
+import stackweave
 
 
 # Values stored in the WVD.  Must be weakly referenceable, so either a plain class
@@ -115,7 +115,7 @@ def wvd_round(H, wid, rng, state):
                                            # the LAST value, defeating its drop below
 
     # (2) YIELD: siblings churn their own WVDs and call gc.collect() on other hubs.
-    runloom.yield_now()
+    stackweave.yield_now()
 
     # (3) All K keys must be present and map to THIS fiber's (wid, kid) value.
     for kid in range(K):
@@ -145,7 +145,7 @@ def wvd_round(H, wid, rng, state):
     gc.collect()
 
     # (5) YIELD again: overlap this splice with siblings' inserts/collections.
-    runloom.yield_now()
+    stackweave.yield_now()
 
     # (6) EXACTLY the dropped keys vanished; EVERY retained key still maps correctly.
     for kid in range(K):

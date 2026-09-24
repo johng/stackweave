@@ -5,7 +5,7 @@ import time
 
 import os
 
-import runloom
+import stackweave
 
 # Free-threaded build: fan fibers across all cores (M:N scheduler).
 HUBS = os.cpu_count() or 4
@@ -29,7 +29,7 @@ def client(client_id, n_msgs, payload):
         s.close()
 
 def main():
-    runloom.monkey.patch()
+    stackweave.monkey.patch()
     n_clients = int(sys.argv[1]) if len(sys.argv) > 1 else 100
     n_msgs    = int(sys.argv[2]) if len(sys.argv) > 2 else 100
     size      = int(sys.argv[3]) if len(sys.argv) > 3 else 64
@@ -39,9 +39,9 @@ def main():
 
     def spawn():
         for i in range(n_clients):
-            runloom.fiber(lambda i=i: client(i, n_msgs, payload))
+            stackweave.fiber(lambda i=i: client(i, n_msgs, payload))
     t0 = time.perf_counter()
-    runloom.run(HUBS, spawn)
+    stackweave.run(HUBS, spawn)
     t = time.perf_counter() - t0
     total = n_clients * n_msgs
     print("{0} round-trips in {1:.2f}s -- {2:.0f} req/s, {3:.1f} us/RT".format(

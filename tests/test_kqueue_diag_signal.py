@@ -22,7 +22,7 @@ pytestmark = pytest.mark.skipif(
 
 sys.path.insert(0, "src")
 
-import runloom_c  # noqa: E402
+import stackweave_c  # noqa: E402
 
 READ = 1
 WRITE = 2
@@ -40,8 +40,8 @@ def _drive(*fibers):
         return runner
 
     for g in fibers:
-        runloom_c.fiber(wrap(g))
-    runloom_c.run()
+        stackweave_c.fiber(wrap(g))
+    stackweave_c.run()
     if box:
         raise box[0]
 
@@ -56,7 +56,7 @@ def _pair():
 def _reset_registration():
     for fd in range(3, 1024):
         try:
-            runloom_c.netpoll_unregister(fd)
+            stackweave_c.netpoll_unregister(fd)
         except Exception:           # noqa: BLE001
             pass
 
@@ -69,7 +69,7 @@ def _reg_reset():
 
 
 def test_backend_is_kqueue():
-    assert runloom_c.netpoll_backend() == "kqueue"
+    assert stackweave_c.netpoll_backend() == "kqueue"
 
 
 # -- _dump_parkers while fibers are parked (netpoll_diag_fd dump_parkers walk) --
@@ -81,12 +81,12 @@ def test_dump_parkers_with_parked_fibers(n):
     pairs = [_pair() for _ in range(n)]
 
     def reader(a):
-        runloom_c.wait_fd(a.fileno(), READ, 3000)
+        stackweave_c.wait_fd(a.fileno(), READ, 3000)
 
     def dumper():
         for _ in range(8):
-            runloom_c.sched_yield()
-        runloom_c._dump_parkers()        # walk the parked set (categorize + rdyP)
+            stackweave_c.sched_yield()
+        stackweave_c._dump_parkers()        # walk the parked set (categorize + rdyP)
         for _a, b in pairs:              # release everyone so the run ends
             b.send(b"x")
 
@@ -97,7 +97,7 @@ def test_dump_parkers_with_parked_fibers(n):
 
 def test_dump_parkers_when_none_parked():
     """dump_parkers early-out path: total==0 per pool (no fibers parked)."""
-    runloom_c._dump_parkers()            # must be a clean no-op, never crash
+    stackweave_c._dump_parkers()            # must be a clean no-op, never crash
 
 
 # -- _self_check: inspect_for_self_check walk (count + by_fd buckets) ----------
@@ -109,13 +109,13 @@ def test_self_check_with_parked_fibers(n):
     res = []
 
     def reader(a):
-        runloom_c.wait_fd(a.fileno(), READ, 3000)
+        stackweave_c.wait_fd(a.fileno(), READ, 3000)
 
     def checker():
         for _ in range(8):
-            runloom_c.sched_yield()
+            stackweave_c.sched_yield()
         try:
-            res.append(runloom_c._self_check())   # walk while parkers are linked
+            res.append(stackweave_c._self_check())   # walk while parkers are linked
         except Exception as e:                    # noqa: BLE001
             res.append(("err", repr(e)))
         for _a, b in pairs:
@@ -130,7 +130,7 @@ def test_self_check_with_parked_fibers(n):
 def test_self_check_when_idle():
     """self_check with nothing parked (the empty-pool path)."""
     try:
-        runloom_c._self_check()
+        stackweave_c._self_check()
     except Exception:                    # noqa: BLE001
         pass                             # presence of the call drives the branch
 
@@ -141,11 +141,11 @@ def test_fiber_count_while_parked():
     seen = []
 
     def reader():
-        seen.append(runloom_c.fiber_count())   # >=1 (at least this fiber)
-        runloom_c.wait_fd(a.fileno(), READ, 2000)
+        seen.append(stackweave_c.fiber_count())   # >=1 (at least this fiber)
+        stackweave_c.wait_fd(a.fileno(), READ, 2000)
 
     def waker():
-        runloom_c.sched_yield()
+        stackweave_c.sched_yield()
         b.send(b"x")
 
     _drive(reader, waker)
@@ -175,7 +175,7 @@ def test_signal_wakes_parked_wait_fd():
             signal.setitimer(signal.ITIMER_REAL, 0.2)
             try:
                 # No timeout: only the signal (or the safety deadline) can wake it.
-                runloom_c.wait_fd(a.fileno(), READ, 3000)
+                stackweave_c.wait_fd(a.fileno(), READ, 3000)
             except KeyboardInterrupt:
                 raised.append(1)
 

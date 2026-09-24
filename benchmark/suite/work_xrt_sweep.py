@@ -13,7 +13,7 @@ identical FNV-1a byte hash runs in each runtime's natural handler language --
 
 The prediction is two bands: the interpreted runtimes cluster together and the
 compiled ones cluster together -- i.e. for CPU-bound handler work the dominant
-variable is the handler LANGUAGE, not the runtime. runloom's own advantage is
+variable is the handler LANGUAGE, not the runtime. stackweave's own advantage is
 that it gets the compiled band (Cython) while keeping M:N parallelism across all
 cores; a single asyncio process serialises the same work onto one core. Compare
 within a matched core count (runloom-cython vs Go run on the same cores). Nothing
@@ -78,14 +78,14 @@ def build_runtimes():
     return [
         # The cdef c_entry (tstate-free) handler matched this Cython handler to
         # within noise, so the cross-runtime comparison shows just ONE compiled
-        # runloom line -- the relatable "compile your hot handler in Cython" path.
+        # stackweave line -- the relatable "compile your hot handler in Cython" path.
         # (The cdef-vs-cython tstate-bypass detail lives in its own report
         # section, suite/servers/handler_cdef.pyx, not here.)
-        dict(name="runloom_cython", label="Runloom (M:N) — Cython handler (compiled)",
+        dict(name="runloom_cython", label="Stackweave (M:N) — Cython handler (compiled)",
              kind="compiled", cores=HUBS, cpus=MANY, gil_off=True, env={}, make=rl("cython")),
         dict(name="go", label="Go net (GOMAXPROCS=%d)" % GO,
              kind="compiled", cores=GO, cpus=MANY, gil_off=True, env={}, make=gomk),
-        dict(name="runloom_py", label="Runloom (M:N) — Python handler",
+        dict(name="runloom_py", label="Stackweave (M:N) — Python handler",
              kind="interpreted", cores=HUBS, cpus=MANY, gil_off=True, env={}, make=rl("py")),
         dict(name="asyncio", label="asyncio Protocol (1 core)",
              kind="interpreted", cores=1, cpus=ONE, gil_off=False, env={}, make=aio("asyncio")),

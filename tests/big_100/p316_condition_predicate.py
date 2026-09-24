@@ -56,7 +56,7 @@ oracle even fires.
 import random
 
 import harness
-import runloom
+import stackweave
 
 # A single Condition + notify_all() is intrinsically O(waiters): each notify_all
 # wakes every parked consumer for one level bump (a thundering herd).  Cap the
@@ -129,7 +129,7 @@ def producer(H, pid, rng, state):
                 cond.notify_all()
         H.op(pid)
         if rng.random() < 0.1:
-            runloom.yield_now()
+            stackweave.yield_now()
     # Phase 2: flush.  level is already >= N, so EVERY consumer's predicate is
     # now true; keep waking until they have all drained (or the run ends).  This
     # is the teardown that turns a lurking lost-wake into a detectable shortfall
@@ -141,7 +141,7 @@ def producer(H, pid, rng, state):
         with cond:
             level[0] = max(level[0], n)
             cond.notify_all()
-        runloom.sleep(0.005)
+        stackweave.sleep(0.005)
     state["bumps"][pid & 1023] += bumps
 
 
@@ -158,7 +158,7 @@ def setup(H):
     nproducers = NPRODUCERS
     nconsumers = min(MAX_CONSUMERS, max(1, H.funcs - nproducers))
     H.state = {
-        "cond": runloom.sync.Condition(),
+        "cond": stackweave.sync.Condition(),
         "level": [0],
         "nproducers": nproducers,
         "nconsumers": nconsumers,

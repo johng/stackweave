@@ -1,7 +1,7 @@
 """(a) eof_received() -> True keeps transport writable (half-close);
 (b) pause_reading/resume_reading actually gates data_received."""
 import sys, asyncio, socket, threading, time
-import runloom.aio as aio
+import stackweave.aio as aio
 
 async def main():
     loop = asyncio.get_event_loop()

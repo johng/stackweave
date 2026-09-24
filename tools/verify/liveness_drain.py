@@ -6,7 +6,7 @@ under-weighted item).
 pygo verifies liveness only at the MODEL level (TLA+ _live.cfg, Coq); there is no
 dynamic oracle proving the REAL runtime makes forward progress.  This is it:
 
-  Phase 1 (chaos):  drive a spawn/park/wake/steal-heavy workload with RUNLOOM_DELAY
+  Phase 1 (chaos):  drive a spawn/park/wake/steal-heavy workload with STACKWEAVE_DELAY
                     seeded scheduler perturbation active -- widened windows where
                     a lost wake / livelock / stalled-hub bug strands a goroutine.
   Phase 2 (freeze): after a chaos window, _delay_freeze() stops ALL injection.
@@ -46,19 +46,19 @@ def main():
     ap.add_argument("--teeth", action="store_true")
     ap.add_argument("--buggify", action="store_true",
                     help="use BUGGIFY (per-seed random fault subset, ~25%% firing) "
-                         "instead of RUNLOOM_DELAY (all sites, every hit)")
+                         "instead of STACKWEAVE_DELAY (all sites, every hit)")
     args = ap.parse_args()
 
     # Chaos on: seeded scheduler perturbation (the C layer reads the env lazily).
     # BUGGIFY activates a different ~half-of-sites subset per seed (FoundationDB);
-    # RUNLOOM_DELAY perturbs every site every hit.  Both are stopped by
+    # STACKWEAVE_DELAY perturbs every site every hit.  Both are stopped by
     # _delay_freeze() at the drain deadline.
-    os.environ["RUNLOOM_BUGGIFY" if args.buggify else "RUNLOOM_DELAY"] = str(args.seed)
-    os.environ.setdefault("RUNLOOM_DELAY_MAX_NS", "5000")
+    os.environ["STACKWEAVE_BUGGIFY" if args.buggify else "STACKWEAVE_DELAY"] = str(args.seed)
+    os.environ.setdefault("STACKWEAVE_DELAY_MAX_NS", "5000")
 
-    import runloom
-    import runloom_c as rc
-    from runloom.sync import WaitGroup
+    import stackweave
+    import stackweave_c as rc
+    from stackweave.sync import WaitGroup
 
     nch = max(4, args.workers // 50)
     # slot layout: [0,workers)=producers, then nch consumers, then closer, [+teeth]
@@ -142,7 +142,7 @@ def main():
         sys.stderr.flush()
         os._exit(0 if args.teeth else 2)
 
-    # Timers set HERE (before runloom.run) so they survive intact even if runloom
+    # Timers set HERE (before stackweave.run) so they survive intact even if stackweave
     # falls back to the TLBC=0 re-exec (only when the GC frames anchor is inactive;
     # by default TLBC stays on and there is no re-exec).  _delay_freeze() is atomic.
     freeze_t = threading.Timer(args.chaos, rc._delay_freeze)
@@ -154,7 +154,7 @@ def main():
     t0 = time.monotonic()
     err = None
     try:
-        runloom.run(args.hubs, main_fn)
+        stackweave.run(args.hubs, main_fn)
     except BaseException as e:  # noqa: BLE001
         err = e
     dt = time.monotonic() - t0

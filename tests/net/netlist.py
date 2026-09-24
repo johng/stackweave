@@ -5,7 +5,7 @@ load()), so accidental test collection can never touch the wire.  Three things
 live here:
 
   * enabled()  -- the opt-in gate.  The whole suite is a no-op unless the
-                  environment sets RUNLOOM_NET_TESTS=1.  Every program calls it
+                  environment sets STACKWEAVE_NET_TESTS=1.  Every program calls it
                   first and SKIPs before any scheduler/network start otherwise.
   * load()/servers_for() -- fetch the user's curated list at
                   http://ovh1.p2pd.net:8000/servers (plain HTTP, port 8000), with
@@ -36,9 +36,9 @@ CAT_NTP = "NTP"
 
 
 def enabled():
-    """The opt-in gate: True only when RUNLOOM_NET_TESTS=1.  The suite is inert
+    """The opt-in gate: True only when STACKWEAVE_NET_TESTS=1.  The suite is inert
     (never touches the network, never starts a scheduler) unless this holds."""
-    return os.environ.get("RUNLOOM_NET_TESTS") == "1"
+    return os.environ.get("STACKWEAVE_NET_TESTS") == "1"
 
 
 # A tiny PINNED fallback keyed [category][af][proto] -> list of (host, port).

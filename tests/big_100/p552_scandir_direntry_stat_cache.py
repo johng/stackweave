@@ -21,7 +21,7 @@ itertools/tee C-iterator:
      DirEntry could report a type/size that CHANGES across a yield -- a torn or
      lost cache write.
 
-WHERE M:N COULD BREAK IT (the gap this program probes).  runloom parks a fiber at
+WHERE M:N COULD BREAK IT (the gap this program probes).  stackweave parks a fiber at
 a cooperative yield and may resume it on ANY hub.  If the ScandirIterator's DIR*
 cursor, or a DirEntry's memoized stat, is not carried faithfully across that hub
 migration, the walk loses/duplicates an entry or a DirEntry's cached fields
@@ -63,7 +63,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (single-owner, closed-world):
   We verified the closed-world expectation with a plain-threads control (8 OS
   threads, each scandiring its own private dir with yields inside the walk, GIL on
   AND off): 100% of walks return exactly the created set with identity-stable
-  DirEntry fields -- 0 lost/extra/dup, 0 cache mutations.  Under a CORRECT runloom
+  DirEntry fields -- 0 lost/extra/dup, 0 cache mutations.  Under a CORRECT stackweave
   it must also hold, so this single-owner oracle PASSES (exit 0) when there is no
   bug.  A FAIL means the scandir cursor or the DirEntry stat cache desynced across
   a park+hub-migration -- a real runtime bug.
@@ -100,7 +100,7 @@ migration, localizes the desync before the conservation sum even closes.
 import os
 
 import harness
-import runloom
+import stackweave
 
 # Per-fiber private directory layout.  A fixed, KNOWN set of entries so the
 # closed-world oracle needs zero baseline recording.  Small enough that a full
@@ -166,9 +166,9 @@ def walk_once(H, wid, path, expected, state):
             # this fiber may resume on a DIFFERENT hub.  yield_now forces the
             # scheduler to consider a sibling; an occasional tiny sleep parks the
             # fiber long enough that a hub migration reliably interleaves.
-            runloom.yield_now()
+            stackweave.yield_now()
             if entries & 1:
-                runloom.sleep(0.0002)
+                stackweave.sleep(0.0002)
 
             # Second read: MUST return the identical memoized cache values even
             # though the fiber may have migrated hubs across the yield.
@@ -255,7 +255,7 @@ def worker(H, wid, rng, state):
     scandirs it, yielding mid-walk so a sibling reliably interleaves and the
     fiber migrates hubs with the DIR* cursor / DirEntry cache in flight.  Every
     check is single-owner -- there is no sharing to race, so a failure is a
-    runloom cursor/cache desync, not documented shared-object semantics."""
+    stackweave cursor/cache desync, not documented shared-object semantics."""
     base = state["base"]
     path, expected = build_private_dir(base, wid)
     for _ in H.round_range():

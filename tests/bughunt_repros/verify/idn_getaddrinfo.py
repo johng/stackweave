@@ -10,7 +10,7 @@ except Exception as e:
     print("STOCK: raised %s: %s" % (type(e).__name__, e))
 
 # 2) Patched behavior
-import runloom.monkey as monkey
+import stackweave.monkey as monkey
 monkey.patch()
 
 try:

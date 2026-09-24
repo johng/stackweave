@@ -131,7 +131,7 @@ def post(H):
     # close() does NOT wake a parked accept/wait_fd.  They self-drain within
     # <=200ms of teardown, but require_no_goroutine_leak samples residual live
     # fibers AT drain-end, before that poll cadence elapses, so it false-positives
-    # on the still-polling acceptors (verified: runloom_c.dump_fibers() reports 0
+    # on the still-polling acceptors (verified: stackweave_c.dump_fibers() reports 0
     # live by post() -- the runtime drains them all).  Every other serve_forever
     # program (p01/p81/p82/p84/p90/...) omits this check for the same reason; the
     # fd-leak oracle above already covers the meaningful resource-leak concern.

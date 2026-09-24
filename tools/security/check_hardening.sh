@@ -6,7 +6,7 @@
 # setup.py flag drop is caught.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$ROOT"
-SO="$(ls src/runloom_c*.so 2>/dev/null | head -1)"
+SO="$(ls src/stackweave_c*.so 2>/dev/null | head -1)"
 [ -z "$SO" ] && { echo "no built .so -- run setup.py build_ext --inplace first"; exit 2; }
 command -v readelf >/dev/null 2>&1 || { echo "SKIP: readelf not found"; exit 0; }
 echo "== S9 hardening of $SO =="

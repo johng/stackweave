@@ -17,7 +17,7 @@ Two distinct cells, because the primitives have different contracts:
     fibers AND real OS threads together -- the cell that surfaced the CoFMutex
     strand class.  Complements test_foreign_safe_mutex by hammering them under
     heavier mixed load.
-  * FIBER-ONLY primitives (runloom_c.Mutex / Chan -- which correctly REQUIRE a
+  * FIBER-ONLY primitives (stackweave_c.Mutex / Chan -- which correctly REQUIRE a
     goroutine context) are driven from fibers spread across MULTIPLE hubs (mn),
     the cross-hub cell where a wake must route to the owning hub.
 
@@ -36,7 +36,7 @@ ENV = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
 
 
 def run_body(body, timeout=45):
-    script = ("import runloom_c as rc, runloom, threading, time, sys\n"
+    script = ("import stackweave_c as rc, stackweave, threading, time, sys\n"
               + textwrap.dedent(body))
     return subprocess.run([PY, "-c", script], env=ENV, capture_output=True,
                           timeout=timeout)
@@ -48,7 +48,7 @@ def expect(body, sentinel="OK", timeout=45):
     except subprocess.TimeoutExpired as exc:
         # Do not assert a cause here. These timeouts were read as strands for
         # a long time and were this file's own completion latches losing
-        # increments across hubs -- runloom.stats() during a "hang" showed
+        # increments across hubs -- stackweave.stats() during a "hang" showed
         # every fiber COMPLETED. Print what the child said and let the reader
         # judge.
         def _t(r):
@@ -71,7 +71,7 @@ def test_colock_exclusion_fibers_and_foreign_threads():
     # bumped by fibers AND foreign threads.  Real exclusion -> exact; a lost
     # update -> short count; a strand -> timeout.
     expect("""
-        from runloom.monkey.locks import CoLock
+        from stackweave.monkey.locks import CoLock
         lk = CoLock(); counter = [0]; K = 3000; NFIB = 4; NFOR = 4
         go = threading.Event()
         def foreign():
@@ -92,7 +92,7 @@ def test_colock_exclusion_fibers_and_foreign_threads():
     """)
 
 
-# TODO(runloom): FOREIGN-THREAD LOST WAKEUP -- a genuine runloom bug, NOT a
+# TODO(stackweave): FOREIGN-THREAD LOST WAKEUP -- a genuine stackweave bug, NOT a
 # 3.13t/CPython issue.  With fibers AND foreign threads racing Once.do(init), one
 # foreign caller intermittently STRANDS inside once.do() (CI saw seen=11 of 12 --
 # init ran exactly once, but a waiter never woke).  Reproduces on BOTH 3.13t AND
@@ -101,7 +101,7 @@ def test_once_exactly_once_fibers_and_threads():
     # Many fibers AND threads race Once.do(init); init must run EXACTLY once and
     # every caller observe completion (ft-check-then-act class).
     expect("""
-        from runloom.sync import Once
+        from stackweave.sync import Once
         once = Once(); runs = [0]; seen = [0]; NFIB = 6; NFOR = 6
         go = threading.Event()
         # `seen` is the observation latch and is bumped by BOTH foreign threads
@@ -131,7 +131,7 @@ def test_waitgroup_foreign_and_fiber_no_strand():
     # decrements; the WaitGroup guard is CoFMutex, so no waiter is stranded and
     # every wait returns exactly when the count hits zero.
     expect("""
-        from runloom.sync import WaitGroup
+        from stackweave.sync import WaitGroup
         wg = WaitGroup(); N = 8; wg.add(N); seen = [0]; lock = threading.Lock()
         go = threading.Event()
         def waiter_foreign():
@@ -179,7 +179,7 @@ def test_rc_mutex_cross_hub_exclusion():
                 with _dlk: done[0] += 1
             for _ in range(NFIB): rc.mn_fiber(fiber)
             while done[0] < NFIB: rc.sched_sleep(0.003)
-        runloom.run(4, main_fn=body)
+        stackweave.run(4, main_fn=body)
         exp = NFIB * K
         print("OK" if counter[0] == exp else "FAIL got=%d exp=%d" % (counter[0], exp))
     """)
@@ -208,7 +208,7 @@ def test_rc_chan_exactly_once_cross_hub():
             for p in range(P): rc.mn_fiber(lambda p=p: producer(p * 1000000))
             rc.mn_fiber(lambda: consumer(PER * P))
             while done[0] < P + 1: rc.sched_sleep(0.003)
-        runloom.run(4, main_fn=body)
+        stackweave.run(4, main_fn=body)
         dups = [k for k, c in got.items() if c != 1]
         ok = (len(got) == PER * P and not dups)
         print("OK" if ok else "FAIL n=%d dups=%d" % (len(got), len(dups)))

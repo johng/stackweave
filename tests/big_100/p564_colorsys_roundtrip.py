@@ -14,7 +14,7 @@ WHERE M:N COULD BREAK IT (the gap this program probes).  Each conversion runs a
 handful of Python float multiplies/adds/compares across several bytecode ops and
 temporary stack slots.  A fiber computes a forward triple, YIELDS (hub migration
 + sibling interleave), then recomputes the SAME forward call on the SAME single-
-owner input floats.  If runloom torn a float across the yield -- a stackful-coro
+owner input floats.  If stackweave torn a float across the yield -- a stackful-coro
 frame that leaked a temporary into a sibling, a mis-restored evaluation-stack
 slot on resume, a cross-fiber clobber of the fiber-local input triple -- the
 recomputed triple would differ in even one bit, or the round-trip closure would
@@ -27,11 +27,11 @@ The input triple and every intermediate tuple are fiber-local floats/tuples,
 created inside the worker and never shared with any sibling.  There is no shared
 mutable container anywhere in the load-bearing arm (colorsys holds none, and we
 introduce none), so a divergence CANNOT be the documented shared-object race
-(p67/p490 shared-container behaviour); it can only be a runloom fault: a torn
+(p67/p490 shared-container behaviour); it can only be a stackweave fault: a torn
 value, a leaked/clobbered single-owner float across a yield, or a mis-restored
 coroutine stack.  A plain-threads control (many OS threads each running the same
 recompute+round-trip on private triples, GIL on and off) returns bit-identical
-forward triples and closes every round-trip -- so a divergence here is a runloom
+forward triples and closes every round-trip -- so a divergence here is a stackweave
 bug, not a colorsys or CPython-float property.
 
 ORACLES:
@@ -53,7 +53,7 @@ ORACLES:
 FAIL ON: a forward conversion that is not bit-identical when recomputed on the
 same single-owner input across a yield, or a round-trip that misses the original
 by more than EPS.  Both would indicate a torn/leaked single-owner float or a
-mis-restored coroutine stack -- a runloom bug.
+mis-restored coroutine stack -- a stackweave bug.
 
 Stresses: pure float arithmetic across bytecode temporaries and evaluation-stack
 slots, coroutine-frame save/restore of intermediate float values across a hub-
@@ -62,7 +62,7 @@ migrating yield, single-owner-triple integrity under M:N interleave.
 import colorsys
 
 import harness
-import runloom
+import stackweave
 
 # Round-trip closure tolerance.  Empirically the worst-case error over the three
 # pairs is ~1.1e-15 across a 200k sweep; 1e-9 is a vast, unambiguous margin --
@@ -82,7 +82,7 @@ def one_check(H, wid, rng, state):
     All values here are fiber-local: the input triple, the forward triples, and
     the recovered triples are created in this frame and never shared.  A bit
     difference on recompute, or a round-trip miss, is a torn/leaked single-owner
-    float across the yield -- a runloom fault, not a colorsys or float property.
+    float across the yield -- a stackweave fault, not a colorsys or float property.
     """
     # Fiber-local RGB triple in the unit cube (the documented colorsys domain).
     r = rng.random()
@@ -97,9 +97,9 @@ def one_check(H, wid, rng, state):
     # YIELD: hub migration + let siblings compute on other hubs.  If a sibling's
     # work leaks into this fiber's stack or clobbers a single-owner float, the
     # recompute below diverges.
-    runloom.yield_now()
+    stackweave.yield_now()
     if r < 0.5:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
 
     # PURITY: recompute each forward conversion on the SAME single-owner input
     # floats -- MUST be bit-for-bit identical (deterministic pure function).
@@ -206,4 +206,4 @@ if __name__ == "__main__":
                  "the original within 1e-9.  All triples are fiber-local (no "
                  "shared container), so a bit divergence or round-trip miss is "
                  "a torn/leaked single-owner float or mis-restored coroutine "
-                 "stack -- a runloom bug, not a colorsys/float property")
+                 "stack -- a stackweave bug, not a colorsys/float property")

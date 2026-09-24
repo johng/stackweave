@@ -3,8 +3,8 @@ chan), like a fiber blocked in ch.recv() does.  runloom_chan_select's phase-2
 park never calls runloom_g_state_set(PARKED_CHAN) / set_wait_reason, so the
 fiber dump reports it as 'running' and the deadlock detector does not count it
 as blocked."""
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 import io, sys
 
 ch = rc.Chan(0)
@@ -18,8 +18,8 @@ def main():
         rc.select([("recv", ch)])
     rc.mn_fiber(blocked_in_recv)
     rc.mn_fiber(blocked_in_select)
-    runloom.sleep(0.2)
-    for f in runloom.fibers():
+    stackweave.sleep(0.2)
+    for f in stackweave.fibers():
         states[f["id"]] = (f.get("state"), f.get("wait"), f.get("wait_reason"))
     print("fiber states while one parked in recv and one in select:")
     for k, v in states.items():
@@ -28,4 +28,4 @@ def main():
     ch.send(1)
     ch2.send(1)
 
-runloom.run(2, main)
+stackweave.run(2, main)

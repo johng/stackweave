@@ -7,7 +7,7 @@ miss=0; hit=0
 for b in $(seq 1 $BATCHES); do
   pids=()
   for j in $(seq 1 $PAR); do
-    ( out=$(RUNLOOM_DEADLOCK=raise timeout 8 $PY $REPRO 2>&1); code=$?
+    ( out=$(STACKWEAVE_DEADLOCK=raise timeout 8 $PY $REPRO 2>&1); code=$?
       if echo "$out" | grep -q "deadlock"; then exit 0; else echo "MISS batch=$b j=$j code=$code out=[$(echo "$out" | head -3 | tr -d '\0')]"; exit 1; fi ) &
     pids+=($!)
   done

@@ -4,9 +4,9 @@ buffered objects.  After the run + gc, every weakref must be dead."""
 import gc
 import sys
 import weakref
-import runloom
-import runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave
+import stackweave_c as rc
+from stackweave.sync import WaitGroup
 
 HUBS = int(sys.argv[1]) if len(sys.argv) > 1 else 8
 
@@ -55,7 +55,7 @@ def main():
         rc.mn_fiber(lambda pid=p: producer(pid))
     wg.wait()
 
-runloom.run(HUBS, main)
+stackweave.run(HUBS, main)
 
 assert sorted(out) == list(range(N)), "lost/dup values: %d unique of %d" % (len(set(out)), len(out))
 del boxes

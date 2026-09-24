@@ -65,7 +65,7 @@ value, or a crash/hang.  NEVER fail on the shared-URL parse result variance
 (report it as a rate).
 
 EXPECTED RESULT: this is a LIKELY-STATELESS probe, so under a correct runtime
-(both runloom M:N and plain threads GIL on AND off) the program is EXPECTED
+(both stackweave M:N and plain threads GIL on AND off) the program is EXPECTED
 to PASS cleanly (exit 0) with 0 shared-parse drifts.  If it FAILS, it has
 caught a real, previously-UNFIXED urllib M:N isolation bug.
 
@@ -82,7 +82,7 @@ import urllib.parse
 from urllib.parse import urlparse, quote, urlencode, parse_qs
 
 import harness
-import runloom
+import stackweave
 
 # Canonical, single-owner function to compute urlparse() for any (wid, idx).
 # Built in setup() as a closure that deterministically generates the canonical
@@ -169,9 +169,9 @@ def private_parse_check(H, wid, idx, state):
 
     # YIELD + SLEEP before parsing so a sibling on this hub has time to
     # parse its own URL and potentially corrupt the parse state.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
 
     # Parse the URL.
     parsed = urlparse(url)
@@ -197,7 +197,7 @@ def private_parse_check(H, wid, idx, state):
         H.fail(
             "urllib.parse SCHEME MISMATCH: fiber {0} parsed scheme={1!r} "
             "(expected {2!r}) from URL {3!r} -- a sibling's parse state "
-            "leaked into this fiber's result (runloom parse-state isolation "
+            "leaked into this fiber's result (stackweave parse-state isolation "
             "bug).".format(wid, scheme, expected_scheme, url))
         return
 
@@ -210,7 +210,7 @@ def private_parse_check(H, wid, idx, state):
         H.fail(
             "urllib.parse NETLOC MISMATCH: fiber {0} parsed netloc={1!r} "
             "(expected {2!r}) from URL {3!r} -- a sibling's parse may have "
-            "corrupted the netloc (runloom parse-state isolation bug).".format(
+            "corrupted the netloc (stackweave parse-state isolation bug).".format(
                 wid, netloc, expected_netloc, url))
         return
 
@@ -223,7 +223,7 @@ def private_parse_check(H, wid, idx, state):
         H.fail(
             "urllib.parse PATH MISMATCH: fiber {0} parsed path={1!r} "
             "(expected {2!r}) from URL {3!r} -- a sibling fiber's wid may be "
-            "embedded in the path (runloom parse-state isolation bug).".format(
+            "embedded in the path (stackweave parse-state isolation bug).".format(
                 wid, path, expected_path, url))
         return
 
@@ -237,7 +237,7 @@ def private_parse_check(H, wid, idx, state):
         H.fail(
             "urllib.parse QUERY MISMATCH: fiber {0} parsed query={1!r} "
             "(expected {2!r}) from URL {3!r} -- a sibling's query parameters "
-            "leaked (runloom parse-state isolation bug).".format(
+            "leaked (stackweave parse-state isolation bug).".format(
                 wid, query, canonical_parsed.query, url))
         return
 
@@ -250,7 +250,7 @@ def private_parse_check(H, wid, idx, state):
         H.fail(
             "urllib.parse FRAGMENT MISMATCH: fiber {0} parsed fragment={1!r} "
             "(expected {2!r}) from URL {3!r} -- a sibling's fragment leaked "
-            "(runloom parse-state isolation bug).".format(
+            "(stackweave parse-state isolation bug).".format(
                 wid, fragment, expected_fragment, url))
         return
 
@@ -265,7 +265,7 @@ def private_parse_check(H, wid, idx, state):
 def shared_parse_check(H, wid, idx, state):
     """Check that shared-URL parse is consistent across concurrent calls."""
     # YIELD before parsing, so siblings parse concurrently.
-    runloom.yield_now()
+    stackweave.yield_now()
 
     # Parse the shared URL.
     parsed = urlparse(SHARED_URL)
@@ -336,7 +336,7 @@ def post(H):
     if fails:
         H.log("note: the LOAD-BEARING private-URL arm observed parse-result "
               "mismatches -- urllib.parse or urllib.request state may have leaked "
-              "across fibers on a shared hub thread (runloom M:N isolation bug).")
+              "across fibers on a shared hub thread (stackweave M:N isolation bug).")
     if sdrifts:
         H.log("note: the shared-URL parse result varied across {0} concurrent "
               "calls -- a parse-state corruption or cache inconsistency under "

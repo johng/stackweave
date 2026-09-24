@@ -3,7 +3,7 @@
     <dependency name='libc.so.6'/>
   </elf-needed>
   <elf-function-symbols>
-    <elf-symbol name='PyInit_runloom_c' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PyInit_stackweave_c' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='runloom_advice_autosize_enabled' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='runloom_advice_enabled' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='runloom_advice_note_spawn' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
@@ -4986,7 +4986,7 @@
       <parameter type-id='type-id-233'/>
       <return type-id='type-id-21'/>
     </function-decl>
-    <function-decl name='PyInit_runloom_c' mangled-name='PyInit_runloom_c' filepath='src/runloom_c/module_init.c.inc' line='518' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PyInit_runloom_c'>
+    <function-decl name='PyInit_stackweave_c' mangled-name='PyInit_stackweave_c' filepath='src/runloom_c/module_init.c.inc' line='518' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PyInit_stackweave_c'>
       <return type-id='type-id-2'/>
     </function-decl>
     <function-decl name='runloom_immortalize' filepath='src/runloom_c/module_run.c.inc' line='347' column='1' visibility='default' binding='global' size-in-bits='64'>

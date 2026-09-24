@@ -4,22 +4,22 @@ import tempfile
 import time
 import unittest
 
-import runloom_c
+import stackweave_c
 
 
-@unittest.skipUnless(runloom_c.iouring_available(),
+@unittest.skipUnless(stackweave_c.iouring_available(),
                      "io_uring not available (need Linux >= 5.1)")
 class TestIouring(unittest.TestCase):
     def test_write_then_read(self):
         path = tempfile.mktemp()
         fd = os.open(path, os.O_RDWR | os.O_CREAT)
         try:
-            data = b"hello runloom io_uring" * 100
-            n = runloom_c.file_write(fd, data)
+            data = b"hello stackweave io_uring" * 100
+            n = stackweave_c.file_write(fd, data)
             self.assertEqual(n, len(data))
 
             buf = bytearray(len(data))
-            n = runloom_c.file_read(fd, buf, len(data), 0)
+            n = stackweave_c.file_read(fd, buf, len(data), 0)
             self.assertEqual(n, len(data))
             self.assertEqual(bytes(buf), data)
         finally:
@@ -32,7 +32,7 @@ class TestIouring(unittest.TestCase):
         try:
             os.write(fd, b"abcdefghij")
             buf = bytearray(5)
-            n = runloom_c.file_read(fd, buf, 5, 0)
+            n = stackweave_c.file_read(fd, buf, 5, 0)
             self.assertEqual(n, 5)
             self.assertEqual(bytes(buf), b"abcde")
         finally:
@@ -46,7 +46,7 @@ class TestIouring(unittest.TestCase):
         def worker(path):
             fd = os.open(path, os.O_RDONLY)
             buf = bytearray(11)
-            runloom_c.file_read(fd, buf, 11, 0)
+            stackweave_c.file_read(fd, buf, 11, 0)
             out.append(bytes(buf))
             os.close(fd)
 
@@ -54,8 +54,8 @@ class TestIouring(unittest.TestCase):
         with open(path, "wb") as f:
             f.write(b"hello world")
 
-        runloom_c.fiber(lambda: worker(path))
-        runloom_c.run()
+        stackweave_c.fiber(lambda: worker(path))
+        stackweave_c.run()
         os.unlink(path)
 
         self.assertEqual(out, [b"hello world"])
@@ -75,18 +75,18 @@ class TestIouring(unittest.TestCase):
             fd = os.open(path, os.O_RDONLY)
             buf = bytearray(4096)
             events.append("read-start")
-            runloom_c.file_read(fd, buf, 4096, 0)
+            stackweave_c.file_read(fd, buf, 4096, 0)
             events.append("read-done")
             os.close(fd)
 
         def runner():
             for i in range(5):
                 events.append("tick-" + str(i))
-                runloom_c.sched_yield()
+                stackweave_c.sched_yield()
 
-        runloom_c.fiber(reader)
-        runloom_c.fiber(runner)
-        runloom_c.run()
+        stackweave_c.fiber(reader)
+        stackweave_c.fiber(runner)
+        stackweave_c.run()
         os.unlink(path)
 
         # Reader starts before runner's first tick (both fiber() calls happen
@@ -110,9 +110,9 @@ class TestFallback(unittest.TestCase):
     TestIouring above when io_uring is enabled."""
 
     def test_function_exists(self):
-        self.assertTrue(callable(runloom_c.file_read))
-        self.assertTrue(callable(runloom_c.file_write))
-        self.assertTrue(callable(runloom_c.iouring_available))
+        self.assertTrue(callable(stackweave_c.file_read))
+        self.assertTrue(callable(stackweave_c.file_write))
+        self.assertTrue(callable(stackweave_c.iouring_available))
 
 
 if __name__ == "__main__":

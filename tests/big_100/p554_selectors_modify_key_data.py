@@ -10,7 +10,7 @@ re-inserts a fresh SelectorKey with the new data/events); select() returns
 
 WHERE M:N COULD BREAK IT (the gap this program probes)
 ------------------------------------------------------
-runloom makes the underlying epoll/poll COOPERATIVE: select() parks the fiber and,
+stackweave makes the underlying epoll/poll COOPERATIVE: select() parks the fiber and,
 on resume, re-reads its selector's map to build the SelectorKey list.  Thousands of
 fibers, spread across the M:N hubs with the GIL off, each own their OWN selector and
 own pipe, and each is concurrently doing register / modify / select / unregister.
@@ -42,9 +42,9 @@ And get_map()/get_key() must agree with that key.  We verified with a standalone
 plain-threads control (8 OS threads, each owning a selector+pipe, GIL on AND off,
 same modify-across-a-barrier churn) that 100% of select()/get_key() results carry
 the owning thread's own sentinel + fd -- 0 cross-thread leaks.  A private selector
-touched by exactly one fiber MUST behave the same under a correct runloom.  A
+touched by exactly one fiber MUST behave the same under a correct stackweave.  A
 sentinel identity that is not ours, a fileobj/fd that is not ours, or an events
-value we never set = a runloom selector-key isolation bug, so this single-owner
+value we never set = a stackweave selector-key isolation bug, so this single-owner
 load-bearing oracle PASSES (exit 0) on a correct runtime.
 
 ORACLES
@@ -55,7 +55,7 @@ ORACLES
     MODIFY_ITERS modify()+yield+select() cycles; each cycle asserts the returned
     key is identity-ours (data `is` current sentinel), fd-ours (fileobj/fd ==
     our read fd), and mask-ours (events == EVENT_READ), and that get_key() agrees.
-    A violation is a runloom cross-fiber selector-key leak / torn key.
+    A violation is a stackweave cross-fiber selector-key leak / torn key.
 
   * CONSERVATION -- MAP-COUNT (worker fail-fast + post sum).  `len(get_map())` is
     exactly 1 from register() until unregister(), and returns to 0 after
@@ -93,7 +93,7 @@ import os
 import selectors
 
 import harness
-import runloom
+import stackweave
 
 # modify()+yield+select() cycles per registration.  Each cycle rebinds the key's
 # .data to a FRESH sentinel and re-reads it back through select()/get_key() across
@@ -216,9 +216,9 @@ def do_round(H, wid, seq, state):
         for gen in range(1, MODIFY_ITERS + 1):
             # YIELD at the hazard boundary so a sibling's modify()/select() on its
             # OWN selector (another hub) interleaves before our select() resumes.
-            runloom.yield_now()
+            stackweave.yield_now()
             if gen & 1:
-                runloom.sleep(0.0002)
+                stackweave.sleep(0.0002)
 
             nxt = Sentinel(wid, seq, gen)
             sel.modify(r, selectors.EVENT_READ, nxt)
@@ -238,7 +238,7 @@ def do_round(H, wid, seq, state):
 
             # YIELD again, then select(): the cooperative epoll parks here and, on
             # resume, rebuilds the SelectorKey list from _fd_to_key.
-            runloom.yield_now()
+            stackweave.yield_now()
             events = sel.select(SELECT_TIMEOUT)
             found = find_our_key(events, r)
             if found is None:
@@ -369,4 +369,4 @@ if __name__ == "__main__":
                  ".events is EVENT_READ -- never a sibling's; len(get_map()) is "
                  "conserved (1 while registered, 0 after unregister, registers == "
                  "unregisters).  A cross-fiber key-data/fileobj leak or a "
-                 "non-conserved map is the runloom selector-isolation bug")
+                 "non-conserved map is the stackweave selector-isolation bug")

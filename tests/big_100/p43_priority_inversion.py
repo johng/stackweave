@@ -2,7 +2,7 @@
 
 A single shared lock.  "Low priority" goroutines grab it and hold it for a
 while (long critical sections); "high priority" goroutines want it briefly and
-measure how long they waited.  runloom has no real priorities, so this checks
+measure how long they waited.  stackweave has no real priorities, so this checks
 the lock does not let waiters starve unboundedly -- a high-priority acquire
 must always complete within a generous bound.
 
@@ -12,7 +12,7 @@ import threading
 import time
 
 import harness
-import runloom
+import stackweave
 
 WAIT_BOUND = 30.0       # a high-pri acquire slower than this == pathological
 
@@ -30,16 +30,16 @@ MAX_CONTENDERS = 2000
 
 
 def setup(H):
-    H.state = {"lock": runloom.sync.Lock(), "maxwait": [0.0] * 1024}
+    H.state = {"lock": stackweave.sync.Lock(), "maxwait": [0.0] * 1024}
 
 
 def low_pri(H, wid, rng, state):
     lock = state["lock"]
     while H.running():
         with lock:
-            runloom.sleep(rng.uniform(0.001, 0.02))
+            stackweave.sleep(rng.uniform(0.001, 0.02))
         H.op(wid)
-        runloom.yield_now()
+        stackweave.yield_now()
 
 
 def high_pri(H, wid, rng, state):
@@ -56,7 +56,7 @@ def high_pri(H, wid, rng, state):
                 return
         H.op(wid)
         H.task_done(wid)
-        runloom.sleep(rng.uniform(0.0, 0.002))
+        stackweave.sleep(rng.uniform(0.0, 0.002))
 
 
 def body(H):

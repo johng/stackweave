@@ -10,11 +10,11 @@ lives on the parser object across callbacks.
 
 WHERE M:N COULD BREAK IT (the gap this program probes).  Each fiber parses its
 OWN document string (single-owner Document, never shared) and then HOLDS one
-Element node live across a park (runloom.yield_now / sleep).  While this fiber is
+Element node live across a park (stackweave.yield_now / sleep).  While this fiber is
 parked, a SIBLING fiber on the same hub is inside its own parseString(), driving
 ITS expat instance through the very same StartElement/CharacterData/entity
 callbacks.  If any expat/entity scratch state, or minidom's builder cursor, were
-process-global instead of per-parser -- or if a runloom hub migration reused a C
+process-global instead of per-parser -- or if a stackweave hub migration reused a C
 buffer across the two live parses -- the parked fiber's held Element could come
 back with a MUTATED .firstChild.data (its text overwritten by the sibling's
 character-data buffer), a changed attribute, or a different identity.  A correct
@@ -32,7 +32,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain threads):
   threading.Barrier mid-hold, then re-reading) that 100% of held nodes are byte-
   identical before and after the park and that toxml()->re-parse reproduces the
   wid-marked text and attribute exactly -- 0 cross-thread bleed.  Under a CORRECT
-  runloom it must also hold, so this single-owner oracle PASSES on a correct
+  stackweave it must also hold, so this single-owner oracle PASSES on a correct
   runtime (program exits 0 when there is no bug).
 
 ORACLES:
@@ -48,7 +48,7 @@ ORACLES:
       - getAttribute("tag") unchanged and equal to the wid-unique expected value,
       - firstChild.data unchanged and equal to the entity-decoded expected text.
     Single-owner: the Document is created inside the fiber, stored in a local,
-    unlink()ed in finally, never shared.  A failure is a runloom parse-isolation
+    unlink()ed in finally, never shared.  A failure is a stackweave parse-isolation
     desync -- a real torn/leaked-node bug.
 
   * LOAD-BEARING -- toxml ROUND-TRIP CONSERVATION (worker, HARD, fail-fast).  After
@@ -86,7 +86,7 @@ parse, localizes the bleed before the identity/round-trip oracle even fires.
 import xml.dom.minidom as minidom
 
 import harness
-import runloom
+import stackweave
 
 # Number of sibling <item> elements around the marker so expat builds a real,
 # non-trivial tree (several StartElement/CharacterData/EndElement cycles) rather
@@ -181,9 +181,9 @@ def identity_and_roundtrip_check(H, wid, idx, state):
             return
 
         # ---- PARK: let a sibling drive its own expat parse on this hub ----
-        runloom.yield_now()
+        stackweave.yield_now()
         if idx & 1:
-            runloom.sleep(0.0003)
+            stackweave.sleep(0.0003)
 
         # ---- re-read the SAME held references AFTER the park -------------
         if id(marker) != base_marker_id:
@@ -303,4 +303,4 @@ if __name__ == "__main__":
                  "conserves the wid-unique attribute and entity-decoded text "
                  "exactly.  Single-owner throughout (Document unlink()ed in finally) "
                  "-- a torn node, cross-fiber expat-buffer bleed, or round-trip loss "
-                 "is the runloom bug")
+                 "is the stackweave bug")

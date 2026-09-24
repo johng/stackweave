@@ -18,7 +18,7 @@ Stresses: per-goroutine C-recursion budget isolation, RecursionError cleanliness
 under concurrency, recursion-sum integrity across a migration.
 """
 import harness
-import runloom
+import stackweave
 
 # A modest floor every goroutine MUST clear.  Calibrated well below the observed
 # ceiling so it is robust, but high enough to fail if the budget collapses to a
@@ -38,7 +38,7 @@ def yielding_sum(n):
     while a deep-ish Python frame chain is live, returning the exact sum."""
     if n == 0:
         return 0
-    runloom.yield_now()
+    stackweave.yield_now()
     return n + yielding_sum(n - 1)
 
 

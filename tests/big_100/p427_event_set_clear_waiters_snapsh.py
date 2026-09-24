@@ -1,7 +1,7 @@
 """big_100 / 427 -- Event.set() waiter-deque snapshot/rebind vs a racing wait().
 
 The subject is the cooperative ``threading.Event`` (monkey.patch() hands every
-fiber the cooperative CoEvent, src/runloom/monkey/events.py:17, __slots__
+fiber the cooperative CoEvent, src/stackweave/monkey/events.py:17, __slots__
 ``_flag`` / ``_waiters`` / ``_guard``).  Event is NOT a Condition: it gates
 fibers on a single boolean ``_flag`` plus a hand-rolled ``_waiters`` deque, and
 its set() does a TWO-STEP snapshot-then-rebind of that deque:
@@ -103,7 +103,7 @@ the dropped wakeup before the conservation sum even closes.  RNG is per-worker
 (rng) for replay; the setter's pre-set yield seeds the park window.
 """
 import harness
-import runloom
+import stackweave
 
 # Waiter fibers per shared round.  Small enough that every waiter genuinely
 # parks (the setter fires exactly once after they all register, so each must be
@@ -155,9 +155,9 @@ def run_shared_handshake(H, wid, rng, state, slot):
     armed_cell = [0] * WAITERS
     woke_cell = [0] * WAITERS
 
-    reg_wg = runloom.WaitGroup()            # every waiter signals once pre-wait
+    reg_wg = stackweave.WaitGroup()            # every waiter signals once pre-wait
     reg_wg.add(WAITERS)
-    done_wg = runloom.WaitGroup()           # every waiter signals once on return
+    done_wg = stackweave.WaitGroup()           # every waiter signals once on return
     done_wg.add(WAITERS)
 
     def waiter(idx):
@@ -192,7 +192,7 @@ def run_shared_handshake(H, wid, rng, state, slot):
         reg_wg.wait()
         # Yield once so the appends and our snapshot/rebind genuinely interleave
         # across hubs (the appends may still be landing as we take list(_waiters)).
-        runloom.yield_now()
+        stackweave.yield_now()
         ev.set()                            # EXACTLY ONCE: wakes the snapshot
 
     for idx in range(WAITERS):
@@ -302,7 +302,7 @@ def run_private_control(H, wid, rng, state, slot):
                "owner clear() store lost".format(wid))
         return False
     woke2_cell = [0]
-    set_wg = runloom.WaitGroup()
+    set_wg = stackweave.WaitGroup()
     set_wg.add(1)
 
     def child_setter():
@@ -311,7 +311,7 @@ def run_private_control(H, wid, rng, state, slot):
             # this exercises the append+park+snapshot wake path (not the fast
             # path), yet only THIS fiber-pair touches the Event -> still race-free.
             for _ in range(3):
-                runloom.yield_now()
+                stackweave.yield_now()
             ev.set()
         finally:
             set_wg.done()

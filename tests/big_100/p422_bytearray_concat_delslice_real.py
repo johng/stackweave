@@ -85,7 +85,7 @@ ob_bytes load/store, or a single out-of-universe byte under replay, localizes
 the fault before the universe-membership assert even closes.
 """
 import harness
-import runloom
+import stackweave
 
 
 # Finite sentinel UNIVERSE: a fixed 64-value byte alphabet.  Every byte the
@@ -222,7 +222,7 @@ def walk_iterator(H, ba, gate, counts, slot):
                 # live -- the realloc/memmove lands here, in the park window.
                 parked = True
                 gate.done()
-                runloom.yield_now()
+                stackweave.yield_now()
         counts["walked"][slot] += 1
         return "clean"
     except Exception as exc:                # noqa: BLE001
@@ -291,9 +291,9 @@ def run_round_impl(H, wid, rng, slot, state):
     # serialized shared order is byte-identical to the control's.
     order = {"i": 0}
 
-    gate = runloom.WaitGroup()
+    gate = stackweave.WaitGroup()
     gate.add(1)
-    wg = runloom.WaitGroup()
+    wg = stackweave.WaitGroup()
     wg.add(2)
     # The mutators wait on the gate (tripped by the iterator just before it parks)
     # so their realloc/memmove lands inside the park window.
@@ -308,7 +308,7 @@ def run_round_impl(H, wid, rng, slot, state):
             for op in merged:
                 with lock:
                     apply_op(shared, op, None)
-                    runloom.yield_now()  # iterator resumes its read during our RMW
+                    stackweave.yield_now()  # iterator resumes its read during our RMW
         except Exception as exc:        # noqa: BLE001
             H.error(wid, exc)
         finally:
@@ -379,12 +379,12 @@ def worker(H, wid, rng, state):
 
 
 def setup(H):
-    # Built INSIDE the root (monkey.patch() already ran), so runloom.sync.Lock is
+    # Built INSIDE the root (monkey.patch() already ran), so stackweave.sync.Lock is
     # the cooperative M:N-safe primitive.  The lock serializes WRITES to the shared
     # bytearray (bytearray is documented NOT thread-safe); the iterator races
     # without it, which is the use-after-realloc probe.
     H.state = {
-        "lock": runloom.sync.Lock(),
+        "lock": stackweave.sync.Lock(),
         "counts": {"walked": [0] * SLOTS},   # iterator walks that finished clean
         "bytes_in": [0] * SLOTS,             # quiescent bytes reconciled
         "rounds": [0] * SLOTS,               # rounds whose byte-exact law held

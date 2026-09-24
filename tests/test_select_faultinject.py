@@ -1,9 +1,9 @@
 """Fault injection for the POSIX select() netpoll fallback.
 
-select() is a BUILD-TIME backend on POSIX (RUNLOOM_NETPOLL=select -> -DRUNLOOM_FORCE_
+select() is a BUILD-TIME backend on POSIX (STACKWEAVE_NETPOLL=select -> -DRUNLOOM_FORCE_
 SELECT suppresses epoll/kqueue), so this harness builds a select-forced
 extension into a temp dir once, then drives netpoll_inproc_fault_workload.py
-against it with RUNLOOM_FAULT_SELECT armed (the same compiled-in mechanism the
+against it with STACKWEAVE_FAULT_SELECT armed (the same compiled-in mechanism the
 kqueue/Windows pumps use).  Asserts the POSIX select pump:
 
   EINTR (once)       -> retried; the parked fiber still wakes.
@@ -40,13 +40,13 @@ MAX_FAULTS = TIMEOUT_MS * 6
 
 @pytest.fixture(scope="module")
 def select_build():
-    """Build a RUNLOOM_NETPOLL=select extension into a temp dir (a FRESH build-temp
+    """Build a STACKWEAVE_NETPOLL=select extension into a temp dir (a FRESH build-temp
     so the -DRUNLOOM_FORCE_SELECT define actually takes).  Skips if it won't build
     (e.g. a toolchain that can't be invoked from the test env)."""
     lib = tempfile.mkdtemp(prefix="runloom_sel_lib_")
     tmp = tempfile.mkdtemp(prefix="runloom_sel_tmp_")
     env = dict(os.environ)
-    env["RUNLOOM_NETPOLL"] = "select"
+    env["STACKWEAVE_NETPOLL"] = "select"
     p = subprocess.run(
         [sys.executable, "setup.py", "build_ext", "--build-lib", lib,
          "--build-temp", tmp],
@@ -63,13 +63,13 @@ def select_build():
 
 def _run(select_build, spec, timeout=40):
     env = dict(os.environ)
-    env["RUNLOOM_CORE_PATH"] = select_build           # workload imports runloom_c from here
+    env["STACKWEAVE_CORE_PATH"] = select_build           # workload imports stackweave_c from here
     env["PYTHONPATH"] = os.path.join(REPO, "src")
     env["PYTHON_GIL"] = "0"                         # focus: free-threaded only
     env["FAULT_SITE"] = "SELECT"
     env["FAULT_TIMEOUT_MS"] = str(TIMEOUT_MS)
     if spec:
-        env["RUNLOOM_FAULT_SELECT"] = spec
+        env["STACKWEAVE_FAULT_SELECT"] = spec
     return subprocess.run(
         [sys.executable, WORKLOAD], cwd=REPO, env=env, timeout=timeout,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)

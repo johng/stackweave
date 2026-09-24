@@ -1,6 +1,6 @@
 # needs cert.pem/key.pem: openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 2 -nodes -subj /CN=localhost
 import socket, ssl, sys, threading, os, time
-import runloom
+import stackweave
 D = os.path.dirname(os.path.abspath(__file__))
 
 def server(srv, hold):
@@ -27,5 +27,5 @@ def scenario(tag):
 
 if sys.argv[1] == "stock": scenario("stock:")
 else:
-    def main(): runloom.fiber(lambda: scenario("patched:"))
-    runloom.monkey.patch(); runloom.run(2, main)
+    def main(): stackweave.fiber(lambda: scenario("patched:"))
+    stackweave.monkey.patch(); stackweave.run(2, main)

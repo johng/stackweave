@@ -35,17 +35,17 @@ SCENARIOS = {
     "recv_no_sender": {
         "deadlock": True,
         "go": "ch := make(chan int); <-ch",
-        "pg": "runloom_c.Chan(0).recv()",
+        "pg": "stackweave_c.Chan(0).recv()",
     },
     "send_no_receiver": {
         "deadlock": True,
         "go": "ch := make(chan int); ch <- 1",
-        "pg": "runloom_c.Chan(0).send(1)",
+        "pg": "stackweave_c.Chan(0).send(1)",
     },
     "completes": {
         "deadlock": False,
         "go": "ch := make(chan int, 1); ch <- 1; <-ch",
-        "pg": "c = runloom_c.Chan(1); c.send(1); c.recv()",
+        "pg": "c = stackweave_c.Chan(1); c.send(1); c.recv()",
     },
 }
 
@@ -53,12 +53,12 @@ GO_TMPL = "package main\nfunc main() {{\n\t{body}\n}}\n"
 PG_TMPL = textwrap.dedent("""\
     import os, sys
     sys.path.insert(0, {src!r})
-    import runloom, runloom_c
-    runloom_c.set_deadlock_mode(2)          # Go-equivalent always-on census
+    import stackweave, stackweave_c
+    stackweave_c.set_deadlock_mode(2)          # Go-equivalent always-on census
     def body():
         {body}
     try:
-        runloom.run(2, main_fn=lambda: runloom.fiber(body))
+        stackweave.run(2, main_fn=lambda: stackweave.fiber(body))
         print("COMPLETED")
     except BaseException as e:              # census raises on a real deadlock
         print("DEADLOCK", type(e).__name__)

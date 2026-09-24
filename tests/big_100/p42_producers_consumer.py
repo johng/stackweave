@@ -7,14 +7,14 @@ increasing with no gaps and no repeats -- nothing dropped, nothing duplicated.
 
 Stresses: channel correctness and contention with one drain point.
 
-SCALE NOTE (memory ceiling, NOT a runloom bug): every func is a long-lived goroutine that PARKS on the channel/work and all resume ~simultaneously at teardown (close wakes every parked waiter -- chan_ops.c.inc). At 1M on a 16 GB box that simultaneous-resume working set exceeds RAM even with macOS compression -> jetsam SIGKILL (137). Verified mem-bound: PASSES at 400k, jetsam at 1M; close correctly wakes all waiters (not a lost-wakeup). Cap funcs to a memory- and drain-budget-safe level.
+SCALE NOTE (memory ceiling, NOT a stackweave bug): every func is a long-lived goroutine that PARKS on the channel/work and all resume ~simultaneously at teardown (close wakes every parked waiter -- chan_ops.c.inc). At 1M on a 16 GB box that simultaneous-resume working set exceeds RAM even with macOS compression -> jetsam SIGKILL (137). Verified mem-bound: PASSES at 400k, jetsam at 1M; close correctly wakes all waiters (not a lost-wakeup). Cap funcs to a memory- and drain-budget-safe level.
 """
 import harness
-import runloom
+import stackweave
 
 
 def setup(H):
-    H.state = {"ch": runloom.Chan(4096),
+    H.state = {"ch": stackweave.Chan(4096),
                "final_seq": {},             # producer wid -> how many it sent
                "last_seq": {},              # consumer's view, producer -> seq
                "received": [0]}
@@ -40,7 +40,7 @@ def consumer(H, state):
         if got is None:
             if not H.running():
                 break
-            runloom.sleep(0.0002)
+            stackweave.sleep(0.0002)
             continue
         item, ok = got
         if not ok:

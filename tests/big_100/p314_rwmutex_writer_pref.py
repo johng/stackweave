@@ -1,6 +1,6 @@
 """big_100 / 314 -- sync.RWMutex writer-preference handoff under M:N.
 
-runloom.sync.RWMutex is the ONE Go-style reader/writer lock in the library and
+stackweave.sync.RWMutex is the ONE Go-style reader/writer lock in the library and
 (grep-confirmed) is exercised by ZERO other big_100 programs.  It claims two
 strong properties that nothing here has ever stressed:
 
@@ -64,9 +64,9 @@ import _thread
 import random
 
 import harness
-import runloom
-import runloom.sync as rsync
-import runloom_c
+import stackweave
+import stackweave.sync as rsync
+import stackweave_c
 
 # Real OS lock (not a goroutine primitive) for the rare aggregate-breach
 # bookkeeping the instrumented lock does under its own _mu -- the critical
@@ -113,7 +113,7 @@ class ObservedRWMutex(rsync.RWMutex):
     # -- reader side -------------------------------------------------------
     def rlock(self):
         rsync._resolve_from_fiber("RWMutex.rlock()")
-        g = runloom_c.current_g()
+        g = stackweave_c.current_g()
         rsync._acquire(self._mu)
         if not self._writer and not self._wwait:        # writer-preference gate
             self._readers += 1
@@ -127,9 +127,9 @@ class ObservedRWMutex(rsync.RWMutex):
         cell = [g, [False]]
         self._rwait.append(cell)
         self._mu.unlock()
-        runloom_c.set_wait_reason(runloom_c.WR_LOCK)
+        stackweave_c.set_wait_reason(stackweave_c.WR_LOCK)
         while True:
-            runloom_c.park()
+            stackweave_c.park()
             rsync._acquire(self._mu)
             granted = cell[1][0]
             if granted:
@@ -163,7 +163,7 @@ class ObservedRWMutex(rsync.RWMutex):
     # -- writer side -------------------------------------------------------
     def lock(self):
         rsync._resolve_from_fiber("RWMutex.lock()")
-        g = runloom_c.current_g()
+        g = stackweave_c.current_g()
         rsync._acquire(self._mu)
         if not self._writer and self._readers == 0:
             self._on_writer_granted_locked(snapshot=self.obs_admitted)
@@ -174,9 +174,9 @@ class ObservedRWMutex(rsync.RWMutex):
         self._wwait.append(cell)
         snap = self.obs_admitted                         # under _mu at the EXACT
         self._mu.unlock()                                # moment we queued
-        runloom_c.set_wait_reason(runloom_c.WR_LOCK)
+        stackweave_c.set_wait_reason(stackweave_c.WR_LOCK)
         while True:
-            runloom_c.park()
+            stackweave_c.park()
             rsync._acquire(self._mu)
             granted = cell[1][0]
             if granted:
@@ -271,7 +271,7 @@ def reader(H, wid, rw, rng):
             for k in range(CS_SPINS):
                 acc ^= (k * 2654435761) & 0xFFFFFFFF
                 if (k & 15) == 0:
-                    runloom.yield_now()
+                    stackweave.yield_now()
         H.op(wid)
         H.task_done(wid)
 
@@ -291,7 +291,7 @@ def writer(H, wid, rw, rng):
                     rw.obs_mx_breach += 1
             for k in range(CS_SPINS):
                 if (k & 7) == 0:
-                    runloom.yield_now()                  # force cross-hub handoff
+                    stackweave.yield_now()                  # force cross-hub handoff
             if rw.obs_live_readers != 0:
                 with _AGG:
                     rw.obs_mx_breach += 1

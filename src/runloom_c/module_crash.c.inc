@@ -16,11 +16,11 @@ static PyObject *m_install_crash_handler(PyObject *self, PyObject *args,
     if (level != NULL && level[0] != '\0') {
         flags = runloom_crash_parse_flags(level);
     } else {
-        const char *env = getenv("RUNLOOM_CRASH");
+        const char *env = getenv("STACKWEAVE_CRASH");
         flags = (env != NULL) ? runloom_crash_parse_flags(env)
                               : RUNLOOM_CRASH_DEFAULT;
     }
-    if (path == NULL) path = getenv("RUNLOOM_CRASH_FILE");
+    if (path == NULL) path = getenv("STACKWEAVE_CRASH_FILE");
 
     if (flags < 0) {            /* "off" -- treat as uninstall */
         runloom_crash_uninstall();

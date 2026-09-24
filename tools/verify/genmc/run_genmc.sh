@@ -236,7 +236,7 @@ fi
 # (iouring/global-runq) are each proven in isolation; this checks their
 # COMPOSITION -- a park that commits via Dekker then the wake_state CAS, racing
 # wake_g -- holds no-lost-wake + enqueued-at-most-once under RC11.  Gate this
-# BEFORE promoting RUNLOOM_STEAL_WOKEN / RUNLOOM_PER_G_TSTATE toward default.
+# BEFORE promoting STACKWEAVE_STEAL_WOKEN / STACKWEAVE_PER_G_TSTATE toward default.
 # Drift-guard: sched_parkwake_seam.c is a FAITHFUL SLICE (not byte-shared), so
 # its wake_state enum must track runloom_sched.h exactly -- names AND encodings.
 # This model already drifted once (a 4-state copy of the 6-state kernel: the
@@ -281,7 +281,7 @@ fi
 # migratable fiber via BOTH routes (wake_safe + wake_g) can double-enqueue.  If
 # it reports a violation, the constraint "migratable fibers are woken via wake_g
 # ONLY" is load-bearing -- keep it enforced in the wake routing.
-if [ "${RUNLOOM_GENMC_SEAM_MIX:-}" = "1" ]; then
+if [ "${STACKWEAVE_GENMC_SEAM_MIX:-}" = "1" ]; then
     printf '  [genmc] %-30s ' "sched_parkwake_seam.c(-DSEAM_MIX_DEKKER,info)"
     if "$G" -- "-DSEAM_MIX_DEKKER" "$HERE/sched_parkwake_seam.c" >"$HERE/.genmc.mix.log" 2>&1 \
             && grep -q "No errors were detected" "$HERE/.genmc.mix.log"; then
@@ -338,7 +338,7 @@ done
 #   mimalloc_page_free.c -- WHO may touch a page (per-page xthread_id abandon/adopt)
 #   qsbr_drain.c         -- WHEN a deferred free may run (QSBR grace period)
 #   brc_merge.c          -- WHO may merge a refcount (biased-refcount owner drain)
-# Each is gated off in the shipping runtime (RUNLOOM_ALLOW_UNSAFE_MIGRATION); these
+# Each is gated off in the shipping runtime (STACKWEAVE_ALLOW_UNSAFE_MIGRATION); these
 # are the SPEC a candidate abandon/adopt handshake must satisfy before it is trusted.
 genmc_model() {                 # name  correct-grep  "BUG1 BUG2 ..."  blurb
     local f="$1" posgrep="$2" bugs="$3" blurb="$4"

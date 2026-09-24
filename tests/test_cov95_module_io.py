@@ -1,4 +1,4 @@
-"""Coverage-driven adversarial suite for the runloom_c serve() / fd-I/O surface.
+"""Coverage-driven adversarial suite for the stackweave_c serve() / fd-I/O surface.
 
 Targets the uncovered (#####) lines in two fragments compiled into module.c:
 
@@ -39,7 +39,7 @@ and each names the exact source lines it drives + the gate it makes true.
                     L205 hard-error covered by the RST storm in class 5)
     (io L202-203, the EAGAIN->WRITE-park->continue, is RACE -- see exclusions.)
 
- 4. SPAWN-FAILURE branches, driven by the RUNLOOM_FAULT_SPAWN_G OOM hook (the
+ 4. SPAWN-FAILURE branches, driven by the STACKWEAVE_FAULT_SPAWN_G OOM hook (the
     g-slab alloc returns NULL).  The hook is armed at process start (so the
     "armed" cache latches on) with a NON-firing spec (always:0), then switched
     to a firing spec from INSIDE the run -- after the earlier, must-succeed
@@ -85,7 +85,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from adv_util import hang_guard, needs_free_threading  # noqa: E402
 
-import runloom_c as rc  # noqa: E402
+import stackweave_c as rc  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PY = sys.executable
@@ -264,15 +264,15 @@ def _ipv6_loopback_ok():
 
 def _run_subproc(script, timeout=200):
     """Run a serve() script in a clean subprocess so gcov counters flush on
-    exit, and so each full runloom.run(N) M:N session is isolated.
+    exit, and so each full stackweave.run(N) M:N session is isolated.
 
-    RUNLOOM_FAULT_SPAWN_G is set to a NON-firing spec (always:0 -> code 0, never
+    STACKWEAVE_FAULT_SPAWN_G is set to a NON-firing spec (always:0 -> code 0, never
     fires) at process start: this is INERT for the round-trip/park/storm scripts,
     and for the spawn-fail scripts it latches runloom_spawn_fault_armed() True so
     they can switch to a firing spec from inside the run (after the must-succeed
     early spawns)."""
     env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src",
-               RUNLOOM_FAULT_SPAWN_G="always:0")
+               STACKWEAVE_FAULT_SPAWN_G="always:0")
     try:
         return subprocess.run([PY, "-c", script], cwd=REPO, env=env,
                               capture_output=True, text=True, timeout=timeout)
@@ -281,7 +281,7 @@ def _run_subproc(script, timeout=200):
 
 
 # Each serve() M:N session is driven in its OWN clean-exit SUBPROCESS rather than
-# in-process.  serve() spins a full runloom.run(N) M:N session; running several
+# in-process.  serve() spins a full stackweave.run(N) M:N session; running several
 # back-to-back in ONE process accumulates scheduler/teardown state and can wedge
 # an unrelated later session (the known multi-session mn_fini teardown flake) --
 # brutal to attribute.  A subprocess per session also EXITS CLEANLY, which is
@@ -291,7 +291,7 @@ def _run_subproc(script, timeout=200):
 _SERVE_IPV6_ROUNDTRIP = r'''
 import sys
 sys.path.insert(0, "src")
-import runloom_c as rc, runloom
+import stackweave_c as rc, stackweave
 result = {}
 def main():
     def handler(conn):
@@ -303,7 +303,7 @@ def main():
         c.send_all(b"v6"); result["reply"] = c.recv(64); c.close()
         for L in listeners: L.close()
     rc.mn_fiber(client)
-runloom.run(3, main)
+stackweave.run(3, main)
 if isinstance(result.get("port"), int) and result["port"] > 0 and result.get("reply") == b"6:v6":
     print("IPV6_ROUNDTRIP_OK"); sys.exit(0)
 print("UNEXPECTED %r" % (result,)); sys.exit(3)
@@ -312,7 +312,7 @@ print("UNEXPECTED %r" % (result,)); sys.exit(3)
 _ECHO_WRITE_PARK = r'''
 import socket, time, threading, sys
 sys.path.insert(0, "src")
-import runloom_c as rc, runloom
+import stackweave_c as rc, stackweave
 RealThread = threading.Thread
 TOTAL = 1024 * 1024
 result = {}
@@ -358,7 +358,7 @@ def main():
     for _ in range(3000):
         rc.sched_sleep(0.02)
         if "recd" in result or "cerr" in result: break
-runloom.run(3, main)
+stackweave.run(3, main)
 # Assertion: a full, byte-conserving round-trip of TOTAL bytes through the all-C
 # echo under a clamped receive window (no loss, no deadlock).  The send-EAGAIN
 # WRITE park (io L202-203) MAY fire en route -- it is RACE-dependent on TCP
@@ -371,7 +371,7 @@ print("UNEXPECTED %r" % (result,)); sys.exit(3)
 _ECHO_RST_STORM = r'''
 import socket, struct, time, threading, sys
 sys.path.insert(0, "src")
-import runloom_c as rc, runloom
+import stackweave_c as rc, stackweave
 RealThread = threading.Thread
 result = {"rst": 0}
 def main():
@@ -399,7 +399,7 @@ def main():
     for L in listeners:
         try: L.close()
         except Exception: pass
-runloom.run(3, main)
+stackweave.run(3, main)
 if result.get("rst", 0) > 0 and rc._self_check(0) == 0:
     print("RST_STORM_OK rst=%d" % result["rst"]); sys.exit(0)
 print("UNEXPECTED %r" % (result,)); sys.exit(3)
@@ -448,7 +448,7 @@ def test_all_c_echo_rst_storm_survives():
 
 
 # ===========================================================================
-# Class 4: spawn-failure branches via the RUNLOOM_FAULT_SPAWN_G OOM hook, in a
+# Class 4: spawn-failure branches via the STACKWEAVE_FAULT_SPAWN_G OOM hook, in a
 # clean-exit SUBPROCESS so gcov flushes.  The env is armed at process start with
 # a non-firing spec (always:0) so runloom_spawn_fault_armed() latches True; the
 # firing spec is set from INSIDE the run, after the must-succeed spawns, so the
@@ -457,12 +457,12 @@ def test_all_c_echo_rst_storm_survives():
 _SERVE_ACCEPTOR_SPAWNFAIL = r'''
 import os, sys
 sys.path.insert(0, "src")
-import runloom_c as rc, runloom
+import stackweave_c as rc, stackweave
 res = {}
 def main():
     # main spawned with always:0 (never fires). Arm a one-shot ENOMEM so the
     # NEXT g spawn -- serve()'s all-C acceptor mn_fiber_c -- fails (io L324-326).
-    os.environ["RUNLOOM_FAULT_SPAWN_G"] = "once:12"
+    os.environ["STACKWEAVE_FAULT_SPAWN_G"] = "once:12"
     try:
         rc.serve("127.0.0.1", 0, None, 1, 64)     # handler=None -> all-C path
         res["r"] = "no-error"
@@ -471,8 +471,8 @@ def main():
     except Exception as e:
         res["r"] = (type(e).__name__, str(e))
     finally:
-        os.environ["RUNLOOM_FAULT_SPAWN_G"] = "always:0"
-runloom.run(2, main)
+        os.environ["STACKWEAVE_FAULT_SPAWN_G"] = "always:0"
+stackweave.run(2, main)
 if res.get("r") and res["r"][0] == "RuntimeError" and "mn_fiber_c failed" in res["r"][1]:
     print("ACCEPTOR_SPAWNFAIL_OK"); sys.exit(0)
 print("UNEXPECTED %r" % (res.get("r"),)); sys.exit(3)
@@ -481,7 +481,7 @@ print("UNEXPECTED %r" % (res.get("r"),)); sys.exit(3)
 _SERVE_ECHO_SPAWNFAIL = r'''
 import os, socket, time, threading, sys
 sys.path.insert(0, "src")
-import runloom_c as rc, runloom
+import stackweave_c as rc, stackweave
 RealThread = threading.Thread
 res = {}
 def main():
@@ -490,7 +490,7 @@ def main():
     # fails -> close(cfd) (io L241). The acceptor keeps accepting+failing safely.
     port, listeners = rc.serve("127.0.0.1", 0, None, 1, 64)
     res["port"] = port
-    os.environ["RUNLOOM_FAULT_SPAWN_G"] = "always:12"
+    os.environ["STACKWEAVE_FAULT_SPAWN_G"] = "always:12"
     def client():
         for _ in range(6):
             try:
@@ -509,11 +509,11 @@ def main():
     for _ in range(300):
         rc.sched_sleep(0.02)
         if res.get("done"): break
-    os.environ["RUNLOOM_FAULT_SPAWN_G"] = "always:0"   # disarm for clean teardown
+    os.environ["STACKWEAVE_FAULT_SPAWN_G"] = "always:0"   # disarm for clean teardown
     for L in listeners:
         try: L.close()
         except Exception: pass
-runloom.run(2, main)
+stackweave.run(2, main)
 if res.get("done"):
     print("ECHO_SPAWNFAIL_OK"); sys.exit(0)
 print("UNEXPECTED %r" % (res,)); sys.exit(3)

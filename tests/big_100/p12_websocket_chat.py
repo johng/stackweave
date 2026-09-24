@@ -16,7 +16,7 @@ import threading
 
 import harness
 import netutil
-import runloom
+import stackweave
 import wsutil
 
 NROOMS = 64
@@ -55,8 +55,8 @@ def setup(H):
                "rooms": [Room() for _ in range(NROOMS)]}
 
     def serve(sock):
-        outbound = runloom.Chan(64)
-        writer_done = runloom.Chan(1)
+        outbound = stackweave.Chan(64)
+        writer_done = stackweave.Chan(1)
         room = None
         writer_started = False
         try:

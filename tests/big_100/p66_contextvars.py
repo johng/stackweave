@@ -2,7 +2,7 @@
 
 Each goroutine sets a contextvar to its own unique value, then does deep nested
 calls, yields and sleeps, and reads the var back.  In an asyncio-style model the
-value would always be its OWN; runloom's M:N goroutines share the hub thread's
+value would always be its OWN; stackweave's M:N goroutines share the hub thread's
 context with no per-goroutine copy, so the value can leak from a sibling (see
 FINDINGS BUG #7).  This project MEASURES that leak rate instead of failing, and
 fails only on corruption -- a value that was never any goroutine's id.
@@ -12,7 +12,7 @@ Stresses: contextvars behaviour across yields/sleeps under M:N.
 import contextvars
 
 import harness
-import runloom
+import stackweave
 
 CV = contextvars.ContextVar("big100_cv")
 
@@ -20,9 +20,9 @@ CV = contextvars.ContextVar("big100_cv")
 def deep(rng, depth):
     if depth <= 0:
         if rng.random() < 0.5:
-            runloom.yield_now()
+            stackweave.yield_now()
         else:
-            runloom.sleep(0.0005)
+            stackweave.sleep(0.0005)
         return CV.get(None)
     return deep(rng, depth - 1)
 
@@ -55,7 +55,7 @@ def post(H):
     leaks = sum(H.state["leaks"])
     pct = (100.0 * leaks / checks) if checks else 0.0
     H.log("contextvars: {0} checks, {1} cross-goroutine leaks ({2:.1f}%) -- "
-          "runloom goroutines share the hub context (FINDINGS BUG #7); only "
+          "stackweave goroutines share the hub context (FINDINGS BUG #7); only "
           "corruption fails".format(checks, leaks, pct))
 
 

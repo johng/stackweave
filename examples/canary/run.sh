@@ -4,7 +4,7 @@
 # for a duration, then run the slope oracle on the sample CSV and write a REPORT.
 #
 # This is the highest-fidelity reliability test: a REAL service under REAL load,
-# judged by the same flat-slope oracle as any soak.  "runloom served continuously
+# judged by the same flat-slope oracle as any soak.  "stackweave served continuously
 # for N with flat gauges" is the launch-credibility claim, and this measures it.
 #
 # Usage:
@@ -14,7 +14,7 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
-PY="${RUNLOOM_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
+PY="${STACKWEAVE_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
 SECS="${1:-600}"
 WARMUP="${2:-120}"
 # sample interval: 30s is right for a multi-day canary; a SHORT verification run
@@ -28,7 +28,7 @@ CSV="$OUT/canary.csv"
 sudo -n prlimit --pid $$ --nofile=1048576:1048576 2>/dev/null || true
 
 echo "[canary] soak ${SECS}s -> $OUT"
-CANARY_CRASH_FILE="$OUT/canary_crash.txt" RUNLOOM_WATCHDOG=120 \
+CANARY_CRASH_FILE="$OUT/canary_crash.txt" STACKWEAVE_WATCHDOG=120 \
   PYTHON_GIL=0 "$PY" examples/canary/server.py \
     --csv "$CSV" --interval "$INTERVAL" --seconds "$SECS" >"$OUT/server.log" 2>&1 &
 SRV=$!

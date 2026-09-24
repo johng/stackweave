@@ -34,9 +34,9 @@ import tempfile
 
 import pytest
 
-import runloom
-import runloom_c as rc
-import runloom.aio as aio
+import stackweave
+import stackweave_c as rc
+import stackweave.aio as aio
 from adv_util import hang_guard
 
 

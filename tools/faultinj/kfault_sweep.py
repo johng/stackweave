@@ -4,7 +4,7 @@
 fault_sweep.py + the LD_PRELOAD shim fail libc-level calls (malloc/mmap/epoll_ctl).
 This reaches DEEPER: the Linux fault-injection framework fails the request inside
 the KERNEL -- a slab allocation (failslab) or, crucially, the process-private
-PyMutex FUTEX (fail_futex). That GIL-off shared-lock park/wake path is runloom's
+PyMutex FUTEX (fail_futex). That GIL-off shared-lock park/wake path is stackweave's
 documented recurring-bug surface and is UNREACHABLE from a userspace libc shim.
 
 Per-thread targeting: /proc/<tid>/fail-nth fails the Nth fault-checked call on
@@ -27,7 +27,7 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DEBUGFS = "/sys/kernel/debug"
-PYBIN = os.environ.get("RUNLOOM_PYTHON",
+PYBIN = os.environ.get("STACKWEAVE_PYTHON",
                        os.path.expanduser("~/.pyenv/versions/3.14.4t/bin/python3"))
 
 # A small M:N workload that allocates + parks on futexes across hubs -- the
@@ -35,9 +35,9 @@ PYBIN = os.environ.get("RUNLOOM_PYTHON",
 WORKLOAD = r"""
 import os, sys
 sys.path.insert(0, os.path.join(%r, "src"))
-import runloom_c
-runloom_c.mn_init(4)
-ch = runloom_c.Chan(0)
+import stackweave_c
+stackweave_c.mn_init(4)
+ch = stackweave_c.Chan(0)
 def producer():
     for i in range(200): ch.send(i)
     ch.close()
@@ -47,10 +47,10 @@ def consumer():
         v, ok = ch.recv()
         if not ok: break
         n += 1
-runloom_c.mn_fiber(producer)
-for _ in range(8): runloom_c.mn_fiber(consumer)
-runloom_c.mn_run(); runloom_c.mn_fini()
-assert runloom_c._self_check(0) == 0
+stackweave_c.mn_fiber(producer)
+for _ in range(8): stackweave_c.mn_fiber(consumer)
+stackweave_c.mn_run(); stackweave_c.mn_fini()
+assert stackweave_c._self_check(0) == 0
 print("WORKLOAD_OK")
 """ % (ROOT,)
 

@@ -28,9 +28,9 @@ import threading
 
 import harness
 import netutil
-import runloom
-import runloom.time as rtime
-import runloom_c
+import stackweave
+import stackweave.time as rtime
+import stackweave_c
 
 
 # ---- (c) channel helper ---------------------------------------------------
@@ -101,7 +101,7 @@ def action_chan(H, wid, rng, state):
 
     A fresh pair of cap-1 channels per call means no other goroutine can ever
     read or write them -- the value we get back is provably our own."""
-    ch_in, ch_out = runloom.Chan(1), runloom.Chan(1)
+    ch_in, ch_out = stackweave.Chan(1), stackweave.Chan(1)
     val = struct.pack("<IQ", wid, rng.getrandbits(48))
     H.fiber(echo_once, ch_in, ch_out, val)
     try:
@@ -120,7 +120,7 @@ def action_lock(H, wid, rng, state):
     cell = state["counter"]
     with lock:
         x = cell[0]
-        runloom.yield_now()                # hold the lock across a migration
+        stackweave.yield_now()                # hold the lock across a migration
         cell[0] = x + 1
     state["lock_ops"][wid & 1023] += 1
     return True
@@ -129,7 +129,7 @@ def action_lock(H, wid, rng, state):
 def action_timer(H, wid, rng, state):
     """(e) a short timer fires; select resolves exactly once."""
     t = rtime.After(rng.uniform(0.001, 0.006))
-    idx, payload = runloom.select([("recv", t)])
+    idx, payload = stackweave.select([("recv", t)])
     return H.check(idx == 0, "timer select did not resolve wid={0}".format(wid))
 
 
@@ -156,12 +156,12 @@ def action_cancel(H, wid, rng, state):
     the timer wins we abandon it (cancel) and resubmit a quick deterministic
     op; if the helper wins we verify the tag.  Either way exactly one outcome,
     no double-resume."""
-    ch = runloom.Chan(1)
+    ch = stackweave.Chan(1)
     tag = struct.pack("<IQ", wid, rng.getrandbits(48))
     delay = rng.uniform(0.001, 0.02)
 
     def helper():
-        runloom.sleep(delay)
+        stackweave.sleep(delay)
         try:
             ch.try_send(tag)
         except Exception:
@@ -169,7 +169,7 @@ def action_cancel(H, wid, rng, state):
 
     H.fiber(helper)
     timer = rtime.After(delay * rng.uniform(0.3, 2.0) + 0.0005)
-    idx, payload = runloom.select([("recv", ch), ("recv", timer)])
+    idx, payload = stackweave.select([("recv", ch), ("recv", timer)])
     if idx == 0:
         got = payload[0]
         return H.check(got == tag, "cancel-path value mismatch wid={0}".format(wid))

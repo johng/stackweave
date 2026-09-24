@@ -1,5 +1,5 @@
 import threading
-from runloom._hot import hot
+from stackweave._hot import hot
 def make():
     count = 0
     def handler():

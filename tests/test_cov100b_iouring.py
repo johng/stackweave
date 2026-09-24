@@ -4,7 +4,7 @@ The round-1 cov100 suites drove real workloads but under the DEFAULT (epoll
 readiness) backend, so the io_uring-as-loop code -- the per-hub ring arm/teardown
 in hub_main, and the CQE-driven wake/cancel machinery in netpoll_wake_iouring --
 never executed.  These tests run the SAME adversarial workloads with
-RUNLOOM_IOURING_LOOP=1 (+ RUNLOOM_IOURING_MS=1 for multishot recv) in a
+STACKWEAVE_IOURING_LOOP=1 (+ STACKWEAVE_IOURING_MS=1 for multishot recv) in a
 SUBPROCESS (the backend is resolved once at first run(), so it must be set in the
 child env), and each child EXITS CLEANLY so gcov counters flush.
 
@@ -29,8 +29,8 @@ pytestmark = pytest.mark.skipif(not FT, reason="io_uring loop is an M:N backend"
 
 def _iou_available():
     try:
-        import runloom_c
-        return bool(runloom_c.iouring_available())
+        import stackweave_c
+        return bool(stackweave_c.iouring_available())
     except Exception:
         return False
 
@@ -43,7 +43,7 @@ def _run(script, env_extra, timeout=240):
     # box (a concurrent build/CI run competing for io_uring + CPU); a timeout
     # there is contention, not a bug.  We make them robust rather than flaky.
     env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src",
-               RUNLOOM_IOURING_LOOP="1", RUNLOOM_IOURING_MS="1", **env_extra)
+               STACKWEAVE_IOURING_LOOP="1", STACKWEAVE_IOURING_MS="1", **env_extra)
     try:
         return subprocess.run([PY, "-c", script], cwd=REPO, env=env,
                               capture_output=True, text=True, timeout=timeout)
@@ -57,8 +57,8 @@ def _run(script, env_extra, timeout=240):
 # --------------------------------------------------------------------------
 _ECHO = r'''
 import sys, struct; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave, stackweave_c as rc
+from stackweave.sync import WaitGroup
 N = 64
 got = [None] * N
 def main():
@@ -77,7 +77,7 @@ def main():
     wg.wait()
     for ln in lst:
         ln.close()
-runloom.run(4, main)
+stackweave.run(4, main)
 ok = sum(1 for i in range(N) if got[i] == struct.pack(">Q", i))
 sys.stdout.write("ECHO_OK %d\n" % ok)
 '''
@@ -96,8 +96,8 @@ def test_iouring_loop_echo_exact_once():
 # --------------------------------------------------------------------------
 _PYHANDLER = r'''
 import sys, struct; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave, stackweave_c as rc
+from stackweave.sync import WaitGroup
 N = 40
 got = [None] * N
 def main():
@@ -119,7 +119,7 @@ def main():
         rc.mn_fiber(lambda i=i: client(i))
     wg.wait()
     for ln in lst: ln.close()
-runloom.run(4, main)
+stackweave.run(4, main)
 sys.stdout.write("PYH_OK %d\n" % sum(1 for i in range(N) if got[i] == struct.pack(">Q", i)))
 '''
 
@@ -137,8 +137,8 @@ def test_iouring_loop_python_handler():
 # --------------------------------------------------------------------------
 _TEARDOWN = r'''
 import sys, struct; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave, stackweave_c as rc
+from stackweave.sync import WaitGroup
 def one_round():
     got = {}
     def main():
@@ -153,7 +153,7 @@ def one_round():
         for i in range(8): rc.mn_fiber(lambda i=i: cl(i))
         wg.wait()
         for ln in lst: ln.close()
-    runloom.run(4, main)         # each run() creates + tears down per-hub rings
+    stackweave.run(4, main)         # each run() creates + tears down per-hub rings
     return sum(1 for v in got.values() if v)
 total = 0
 for _ in range(4):
@@ -175,7 +175,7 @@ def test_iouring_loop_ring_create_destroy_cycles():
 # --------------------------------------------------------------------------
 _CANCEL = r'''
 import sys; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
+import stackweave, stackweave_c as rc
 res = {}
 def main():
     # a fiber parks reading a socketpair that never receives; another cancels it
@@ -213,7 +213,7 @@ def main():
     except Exception:
         pass
     a.close(); b.close()
-runloom.run(2, main)
+stackweave.run(2, main)
 sys.stdout.write("CANCEL rv=%r woke=%r\n" % (res.get("rv"), res.get("woke")))
 '''
 
@@ -233,7 +233,7 @@ def test_iouring_loop_cancel_parked_fiber():
 # --------------------------------------------------------------------------
 _FILEIO = r'''
 import sys, os, tempfile; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
+import stackweave, stackweave_c as rc
 ok = bytearray(24)
 def main():
     def one(i):
@@ -247,13 +247,13 @@ def main():
             os.close(fd); os.unlink(path)
     for i in range(24):
         rc.mn_fiber(lambda i=i: one(i))
-runloom.run(4, main)
+stackweave.run(4, main)
 sys.stdout.write("FILEIO_OK %d\n" % sum(ok))
 '''
 
 
 @needs_iouring
-@pytest.mark.skipif(not hasattr(__import__("runloom_c"), "file_read"),
+@pytest.mark.skipif(not hasattr(__import__("stackweave_c"), "file_read"),
                     reason="file_read not built")
 def test_iouring_loop_file_io():
     p = _run(_FILEIO, {})

@@ -86,14 +86,14 @@ int runloom_preempt_init(long quantum_us)
      * slicer-already-running ordering hole is closed on the other side:
      * mn_init's fence refuses a native mn-sim run while the slicer is live. */
     {
-        const char *simmn = getenv("RUNLOOM_SIM_MN");
+        const char *simmn = getenv("STACKWEAVE_SIM_MN");
         if (simmn != NULL && simmn[0] != '\0' && simmn[0] != '0' &&
             runloom_sim_enabled()) {
             static int warned = 0;
             if (!warned) {
                 warned = 1;
-                fprintf(stderr, "runloom mn-sim: preempt_init is a no-op under "
-                        "RUNLOOM_SIM_MN (wall-clock preemption is "
+                fprintf(stderr, "stackweave mn-sim: preempt_init is a no-op under "
+                        "STACKWEAVE_SIM_MN (wall-clock preemption is "
                         "nondeterministic; the frame-count preempt rules)\n");
             }
             return 0;
@@ -109,7 +109,7 @@ int runloom_preempt_init(long quantum_us)
     if (runloom_thread_create(&runloom_preempt_thread,
                            runloom_preempt_main, NULL) != 0) {
         runloom_preempt_running = 0;
-        PyErr_SetString(PyExc_OSError, "runloom preempt thread create failed");
+        PyErr_SetString(PyExc_OSError, "stackweave preempt thread create failed");
         return -1;
     }
     return 0;

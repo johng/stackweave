@@ -5,7 +5,7 @@ all mutate one per-process log connection + one per-process priority mask (the
 C `S_log_open`, `S_ident_o`, and the libc `setlogmask()` state).  That global
 hook is NOT single-owner and MUST NOT be the oracle -- many fibers calling
 openlog()/setlogmask() concurrently is documented process-global contention,
-not a runloom bug, and syslog() would also spew into the real system log.
+not a stackweave bug, and syslog() would also spew into the real system log.
 
 But syslog exposes two PURE, side-effect-free integer functions that the module
 produces WITHOUT touching any global state:
@@ -53,7 +53,7 @@ ORACLES:
   * LOAD-BEARING -- MASK PURITY (worker, HARD, fail-fast).  Single-owner: every
     input priority and every mask is a fiber-local int; nothing is shared.  A
     value that changes across the yield, or disagrees with the closed form, is a
-    runloom purity/isolation fault.
+    stackweave purity/isolation fault.
   * NON-VACUITY (post, HARD): mask_checks > 0 -- the purity arm actually ran.
   * COMPLETENESS (post, HARD): require_no_lost -- no fiber vanished mid-check
     (e.g. stranded inside the C LOG_MASK call across a hub migration).
@@ -76,7 +76,7 @@ return before the bit-identity law even closes.
 import syslog
 
 import harness
-import runloom
+import stackweave
 
 # The documented syslog priority band: LOG_EMERG (0) .. LOG_DEBUG (7).  Within
 # this band 1<<pri and (1<<(pri+1))-1 are exact positive ints (no 32-bit C shift
@@ -129,9 +129,9 @@ def mask_check(H, wid, idx, rng, state):
         base_upto_union |= syslog.LOG_MASK(p)
 
     # --- YIELD: let siblings run the same pure calls on other hubs ----------
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0003)
+        stackweave.sleep(0.0003)
 
     # --- recompute AFTER the yield and check the three laws -----------------
     for p, base_m in zip(subset, base_masks):

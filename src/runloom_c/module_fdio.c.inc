@@ -6,7 +6,7 @@ static int runloom_fdio_fault_armed(void)
 {
     static int cached = -1;
     if (cached < 0)
-        cached = (getenv("RUNLOOM_FAULT_FD_READ") || getenv("RUNLOOM_FAULT_FD_WRITE")) ? 1 : 0;
+        cached = (getenv("STACKWEAVE_FAULT_FD_READ") || getenv("STACKWEAVE_FAULT_FD_WRITE")) ? 1 : 0;
     return cached;
 }
 #define RUNLOOM_FDIO_FINJ(site) (runloom_fdio_fault_armed() ? runloom_fault_inject(site) : 0)

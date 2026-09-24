@@ -1,4 +1,4 @@
-"""Adversarial QA: runloom.monkey -- foreign-OS-thread safety.
+"""Adversarial QA: stackweave.monkey -- foreign-OS-thread safety.
 
 The project's sharpest invariant (CLAUDE.md "Cooperative primitives must be
 FOREIGN-OS-THREAD-safe"): monkey.patch() replaces threading/select/... GLOBALLY,
@@ -20,7 +20,7 @@ runs under the patch (like the existing monkey suites).
 import sys
 import time
 
-import runloom.monkey as monkey
+import stackweave.monkey as monkey
 monkey.patch()
 
 import threading          # patched
@@ -29,8 +29,8 @@ import socket             # patched
 
 import pytest
 
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 from adv_util import hang_guard, needs_free_threading
 
 # A genuinely-foreign OS thread: the monkey go-wrapper marks fiber context
@@ -63,7 +63,7 @@ def test_patch_is_idempotent():
 def test_patched_lock_is_cooperative_type():
     lk = threading.Lock()
     # Under patch a Lock is the cooperative CoLock, not the builtin _thread.lock.
-    assert type(lk).__module__.startswith("runloom")
+    assert type(lk).__module__.startswith("stackweave")
 
 
 # --------------------------------------------------------------------------
@@ -95,7 +95,7 @@ def test_patched_lock_mutual_exclusion_fibers_mn():
             with lk:
                 counter[0] += 1            # GIL-off: only the lock makes this safe
     def main():
-        from runloom.sync import WaitGroup
+        from stackweave.sync import WaitGroup
         wg = WaitGroup(); wg.add(N)
         def w():
             try:
@@ -106,7 +106,7 @@ def test_patched_lock_mutual_exclusion_fibers_mn():
             rc.mn_fiber(w)
         wg.wait()
     with hang_guard(40, "lock mutex M:N"):
-        runloom.run(4, main)
+        stackweave.run(4, main)
     assert counter[0] == N * ITERS, "lost increments under M:N: %d != %d" % (counter[0], N * ITERS)
 
 
@@ -146,7 +146,7 @@ def test_patched_lock_foreign_thread_plus_fibers():
     _real_thread_mod.start_new_thread(foreign_body, ())
 
     def main():
-        from runloom.sync import WaitGroup
+        from stackweave.sync import WaitGroup
         wg = WaitGroup(); wg.add(GOR)
         def w():
             try:
@@ -160,7 +160,7 @@ def test_patched_lock_foreign_thread_plus_fibers():
         wg.wait()
 
     with hang_guard(60, "lock foreign+fibers"):
-        runloom.run(4, main)
+        stackweave.run(4, main)
         # Wait for the foreign thread to finish its remaining increments via the
         # raw-lock latch (deterministic; the 30s cap only bounds a true hang).
         acquired = done_latch.acquire(timeout=30)
@@ -236,9 +236,9 @@ def test_patched_queue_blocking_get_across_fibers():
         out.append(q.get())     # blocks until producer puts
         out.append(q.get())
     def producer():
-        runloom.sleep(0.02)
+        stackweave.sleep(0.02)
         q.put("a")
-        runloom.sleep(0.02)
+        stackweave.sleep(0.02)
         q.put("b")
     def main():
         rc.fiber(consumer)

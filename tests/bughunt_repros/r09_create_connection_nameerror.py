@@ -3,7 +3,7 @@ OSError on the FIRST getaddrinfo entry (e.g. EAFNOSUPPORT for AF_INET6 on an
 IPv6-disabled host), the `except OSError:` handler does `s.close()` with `s`
 unbound -> NameError swallows the fallback to the next address family."""
 import sys, socket, asyncio
-import runloom.aio as aio
+import stackweave.aio as aio
 
 real_socket = socket.socket
 calls = []
@@ -26,7 +26,7 @@ async def main():
     try:
         # Force two addrinfo entries for the same target so there is a
         # fallback candidate after the first failure.
-        import runloom.aio.loop_net as ln
+        import stackweave.aio.loop_net as ln
         orig_resolve = ln._resolve
         def fake_resolve(h, p, fam, typ, proto, flags):
             infos = orig_resolve(h, p, fam, typ, proto, flags)

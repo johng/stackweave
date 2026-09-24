@@ -1,7 +1,7 @@
 """big_100 / 111 -- os.fork() while the M:N scheduler is active.
 
 A goroutine calls os.fork() while OTHER goroutines are running across the hubs.
-In the CHILD: immediately runloom_c.reset_after_fork() (drop the inherited hub
+In the CHILD: immediately stackweave_c.reset_after_fork() (drop the inherited hub
 threads / scheduler locks that only exist in the parent's address space), write
 a known byte to a pipe, and os._exit(EXPECTED).  In the PARENT: os.waitpid the
 child, verify the exit status is EXPECTED and read back the byte.
@@ -21,8 +21,8 @@ fork-deadlock avoidance, child exit-status + pipe-byte conservation.
 import os
 
 import harness
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
 # Capture the ORIGINAL blocking os.write/os.read BEFORE the harness calls
 # monkey.patch().  The child must use these raw syscalls: after fork the child
@@ -42,7 +42,7 @@ def child_main(wfd):
     possible until reset_after_fork() has re-initialized it."""
     try:
         # FIRST thing: drop the parent's inherited hub threads / sched locks.
-        runloom_c.reset_after_fork()
+        stackweave_c.reset_after_fork()
     except Exception:
         # Even if reset is unavailable, still try to produce our byte + exit so
         # the parent's invariant can detect the failure precisely.

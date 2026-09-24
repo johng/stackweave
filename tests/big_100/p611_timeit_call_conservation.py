@@ -3,7 +3,7 @@
 timeit is a PROCESS-GLOBAL-flavoured module: its module-level default_timer,
 the gc.disable()/gc.enable() toggle inside Timer.timeit(), and the shared
 _globals() namespace are NOT single-owner, so an oracle built on them would race
-exactly like any shared global (documented behavior, NOT a runloom bug).  But
+exactly like any shared global (documented behavior, NOT a stackweave bug).  But
 timeit ALSO produces a genuinely SINGLE-OWNER, exactly-countable artifact: a
 Timer whose stmt is a fiber-local CALLABLE.  timeit.Timer(stmt=fn).timeit(N)
 compiles + execs a private `inner(_it, _timer)` closure (each Timer builds its
@@ -26,7 +26,7 @@ increments are race-free by construction even with the GIL off -- the count is
 the oracle, not the wall-clock time.
 
 WHERE M:N BREAKS IT (the gap this program probes).  We deliberately drive a
-runloom.yield_now() from INSIDE the timed callable, so this fiber PARKS mid-way
+stackweave.yield_now() from INSIDE the timed callable, so this fiber PARKS mid-way
 through timeit's `for _i in _it:` inner loop and a sibling on another hub runs
 (building/execing its own Timer, toggling process-global gc, calling its own
 inner loop) before this fiber is resumed to finish the loop.  If the runtime
@@ -50,7 +50,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against the timeit template):
   These are closed-form identities of timeit's inner loop; on a CORRECT runtime
   they hold bit-exactly regardless of hub migration or the sibling gc toggling,
   so the load-bearing single-owner oracle PASSES (exit 0) when there is no bug.
-  A miscount is a runloom loop-resume / lost-or-doubled-wakeup desync.
+  A miscount is a stackweave loop-resume / lost-or-doubled-wakeup desync.
 
 ORACLES:
   * LOAD-BEARING -- CALL CONSERVATION (worker, HARD, fail-fast).  Per round, a
@@ -92,7 +92,7 @@ iteration, shows up as cc[0] != N before any wall-clock value is even inspected.
 import timeit
 
 import harness
-import runloom
+import stackweave
 
 # Inner-loop iteration count per timeit() call.  Small so a round is fast under
 # tens of thousands of fibers, but > 1 so a dropped/doubled loop iteration is a
@@ -130,7 +130,7 @@ def make_callables():
         # own Timer / toggling gc / running its own loop) before we resume and
         # keep counting.  The count must still land EXACTLY on N.
         if cc[0] % YIELD_EVERY == 0:
-            runloom.yield_now()
+            stackweave.yield_now()
 
     def setup():
         sc[0] += 1
@@ -277,6 +277,6 @@ if __name__ == "__main__":
                  "runs; the callable-invocation count MUST still land exactly on "
                  "N / R*N.  A dropped/doubled loop iteration, a miscounted setup, "
                  "a non-float/negative elapsed, or a fiber stranded inside the "
-                 "timed loop is the runloom bug.  The process-global gc toggle + "
+                 "timed loop is the stackweave bug.  The process-global gc toggle + "
                  "default_timer are raced but never asserted on (single-owner "
                  "callable-count is the only oracle)")

@@ -11,7 +11,7 @@ tests).  The contract a cooperative version must keep:
   * a blocked wait yields the scheduler -- a sibling fiber keeps running;
   * pause() returns once a handled signal is caught.
 
-These run under the single-threaded scheduler (runloom_c.fiber/run on the main
+These run under the single-threaded scheduler (stackweave_c.fiber/run on the main
 thread), which is where signal masks are stable and set_wakeup_fd is usable.
 """
 import os
@@ -19,9 +19,9 @@ import platform
 import time
 import unittest
 
-import runloom
-import runloom.monkey
-import runloom_c
+import stackweave
+import stackweave.monkey
+import stackweave_c
 
 try:
     import signal
@@ -46,19 +46,19 @@ def _drive(fn):
         except BaseException as e:   # noqa: BLE001
             box[1] = e
 
-    runloom_c.fiber(runner)
-    runloom_c.run()
+    stackweave_c.fiber(runner)
+    stackweave_c.run()
     if box[1] is not None:
         raise box[1]
     return box[0]
 
 
 def setUpModule():
-    runloom.monkey.patch()
+    stackweave.monkey.patch()
 
 
 def tearDownModule():
-    runloom.monkey.unpatch()
+    stackweave.monkey.unpatch()
 
 
 @unittest.skipIf(SIG is None, "no SIGUSR1")
@@ -77,16 +77,16 @@ class TestSigwait(unittest.TestCase):
             signal.pthread_sigmask(signal.SIG_BLOCK, {SIG})
             try:
                 def sender():
-                    runloom.sleep(0.02)
+                    stackweave.sleep(0.02)
                     os.kill(os.getpid(), SIG)
 
                 def ticker():
                     while not done["v"]:
                         ticks.append(1)
-                        runloom.sleep(0.002)
+                        stackweave.sleep(0.002)
 
-                runloom_c.fiber(sender)
-                runloom_c.fiber(ticker)
+                stackweave_c.fiber(sender)
+                stackweave_c.fiber(ticker)
                 sig = signal.sigwait({SIG})
                 done["v"] = True
             finally:
@@ -99,7 +99,7 @@ class TestSigwait(unittest.TestCase):
     def test_sigwait_retries_eintr_fault(self):
         """Fault injection: sigtimedwait raising EINTR mid-poll must be retried,
         not propagated -- the sigwait still reaps the pending signal."""
-        import runloom.monkey as _m
+        import stackweave.monkey as _m
         real = _m.signals._orig_sigtimedwait
         st = {"n": 0}
 
@@ -114,9 +114,9 @@ class TestSigwait(unittest.TestCase):
             _m.signals._orig_sigtimedwait = flaky
             try:
                 def sender():
-                    runloom.sleep(0.02)
+                    stackweave.sleep(0.02)
                     os.kill(os.getpid(), SIG)
-                runloom_c.fiber(sender)
+                stackweave_c.fiber(sender)
                 return signal.sigwait({SIG})
             finally:
                 _m.signals._orig_sigtimedwait = real
@@ -133,16 +133,16 @@ class TestSigwait(unittest.TestCase):
             signal.pthread_sigmask(signal.SIG_BLOCK, {SIG})
             try:
                 def sender():
-                    runloom.sleep(0.02)
+                    stackweave.sleep(0.02)
                     os.kill(os.getpid(), SIG)
 
                 def ticker():
                     while not done["v"]:
                         ticks.append(1)
-                        runloom.sleep(0.002)
+                        stackweave.sleep(0.002)
 
-                runloom_c.fiber(sender)
-                runloom_c.fiber(ticker)
+                stackweave_c.fiber(sender)
+                stackweave_c.fiber(ticker)
                 info = signal.sigwaitinfo({SIG})
                 done["v"] = True
             finally:
@@ -162,10 +162,10 @@ class TestSigtimedwait(unittest.TestCase):
             signal.pthread_sigmask(signal.SIG_BLOCK, {SIG})
             try:
                 def sender():
-                    runloom.sleep(0.02)
+                    stackweave.sleep(0.02)
                     os.kill(os.getpid(), SIG)
 
-                runloom_c.fiber(sender)
+                stackweave_c.fiber(sender)
                 info = signal.sigtimedwait({SIG}, 5.0)
             finally:
                 signal.pthread_sigmask(signal.SIG_UNBLOCK, {SIG})
@@ -181,9 +181,9 @@ class TestSigtimedwait(unittest.TestCase):
                 def ticker():
                     while not done["v"]:
                         ticks.append(1)
-                        runloom.sleep(0.003)
+                        stackweave.sleep(0.003)
 
-                runloom_c.fiber(ticker)
+                stackweave_c.fiber(ticker)
                 info = signal.sigtimedwait({SIG}, 0.08)   # nothing pending
                 done["v"] = True
             finally:
@@ -227,14 +227,14 @@ class TestPause(unittest.TestCase):
                 def ticker():
                     while not done["v"]:
                         ticks.append(1)
-                        runloom.sleep(0.003)
+                        stackweave.sleep(0.003)
 
                 def sender():
-                    runloom.sleep(0.03)
+                    stackweave.sleep(0.03)
                     os.kill(os.getpid(), SIG)
 
-                runloom_c.fiber(ticker)
-                runloom_c.fiber(sender)
+                stackweave_c.fiber(ticker)
+                stackweave_c.fiber(sender)
                 signal.pause()           # parks on the wakeup-fd pipe
                 done["v"] = True
                 return len(ticks)

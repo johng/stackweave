@@ -19,22 +19,22 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import pytest
 
-import runloom            # noqa: E402
-import runloom.monkey     # noqa: E402
-import runloom_c       # noqa: E402
+import stackweave            # noqa: E402
+import stackweave.monkey     # noqa: E402
+import stackweave_c       # noqa: E402
 
 pytestmark = pytest.mark.skipif(not hasattr(os, "fork"), reason="os.fork required")
 
-runloom.monkey.patch()
+stackweave.monkey.patch()
 
-CHILD_TIMEOUT = float(os.environ.get("RUNLOOM_FORK_TIMEOUT", "15"))
+CHILD_TIMEOUT = float(os.environ.get("STACKWEAVE_FORK_TIMEOUT", "15"))
 
 
 def _coop(workload):
     """Run workload() inside a fiber, return its result."""
     box = []
-    runloom_c.fiber(lambda: box.append(workload()), stack_size=8 << 20)
-    runloom_c.run()
+    stackweave_c.fiber(lambda: box.append(workload()), stack_size=8 << 20)
+    stackweave_c.run()
     return box[0] if box else None
 
 
@@ -151,12 +151,12 @@ def _arm_fd_in_parent():
         st["got"] = a.recv(8)          # no data yet -> ARMS fd a, parks
 
     def sender():
-        runloom.sleep(0.05)
+        stackweave.sleep(0.05)
         b.send(b"arm")                 # wakes receiver -> recv completes
 
-    runloom_c.fiber(receiver)
-    runloom_c.fiber(sender)
-    runloom_c.run()
+    stackweave_c.fiber(receiver)
+    stackweave_c.fiber(sender)
+    stackweave_c.run()
     assert st.get("got") == b"arm"
     return a, b
 
@@ -178,8 +178,8 @@ def test_fork_child_recv_on_armed_inherited_fd():
             rc = 99
             try:
                 box = []
-                runloom_c.fiber(lambda: box.append(a.recv(8)), stack_size=8 << 20)
-                runloom_c.run()
+                stackweave_c.fiber(lambda: box.append(a.recv(8)), stack_size=8 << 20)
+                stackweave_c.run()
                 rc = 0 if box and box[0] == b"hello" else 3
             except BaseException:      # noqa: BLE001
                 rc = 1

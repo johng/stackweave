@@ -2,7 +2,7 @@
 
 Thread A creates a child context; a per-thread trace function pauses it exactly
 between the `parent._err is not None` check and the `parent._children.append(self)`
-(src/runloom/context.py lines 150/154).  While paused, thread B runs the parent's
+(src/stackweave/context.py lines 150/154).  While paused, thread B runs the parent's
 cancel() to completion.  Thread A then resumes and appends.
 
 Expected (Go semantics / correct behavior): child ends up cancelled.
@@ -11,7 +11,7 @@ Claimed bug: child._err stays None forever -> lost cancellation.
 import sys
 import threading
 
-from runloom import context
+from stackweave import context
 
 in_window = threading.Event()
 cancel_done = threading.Event()

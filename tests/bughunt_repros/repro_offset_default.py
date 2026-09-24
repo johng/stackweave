@@ -1,10 +1,10 @@
-"""Repro: runloom_c.file_read / file_write with default offset=-1
+"""Repro: stackweave_c.file_read / file_write with default offset=-1
 ("use current fd offset" per the C comment) actually read/write at
 OFFSET 0 on the io_uring path, diverging from the non-io_uring fallback
 (plain read()/write(), which honours + advances the fd position).
 """
 import os, sys, tempfile
-import runloom_c as rc
+import stackweave_c as rc
 
 print("iouring_available:", rc.iouring_available())
 

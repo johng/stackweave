@@ -20,7 +20,7 @@ import socket as _socket
 import sys
 
 import harness
-import runloom
+import stackweave
 
 # --- audit hook: installed at IMPORT time, ONE cheap counting callback. ------
 # Buckets are fixed up front so the hook never allocates / never recurses.
@@ -91,7 +91,7 @@ def worker(H, wid, rng, state):
             continue
         H.op(wid)
         if rng.random() < 0.2:
-            runloom.yield_now()
+            stackweave.yield_now()
         H.task_done(wid)
 
 

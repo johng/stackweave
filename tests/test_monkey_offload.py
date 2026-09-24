@@ -12,10 +12,10 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-import runloom.monkey
-import runloom_c
+import stackweave.monkey
+import stackweave_c
 
-runloom.monkey.patch()
+stackweave.monkey.patch()
 
 import tempfile     # imported AFTER patch, so its _once_lock is cooperative
 
@@ -33,15 +33,15 @@ def _filework():
 
 def test_concurrent_offload_single_thread():
     for _ in range(16):
-        runloom_c.fiber(_filework, stack_size=2 << 20)
-    runloom_c.run()
-    assert runloom_c._self_check(0) == 0
+        stackweave_c.fiber(_filework, stack_size=2 << 20)
+    stackweave_c.run()
+    assert stackweave_c._self_check(0) == 0
 
 
 def test_concurrent_offload_mn():
-    runloom_c.mn_init(4)
+    stackweave_c.mn_init(4)
     for _ in range(16):
-        runloom_c.mn_fiber(_filework)
-    runloom_c.mn_run()
-    runloom_c.mn_fini()
-    assert runloom_c._self_check(0) == 0
+        stackweave_c.mn_fiber(_filework)
+    stackweave_c.mn_run()
+    stackweave_c.mn_fini()
+    assert stackweave_c._self_check(0) == 0

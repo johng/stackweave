@@ -14,7 +14,7 @@ WHERE M:N COULD BREAK IT (the gap this program probes).  Under free-threaded
 3.14t with the GIL off and tens of thousands of goroutines parsing across >1
 hubs, parse() is on a hot shared-code path that touches those module-global
 lookup tables and constructs many short-lived SubPattern/State objects
-concurrently.  If runloom mis-schedules a fiber across hubs mid-parse -- a lost
+concurrently.  If stackweave mis-schedules a fiber across hubs mid-parse -- a lost
 wakeup that strands a fiber inside the tokenizer, a torn read of a shared
 constant table, an object built on one hub being resumed/finalized on another
 with corrupted intermediate state, or any cross-fiber leak of the per-call
@@ -37,7 +37,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (a pure-function PURITY law):
       so it is comparable across a yield;
     * records the closed-form group count and cross-checks it against the
       parser's own state.groups (parser sees ngroups+1);
-    * YIELDS (runloom.yield_now / sleep) so siblings parse their conflicting
+    * YIELDS (stackweave.yield_now / sleep) so siblings parse their conflicting
       patterns in parallel, possibly on other hubs;
     * re-parses the SAME fiber-local pattern and re-serializes;
     * asserts the second serialization is BIT-IDENTICAL to the first, and the
@@ -48,7 +48,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (a pure-function PURITY law):
   correct pure parse() re-run over the same input MUST reproduce the same tree.
   A mismatch means a fiber's parse observed a value that changed across a yield
   -- a torn shared table, a cross-fiber State/Tokenizer leak, or a scheduler
-  desync -- i.e. a runloom M:N bug, never documented Python semantics.
+  desync -- i.e. a stackweave M:N bug, never documented Python semantics.
 
   Verified reasoning: parse() holds no cross-call mutable state (Tokenizer and
   State are per-call; the module tables it reads are frozensets / never-written
@@ -86,7 +86,7 @@ import sre_parse
 import warnings
 
 import harness
-import runloom
+import stackweave
 
 # Silence the 3.12+ "module 'sre_parse' is deprecated" DeprecationWarning at
 # import time; the module and its public parse() remain live and are the target.
@@ -212,9 +212,9 @@ def purity_check(H, wid, idx, rng, state):
 
     # YIELD: let siblings parse their conflicting patterns, possibly on other
     # hubs, between this fiber's two parses of the SAME input.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
 
     # Reparse the SAME fiber-local pattern; a pure parse() must reproduce the
     # exact same tree and group count.
@@ -294,5 +294,5 @@ if __name__ == "__main__":
                  "conflicting patterns in parallel across hubs), then reparses "
                  "the SAME pattern; the second tree MUST be bit-identical and the "
                  "group count MUST still match the closed form.  A changed tree "
-                 "or group count across a yield is a runloom M:N bug (torn shared "
+                 "or group count across a yield is a stackweave M:N bug (torn shared "
                  "table, cross-fiber State/Tokenizer leak, or scheduler desync)")

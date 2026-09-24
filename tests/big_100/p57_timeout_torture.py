@@ -9,12 +9,12 @@ Stresses: timer cancellation, the exception/early-return paths.
 """
 import harness
 import cancelutil
-import runloom
+import stackweave
 
 
 def setup(H):
     # A channel that mostly never has data, so recvs usually time out.
-    H.state = {"quiet": runloom.Chan(1), "lock": runloom.sync.Lock(),
+    H.state = {"quiet": stackweave.Chan(1), "lock": stackweave.sync.Lock(),
                "completed": [0] * 1024, "timedout": [0] * 1024}
 
 

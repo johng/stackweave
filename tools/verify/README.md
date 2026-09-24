@@ -1,6 +1,6 @@
-# runloom formal verification
+# stackweave formal verification
 
-Machine-checked correctness for runloom's lock-free concurrency primitives.
+Machine-checked correctness for stackweave's lock-free concurrency primitives.
 Four engines, used for what each is best at:
 
 | engine | what it checks | how |
@@ -75,7 +75,7 @@ has teeth. `run_verify.sh` runs this and asserts it *does* fail.
 
 ### 3. `park_safe`/`wake_safe` handshake -- `spin/parked_safe.pml`
 
-The race-safe single-thread park used by `runloom.aio`'s `RunloomTask` and the
+The race-safe single-thread park used by `stackweave.aio`'s `StackweaveTask` and the
 blocking-offload pool, where a wake can arrive from another OS thread
 mid-park (`runloom_sched_park_safe` / `runloom_sched_wake_safe`). Models the
 `wake_pending` counter + `parked_safe` CAS handoff verbatim:
@@ -125,7 +125,7 @@ properties demonstrably have teeth.
 ### 6. Default M:N wake path -- `spin/hub_submit.pml`
 
 The wake path that actually runs by default on Linux free-threaded 3.13t:
-`RUNLOOM_PER_G_TSTATE` and `RUNLOOM_STEAL_WOKEN` are both off, so `runloom_mn_wake_g`
+`STACKWEAVE_PER_G_TSTATE` and `STACKWEAVE_STEAL_WOKEN` are both off, so `runloom_mn_wake_g`
 routes through `runloom_mn_hub_submit` (the per-hub-tstate MPSC submission
 list), **not** the global-runq `wake_state` machine of #2. A parker can be
 `wake_g`'d more than once (a netpoll-pump unlink + a stale safety-unlink
@@ -144,7 +144,7 @@ fails (resume-after-done).
 
 ### 7. Blocking-offload wake order -- `spin/blockpool.pml`
 
-The default `runloom.blocking` / DNS-offload path (`runloom_blockpool.c`): a
+The default `stackweave.blocking` / DNS-offload path (`runloom_blockpool.c`): a
 goroutine offloads to a worker thread and parks; the single-thread drain
 blocks in `epoll_wait`, so an `inflight` counter keeps it alive while a job
 is outstanding. The worker must **re-queue the goroutine before
@@ -163,7 +163,7 @@ fails (the drain exits and strands the goroutine).
 
 The lost-wake guard for I/O parking (`netpoll.c`): the piece where the real
 lost-wake bugs have lived (EPOLLET edge-drop, and the residual "missing atomic
-park-commit"). It models Go's `netpollblockcommit`, adapted to runloom's re-queue
+park-commit"). It models Go's `netpollblockcommit`, adapted to stackweave's re-queue
 model -- the `commit` field (`ARMED → {PARKED | WOKEN}`) shared between a
 goroutine parking on an fd (`runloom_netpoll_wait_fd`) and the pump that delivers
 readiness (`runloom_pump_dispatch_event` / `runloom_pump_claim`):
@@ -285,14 +285,14 @@ closing CQE wakes that waiter and then frees the handle *outside* `h->lock`
 This is memory-safe **only under the single-owner convention**: a `TCPConn` is
 driven by one goroutine, so `close()` runs after `recv()` returns and no
 consumer is parked in `ms_recv` when the closing CQE frees the handle.
-(`RunloomTCPConn` is a standalone primitive -- *not* used by `runloom.aio` -- and its
+(`RunloomTCPConn` is a standalone primitive -- *not* used by `stackweave.aio` -- and its
 benches/tests are one-goroutine-per-conn.) The model proves **no use-after-free
 under that convention**: the consumer never re-locks the handle after it is
 freed (`assert(freed == 0)` at the re-lock).
 
 Negative control `-DBUG_CONCURRENT_CLOSE` lifts the convention (a second task
 closes the conn while the first is parked in `recv` -- a shared `TCPConn` under
-`RUNLOOM_TCPCONN_IOURING=1` on M:N free-threaded) and Spin finds the UAF: the
+`STACKWEAVE_TCPCONN_IOURING=1` on M:N free-threaded) and Spin finds the UAF: the
 closing CQE wakes the parked consumer *and* frees the handle, and the woken
 consumer re-locks freed memory. So the single-owner convention is load-bearing
 for memory safety; making `TCPConn` shareable would require refcounting the
@@ -300,7 +300,7 @@ handle or freeing it under coordination with a parked `recv`.
 
 ### 12. Phase C per-thread-scheduler wake routing -- `spin/cross_thread_wake.pml`
 
-runloom now runs **one scheduler per OS thread** (commit 4bef422); runloom.aio drives
+stackweave now runs **one scheduler per OS thread** (commit 4bef422); stackweave.aio drives
 each event loop on its own thread, and a goroutine records its owner sched at
 spawn (`g->owner`). When a **foreign thread** wakes it -- a `run_in_executor`
 pool worker, or an io_uring CQE resolving a future the owner awaits --
@@ -456,7 +456,7 @@ backend** -- only the arm differs -- so this model isolates the kqueue arm and
 proves it closes the *same* not-yet-linked window. Source:
 `netpoll_register.c.inc:85-123`.
 
-runloom arms only the requested direction(s) with **`EV_ADD | EV_ONESHOT`,
+stackweave arms only the requested direction(s) with **`EV_ADD | EV_ONESHOT`,
 re-issued on every park, strictly after linking the parker**. `EV_ADD`
 re-checks readiness *now* (kqueue reports a level-ready fd at add time), so a
 still-ready fd queues a fresh delivery generated after the link -- the kqueue

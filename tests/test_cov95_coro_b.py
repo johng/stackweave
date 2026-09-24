@@ -23,7 +23,7 @@ ONLY exercised when >512 coros are released on ONE pool.  Batch 1 spawned 200-30
 at a time, so the pool absorbed them all and none of these lines ran.
 
 Each worker therefore spawns N > 512 fibers and holds them ALL concurrently
-alive on a SINGLE M:1 pool (runloom.run(1, ...) -> rc.fiber, the cooperative
+alive on a SINGLE M:1 pool (stackweave.run(1, ...) -> rc.fiber, the cooperative
 single-thread scheduler whose coro pool is one TLS pool) behind a release
 WaitGroup, so when they finish together the pool overflows by N-512 and that
 many real stack releases run.  M:1 (not M:N) is deliberate: it pins every
@@ -44,13 +44,13 @@ regenerating gcov against the instrumented build before writing this file:
             actually released (pool overflow) -- 0 hits with <=512 fibers.
   L608-618  the arena release branch: madvise the slice body + runloom_arena_free
             it back to the bump allocator.  Same >512 gate.
-  L572      RUNLOOM_STACK_MADV=off: runloom_stack_madv_reclaim resolves its
+  L572      STACKWEAVE_STACK_MADV=off: runloom_stack_madv_reclaim resolves its
             cached flag to 0 -- but the resolve only runs on the FIRST stack
             release, so a process that never releases never resolves "off".
-  L575,594  RUNLOOM_STACK_MADV=dontneed: flag resolves to MADV_DONTNEED and is
+  L575,594  STACKWEAVE_STACK_MADV=dontneed: flag resolves to MADV_DONTNEED and is
             stored; reached on the first release (same >512 gate).
   L403-404  runloom_stack_flush_to_global over-cap munmap: with a TINY
-            RUNLOOM_STACK_DEPOT_CAP, the TLS->depot flush of released stacks
+            STACKWEAVE_STACK_DEPOT_CAP, the TLS->depot flush of released stacks
             exceeds the cap and munmaps the excess.  Needs real releases (>512)
             AND a low cap; batch 1's depot test used cap=2000 (never overflows).
   L866-868  runloom_stack_prewarm_global CAS-loss: two prewarm contexts (the
@@ -82,7 +82,7 @@ import textwrap
 
 import pytest
 
-import runloom_c as rc
+import stackweave_c as rc
 from adv_util import needs_free_threading
 
 FT = needs_free_threading()
@@ -111,7 +111,7 @@ def _run_worker(body, env_extra=None, timeout=240):
     """
     src = ("import sys\n"
            "sys.path.insert(0, 'src')\n"
-           "import runloom_c as rc\n"
+           "import stackweave_c as rc\n"
            + textwrap.dedent(body))
     env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
     if env_extra:
@@ -142,8 +142,8 @@ def _assert_clean(p, marker):
 # releases hits structures already at steady state (depot already at cap for the
 # munmap path; arena cursor already cycled).
 _OVERFLOW = r'''
-import runloom
-from runloom.sync import WaitGroup
+import stackweave
+from stackweave.sync import WaitGroup
 N = {n}
 ROUNDS = {rounds}
 
@@ -168,7 +168,7 @@ def main():
     for _ in range(ROUNDS):
         _wave()
 
-runloom.run(1, main)                 # M:1: pins every destroy to one TLS coro pool
+stackweave.run(1, main)                 # M:1: pins every destroy to one TLS coro pool
 assert rc._self_check(0) == 0, "self_check tripped after release churn"
 print("{marker} %d" % N)
 '''
@@ -178,7 +178,7 @@ print("{marker} %d" % N)
 # L504-509 (runloom_stack_in_arena) + L608-618 (arena release branch).
 # --------------------------------------------------------------------------
 def test_arena_stack_release_path_on_pool_overflow():
-    """RUNLOOM_STACK_ARENA=1 carves every fiber's stack from the one big arena.
+    """STACKWEAVE_STACK_ARENA=1 carves every fiber's stack from the one big arena.
     With N=700 fibers held concurrently alive on a SINGLE M:1 coro pool, the pool
     (cap 512) overflows on finish, so ~188 coros take the runloom_stack_release
     path PER round.  For an arena slice that means the L607 guard calls
@@ -189,39 +189,39 @@ def test_arena_stack_release_path_on_pool_overflow():
     free-list / cursor stay consistent (self_check == 0); a mis-computed slot
     index in L611 or a double-free in runloom_arena_free would corrupt it."""
     body = _OVERFLOW.format(n=CONC, rounds=3, marker="ARENA_RELEASE_OK")
-    p = _run_worker(body, {"RUNLOOM_STACK_ARENA": "1",
-                           "RUNLOOM_STACK_ARENA_N": "8192"})
+    p = _run_worker(body, {"STACKWEAVE_STACK_ARENA": "1",
+                           "STACKWEAVE_STACK_ARENA_N": "8192"})
     _assert_clean(p, "ARENA_RELEASE_OK %d" % CONC)
 
 
 # --------------------------------------------------------------------------
-# L572 : RUNLOOM_STACK_MADV=off -> reclaim flag resolves to 0 on first release.
+# L572 : STACKWEAVE_STACK_MADV=off -> reclaim flag resolves to 0 on first release.
 # --------------------------------------------------------------------------
 def test_madv_off_flag_resolves_on_real_release():
     """runloom_stack_madv_reclaim resolves its cached flag lazily on the FIRST
-    pooled-stack release.  RUNLOOM_STACK_MADV=off makes that resolution take the
+    pooled-stack release.  STACKWEAVE_STACK_MADV=off makes that resolution take the
     L571->L572 branch (flag = 0) and store it (L594), after which every release
     skips madvise.  Batch 1 set the env but its <=300-fiber waves never released a
     stack, so the resolve (and L572) never ran.  Here N=700 overflows the M:1
     pool -> real releases -> the 'off' flag resolves.  Oracle: all fibers run and
     structures stay consistent with reclaim DISABLED (pages kept resident)."""
     body = _OVERFLOW.format(n=CONC, rounds=2, marker="MADV_OFF_OK")
-    p = _run_worker(body, {"RUNLOOM_STACK_MADV": "off"})
+    p = _run_worker(body, {"STACKWEAVE_STACK_MADV": "off"})
     _assert_clean(p, "MADV_OFF_OK %d" % CONC)
 
 
 # --------------------------------------------------------------------------
-# L575, L594 : RUNLOOM_STACK_MADV=dontneed -> flag = MADV_DONTNEED, eager reclaim.
+# L575, L594 : STACKWEAVE_STACK_MADV=dontneed -> flag = MADV_DONTNEED, eager reclaim.
 # --------------------------------------------------------------------------
 def test_madv_dontneed_flag_resolves_and_reclaims_on_release():
-    """RUNLOOM_STACK_MADV=dontneed makes the first real release resolve the flag
+    """STACKWEAVE_STACK_MADV=dontneed makes the first real release resolve the flag
     via L573->L575 (MADV_DONTNEED) and store it (L594); every subsequent release
     then EAGERLY madvise(MADV_DONTNEED)s the stack body (the tight-RSS / old
     behaviour).  Same >512 release gate as above (batch 1's waves never reached
     the resolve).  Oracle: the eager per-release zap does not corrupt a stack the
     pool later reuses -> all fibers run across both rounds, self_check clean."""
     body = _OVERFLOW.format(n=CONC, rounds=2, marker="MADV_DN_OK")
-    p = _run_worker(body, {"RUNLOOM_STACK_MADV": "dontneed"})
+    p = _run_worker(body, {"STACKWEAVE_STACK_MADV": "dontneed"})
     _assert_clean(p, "MADV_DN_OK %d" % CONC)
 
 
@@ -229,7 +229,7 @@ def test_madv_dontneed_flag_resolves_and_reclaims_on_release():
 # L403-404 : runloom_stack_flush_to_global over-cap munmap.
 # --------------------------------------------------------------------------
 def test_depot_flush_over_cap_munmaps_excess():
-    """With a TINY RUNLOOM_STACK_DEPOT_CAP=1, the global depot fills on the first
+    """With a TINY STACKWEAVE_STACK_DEPOT_CAP=1, the global depot fills on the first
     released stack; every later TLS->depot flush (runloom_stack_flush_to_global,
     triggered once the per-thread TLS cache exceeds RUNLOOM_STACK_TLS_CAP=64) then
     finds the depot AT cap and takes the L402->L403-404 else-branch, munmap'ing the
@@ -240,7 +240,7 @@ def test_depot_flush_over_cap_munmaps_excess():
     returns stacks to the OS correctly -- fibers all run, no UAF on a freed stack,
     self_check clean (a wrong size read at L404 would munmap the wrong length)."""
     body = _OVERFLOW.format(n=CONC, rounds=2, marker="DEPOT_MUNMAP_OK")
-    p = _run_worker(body, {"RUNLOOM_STACK_DEPOT_CAP": "1"})
+    p = _run_worker(body, {"STACKWEAVE_STACK_DEPOT_CAP": "1"})
     _assert_clean(p, "DEPOT_MUNMAP_OK %d" % CONC)
 
 
@@ -255,7 +255,7 @@ def test_prewarm_global_cap_race_gives_stack_back():
     unlock, munmap the just-mapped stack, break.  We provoke this race by running
     the continuous prewarm DAEMON (prewarm_keep) concurrently with many detached
     BACKGROUND prewarm threads (prewarm(..., background=True)), all hammering a
-    tiny RUNLOOM_STACK_DEPOT_CAP so the depot sits right at the cap and the
+    tiny STACKWEAVE_STACK_DEPOT_CAP so the depot sits right at the cap and the
     post-mmap re-check frequently loses.  It is a genuine race, so the worker
     drives MANY iterations; the line credit accrues from the race landing in at
     least one iteration across the whole run.
@@ -266,7 +266,7 @@ def test_prewarm_global_cap_race_gives_stack_back():
     must return a sane non-negative count -- i.e. the give-back path frees the
     racing stack rather than leaking or double-inserting it."""
     body = r'''
-import runloom_c as rc
+import stackweave_c as rc
 # Continuous daemon keeps the depot churning right at the tiny cap.
 assert rc.prewarm_keep(4, 65536) == 0
 # Many detached background prewarm threads each pass the < cap full-check then
@@ -285,7 +285,7 @@ assert n is None or (isinstance(n, int) and n >= 0), "sync prewarm returned %r" 
 rc.prewarm_stop()
 print("PREWARM_RACE_OK")
 '''
-    p = _run_worker(body, {"RUNLOOM_STACK_DEPOT_CAP": "4"})
+    p = _run_worker(body, {"STACKWEAVE_STACK_DEPOT_CAP": "4"})
     _assert_clean(p, "PREWARM_RACE_OK")
 
 
@@ -302,8 +302,8 @@ def test_default_mode_pool_overflow_baseline_in_process():
     worker's failure attributes to the mode and not to the overflow harness.
     Exercises the default runloom_stack_release path (MADV_FREE reclaim + depot
     pool insert) under a genuine pool overflow."""
-    import runloom
-    from runloom.sync import WaitGroup
+    import stackweave
+    from stackweave.sync import WaitGroup
     from adv_util import hang_guard
 
     N = CONC
@@ -327,6 +327,6 @@ def test_default_mode_pool_overflow_baseline_in_process():
         done.wait()
 
     with hang_guard(60, "default-mode 700-fiber pool overflow"):
-        runloom.run(1, main)
+        stackweave.run(1, main)
     assert sum(ran) == N, "only %d/%d ran" % (sum(ran), N)
     assert rc._self_check(0) == 0

@@ -58,7 +58,7 @@ static int runloom_netpoll_dbg_stale_check(void)
     static int v = -1;
     int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
     if (cur < 0) {
-        const char *e = getenv("RUNLOOM_DBG_NETPOLL");
+        const char *e = getenv("STACKWEAVE_DBG_NETPOLL");
         cur = (e != NULL && e[0] != '\0' && e[0] != '0') ? 1 : 0;
         __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
     }
@@ -74,7 +74,7 @@ static long long runloom_netpoll_stale_probe_ns(void)
     static long long v = -1;
     long long cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
     if (cur < 0) {
-        const char *e = getenv("RUNLOOM_STALE_ARM_PROBE_MS");
+        const char *e = getenv("STACKWEAVE_STALE_ARM_PROBE_MS");
         cur = (e != NULL) ? atoll(e) * 1000000LL : 250000000LL;
         if (cur < 0) cur = 0;
         __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
@@ -968,7 +968,7 @@ int runloom_netpoll_sweep_idle(void *hub_opaque, long long threshold_ns)
         static long long max_churn = -1;     /* links/sec; -1 = read env once */
         long long mc = __atomic_load_n(&max_churn, __ATOMIC_RELAXED);
         if (mc < 0) {
-            const char *e = getenv("RUNLOOM_SWEEP_MAX_CHURN");
+            const char *e = getenv("STACKWEAVE_SWEEP_MAX_CHURN");
             mc = (e != NULL) ? atoll(e) : RUNLOOM_SWEEP_DEFAULT_MAX_CHURN;
             if (mc < 0) mc = 0;
             __atomic_store_n(&max_churn, mc, __ATOMIC_RELAXED);

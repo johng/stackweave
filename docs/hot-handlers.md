@@ -1,6 +1,6 @@
-# Hot handlers — `@runloom.hot`
+# Hot handlers — `@stackweave.hot`
 
-`@runloom.hot` makes a **shared closure** handler scale cleanly across all your
+`@stackweave.hot` makes a **shared closure** handler scale cleanly across all your
 cores. It is a no-op for handlers that don't need it, so it's safe to leave on.
 
 ## When you need it
@@ -32,7 +32,7 @@ equivalent that didn't share its captures.)
 ## The fix
 
 ```python
-@runloom.hot
+@stackweave.hot
 def handle(conn):
     serve(conn, config)
 ```
@@ -45,7 +45,7 @@ contention.
 
 - **No-op on a module-level `def` that captures nothing** — it already scales.
 - **No-op if the handler *rebinds* a capture** (`nonlocal x; x = ...`) — per-core
-  copies could drift, so runloom leaves it shared. *Reading* a capture, or
+  copies could drift, so stackweave leaves it shared. *Reading* a capture, or
   mutating a captured object **in place** (`cfg.x = 1`, `d[k] = v`,
   `buf.append(...)`), is fully supported — every copy points at the same object.
 - **No-op on anything that isn't a plain Python function** (a builtin, a class
@@ -61,7 +61,7 @@ RSS is bounded by your core count, not your fiber count.
 
 ## Automatic mode (no decorator)
 
-`runloom.optimize("throughput")` turns on **auto** hot-handlers: runloom watches
+`stackweave.optimize("throughput")` turns on **auto** hot-handlers: stackweave watches
 which closures get spawned a lot and gives the busiest few the `@hot` treatment
 automatically, under a hard budget so it can never clone its way through your RAM.
 It emits a warning if the budget is hit (no silent truncation).
@@ -71,21 +71,21 @@ Rarely-needed knobs:
 
 | env var | meaning | default |
 |---|---|--:|
-| `RUNLOOM_HOT_HANDLERS` | master on/off for `@hot` | on |
-| `RUNLOOM_HOT_AUTO` | auto-promotion on/off (set by `optimize`) | off |
-| `RUNLOOM_HOT_AUTO_AFTER` | spawns of a closure before it's promoted | 64 |
-| `RUNLOOM_HOT_AUTO_BUDGET` | max distinct handlers to clone | 32 |
+| `STACKWEAVE_HOT_HANDLERS` | master on/off for `@hot` | on |
+| `STACKWEAVE_HOT_AUTO` | auto-promotion on/off (set by `optimize`) | off |
+| `STACKWEAVE_HOT_AUTO_AFTER` | spawns of a closure before it's promoted | 64 |
+| `STACKWEAVE_HOT_AUTO_BUDGET` | max distinct handlers to clone | 32 |
 
 ## Stacking with other decorators
 
-Put `@runloom.hot` **closest to your `def`** (the innermost decorator) so it sees
+Put `@stackweave.hot` **closest to your `def`** (the innermost decorator) so it sees
 your real closure, not another decorator's wrapper.
 
 ## Fastest path first
 
 If a handler is hot enough to want this, *compiling* it (a Cython `cdef`
 handler) beats it outright — that removes the interpreter cost entirely, not just
-the cross-core contention. `@runloom.hot` is the zero-rewrite option for when you
+the cross-core contention. `@stackweave.hot` is the zero-rewrite option for when you
 won't compile.
 
 ## Why it works (one line)
@@ -94,5 +94,5 @@ The contention is the **closure's cells** — the captured-variable slots — sh
 across cores under free-threading; `@hot` gives each core its own cells holding
 the same values. It is **not** the code object: a single shared *code* object
 scales fine. See [`benchmark/SCHEDULER_SCALING_FINDINGS.md`](../benchmark/SCHEDULER_SCALING_FINDINGS.md)
-for the 7-variant ablation that proves it's the cells, and `src/runloom/_hot.py`
+for the 7-variant ablation that proves it's the cells, and `src/stackweave/_hot.py`
 for the implementation.

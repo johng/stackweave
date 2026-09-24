@@ -2,7 +2,7 @@
 
 Run STANDALONE (not collected by pytest) under ``strace -e inject=`` by
 test_netpoll_faultinject.py.  It exercises the netpoll happy path -- a
-fiber parks in runloom_c.wait_fd and a feeder OS thread makes the fd
+fiber parks in stackweave_c.wait_fd and a feeder OS thread makes the fd
 readable -- so that an error injected into the underlying epoll_wait/epoll_ctl
 syscall hits a real park/wake, not a no-op.
 
@@ -23,10 +23,10 @@ import threading
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))), "src"))
-import runloom_c
+import stackweave_c
 
 READ = 1
-TIMEOUT_MS = int(os.environ.get("RUNLOOM_FAULT_TIMEOUT_MS", "2000"))
+TIMEOUT_MS = int(os.environ.get("STACKWEAVE_FAULT_TIMEOUT_MS", "2000"))
 
 
 def mode_happy():
@@ -53,12 +53,12 @@ def mode_happy():
         # leaves run() returning with an empty `got` -- indistinguishable from
         # a silent hang.  Recording the errno proves the error path is clean.
         try:
-            got.append(runloom_c.wait_fd(r.fileno(), READ, TIMEOUT_MS))
+            got.append(stackweave_c.wait_fd(r.fileno(), READ, TIMEOUT_MS))
         except OSError as e:
             err.append(e.errno)
 
-    runloom_c.fiber(waiter)
-    runloom_c.run()
+    stackweave_c.fiber(waiter)
+    stackweave_c.run()
     t.join(5)
     r.close(); w.close()
     if got and (got[0] & READ):
@@ -77,15 +77,15 @@ def mode_timeout():
     got = []
 
     def waiter():
-        got.append(runloom_c.wait_fd(r.fileno(), READ, TIMEOUT_MS))
+        got.append(stackweave_c.wait_fd(r.fileno(), READ, TIMEOUT_MS))
 
-    runloom_c.fiber(waiter)
-    runloom_c.run()
+    stackweave_c.fiber(waiter)
+    stackweave_c.run()
     r.close(); w.close()
     # Either a clean timeout (0) or a raised OSError handled by the caller is
     # acceptable here; what matters to the harness is HOW MUCH CPU/how many
     # syscalls the pump burned getting here, and that we did not crash.
-    print("DONE got=%r backend=%s" % (got, runloom_c.netpoll_backend()))
+    print("DONE got=%r backend=%s" % (got, stackweave_c.netpoll_backend()))
     return 0
 
 

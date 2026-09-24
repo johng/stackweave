@@ -11,7 +11,7 @@ feed() call is exactly where the fiber may PARK (we yield between feeds).  So th
 pending partial-multibyte state has to survive a hub migration and a sibling's
 decoder running in between.
 
-WHERE M:N COULD BREAK IT (the gap this program probes).  runloom gives each fiber
+WHERE M:N COULD BREAK IT (the gap this program probes).  stackweave gives each fiber
 its own Python frame stack, but the IncrementalDecoder's pending buffer lives in
 the decoder OBJECT's C-level state (utf-8's `pendingbytes`/`pendingsize`, the
 BufferedIncrementalDecoder's `buffer`, the utf-16/32 endianness+BOM latch).  If
@@ -31,7 +31,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain CPython):
   verified in a standalone control -- utf-8/utf-16/utf-32, feeding byte-by-byte so
   EVERY multibyte char is cut and the pending buffer is non-empty across the yield
   -- that a correctly isolated decoder reassembles the text with 0 replacement
-  chars and byte-exact equality.  Under a CORRECT runloom this must also hold: the
+  chars and byte-exact equality.  Under a CORRECT stackweave this must also hold: the
   decoder's pending partial-sequence buffer is single-owner state that must survive
   the park unchanged.  If the reassembled text differs from the original, or a
   U+FFFD appears, that is a pending-buffer isolation desync -- the single-owner
@@ -43,7 +43,7 @@ ORACLES:
     iteration, round-robined across utf-8 / utf-16 / utf-32).  It builds a
     wid+idx-TAGGED string dense in multibyte chars (accented Latin, CJK, astral
     emoji), encodes it, then feeds the bytes byte-by-byte with final=False,
-    runloom.yield_now() between feeds so a sibling reliably interleaves while this
+    stackweave.yield_now() between feeds so a sibling reliably interleaves while this
     decoder's pending buffer holds a partial sequence.  After the final
     decode(b'', True) it asserts:
       - the reassembled text EXACTLY equals the original (no tear/mojibake/leak);
@@ -52,7 +52,7 @@ ORACLES:
       - the decoder was fully drained (no residual pending bytes: a final feed of
         b'' with final=True must return '').
     Single-owner: the encoder/decoder pair and the string are fiber-local, never
-    shared.  A failure is a runloom pending-buffer isolation desync.
+    shared.  A failure is a stackweave pending-buffer isolation desync.
 
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber that vanished mid-feed
     (stranded inside decode() on a desynced pending buffer) never returns; the
@@ -68,7 +68,7 @@ intermediate U+FFFD, or residual pending bytes after final=True -- each a real
 runtime corruption of the single-owner decoder's pending partial-multibyte state
 across a park.  There is NO shared decoder anywhere (sharing an IncrementalDecoder
 across fibers would tear EXACTLY like sharing it across threads -- documented
-Python behavior, not a runloom bug), so this program keeps the oracle strictly
+Python behavior, not a stackweave bug), so this program keeps the oracle strictly
 single-owner and never mislabels shared-object semantics as a fault.
 
 Deepens codecs on the INCREMENTAL path (p475/p478 cover only the registry/_cache);
@@ -83,7 +83,7 @@ final decode(b'', True) drain under M:N concurrency.
 import codecs
 
 import harness
-import runloom
+import stackweave
 
 # A pool of multibyte code points spanning the encoding difficulty classes so that
 # byte-by-byte feeding cuts EVERY width of multibyte sequence:
@@ -175,7 +175,7 @@ def incremental_check(H, wid, idx, state):
         pieces.append(out)
         # PARK between feeds while the pending buffer may hold a partial sequence,
         # so a sibling's decoder reliably interleaves before we resume.
-        runloom.yield_now()
+        stackweave.yield_now()
 
     # Final drain: a correctly isolated decoder has nothing left to emit, or emits
     # the last completed char.  It must NOT leave residual pending bytes.
@@ -285,4 +285,4 @@ if __name__ == "__main__":
                  "byte-exact reassembly, no intermediate U+FFFD, and full drain.  A "
                  "reassembled string that differs from the fiber's own original, a "
                  "replacement char, or residual pending bytes is a pending-buffer "
-                 "isolation desync in runloom")
+                 "isolation desync in stackweave")

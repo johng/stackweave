@@ -7,7 +7,7 @@ Some of those queries (notably normalize() and the quick-check / canonical-
 decomposition path) walk internal lookup structures and, in some CPython builds,
 touch small mutable scratch/quick-check state while composing a result.  The C
 code was written assuming a single logical thread of control per call; under the
-GIL that held for free.  With the GIL OFF and runloom's M:N scheduler, a normalize
+GIL that held for free.  With the GIL OFF and stackweave's M:N scheduler, a normalize
 call may PARK at a cooperative yield mid-computation and RESUME on a DIFFERENT hub
 (OS thread) while a sibling fiber is driving its OWN normalize/name/lookup over
 the same shared C tables.  If any of that shared read path is not race-safe -- a
@@ -50,7 +50,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY:
   batch across a yield and asserts byte-identical output; a mismatch -- or a law
   that suddenly fails on a string for which it held one line earlier -- means the C
   reader returned another fiber's codepoint data, i.e. a UCD read-cache race in the
-  runloom hub migration.  Single-owner: every input string is built fiber-local
+  stackweave hub migration.  Single-owner: every input string is built fiber-local
   from an immutable codepoint pool and never handed to another fiber, so there is
   no shared-mutable container for the "documented M:N shared-object" escape hatch
   to apply -- a mismatch here can ONLY be a runtime corruption bug.
@@ -62,7 +62,7 @@ ORACLES:
     char in the pool sample.  It yields (yield_now + occasional tiny sleep so a
     sibling parks/migrates in the same window), then recomputes everything and
     asserts: the normal forms are byte-identical across the yield, the laws still
-    hold, and every per-char DB tuple is unchanged.  A failure is a runloom UCD
+    hold, and every per-char DB tuple is unchanged.  A failure is a stackweave UCD
     read-path desync.
 
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber stranded inside a C
@@ -94,7 +94,7 @@ byte-compare oracle fires.
 import unicodedata
 
 import harness
-import runloom
+import stackweave
 
 
 # ---- Immutable codepoint pool -------------------------------------------------
@@ -270,9 +270,9 @@ def do_check(H, wid, rng, state):
             return
 
     # --- YIELD: allow a sibling to park/migrate and drive the same C tables ---
-    runloom.yield_now()
+    stackweave.yield_now()
     if n & 1:
-        runloom.sleep(0.0003)
+        stackweave.sleep(0.0003)
 
     # --- AFTER the yield: recompute and demand byte-identical results ---
     forms1 = norm_forms(s)

@@ -1,9 +1,9 @@
-"""The runloom canary service (docs/dev/RELIABILITY_PROGRAM.md R6).
+"""The stackweave canary service (docs/dev/RELIABILITY_PROGRAM.md R6).
 
-A small but REAL service on runloom, meant to run continuously for weeks.  It
+A small but REAL service on stackweave, meant to run continuously for weeks.  It
 exercises the whole stack at once -- TCP accept/echo, channels + select + timers
 (the chat room), and blocking-pool offload -- and serves its own
-`runloom.stats()` so its health is observable from outside.  It is also an R1
+`stackweave.stats()` so its health is observable from outside.  It is also an R1
 soak subject: a sampler thread writes the same CSV the soak harness reads, so
 the slope oracle can pass/fail a canary run exactly like any other soak.
 
@@ -15,7 +15,7 @@ Endpoints (all on 127.0.0.1 by default):
   --status-port line-based status: send "stats\\n" -> one JSON line of
                 {uptime_s, stats: {...}}; "ping\\n" -> "pong\\n"
 
-The claim this service exists to earn: "a runloom server ran continuously for
+The claim this service exists to earn: "a stackweave server ran continuously for
 N days with flat gauges."  That is the only reliability claim users trust, and
 the sampler CSV + oracle make it measurable rather than a vibe.
 """
@@ -33,14 +33,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 import time as _time
 _raw_sleep = _time.sleep
 
-import runloom
-import runloom.monkey
-runloom.monkey.patch()
-import runloom_c
+import stackweave
+import stackweave.monkey
+stackweave.monkey.patch()
+import stackweave_c
 
 # Arm the field crash + self-hang telemetry (R5) so a canary wedge produces an
 # artifact instead of a silent stall.
-runloom_c.install_crash_handler(
+stackweave_c.install_crash_handler(
     "goroutines,backtrace",
     os.environ.get("CANARY_CRASH_FILE", "canary_crash.txt"))
 
@@ -78,7 +78,7 @@ def _echo_server(srv):
             conn, _ = srv.accept()
         except OSError:
             break
-        runloom.fiber(lambda c=conn: _echo_conn(c))
+        stackweave.fiber(lambda c=conn: _echo_conn(c))
 
 
 # --------------------------------------------------------------------------
@@ -103,7 +103,7 @@ def _chat_conn(conn):
     with _chat_lock:
         cid = _chat_next[0]
         _chat_next[0] += 1
-        out = runloom_c.Chan(64)
+        out = stackweave_c.Chan(64)
         _chat_members[cid] = out
     _chat_broadcast(b"+ member %d joined\n" % cid)
 
@@ -113,10 +113,10 @@ def _chat_conn(conn):
     # ticker fiber for the process lifetime, exactly the long-uptime leak the
     # canary exists to NOT have.
     def writer():
-        ticker = runloom.time.NewTicker(5.0)
+        ticker = stackweave.time.NewTicker(5.0)
         try:
             while not _STOP[0]:
-                idx, (val, ok) = runloom_c.select([
+                idx, (val, ok) = stackweave_c.select([
                     ("recv", out), ("recv", ticker.c)])
                 if idx == 0:
                     if not ok:
@@ -128,7 +128,7 @@ def _chat_conn(conn):
             pass
         finally:
             ticker.Stop()
-    runloom.fiber(writer)
+    stackweave.fiber(writer)
 
     # reader: each inbound line is broadcast to all members.
     try:
@@ -160,11 +160,11 @@ def _chat_server(srv):
             conn, _ = srv.accept()
         except OSError:
             break
-        runloom.fiber(lambda c=conn: _chat_conn(c))
+        stackweave.fiber(lambda c=conn: _chat_conn(c))
 
 
 # --------------------------------------------------------------------------
-# status endpoint: serves runloom.stats() + uptime
+# status endpoint: serves stackweave.stats() + uptime
 # --------------------------------------------------------------------------
 def _status_conn(conn):
     try:
@@ -182,7 +182,7 @@ def _status_conn(conn):
                 elif cmd == b"stats":
                     payload = {
                         "uptime_s": round(_time.monotonic() - _START, 1),
-                        "stats": {k: v for k, v in runloom.stats().items()
+                        "stats": {k: v for k, v in stackweave.stats().items()
                                   if isinstance(v, (int, float))},
                     }
                     conn.sendall((json.dumps(payload) + "\n").encode())
@@ -200,7 +200,7 @@ def _status_server(srv):
             conn, _ = srv.accept()
         except OSError:
             break
-        runloom.fiber(lambda c=conn: _status_conn(c))
+        stackweave.fiber(lambda c=conn: _status_conn(c))
 
 
 # --------------------------------------------------------------------------
@@ -237,7 +237,7 @@ def _sampler(csv_path, interval):
     with open(csv_path, "w", buffering=1) as csv:
         while not _STOP[0]:
             gc.collect()
-            stats = {k: v for k, v in runloom.stats().items()
+            stats = {k: v for k, v in stackweave.stats().items()
                      if isinstance(v, int)}
             row = {"t": round(_time.monotonic() - _START, 1)}
             row.update(_proc_metrics())
@@ -281,23 +281,23 @@ def main(argv):
           (args.echo_port, args.chat_port, args.status_port), flush=True)
 
     def root():
-        runloom.fiber(lambda: _echo_server(echo))
-        runloom.fiber(lambda: _chat_server(chat))
-        runloom.fiber(lambda: _status_server(status))
+        stackweave.fiber(lambda: _echo_server(echo))
+        stackweave.fiber(lambda: _chat_server(chat))
+        stackweave.fiber(lambda: _status_server(status))
         # deadline / shutdown watcher
         def watch():
             while not _STOP[0]:
                 if args.seconds and (_time.monotonic() - _START) >= args.seconds:
                     _STOP[0] = True
-                runloom_c.sched_sleep(0.5)
+                stackweave_c.sched_sleep(0.5)
             for s in (echo, chat, status):
                 try:
                     s.close()
                 except OSError:
                     pass
-        runloom.fiber(watch)
-    runloom.fiber(root)
-    runloom_c.run()
+        stackweave.fiber(watch)
+    stackweave.fiber(root)
+    stackweave_c.run()
     return 0
 
 

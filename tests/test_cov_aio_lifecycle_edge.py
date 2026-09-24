@@ -1,6 +1,6 @@
 """Coverage: aio transport/stream LIFECYCLE edge cases.
 
-Four gaps in the runloom.aio asyncio bridge that the existing suites don't
+Four gaps in the stackweave.aio asyncio bridge that the existing suites don't
 exercise as a lifecycle whole:
 
   (1) write_eof / can_write_eof HALF-CLOSE -- a client that writes a request
@@ -19,7 +19,7 @@ exercise as a lifecycle whole:
       a tempfile path do an echo round-trip; server.close()/wait_closed() must
       not leave the accept goroutine parked (the per-server accept-fiber leak).
 
-Driven through runloom.aio.run() (its asyncio.run drop-in), no pytest-asyncio.
+Driven through stackweave.aio.run() (its asyncio.run drop-in), no pytest-asyncio.
 """
 import asyncio
 import os
@@ -29,8 +29,8 @@ import tempfile
 
 import pytest
 
-import runloom.aio as aio
-import runloom_c as rc
+import stackweave.aio as aio
+import stackweave_c as rc
 from adv_util import hang_guard
 
 

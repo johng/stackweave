@@ -1,10 +1,10 @@
 """big_100 / 134 -- shutdown with active (parked) tasks.
 
-Each iteration launches a CHILD runloom program (a string run via subprocess):
+Each iteration launches a CHILD stackweave program (a string run via subprocess):
 its main() spawns many goroutines that spend the whole run PARKED in recv / a
 short-sleep loop (i.e. active, parked tasks), then signals a deterministic
 wind-down (flip a stop flag + close the recv sockets so the parked recv wakes)
-and RETURNS from runloom.run().  The runtime must tear the scheduler down
+and RETURNS from stackweave.run().  The runtime must tear the scheduler down
 deterministically -- mn_run() joins every (now woken) goroutine, mn_fini()
 cleans up -- and the process must exit 0 without hanging or segfaulting,
 printing DONE-MARKER then MAIN-EXIT.
@@ -12,13 +12,13 @@ printing DONE-MARKER then MAIN-EXIT.
 The parent runs many such children and checks each exits 0 within a timeout and
 printed its marker.
 
-IMPORTANT runloom semantic (see the candidate finding in the agent report):
-runloom.run()/mn_run() JOINS every goroutine -- it does NOT return on
+IMPORTANT stackweave semantic (see the candidate finding in the agent report):
+stackweave.run()/mn_run() JOINS every goroutine -- it does NOT return on
 quiescence and does NOT cancel still-parked goroutines when main() returns.
 A child that returns from main() while goroutines are parked FOREVER (recv with
 no sender, or sleep(3600)) HANGS run() indefinitely (verified: even a
 sleep-only child times out).  So "active tasks at shutdown" is modelled the way
-runloom actually supports it: the tasks are parked right up to the last moment,
+stackweave actually supports it: the tasks are parked right up to the last moment,
 then main() wakes them (stop flag + socket close) as part of returning, and the
 test asserts that THAT teardown is deterministic and crash-free.
 
@@ -36,14 +36,14 @@ import procutil
 # (active, parked tasks), lets them all reach their park point, prints
 # DONE-MARKER, then deterministically winds them down: flip stop[0], then close
 # every recv socket so the parked recv returns b'' / raises and the goroutine
-# exits.  runloom.run() then joins them and returns; the child prints MAIN-EXIT
+# exits.  stackweave.run() then joins them and returns; the child prints MAIN-EXIT
 # and exits 0.
 CHILD = r'''
 import sys, os, socket
 sys.path.insert(0, {src!r})
-import runloom
-import runloom.monkey
-runloom.monkey.patch()                # cooperative socket recv on the hubs
+import stackweave
+import stackweave.monkey
+stackweave.monkey.patch()                # cooperative socket recv on the hubs
 
 stop = [False]
 
@@ -62,7 +62,7 @@ def parked_sleep():
     # flips stop[0] -- mn_run() can then join it (a bare sleep(3600) cannot be
     # cancelled at main-return and would hang run()).
     while not stop[0]:
-        runloom.sleep(0.01)
+        stackweave.sleep(0.01)
 
 def main():
     socks = []
@@ -71,10 +71,10 @@ def main():
         a.setblocking(True)
         b.setblocking(True)
         socks.append((a, b))
-        runloom.fiber(parked_recv, a)
+        stackweave.fiber(parked_recv, a)
     for _ in range(40):
-        runloom.fiber(parked_sleep)
-    runloom.sleep(0.05)           # let all 80 actually reach their park point
+        stackweave.fiber(parked_sleep)
+    stackweave.sleep(0.05)           # let all 80 actually reach their park point
     sys.stdout.write("DONE-MARKER\n"); sys.stdout.flush()
     # Deterministic wind-down of the still-parked tasks, then RETURN.
     stop[0] = True
@@ -84,7 +84,7 @@ def main():
         try: b.close()
         except OSError: pass
 
-runloom.run(4, main)
+stackweave.run(4, main)
 sys.stdout.write("MAIN-EXIT\n"); sys.stdout.flush()
 '''
 
@@ -150,5 +150,5 @@ def post(H):
 if __name__ == "__main__":
     harness.main("p134_shutdown_active_tasks", body, setup=setup, post=post,
                  default_funcs=120,
-                 describe="child runloom returns from run() with 80 goroutines "
+                 describe="child stackweave returns from run() with 80 goroutines "
                           "still parked; clean deterministic teardown, exit 0")

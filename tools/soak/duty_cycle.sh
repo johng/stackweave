@@ -11,7 +11,7 @@
 #                       a real lost wake; a nonzero exit is a bug)
 #   3. (weekly)      -- one soak-matrix preset (asan-24h / tsan-24h / normal-72h),
 #                       rotated by day-of-week; the machine-day ledger accrues
-#  11. net suite (OPT-IN, RUNLOOM_NET_TESTS=1) -- exercises the real TCP/UDP
+#  11. net suite (OPT-IN, STACKWEAVE_NET_TESTS=1) -- exercises the real TCP/UDP
 #                       netpoll path against public STUN/NTP/MQTT servers
 #                       (tests/net/); flake-tolerant, only real findings inboxed
 #
@@ -30,11 +30,11 @@ set -u
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
-PY="${RUNLOOM_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
+PY="${STACKWEAVE_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
 LOAD_FRAC="${LOAD_FRAC:-0.7}"
 NCPU="$(nproc 2>/dev/null || echo 4)"
 DATE="$(date +%F)"
-INBOX_ARTIFACTS="${RUNLOOM_SOAK_DIR:-$HOME/runloom-soak}/inbox_artifacts/$DATE"
+INBOX_ARTIFACTS="${STACKWEAVE_SOAK_DIR:-$HOME/runloom-soak}/inbox_artifacts/$DATE"
 mkdir -p "$INBOX_ARTIFACTS"
 
 SMOKE=0
@@ -135,7 +135,7 @@ else
 fi
 
 # --- stage 4: counted-exhaustive fault sweep (SQLite-style anomaly testing:
-# fail the Nth reach of every runloom fault site until exhausted; fast --
+# fail the Nth reach of every stackweave fault site until exhausted; fast --
 # minutes -- so it runs nightly, not weekly) ---
 if load_ok; then
   echo "-- counted fault sweep --"
@@ -158,7 +158,7 @@ fi
 if load_ok; then
   echo "-- atheris fuzz ${FUZZ_DUR}s --"
   FZ_OUT="$INBOX_ARTIFACTS/atheris"; mkdir -p "$FZ_OUT"
-  if ! nice -n 10 env RUNLOOM_PYTHON="$PY" bash tools/fuzz/atheris/run.sh "$FUZZ_DUR" \
+  if ! nice -n 10 env STACKWEAVE_PYTHON="$PY" bash tools/fuzz/atheris/run.sh "$FUZZ_DUR" \
        > "$FZ_OUT/run.log" 2>&1; then
     inbox "atheris-crash" "atheris C-API fuzz CRASH" "$FZ_OUT/run.log"
   fi
@@ -203,7 +203,7 @@ if load_ok; then
     inbox "wake-skew" "wake-skew test hung/failed under skew=$WAKE_SKEW" "$WK_OUT/run.log"
   fi
   grep -E "^WAKE-SKEW" "$WK_OUT/run.log" | sed 's/^/   /'
-  env -u RUNLOOM_EXTRA_CFLAGS PYTHON_GIL=0 "$PY" setup.py build_ext --inplace --force \
+  env -u STACKWEAVE_EXTRA_CFLAGS PYTHON_GIL=0 "$PY" setup.py build_ext --inplace --force \
       >/tmp/duty_wake_skew_restore.log 2>&1 \
       && echo "   normal ext restored" || echo "   WARN: normal rebuild failed (/tmp/duty_wake_skew_restore.log)"
 else
@@ -211,16 +211,16 @@ else
 fi
 # --- stage 11: remote-internet net suite (OPT-IN; flake-tolerant) ---
 # Exercises the REAL TCP/UDP netpoll path against public STUN/NTP/MQTT servers
-# (tests/net/).  OFF unless the daemon is started with RUNLOOM_NET_TESTS=1, so a
+# (tests/net/).  OFF unless the daemon is started with STACKWEAVE_NET_TESTS=1, so a
 # network outage can never colour the rotation.  ENV failures (refused/timeout/
 # all-down/list-host-down) SKIP and are NEVER inboxed; only a transaction-token-
 # matched CORRUPT response, a pygo-side crash, or a HANG writes a finding file.
 # Never in check_all_fast or any gate (tests/net/ is not collected by run_isolated).
-if [ "${RUNLOOM_NET_TESTS:-0}" = "1" ] && load_ok; then
+if [ "${STACKWEAVE_NET_TESTS:-0}" = "1" ] && load_ok; then
   echo "-- net suite (remote internet) --"
   NET_OUT="$INBOX_ARTIFACTS/net"; mkdir -p "$NET_OUT/findings"
   if [ "$SMOKE" = "1" ]; then NET_TOP=4; NET_TMO=2; else NET_TOP=32; NET_TMO=3; fi
-  nice -n 10 env PYTHON_GIL=0 PYTHONPATH="$ROOT/src" RUNLOOM_NET_TESTS=1 \
+  nice -n 10 env PYTHON_GIL=0 PYTHONPATH="$ROOT/src" STACKWEAVE_NET_TESTS=1 \
       "$PY" tests/net/run_all_net.py --hubs 8 --top "$NET_TOP" --timeout "$NET_TMO" \
       --report-dir "$NET_OUT" > "$NET_OUT/run.log" 2>&1
   # run_all_net writes findings/<kind>_<sig>.txt ONLY for real findings (ENV SKIPs
@@ -234,14 +234,14 @@ if [ "${RUNLOOM_NET_TESTS:-0}" = "1" ] && load_ok; then
   done
   grep -E "^(PASS|SKIP|FINDING|CRASH|HANG)" "$NET_OUT/run.log" | sed 's/^/   /'
 else
-  echo "-- net suite SKIPPED (RUNLOOM_NET_TESTS!=1 or load) --"
+  echo "-- net suite SKIPPED (STACKWEAVE_NET_TESTS!=1 or load) --"
 fi
 
 # --- stage 12: QA-steal oracles (nightly, fast: seconds-minutes).  The
 # chaos->freeze->drain liveness oracle, the seeded-fault silent-corruption result
 # oracle, and the compound two-at-once fault sweep -- each exits nonzero on a
 # finding (and inboxes it).  All run on the normal ext (BUGGIFY/RUNLOOM_FAULT are
-# env-armed).  cover_check needs a RUNLOOM_COVER=1 rebuild, so it is NOT here; run
+# env-armed).  cover_check needs a STACKWEAVE_COVER=1 rebuild, so it is NOT here; run
 # it in the COVER lane on demand. ---
 if load_ok; then
   echo "-- QA-steal oracles --"
@@ -335,7 +335,7 @@ fi
 if load_ok; then
   echo "-- security: S1-S4 deterministic once, then S6-S9 fuzz for ${SEC_DUR}s --"
   SEC_OUT="$INBOX_ARTIFACTS/security"; mkdir -p "$SEC_OUT"
-  if ! env PYTHON="$PY" RUNLOOM_SEC_FAST=1 tools/security/run_all.sh \
+  if ! env PYTHON="$PY" STACKWEAVE_SEC_FAST=1 tools/security/run_all.sh \
         >"$SEC_OUT/deterministic.log" 2>&1; then
     inbox "security-fail" "security S1-S4 deterministic subset FAILED" "$SEC_OUT/deterministic.log"
   fi
@@ -367,7 +367,7 @@ elif [ "$DO_MATRIX_SMOKE" = "1" ]; then
   MATRIX_PRESET="smoke"
 else
   # rotate by day-of-week: Fri tsan-gold-24h, Sat asan-24h, Sun tsan-24h, else none.
-  # tsan-gold is the fully-instrumented interpreter (races crossing the runloom<->
+  # tsan-gold is the fully-instrumented interpreter (races crossing the stackweave<->
   # CPython seam are attributed, not suppressed) -- it is how the g-registry
   # publish race got caught; running it weekly keeps that class from regressing.
   case "$(date +%u)" in
@@ -378,14 +378,14 @@ else
 fi
 if [ -n "$MATRIX_PRESET" ] && load_ok; then
   echo "-- matrix $MATRIX_PRESET --"
-  # Compose the amplifiers on the fiber-aware TSan-gold lane: RUNLOOM_SHRINK tiny
+  # Compose the amplifiers on the fiber-aware TSan-gold lane: STACKWEAVE_SHRINK tiny
   # caps make deque wrap / slab spill / handle-seg growth / ring wrap fire every
   # few ops, and a sanitizer build auto-enables randomized steal + placement.  So
   # the weekly gold run is HONEST (fiber-tracked TSan attributes per-goroutine) AND
   # maximally amplified (moving schedule + boundary transitions every few ops) --
   # the regime where a previously-merged intra-hub race is most likely to surface.
   MENV=""
-  case "$MATRIX_PRESET" in tsan-gold*) MENV="RUNLOOM_SHRINK=1" ;; esac
+  case "$MATRIX_PRESET" in tsan-gold*) MENV="STACKWEAVE_SHRINK=1" ;; esac
   # shellcheck disable=SC2086
   if ! env $MENV bash tools/soak/matrix.sh "$MATRIX_PRESET" >"$INBOX_ARTIFACTS/matrix_${MATRIX_PRESET}.log" 2>&1; then
     inbox "matrix-fail" "matrix $MATRIX_PRESET FAILED" "$INBOX_ARTIFACTS/matrix_${MATRIX_PRESET}.log"

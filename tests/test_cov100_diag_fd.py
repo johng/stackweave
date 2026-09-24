@@ -3,7 +3,7 @@
 This fragment is the netpoll DIAGNOSTIC + per-fd bookkeeping surface that the
 normal corpus barely touches.  The uncovered, *reachable* lines all live in
 ``runloom_netpoll_dump_parkers`` (the ``_dump_parkers()`` Python hook) and in
-``runloom_fd_cap_target`` (the ``RUNLOOM_NETPOLL_MAXFD`` env parse, read once at
+``runloom_fd_cap_target`` (the ``STACKWEAVE_NETPOLL_MAXFD`` env parse, read once at
 netpoll init).  We drive each by constructing the exact parker shape / env the
 line gates on, then assert the diagnostic actually observed it.
 
@@ -31,7 +31,7 @@ import sys
 
 import pytest
 
-import runloom_c as rc
+import stackweave_c as rc
 from adv_util import hang_guard
 
 READ, WRITE = 1, 2
@@ -134,7 +134,7 @@ def test_dump_classifies_write_rdwr_and_other_parkers():
 # dump_parkers ready-but-parked probe -- L137 (``rdyp++``).
 # The poll() inside the dump reports an fd as ready WHILE its g is still parked.
 # We make a READ parker's fd readable (peer send) but do NOT yield, so the
-# runloom pump has not run -- the parker is still linked + the data is sitting
+# stackweave pump has not run -- the parker is still linked + the data is sitting
 # there.  _dump_parkers()'s non-blocking poll(POLLIN) then sees revents & POLLIN
 # while the g is parked -> rdyp++ (the lost-wakeup detector's positive case).
 # --------------------------------------------------------------------------
@@ -199,7 +199,7 @@ def test_dump_parkers_safe_with_no_parkers():
 
 
 # --------------------------------------------------------------------------
-# runloom_fd_cap_target: the RUNLOOM_NETPOLL_MAXFD env parse -- L251-253
+# runloom_fd_cap_target: the STACKWEAVE_NETPOLL_MAXFD env parse -- L251-253
 # (``char *end``, ``strtol``, ``if (end != env && v > 0) target = v``).
 # This is read ONCE at netpoll init, so it MUST run in a fresh subprocess with
 # the env set.  We pick a value above RUNLOOM_FD_CAP_MIN (1024) so the parsed
@@ -210,7 +210,7 @@ def test_dump_parkers_safe_with_no_parkers():
 def _run_maxfd_subprocess(value):
     script = (
         "import sys, socket; sys.path.insert(0, 'src');\n"
-        "import runloom_c as rc\n"
+        "import stackweave_c as rc\n"
         "def main():\n"
         "    a, b = socket.socketpair(); a.setblocking(False); b.setblocking(False)\n"
         "    got = [0]\n"
@@ -223,7 +223,7 @@ def _run_maxfd_subprocess(value):
         "    assert got[0] & 1, 'reader did not wake on READ (got %r)' % got[0]\n"
         "main()\n"
         "sys.stdout.write('MAXFD_PARSE_OK\\n')\n")
-    env = dict(os.environ, RUNLOOM_NETPOLL_MAXFD=str(value),
+    env = dict(os.environ, STACKWEAVE_NETPOLL_MAXFD=str(value),
                PYTHON_GIL="0", PYTHONPATH="src")
     return subprocess.run([PY, "-c", script], cwd=REPO, env=env,
                           capture_output=True, text=True, timeout=30)

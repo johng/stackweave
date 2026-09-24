@@ -98,7 +98,7 @@ textbook data race; a TSan report on the setentry table write/read localizes the
 torn probe before the membership assert even fires.
 """
 import harness
-import runloom
+import stackweave
 
 # Finite sentinel UNIVERSE of recognizable keys.  Partitioned into three fixed,
 # DISJOINT regions (PRESENT / ABSENT / CHURN).  A value a probe ever yields that
@@ -288,9 +288,9 @@ def run_round_impl(H, wid, rng, slot, state):
 
     # gate: the prober trips it the instant before it parks mid-probe; the mutator
     # waits on it, so the resize provably lands inside the prober's park window.
-    gate = runloom.WaitGroup()
+    gate = stackweave.WaitGroup()
     gate.add(1)
-    wg = runloom.WaitGroup()
+    wg = stackweave.WaitGroup()
     wg.add(2)
 
     # Track whether each arm's probe passed (read in post-round assert).
@@ -309,7 +309,7 @@ def run_round_impl(H, wid, rng, slot, state):
                     gate.done()
                     return
             gate.done()                    # let the mutator resize NOW
-            runloom.yield_now()            # park mid-probe; resize lands here
+            stackweave.yield_now()            # park mid-probe; resize lands here
             # Resume the probe AFTER the resize -- this is the in-flight walk that
             # must finish against the (possibly reallocated) table consistently.
             if not probe_case(H, wid, shared, case, span_keys, absent_keys):
@@ -356,7 +356,7 @@ def run_round_impl(H, wid, rng, slot, state):
                         shared.add(k)
                     else:
                         shared.discard(k)
-                    runloom.yield_now()    # prober resumes its probe mid-resize
+                    stackweave.yield_now()    # prober resumes its probe mid-resize
         except Exception:
             # The mutator's own add/discard of CHURN keys never legally raises;
             # swallow so a mutator hiccup can't deadlock the prober's gate (already
@@ -439,15 +439,15 @@ def worker(H, wid, rng, state):
 
 
 def setup(H):
-    # Built INSIDE the root (monkey.patch() already ran), so runloom.sync.Lock is
+    # Built INSIDE the root (monkey.patch() already ran), so stackweave.sync.Lock is
     # the cooperative M:N-safe lock.  `lock` serializes the MUTATOR's writes to the
     # shared set (set mutation is not thread-safe GIL-off); the PROBER holds no
     # lock, so probe-vs-resize is the only contention.  The per-case tally is
     # written by many workers, so it is guarded by a separate accounting lock --
     # it is NOT the object under test, just coverage bookkeeping.
     H.state = {
-        "lock": runloom.sync.Lock(),
-        "case_guard": runloom.sync.Lock(),
+        "lock": stackweave.sync.Lock(),
+        "case_guard": stackweave.sync.Lock(),
         "probed": [0] * SLOTS,             # rounds whose full oracle passed
         "cases": [0] * NCASES,             # per-case coverage (guarded)
         "seq": [0] * SLOTS,                # per-slot round-robin counter

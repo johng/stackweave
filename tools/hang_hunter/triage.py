@@ -1,4 +1,4 @@
-"""Auto-triage for the hang-hunter: turn a wedged or crashed runloom process into
+"""Auto-triage for the hang-hunter: turn a wedged or crashed stackweave process into
 a deduplicated, human-readable report.
 
 On a HANG we attach gdb to the still-live process and dump, for the free-threaded

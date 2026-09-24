@@ -7,7 +7,7 @@ cancels the context.  Every descendant must observe the cancellation and exit
 promptly.
 
 Because `go()` returns no join handle under M:N, the tree shares a
-`runloom.WaitGroup`: the parent `add(1)`s before each spawn and every descendant
+`stackweave.WaitGroup`: the parent `add(1)`s before each spawn and every descendant
 `done()`s in a finally as it exits.  The parent `wait()`s for the group after
 cancelling -- if even one descendant fails to observe the cancel (a lost
 done-channel wake), wait() never returns and the watchdog fires.
@@ -23,7 +23,7 @@ Stresses: context cancel cascade, cancellable_recv/cancellable_sleep, fan-out
 tree teardown, WaitGroup join, no lost cancellation wake.
 """
 import harness
-import runloom
+import stackweave
 import cancelutil
 
 
@@ -33,7 +33,7 @@ def leaf(H, ctx, wg, exited_cell, exited_lock, rng):
         # Block on a channel nobody sends to, with the ctx watched.  Returns
         # None when ctx is cancelled.  A never-arriving timeout backstop keeps
         # the wait honest (it must be the cancel that wakes us, not a timeout).
-        never = runloom.Chan(0)
+        never = stackweave.Chan(0)
         while H.running():
             r = cancelutil.cancellable_recv(ctx, never, timeout=2.0)
             if r is None:
@@ -78,7 +78,7 @@ def worker(H, wid, rng, state):
         if not H.running():
             break
         ctx, cancel = cancelutil.WithCancel(cancelutil.Background())
-        wg = runloom.WaitGroup()
+        wg = stackweave.WaitGroup()
         exited_cell = [0]
 
         # Spawn a small top level of 2-3 branches; each branch fans out.
@@ -95,7 +95,7 @@ def worker(H, wid, rng, state):
 
         # Let the tree fully materialize (every descendant parks watching ctx)
         # before we cancel, so we exercise the cascade-to-parked path.
-        runloom.sleep(0.002)
+        stackweave.sleep(0.002)
         cancel()
 
         # Wait for EVERY descendant to observe cancellation and exit.  If a

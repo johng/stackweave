@@ -1,7 +1,7 @@
 #!/bin/bash
 # kqueue_cov.sh -- scoped BRANCH coverage of the macOS kqueue netpoll backend.
 #
-# Builds runloom_c instrumented (-fprofile-arcs -ftest-coverage -O0), then runs
+# Builds stackweave_c instrumented (-fprofile-arcs -ftest-coverage -O0), then runs
 # the kqueue + netpoll corpus ONE module per pytest process (a single 15-module
 # process is too slow at -O0 and a timeout-kill flushes no .gcda; per-module each
 # clean exit ACCUMULATES its counters).  Then gcov -b -c + branch summary of the
@@ -10,19 +10,19 @@
 set -u
 cd "$HOME/pygo-macwin" || exit 2
 PY="$HOME/.pyenv/versions/3.14.4t/bin/python3"
-export PYTHON_GIL=0 PYTHONPATH=src RUNLOOM_SYSMON_QUIET=1
+export PYTHON_GIL=0 PYTHONPATH=src STACKWEAVE_SYSMON_QUIET=1
 sudo -n prlimit --pid $$ --nofile=8388608:8388608 2>/dev/null
 ulimit -n 400000 2>/dev/null
 
 OBJ=build/temp.kqcov
 COVOUT=build/kqcov
-rm -rf "$OBJ" "$COVOUT" src/runloom_c*.so build/lib.* ./*.gcov 2>/dev/null
+rm -rf "$OBJ" "$COVOUT" src/stackweave_c*.so build/lib.* ./*.gcov 2>/dev/null
 mkdir -p "$COVOUT"
 
 echo "[kqcov] building instrumented (-O0 --coverage) ..."
-RUNLOOM_DEBUG=1 \
-RUNLOOM_EXTRA_CFLAGS="-fprofile-arcs -ftest-coverage" \
-RUNLOOM_EXTRA_LDFLAGS="-fprofile-arcs -ftest-coverage" \
+STACKWEAVE_DEBUG=1 \
+STACKWEAVE_EXTRA_CFLAGS="-fprofile-arcs -ftest-coverage" \
+STACKWEAVE_EXTRA_LDFLAGS="-fprofile-arcs -ftest-coverage" \
 "$PY" setup.py build_ext --inplace --build-temp "$OBJ" > "$COVOUT/build.log" 2>&1 \
   || { echo "[kqcov] BUILD FAILED"; tail -25 "$COVOUT/build.log"; exit 1; }
 GCNODIR="$(dirname "$(find "$OBJ" -name 'netpoll.gcno' | head -1)")"

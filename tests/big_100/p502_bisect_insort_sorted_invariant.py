@@ -15,7 +15,7 @@ WHERE M:N BREAKS IT (the gap this program probes).  A single list, filled only b
 bisect.insort, is a pure single-writer object: after N insort calls its length is
 EXACTLY N (insort keeps duplicates, never drops), and the array is fully
 non-decreasing by construction.  These are closed-form, race-free facts about a
-single-owner object.  If -- across a yield inserted between insorts -- runloom
+single-owner object.  If -- across a yield inserted between insorts -- stackweave
 ever hands the resumed fiber a list whose length is not what the fiber itself
 built, or whose elements are out of order, or whose bisect_left/bisect_right
 partition no longer brackets a probe key, then the runtime has corrupted a
@@ -33,7 +33,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain threads):
   partition lst[:left] all < x, lst[left:] all >= x, lst[:right] all <= x,
   lst[right:] all > x holds byte-for-byte; (d) a length + boundary snapshot taken
   before a yield re-reads IDENTICALLY after the yield.  0 violations across
-  millions of insorts.  Under a CORRECT runloom every one must also hold; a
+  millions of insorts.  Under a CORRECT stackweave every one must also hold; a
   violation is a single-owner-object corruption across a hub migration, and the
   load-bearing oracle PASSES on a correct runtime (program exits 0 when no bug).
 
@@ -51,7 +51,7 @@ ORACLES:
         lst[left:] >= x; every element of lst[:right] <= x; every element of
         lst[right:] > x                                     (partition invariant)
     Single-owner: the list is a fiber-local variable, created fresh each round and
-    never handed to another fiber.  A failure is a runloom single-owner-object
+    never handed to another fiber.  A failure is a stackweave single-owner-object
     desync (torn length, out-of-order element, or broken partition across a yield).
 
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber stranded mid-insort
@@ -64,7 +64,7 @@ ORACLES:
 There is NO shared-list arm.  A shared list read by a lock-free reader while
 another fiber insorts it would show transient out-of-order / torn-length states --
 but that is DOCUMENTED racing-iteration semantics of a shared mutable list under
-M:N (identical to sharing a list across OS threads), NOT a runloom bug.  Failing
+M:N (identical to sharing a list across OS threads), NOT a stackweave bug.  Failing
 on it would mislabel documented Python behavior as a runtime fault, so we deliberately
 do not build it; the single-owner list keeps len==count a TRUE race-free
 conservation law.
@@ -72,7 +72,7 @@ conservation law.
 FAIL ON: a single-owner insort-built list whose length != the number of insort
 calls, whose elements are out of order, whose bisect_left/bisect_right partition
 does not bracket a probe key, or whose (len, first, last) snapshot changes across
-a yield.  Any of these on a fiber-private list is a runloom object-migration
+a yield.  Any of these on a fiber-private list is a stackweave object-migration
 corruption.
 
 Stresses: bisect.insort C binary search + list.insert ob_item memmove + ob_size
@@ -88,7 +88,7 @@ cleanest signal before the conservation/partition oracle even fires.
 import bisect
 
 import harness
-import runloom
+import stackweave
 
 # Number of insort calls per batch.  Big enough that the backing list crosses
 # several ob_item realloc/growth boundaries (each growth is a fresh malloc + copy,
@@ -201,9 +201,9 @@ def insort_batch(H, wid, rng, state):
             snap_len = len(lst)
             snap_first = lst[0]
             snap_last = lst[-1]
-            runloom.yield_now()
+            stackweave.yield_now()
             if i & 1:
-                runloom.sleep(0.0002)
+                stackweave.sleep(0.0002)
             if len(lst) != snap_len:
                 H.fail("length TORN across yield: len went {0} -> {1} on a "
                        "single-owner insort list (wid {2}) -- the list object was "
@@ -303,5 +303,5 @@ if __name__ == "__main__":
                  "partition holding for every probe key; a (len,first,last) "
                  "snapshot re-reads identically across each yield.  A torn length, "
                  "out-of-order element, or broken partition on a fiber-private list "
-                 "is a runloom object-migration corruption.  No shared-list arm "
+                 "is a stackweave object-migration corruption.  No shared-list arm "
                  "(that would fire on documented racing-iteration semantics)")

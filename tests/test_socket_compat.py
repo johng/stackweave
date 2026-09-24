@@ -25,9 +25,9 @@ import tempfile
 import time
 import unittest
 
-import runloom
-import runloom.monkey
-import runloom_c
+import stackweave
+import stackweave.monkey
+import stackweave_c
 
 _IS_WINDOWS = platform.system() == "Windows"
 _HAVE_MSG = hasattr(socket.socket, "sendmsg") and hasattr(socket.socket, "recvmsg")
@@ -42,19 +42,19 @@ def _drive(fn):
         except BaseException as e:   # noqa: BLE001
             box[1] = e
 
-    runloom_c.fiber(runner)
-    runloom_c.run()
+    stackweave_c.fiber(runner)
+    stackweave_c.run()
     if box[1] is not None:
         raise box[1]
     return box[0]
 
 
 def setUpModule():
-    runloom.monkey.patch()
+    stackweave.monkey.patch()
 
 
 def tearDownModule():
-    runloom.monkey.unpatch()
+    stackweave.monkey.unpatch()
 
 
 def _tcp_server():
@@ -81,7 +81,7 @@ class TestTCPEcho(unittest.TestCase):
                 conn.sendall(data[::-1])
                 conn.close()
 
-            runloom_c.fiber(server)
+            stackweave_c.fiber(server)
             cli = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             cli.connect(addr)
             n = cli.send(b"hello-world")
@@ -142,7 +142,7 @@ class TestTCPEcho(unittest.TestCase):
                     received["n"] += len(chunk)
                 conn.close()
 
-            runloom_c.fiber(server)
+            stackweave_c.fiber(server)
             cli = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             cli.connect(addr)
             cli.sendall(payload)
@@ -150,7 +150,7 @@ class TestTCPEcho(unittest.TestCase):
             # let the server drain
             t0 = time.monotonic()
             while received["n"] < len(payload) and time.monotonic() - t0 < 5:
-                runloom.sleep(0.005)
+                stackweave.sleep(0.005)
             cli.close(); srv.close()
             return received["n"]
 
@@ -175,11 +175,11 @@ class TestTCPEcho(unittest.TestCase):
                 c.connect(addr)
                 c.close()
 
-            runloom_c.fiber(acceptor)
-            runloom_c.fiber(connector)
+            stackweave_c.fiber(acceptor)
+            stackweave_c.fiber(connector)
             t0 = time.monotonic()
             while "accepted" not in order and time.monotonic() - t0 < 5:
-                runloom.sleep(0.005)
+                stackweave.sleep(0.005)
             srv.close()
             return order
 
@@ -206,12 +206,12 @@ class TestUDP(unittest.TestCase):
                 got["data"] = data
                 got["peer_ok"] = peer[0] == "127.0.0.1"
 
-            runloom_c.fiber(receiver)
+            stackweave_c.fiber(receiver)
             time.sleep(0.01)
             s2.sendto(b"datagram", addr1)
             t0 = time.monotonic()
             while "data" not in got and time.monotonic() - t0 < 5:
-                runloom.sleep(0.005)
+                stackweave.sleep(0.005)
             s1.close(); s2.close()
             return got
 
@@ -233,12 +233,12 @@ class TestSendmsgRecvmsg(unittest.TestCase):
                 got["data"] = data
                 got["anc"] = ancdata
 
-            runloom_c.fiber(receiver)
+            stackweave_c.fiber(receiver)
             time.sleep(0.01)
             n = b.sendmsg([b"hello", b"-msg"])
             t0 = time.monotonic()
             while "data" not in got and time.monotonic() - t0 < 5:
-                runloom.sleep(0.005)
+                stackweave.sleep(0.005)
             a.close(); b.close()
             return n, got
         n, got = _drive(body)
@@ -274,14 +274,14 @@ class TestSendmsgRecvmsg(unittest.TestCase):
                 got["msg"] = msg
                 got["fds"] = list(fds)
 
-            runloom_c.fiber(receiver)
+            stackweave_c.fiber(receiver)
             time.sleep(0.01)
             b.sendmsg([b"fd!"],
                       [(socket.SOL_SOCKET, socket.SCM_RIGHTS,
                         array.array("i", [rfd]))])
             t0 = time.monotonic()
             while "fds" not in got and time.monotonic() - t0 < 5:
-                runloom.sleep(0.005)
+                stackweave.sleep(0.005)
             os.close(rfd)
             a.close(); b.close()
             # Read the passed fd to prove it is a working duplicate.
@@ -324,7 +324,7 @@ class TestFaultInjection(unittest.TestCase):
                                 _linger_struct())
                 conn.close()
 
-            runloom_c.fiber(server)
+            stackweave_c.fiber(server)
             c = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             # The RST can race any step: connect (handshake then abort),
             # send (write to a reset peer) or recv (notice the RST).  Catch
@@ -418,7 +418,7 @@ class TestSendfile(unittest.TestCase):
                     received["buf"] += chunk
                 conn.close()
 
-            runloom_c.fiber(server)
+            stackweave_c.fiber(server)
             cli = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             cli.connect(addr)
             f = make_file()
@@ -430,7 +430,7 @@ class TestSendfile(unittest.TestCase):
             want = (len(self.DATA) - offset) if count is None else count
             t0 = time.monotonic()
             while len(received["buf"]) < want and time.monotonic() - t0 < 5:
-                runloom.sleep(0.005)
+                stackweave.sleep(0.005)
             cli.close(); srv.close()
             return sent, received["buf"]
         return _drive(body)
@@ -504,16 +504,16 @@ class TestSendfile(unittest.TestCase):
                     if not chunk:
                         break
                     total += len(chunk)
-                    runloom.sleep(0.001)        # drain slowly so the sender blocks
+                    stackweave.sleep(0.001)        # drain slowly so the sender blocks
                 conn.close()
 
             def ticker():
                 while not done["v"]:
                     ticks["n"] += 1
-                    runloom.sleep(0.002)
+                    stackweave.sleep(0.002)
 
-            runloom_c.fiber(server)
-            runloom_c.fiber(ticker)
+            stackweave_c.fiber(server)
+            stackweave_c.fiber(ticker)
             cli = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             cli.connect(addr)
             with open(path, "rb") as f:
@@ -551,7 +551,7 @@ class TestRecvfromInto(unittest.TestCase):
                 tx.sendto(b"datagram-payload", addr)
                 tx.close()
 
-            runloom_c.fiber(sender)
+            stackweave_c.fiber(sender)
             buf = bytearray(64)
             n, peer = rx.recvfrom_into(buf)
             rx.close()
@@ -573,7 +573,7 @@ class TestRecvfromInto(unittest.TestCase):
                 tx.sendto(b"0123456789", addr)
                 tx.close()
 
-            runloom_c.fiber(sender)
+            stackweave_c.fiber(sender)
             buf = bytearray(64)
             n, _ = rx.recvfrom_into(buf, 4)
             rx.close()
@@ -603,11 +603,11 @@ class TestRecvfromInto(unittest.TestCase):
                 tx.sendto(b"ping", addr)
                 tx.close()
 
-            runloom_c.fiber(receiver)
-            runloom_c.fiber(sender)
+            stackweave_c.fiber(receiver)
+            stackweave_c.fiber(sender)
             t0 = time.monotonic()
             while "got" not in order and time.monotonic() - t0 < 5:
-                runloom.sleep(0.005)
+                stackweave.sleep(0.005)
             rx.close()
             return order
         order = _drive(body)

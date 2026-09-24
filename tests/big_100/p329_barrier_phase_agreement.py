@@ -86,7 +86,7 @@ arrival/break conservation oracle fires.
 import threading      # patched -> cooperative Barrier (built on CoCondition)
 
 import harness
-import runloom
+import stackweave
 
 PARTY = 16                # members per barrier group (small, like p49)
 NPHASES = 6               # phases each group cycles through before the break
@@ -194,7 +194,7 @@ def worker(H, wid, rng, state):
         broke = [0] * PARTY                  # survivor observed the break
         advanced = [0] * PARTY               # highest phase each member cleared
 
-        wg = runloom.WaitGroup()
+        wg = stackweave.WaitGroup()
         wg.add(PARTY)
 
         def run_member(mid):

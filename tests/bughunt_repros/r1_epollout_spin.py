@@ -8,8 +8,8 @@ import socket
 import sys
 import time
 
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 
 TRIGGER_WRITE_PARK = (len(sys.argv) > 1 and sys.argv[1] == "park")
 
@@ -43,7 +43,7 @@ def main():
         if TRIGGER_WRITE_PARK:
             # Sleep so the client's send_all definitely fills the buffers and
             # parks on WRITE, then drain everything.
-            runloom.sleep(0.5)
+            stackweave.sleep(0.5)
             total = 0
             while total < state["n"]:
                 b = conn.recv(65536)
@@ -64,7 +64,7 @@ def main():
             c.send_all(payload)          # must park on WRITE at least once
         # Now everything is drained; both conns idle but OPEN.
         t0 = time.monotonic(); c0 = cpu_seconds()
-        runloom.sleep(2.0)               # idle window
+        stackweave.sleep(2.0)               # idle window
         t1 = time.monotonic(); c1 = cpu_seconds()
         result["wall"] = t1 - t0
         result["cpu"] = c1 - c0

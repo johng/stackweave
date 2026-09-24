@@ -19,8 +19,8 @@ Fix: a second memset clears `[offsetof(arena), offsetof(id))` after the atomic
 state store, restoring the documented "everything before the introspection block
 is cleared" contract (and defending any future field added in that gap).
 """
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
 
 def _round(nhubs, k):
@@ -28,7 +28,7 @@ def _round(nhubs, k):
     they return to the slab freelist.  Phase 2: k plain fiber() fibers that MUST be
     called with no positional arg -- any arg means pass_index leaked.  Returns
     the list of leaked arg-tuples (empty == clean)."""
-    from runloom.sync import WaitGroup
+    from stackweave.sync import WaitGroup
 
     leaked = []
 
@@ -39,7 +39,7 @@ def _round(nhubs, k):
         def idx(i):
             wg1.done()
 
-        runloom_c.fiber_n(idx, k, 0, True)   # (fn, n, stack_size, indexed=True)
+        stackweave_c.fiber_n(idx, k, 0, True)   # (fn, n, stack_size, indexed=True)
         wg1.wait()                        # phase 1 fully drains -> gs recycled
 
         wg2 = WaitGroup()
@@ -51,11 +51,11 @@ def _round(nhubs, k):
             wg2.done()
 
         for _ in range(k):
-            go = runloom.fiber
+            go = stackweave.fiber
             go(plain)                     # reuse the recycled slab gs
         wg2.wait()
 
-    runloom.run(nhubs, main)
+    stackweave.run(nhubs, main)
     return leaked
 
 

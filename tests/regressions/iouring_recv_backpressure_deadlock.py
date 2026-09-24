@@ -1,11 +1,11 @@
 """FINDING (2026-06-15): io_uring recv deadlocks on a backpressured transfer.
 
 Forcing every TCPConn.recv through the opt-in io_uring recv backend
-(RUNLOOM_TCPCONN_IOURING=1) DEADLOCKS a standard large loopback transfer: the
+(STACKWEAVE_TCPCONN_IOURING=1) DEADLOCKS a standard large loopback transfer: the
 receiver parks in conn.recv() partway through a 4 MiB send and is never woken
 again, so the single-thread scheduler's run() never returns.
 
-  * DEFAULT epoll backend (RUNLOOM_TCPCONN_IOURING unset): transfers fine.
+  * DEFAULT epoll backend (STACKWEAVE_TCPCONN_IOURING unset): transfers fine.
   * io_uring recv forced on: server fiber wedges in recv() (observed at
     tests/test_tcp_scenarios.py:96, test_writealot_backpressure) -> hang.
 
@@ -15,7 +15,7 @@ default mode. The hang points to a lost-wakeup / missed-completion hole in the
 io_uring recv path under backpressure (large transfer -> many recvs -> a recv
 completion does not wake the parked receiver). It is LATENT: io_uring recv is
 opt-in per connection and the suite runs default mode, so default users are
-unaffected -- but RUNLOOM_TCPCONN_IOURING is therefore NOT a transparent drop-in
+unaffected -- but STACKWEAVE_TCPCONN_IOURING is therefore NOT a transparent drop-in
 today. Corroboration: forcing the mode also failed test_adv_tcpconn and 3 cases
 in test_cov95_tcp_conn.
 
@@ -30,7 +30,7 @@ confirm); the pytest regression guard is tests/test_iouring_recv_backpressure.py
 
 Run manually (it is self-bounded by a watchdog; NOT part of the default suite):
   PYTHON_GIL=0 PYTHONPATH=src python3 tests/regressions/iouring_recv_backpressure_deadlock.py          # default: OK
-  PYTHON_GIL=0 PYTHONPATH=src RUNLOOM_TCPCONN_IOURING=1 \
+  PYTHON_GIL=0 PYTHONPATH=src STACKWEAVE_TCPCONN_IOURING=1 \
       python3 tests/regressions/iouring_recv_backpressure_deadlock.py      # io_uring: DEADLOCK (watchdog fires)
 """
 import faulthandler
@@ -40,7 +40,7 @@ import sys
 import zlib
 
 sys.path.insert(0, "src")
-import runloom_c
+import stackweave_c
 
 SIZE = 4 * 1024 * 1024
 WATCHDOG_S = 15
@@ -55,14 +55,14 @@ def _bound_port(listener):
 
 
 def main():
-    mode = "io_uring" if os.environ.get("RUNLOOM_TCPCONN_IOURING") == "1" else "default(epoll)"
+    mode = "io_uring" if os.environ.get("STACKWEAVE_TCPCONN_IOURING") == "1" else "default(epoll)"
     payload = (bytes(range(256)) * ((SIZE + 255) // 256))[:SIZE]
     want_crc = zlib.crc32(payload)
     port_holder = [None]
     got = [None]
 
     def server():
-        listener = runloom_c.TCPConn.listen("127.0.0.1", 0)
+        listener = stackweave_c.TCPConn.listen("127.0.0.1", 0)
         port_holder[0] = _bound_port(listener)
         conn = listener.accept()
         crc = 0
@@ -79,8 +79,8 @@ def main():
 
     def client():
         while port_holder[0] is None:
-            runloom_c.sched_yield()
-        c = runloom_c.TCPConn.connect("127.0.0.1", port_holder[0])
+            stackweave_c.sched_yield()
+        c = stackweave_c.TCPConn.connect("127.0.0.1", port_holder[0])
         c.send_all(payload)
         c.close()
 
@@ -88,9 +88,9 @@ def main():
     # non-zero rather than hang forever.
     faulthandler.dump_traceback_later(WATCHDOG_S, exit=True)
     print("[repro] backend = {0}; transferring {1} bytes ...".format(mode, SIZE))
-    runloom_c.fiber(server)
-    runloom_c.fiber(client)
-    runloom_c.run()
+    stackweave_c.fiber(server)
+    stackweave_c.fiber(client)
+    stackweave_c.run()
     faulthandler.cancel_dump_traceback_later()
 
     ok = got[0] == (SIZE, want_crc)

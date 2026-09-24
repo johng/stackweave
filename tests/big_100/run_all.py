@@ -83,11 +83,11 @@ def main():
 
     env = dict(os.environ)
     env["PYTHON_GIL"] = "0"
-    env.setdefault("RUNLOOM_SYSMON_QUIET", "1")
-    # TLBC now stays ON: runloom_c's GC frames anchor makes parked-fiber frames
+    env.setdefault("STACKWEAVE_SYSMON_QUIET", "1")
+    # TLBC now stays ON: stackweave_c's GC frames anchor makes parked-fiber frames
     # visible to the free-threaded collector, so the p565/p524 crash the old
     # PYTHON_TLBC=0 preset avoided is fixed at the source (see
-    # runloom.run/_tlbc_reexec_if_needed and module_gcframes.c.inc).  Running the
+    # stackweave.run/_tlbc_reexec_if_needed and module_gcframes.c.inc).  Running the
     # sweep TLBC-on matches production; because the anchor is active, children no
     # longer re-exec, so no preset is needed.  Diagnostic axis: export
     # PYTHON_TLBC=0 to force a TLBC-off sweep (inherited into `env`).

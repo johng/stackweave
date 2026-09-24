@@ -21,7 +21,7 @@ WHERE M:N COULD BREAK IT (the gap this program probes).  Under free-threaded
 CPython 3.14t with the GIL OFF and tens of thousands of goroutines multiplexed
 across >1 hubs, a stringprep call chain runs partly in the C unicodedata
 extension and partly in Python (the bisect walks, the string join in
-map_table_b2).  If runloom's preemption or hub migration were to (a) corrupt a
+map_table_b2).  If stackweave's preemption or hub migration were to (a) corrupt a
 fiber's Python frame / operand stack mid-chain, (b) let a sibling's computation
 leak a value into this fiber's locals across a yield, or (c) return a torn
 str from the C normalize path, then a purely functional lookup would return a
@@ -51,7 +51,7 @@ Both are single-owner (the sample list, the two profile dicts, and the golden
 lookups are never written by anyone but this fiber / are immutable), so a
 mismatch cannot be the documented "shared mutable object races" behavior -- it
 would be a torn C result, a corrupted frame, or a cross-fiber local leak: a real
-runloom bug.
+stackweave bug.
 
 ORACLES:
   * LOAD-BEARING -- PURITY / CLOSED-FORM (worker, HARD, fail-fast).  Per the two
@@ -76,7 +76,7 @@ cross-fiber locals isolation across a yield, torn C str results.
 import stringprep
 
 import harness
-import runloom
+import stackweave
 
 # The 17 RFC-3454 membership predicates, in a FIXED order so the bool tuple is a
 # stable positional fingerprint of a character.
@@ -146,9 +146,9 @@ def profile_pass(H, wid, rng, state, golden):
     baseline = [profile(chr(cp)) for cp in cps]
 
     # YIELD: let siblings run their own unicodedata/NFKC chains on this hub.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idxs[0] & 1:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
 
     # Recompute and verify self-consistency + closed-form correctness.
     for j in range(SAMPLE):
@@ -260,5 +260,5 @@ if __name__ == "__main__":
                  "chains, recomputes, and asserts the result is bit-identical "
                  "across the yield AND equal to a single-threaded golden table. "
                  "A predicate flipping or a mapped string changing on a fixed "
-                 "input is a torn/leaked pure computation -- a runloom bug. No "
+                 "input is a torn/leaked pure computation -- a stackweave bug. No "
                  "MEASURED arm: stringprep has no mutable state to race")

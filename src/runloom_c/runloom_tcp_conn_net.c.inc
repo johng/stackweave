@@ -81,7 +81,7 @@ static PyObject *RunloomTCPConn_listen_cls(PyTypeObject *cls, PyObject *args, Py
 static int runloom_tcp_accept4_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("RUNLOOM_TCP_ACCEPT4");
+    if (v < 0) { const char *e = getenv("STACKWEAVE_TCP_ACCEPT4");
                  v = (e && e[0] == '0') ? 0 : 1; }   /* default ON */
     return v;
 }

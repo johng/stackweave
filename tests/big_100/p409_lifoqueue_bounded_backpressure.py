@@ -4,7 +4,7 @@
 `not_full` Condition while the queue is full, get() blocks on the `not_empty`
 Condition while it is empty, and BOTH Conditions share one `mutex` Lock.  Under
 `monkey.patch()` that Lock/Condition pair is cooperative, so a full putter and an
-empty getter PARK runloom fibers.  The free-threaded hazard lives at the
+empty getter PARK stackweave fibers.  The free-threaded hazard lives at the
 boundary: a full->not-full transition (a get that frees a slot) must wake a
 parked putter, and an empty->not-empty transition (a put that adds an item) must
 wake a parked getter -- on a DIFFERENT M:N hub, EXACTLY ONCE.  A missed
@@ -68,7 +68,7 @@ conservation with no lost or doubled item.
 import queue
 
 import harness
-import runloom
+import stackweave
 
 # Per-round token UNIVERSE is closed and finite: a token NOT in it consumed by a
 # getter is a torn / corrupted value from a stack mangled under preempt.  Tokens
@@ -176,7 +176,7 @@ def run_round(H, wid, rng, nprod, ncons, counts, slot, fails, fail_slot):
     rem = total_real % ncons
     quotas = [base + (1 if c < rem else 0) for c in range(ncons)]
 
-    wg = runloom.WaitGroup()
+    wg = stackweave.WaitGroup()
     wg.add(nprod + ncons)
 
     for c in range(ncons):

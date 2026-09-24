@@ -3,7 +3,7 @@
 The Linux campaign (test_netpoll_faultinject.py) forces epoll_wait / epoll_ctl
 to fail with chosen errnos via strace's `-e inject=`.  Windows has no strace, so
 the Windows netpoll backends carry compiled-in, env-gated injection points
-(RUNLOOM_FAULT_<SITE> = "<mode>:<wsa_code>", mode in {once, always}; see
+(STACKWEAVE_FAULT_<SITE> = "<mode>:<wsa_code>", mode in {once, always}; see
 netpoll.c).  Same questions a model checker can't answer -- these are kernel
 error contracts, not memory-model races:
 
@@ -16,7 +16,7 @@ error contracts, not memory-model races:
   * an AFD-poll SUBMIT failure must surface cleanly to the parked fiber --
     no crash, no stranded fiber.
 
-Each backend (wsapoll / select / iocp-afd) is forced via RUNLOOM_NETPOLL; the
+Each backend (wsapoll / select / iocp-afd) is forced via STACKWEAVE_NETPOLL; the
 workload (netpoll_inproc_fault_workload.py) parks a fiber on a socket so the
 fault hits a live pump and the deadline still wakes it.  Windows-only.
 """
@@ -49,12 +49,12 @@ def _run(backend, site, fault_spec, timeout=40):
     env["PYTHONPATH"] = os.path.join(REPO, "src")
     env["PYTHON_GIL"] = "0"
     if backend:
-        env["RUNLOOM_NETPOLL"] = backend
+        env["STACKWEAVE_NETPOLL"] = backend
     else:
-        env.pop("RUNLOOM_NETPOLL", None)            # default backend (iocp-afd)
+        env.pop("STACKWEAVE_NETPOLL", None)            # default backend (iocp-afd)
     env["FAULT_SITE"] = site
     env["FAULT_TIMEOUT_MS"] = str(TIMEOUT_MS)
-    env["RUNLOOM_FAULT_" + site] = fault_spec
+    env["STACKWEAVE_FAULT_" + site] = fault_spec
     return subprocess.run(
         [sys.executable, WORKLOAD], cwd=REPO, env=env, timeout=timeout,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)

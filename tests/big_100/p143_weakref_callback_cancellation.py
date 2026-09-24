@@ -1,13 +1,13 @@
 """big_100 / 143 -- weakref callbacks doing scheduler-ish work.
 
 Objects carry weakref.ref(obj, callback) callbacks that do scheduler-adjacent
-work from inside the GC dealloc path: close an os.pipe fd, set a runloom Event,
+work from inside the GC dealloc path: close an os.pipe fd, set a stackweave Event,
 and bump a per-worker counter.  Goroutines churn create/drop them with periodic
 gc.collect() under load.  The reentrant scheduler-ish call (Event.set) from a
 weakref callback running during collection must not crash or deadlock, and
 forward progress must continue.
 
-Stresses: weakref callback reentrancy, a runloom Event set + an fd close from a
+Stresses: weakref callback reentrancy, a stackweave Event set + an fd close from a
 GC callback under M:N.
 """
 import gc
@@ -15,7 +15,7 @@ import os
 import weakref
 
 import harness
-import runloom
+import stackweave
 
 
 class Thing(object):
@@ -27,14 +27,14 @@ class Thing(object):
 
 def setup(H):
     # Per-worker `fired` and `closed` slots (single-writer-per-slot -> race-free,
-    # exact).  A shared runloom Event the callbacks set: setting an already-set
+    # exact).  A shared stackweave Event the callbacks set: setting an already-set
     # Event is the reentrant scheduler-touch we want to exercise from the dealloc
     # path; we re-create/clear it periodically so it actually transitions.
     H.state = {
         "fired": [0] * H.funcs,
         "closed": [0] * H.funcs,
         "events_set": [0],          # racy aggregate, only needs >0
-        "ev": runloom.sync.Event(),
+        "ev": stackweave.sync.Event(),
     }
 
 
@@ -46,7 +46,7 @@ def worker(H, wid, rng, state):
 
     def make_callback(rfd, wfd):
         # The weakref callback runs while the Thing is being collected.  It does
-        # scheduler-ish work: set a runloom Event (a real scheduler primitive
+        # scheduler-ish work: set a stackweave Event (a real scheduler primitive
         # reentered from the dealloc path) and close two real fds, then count.
         def callback(ref):
             try:
@@ -82,7 +82,7 @@ def worker(H, wid, rng, state):
         H.op(wid, k)
         H.task_done(wid)
         if rng.random() < 0.1:
-            runloom.yield_now()
+            stackweave.yield_now()
 
 
 def body(H):
@@ -100,14 +100,14 @@ def body(H):
             # A no-timeout ev.wait() strands this goroutine once the workers are
             # done and no setter remains: the harness teardown force-cancels
             # netpoll parkers but NOT a cooperative Event waiter (an in-memory
-            # runloom_c.park), so the stranded waiter wedges mn_run's join.  macOS
+            # stackweave_c.park), so the stranded waiter wedges mn_run's join.  macOS
             # exposes this 100% (the wait->clear->wait re-park lands stuck); Linux
             # only happened to fire a last set() from post()'s gc.collect().  The
             # timed poll still exercises the set-from-dealloc -> wake path.
             if ev.wait(timeout=0.05):
                 woken += 1
                 ev.clear()
-            runloom.yield_now()
+            stackweave.yield_now()
         H.log("event_wakes={0}".format(woken))
 
     H.fiber(waiter)
@@ -135,5 +135,5 @@ def post(H):
 if __name__ == "__main__":
     harness.main("p143_weakref_callback_cancellation", body, setup=setup,
                  post=post, default_funcs=2000,
-                 describe="weakref callbacks set a runloom Event + close fds from "
+                 describe="weakref callbacks set a stackweave Event + close fds from "
                           "the GC dealloc path; no crash/deadlock")

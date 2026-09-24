@@ -1,6 +1,6 @@
 """big_100 / 169 -- hashlib incremental hashing under cancellation.
 
-Goroutines hash large buffers (>256 KiB so runloom's size-gated auto-offload of
+Goroutines hash large buffers (>256 KiB so stackweave's size-gated auto-offload of
 hashlib kicks in) in chunks via hashlib.  Each hash runs inside a cancellable
 scope (a context with a short jittered timeout); SOME are cancelled mid-update.
 A cancelled hash is simply DISCARDED; a hash that runs to completion must equal
@@ -15,7 +15,7 @@ pool integrity, digest correctness.
 import hashlib
 
 import harness
-import runloom
+import stackweave
 import cancelutil
 
 CHUNK = 64 * 1024
@@ -59,7 +59,7 @@ def worker(H, wid, rng, state):
             # fraction cancel essentially immediately (delay 0) so the very first
             # inter-chunk ctx.err() check catches it; the rest race the offload.
             delay = 0.0 if (rng.random() < 0.5) else rng.uniform(0.0001, 0.002)
-            runloom.fiber(cancelutil.delayed_cancel, cancel, delay)
+            stackweave.fiber(cancelutil.delayed_cancel, cancel, delay)
 
         h = hashlib.sha256()
         aborted = False
@@ -73,7 +73,7 @@ def worker(H, wid, rng, state):
                 h.update(c)
                 # Yield so a concurrent cancel + other goroutines' offloads
                 # interleave on the pool.
-                runloom.yield_now()
+                stackweave.yield_now()
         finally:
             if not will_cancel:
                 cancel()       # release the context regardless

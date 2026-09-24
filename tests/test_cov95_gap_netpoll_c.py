@@ -12,7 +12,7 @@ Mechanisms used (all from the project's existing harness toolbox):
   cancel_all_parked body (netpoll_wake_iouring.c.inc L256-294)
       In-process M:N run(2): a fiber wait_fd-parks READ on one end of an
       idle socketpair (never written, never closed), the main fiber waits
-      until netpoll_parked>=1 then calls runloom_c.cancel_all_parked(); the
+      until netpoll_parked>=1 then calls stackweave_c.cancel_all_parked(); the
       walk claims+unlinks+wakes the parked g with the CANCELLED sentinel.
       Hub parker (p->hub != NULL) -> the mn_wake_g branch (L283).
 
@@ -54,8 +54,8 @@ import time
 
 import pytest
 
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 from adv_util import hang_guard, needs_free_threading
 
 FT = needs_free_threading()
@@ -70,7 +70,7 @@ IS_EPOLL = rc.netpoll_backend() == "epoll"
 
 
 def _run_py(src, env_extra=None, timeout=60, preload=None):
-    """Run a python snippet in a clean subprocess with the runloom env set.
+    """Run a python snippet in a clean subprocess with the stackweave env set.
 
     The snippet must print its own success marker and exit 0 -- a crash/_exit
     does NOT flush gcov, so we always assert returncode==0 + the marker.
@@ -144,20 +144,20 @@ def test_cancel_all_parked_wakes_idle_fd_parker():
         # logical sleep rather than a same-hub sched_yield).
         t0 = time.monotonic()
         while rc.stats()["netpoll_parked"] < 1 and time.monotonic() - t0 < 3.0:
-            runloom.sleep(0.005)
+            stackweave.sleep(0.005)
         res["parked_before"] = rc.stats()["netpoll_parked"]
         res["n"] = rc.cancel_all_parked()      # drives L256-294
         # Let the woken parker resume and record its result.
         t0 = time.monotonic()
         while "r" not in res and time.monotonic() - t0 < 3.0:
-            runloom.sleep(0.005)
+            stackweave.sleep(0.005)
         rc.netpoll_unregister(a.fileno())
         a.close()
         rc.netpoll_unregister(b.fileno())
         b.close()
 
     with hang_guard(30, "cancel_all_parked"):
-        runloom.run(2, lambda: rc.mn_fiber(main))
+        stackweave.run(2, lambda: rc.mn_fiber(main))
 
     assert res.get("parked_before") == 1, res          # the parker really parked
     assert res.get("n") == 1, res                       # exactly one cancelled
@@ -216,7 +216,7 @@ def test_cancel_all_parked_empty_is_clean_noop():
         res["n1"] = rc.cancel_all_parked()
 
     with hang_guard(20, "cancel_all_parked noop"):
-        runloom.run(2, lambda: rc.mn_fiber(main))
+        stackweave.run(2, lambda: rc.mn_fiber(main))
     assert res.get("n0") == 0, res
     assert res.get("n1") == 0, res
 
@@ -235,7 +235,7 @@ def test_cancel_all_parked_empty_is_clean_noop():
 # ---------------------------------------------------------------------------
 _IOURING_FILEREAD = r"""
     import os, sys, tempfile
-    import runloom_c as rc
+    import stackweave_c as rc
     PAYLOAD = b"netpoll cover payload " * 32
     path = tempfile.mktemp()
     with open(path, "wb") as f:
@@ -303,14 +303,14 @@ def test_add_iouring_eventfd_retry_add_einval_returns_minus1():
 # ---------------------------------------------------------------------------
 _MN_RING = r"""
     import sys
-    import runloom, runloom_c as rc
+    import stackweave, stackweave_c as rc
     def worker():
         for _ in range(40):
             rc.sched_yield()
     def drv():
         for _ in range(6):
             rc.mn_fiber(worker)
-    runloom.run(2, drv)
+    stackweave.run(2, drv)
     sys.stdout.write("MN_RING_OK\n")
 """
 
@@ -351,18 +351,18 @@ def test_add_iouring_ring_undo_table_insert_returns_minus1():
 # netpoll_wake_iouring.c.inc L365-367: runloom_netpoll_wake_pump_arm's
 # epoll_ctl ADD of the (level-triggered, non-exclusive) pump-wake eventfd fails
 # with a non-EEXIST errno -> close(fd), unlock, return -1.  Driven by a
-# single-thread runloom.blocking() offload (runloom_blockpool.c arms the
+# single-thread stackweave.blocking() offload (runloom_blockpool.c arms the
 # pump-wake eventfd); the ADD is epoll_ctl call #1.  On failure the blockpool
 # degrades to no-offload but the blocking call still completes cleanly.
 # ---------------------------------------------------------------------------
 _BLOCKING_ARM = r"""
     import sys, time
-    import runloom, runloom_c as rc
+    import stackweave, stackweave_c as rc
     def slow():
         time.sleep(0.05)
         return 42
     def main():
-        r = runloom.blocking(slow)        # arms the pump-wake eventfd
+        r = stackweave.blocking(slow)        # arms the pump-wake eventfd
         assert r == 42, r
     rc.fiber(main); rc.run()
     sys.stdout.write("BLOCK_OK\n")
@@ -391,7 +391,7 @@ def test_wake_pump_arm_epoll_ctl_fail_degrades_cleanly():
 def test_reset_after_fork_memsets():
     p = _run_py(r"""
         import glob, os, socket, sys
-        import runloom, runloom_c as rc
+        import stackweave, stackweave_c as rc
 
         def gcov_dump():
             # The grandchild exits via os._exit (fork-in-M:N safety), which does
@@ -400,7 +400,7 @@ def test_reset_after_fork_memsets():
             # No-op on a normal build (the symbol simply isn't there).
             try:
                 import ctypes
-                so = glob.glob(os.path.join("src", "runloom_c*.so"))
+                so = glob.glob(os.path.join("src", "stackweave_c*.so"))
                 if so:
                     ctypes.CDLL(so[0]).__gcov_dump()
             except Exception:
@@ -419,12 +419,12 @@ def test_reset_after_fork_memsets():
             rc.netpoll_unregister(a.fileno()); a.close()
             rc.netpoll_unregister(b.fileno()); b.close()
 
-        runloom.run(2, lambda: rc.mn_fiber(lambda: park_once(b"P")))  # parent: by_fd[]+bitmap now set
+        stackweave.run(2, lambda: rc.mn_fiber(lambda: park_once(b"P")))  # parent: by_fd[]+bitmap now set
 
         pid = os.fork()
         if pid == 0:
             try:
-                runloom.run(2, lambda: rc.mn_fiber(lambda: park_once(b"C")))  # reset ran at fork
+                stackweave.run(2, lambda: rc.mn_fiber(lambda: park_once(b"C")))  # reset ran at fork
                 gcov_dump()
                 os._exit(0)
             except BaseException as e:
@@ -498,7 +498,7 @@ def test_fd_cap_target_rlim_cur_fallback(tmp_path):
         pytest.skip("getrlimit shim did not build: %s" % build.stderr[-400:])
     p = _run_py(r"""
         import socket, sys
-        import runloom, runloom_c as rc
+        import stackweave, stackweave_c as rc
         # A real park drives netpoll init -> runloom_fd_cap_target (rlim_cur branch).
         def park_once():
             a, b = socket.socketpair()
@@ -511,7 +511,7 @@ def test_fd_cap_target_rlim_cur_fallback(tmp_path):
             buf = bytearray(1); rc.tcp_recv(a.fileno(), buf, 1)
             rc.netpoll_unregister(a.fileno()); a.close()
             rc.netpoll_unregister(b.fileno()); b.close()
-        runloom.run(2, lambda: rc.mn_fiber(park_once))
+        stackweave.run(2, lambda: rc.mn_fiber(park_once))
         sys.stdout.write("RLIM_OK\n")
     """, preload=str(so), timeout=45)
     assert p.returncode == 0, p.stderr[-1500:]

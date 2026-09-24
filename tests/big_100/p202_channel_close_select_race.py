@@ -18,8 +18,8 @@ Invariant (post): every selector that parked woke exactly once with ok=False
 (wakes_okfalse == selectors_parked); zero phantom values seen after close.
 """
 import harness
-import runloom
-import runloom.sync as sync
+import stackweave
+import stackweave.sync as sync
 
 BATCH_CHANS = 6            # channels per round
 SELECTORS = 8             # goroutines blocked in select per round
@@ -39,7 +39,7 @@ def coordinator(H, wid, rng, state):
     for _ in H.round_range():
         if not H.running():
             break
-        chans = [runloom.Chan(0) for _ in range(BATCH_CHANS)]
+        chans = [stackweave.Chan(0) for _ in range(BATCH_CHANS)]
         cases = [("recv", ch) for ch in chans]
         parked = [0]
         okf = [0]
@@ -51,7 +51,7 @@ def coordinator(H, wid, rng, state):
             # run on the scheduler; the increments race only with siblings.
             # Use per-selector return value instead to stay race-free:
             try:
-                idx, (val, ok) = runloom.select(cases)
+                idx, (val, ok) = stackweave.select(cases)
             except Exception:
                 return ("err", None)
             if ok:
@@ -64,7 +64,7 @@ def coordinator(H, wid, rng, state):
 
         # Give the selectors a beat to actually park in select, then close all
         # channels so every parked select must wake with ok=False.
-        runloom.sleep(0.0005)
+        stackweave.sleep(0.0005)
         for ch in chans:
             ch.close()
 

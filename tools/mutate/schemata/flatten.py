@@ -3,7 +3,7 @@
 so dredd (which only mutates the primary source file, never #included fragments)
 can schemata-mutate the code that actually lives in the fragments.
 
-runloom's C core is thin .c TUs that #include large *.c.inc / *.inc fragments;
+stackweave's C core is thin .c TUs that #include large *.c.inc / *.inc fragments;
 dredd leaves those fragments untouched.  Flattening produces a single physical
 file whose text IS the fragments, so every mutable expression is now in the
 primary file dredd rewrites.  Only local quoted "*.inc" / "*.c.inc" includes are
@@ -15,7 +15,7 @@ Emits, alongside <out>.c:
                      so a mutant reported at flat line X maps back to the real
                      src file:line (the survivors report reads this).
 
-Nesting: runloom's fragments do not include other fragments (verified), so a
+Nesting: stackweave's fragments do not include other fragments (verified), so a
 single pass suffices; a fragment that DID nest would just not get its inner
 fragment inlined -- flagged, not silently wrong.
 

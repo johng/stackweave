@@ -8,7 +8,7 @@ threads each with their OWN independent Profile() still raise this thousands of
 times -- the tool slot is one-per-process, NOT one-per-thread).  The active
 profiler hook is therefore NOT single-owner and NOT fiber-local; it cannot itself
 be the oracle (that would test documented process-global-hook semantics, not
-runloom).
+stackweave).
 
 WHAT IS single-owner, per the contract for process-global modules: the OBJECT the
 module PRODUCES.  A cProfile.Profile, once disabled, plus the pstats.Stats built
@@ -21,13 +21,13 @@ WHERE M:N COULD BREAK IT (the gap this program probes).  Each fiber produces its
 own pstats.Stats snapshot, records a full serialization of it + its closed-world
 totals, then YIELDS (so the scheduler migrates it to another hub and runs
 siblings that build their own snapshots), then re-reads the SAME single-owner
-object.  If runloom corrupts a single-owner object's fields across the yield (a
+object.  If stackweave corrupts a single-owner object's fields across the yield (a
 torn dict entry, a cross-fiber leak of another fiber's Stats state, a value/
 identity change), the re-read serialization differs or the closed-world law
 breaks.  On a correct runtime the object is untouched and every check passes
 (program exits 0).
 
-THE PROCESS-GLOBAL TOOL SLOT is serialized by a cooperative runloom Lock (created
+THE PROCESS-GLOBAL TOOL SLOT is serialized by a cooperative stackweave Lock (created
 in the root).  Only the enable -> workload -> disable region is held; this makes
 production the classic ONE-profiler-at-a-time usage that the sys.monitoring slot
 requires (never a runloom-thread-safety claim about cProfile, which has none).
@@ -50,7 +50,7 @@ ORACLES:
   * LOAD-BEARING -- SINGLE-OWNER Stats STABILITY (worker, HARD, fail-fast).  Each
     fiber builds its own pstats.Stats, checks the closed-world laws, yields, then
     asserts the object is bit-identical + still self-consistent.  Single-owner:
-    the Profile and Stats are fiber-local, never shared.  A failure is a runloom
+    the Profile and Stats are fiber-local, never shared.  A failure is a stackweave
     single-owner-object desync across hub migration.
 
   * MEASURED (report-ONLY, NEVER fails): process-global-hook contention.  Because
@@ -59,7 +59,7 @@ ORACLES:
     sibling's execution leaked into the window (documented process-global-hook
     behavior).  We MEASURE the deviation and the "monitoring slot busy" skips; we
     NEVER fail on them (serializing production keeps them near zero, which is the
-    CORRECT use of a one-per-process tool -- not a runloom bug either way).
+    CORRECT use of a one-per-process tool -- not a stackweave bug either way).
 
   * NON-VACUITY (post, HARD): the load-bearing arm actually ran (checks > 0).
 
@@ -82,7 +82,7 @@ import cProfile
 import pstats
 
 import harness
-import runloom
+import stackweave
 
 # Deterministic fiber-local workload.  leaf() is called exactly LEAF_CALLS times
 # per snapshot; rec() recurses REC_DEPTH deep so the snapshot has an entry whose
@@ -108,7 +108,7 @@ def rec(n):
 
 def driver(n):
     """Deterministic fiber-local workload profiled into the single-owner snapshot.
-    Contains NO runloom yield -- the profiler-enabled region never cooperatively
+    Contains NO stackweave yield -- the profiler-enabled region never cooperatively
     hands off, so the process-global tool slot is held only briefly."""
     s = 0
     for i in range(n):
@@ -142,14 +142,14 @@ INNER_CAP = 100000
 def profile_check(H, wid, rng, idx, state):
     """Produce a single-owner pstats.Stats snapshot, verify the closed-world laws,
     yield, then assert the snapshot is bit-identical + still self-consistent.
-    A cross-yield change to this fiber's private object is a runloom desync."""
+    A cross-yield change to this fiber's private object is a stackweave desync."""
     lock = state["lock"]
     pr = cProfile.Profile()
 
     # ---- produce the snapshot under the process-global tool lock --------------
     # Only enable -> workload -> disable is serialized (the sys.monitoring PROFILER
     # slot is one-per-process; concurrent enable() otherwise raises ValueError).
-    # No runloom yield inside the held region, so the lock is released promptly.
+    # No stackweave yield inside the held region, so the lock is released promptly.
     with lock:
         try:
             pr.enable()
@@ -202,9 +202,9 @@ def profile_check(H, wid, rng, idx, state):
             state["contention"][wid & 1023] += 1
 
     # ---- YIELD: hazard boundary -- migrate hubs, let siblings build snapshots --
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
 
     # ---- re-read the SAME single-owner object; must be untouched --------------
     sig1 = serialize(st.stats)
@@ -257,7 +257,7 @@ def setup(H):
     # raises ValueError).  Built here, inside the root, where cooperative
     # primitives are valid.
     H.state = {
-        "lock": runloom.sync.Lock(),
+        "lock": stackweave.sync.Lock(),
         "checks": [0] * H.funcs,        # LOAD-BEARING single-owner checks (wid-indexed)
         "measured": [0] * 1024,         # MEASURED leaf-count observations (report-only)
         "contention": [0] * 1024,       # process-global-hook leaks (report-only)
@@ -287,7 +287,7 @@ def post(H):
               "NOT this fiber's -- the sys.monitoring PROFILER slot is one-per-"
               "PROCESS and fires for any thread's calls while a fiber's profiler "
               "is active, so a sibling's execution leaked into the window.  This "
-              "is documented process-global-hook behavior, NOT a runloom bug, and "
+              "is documented process-global-hook behavior, NOT a stackweave bug, and "
               "never reaches the load-bearing single-owner oracle".format(
                   contention, measured))
 
@@ -314,6 +314,6 @@ if __name__ == "__main__":
                  "total_calls, sum cc == prim_calls, total!=prim via recursion), "
                  "yields (hub migration), then asserts the single-owner snapshot "
                  "is bit-identical + still self-consistent.  A cross-yield change "
-                 "to the private object is the runloom desync.  Process-global-"
+                 "to the private object is the stackweave desync.  Process-global-"
                  "hook contention (leaf-count leak, slot-busy skips) is MEASURED "
                  "report-only (documented sys.monitoring semantics)")

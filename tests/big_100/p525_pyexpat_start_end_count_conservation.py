@@ -5,7 +5,7 @@ pyexpat.ParserCreate() wraps a raw C `XML_Parser` struct.  Feeding it a document
 in SLICES -- Parse(chunk, False), Parse(chunk, False), ..., Parse(b'', True) --
 keeps that C struct plus its bound handler pointers (StartElementHandler,
 EndElementHandler, CharacterDataHandler) LIVE across every gap between chunks.
-In this program each gap is a runloom yield: the fiber parks with a half-consumed
+In this program each gap is a stackweave yield: the fiber parks with a half-consumed
 XML document sitting inside its parser, and a sibling fiber on the same (or a
 different) hub runs -- itself parked mid-parse inside ITS OWN parser.
 
@@ -32,7 +32,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (a closed-world counting law):
 
   The document has exactly ELEMENT_COUNT = 1 + NITEMS elements and a known
   concatenated character payload EXPECTED_TEXT that embeds wid in every chunk.
-  The parser is driven in small BYTE SLICES with a runloom yield between each
+  The parser is driven in small BYTE SLICES with a stackweave yield between each
   slice, then closed with Parse(b'', True).  After the final Parse:
 
     * starts[0] == ELEMENT_COUNT      (every StartElement callback fired, once)
@@ -48,7 +48,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (a closed-world counting law):
   with probability 1 (verified: a single-threaded run of the same doc yields
   starts==ends==ELEMENT_COUNT and the exact EXPECTED_TEXT).  A FAIL therefore
   means the C parser struct's handler dispatch fired against the wrong fiber's
-  counters across a yield -- a real runloom M:N bug (cross-fiber leak of single-
+  counters across a yield -- a real stackweave M:N bug (cross-fiber leak of single-
   owner C-object state, dropped/doubled callback, or torn accumulator).
 
 ORACLES:
@@ -83,7 +83,7 @@ count/text law even closes.
 import pyexpat
 
 import harness
-import runloom
+import stackweave
 
 # Items per document.  ELEMENT_COUNT = 1 (root) + NITEMS (each <item>).  Sized so
 # the document spans many small byte-slices (many yields per parse) while staying
@@ -92,7 +92,7 @@ NITEMS = 6
 ELEMENT_COUNT = 1 + NITEMS
 
 # Byte-slice size for feeding Parse(chunk, False).  Small so the C parser struct
-# is repeatedly parked mid-document with a runloom yield between every slice --
+# is repeatedly parked mid-document with a stackweave yield between every slice --
 # maximizing the window in which a sibling runs while this parser is half-consumed.
 SLICE = 5
 
@@ -140,7 +140,7 @@ def parse_once(H, wid, state):
     parser.CharacterDataHandler = lambda data: chunks.append(data)
 
     # Feed the document in small slices, parking the C parser struct across a
-    # runloom yield between each slice so a sibling reliably interleaves while this
+    # stackweave yield between each slice so a sibling reliably interleaves while this
     # parser sits half-consumed.
     pos = 0
     n = len(doc)
@@ -148,7 +148,7 @@ def parse_once(H, wid, state):
         end = pos + SLICE
         parser.Parse(doc[pos:end], False)
         pos = end
-        runloom.yield_now()                  # parser parked mid-document here
+        stackweave.yield_now()                  # parser parked mid-document here
     parser.Parse(b"", True)                   # finalize
 
     # ---- closed-world count + text conservation law -----------------------------
@@ -233,7 +233,7 @@ if __name__ == "__main__":
         "p525_pyexpat_start_end_count_conservation", body, setup=setup, post=post,
         default_funcs=6000,
         describe="each fiber owns a pyexpat.ParserCreate() and feeds a KNOWN "
-                 "document in byte-slices with a runloom yield between slices, so "
+                 "document in byte-slices with a stackweave yield between slices, so "
                  "the raw C XML_Parser struct + its StartElement/EndElement/"
                  "CharacterData handler pointers stay live while the fiber is "
                  "parked mid-document.  LOAD-BEARING closed-world law: after the "
@@ -241,5 +241,5 @@ if __name__ == "__main__":
                  "1+NITEMS element count, and the char-data accumulator equals the "
                  "fiber's exact wid-tagged payload.  A dropped/doubled callback, a "
                  "desynced start/end count, or a sibling's wid-tagged text leaking "
-                 "into this parser's accumulator across a yield is the runloom "
+                 "into this parser's accumulator across a yield is the stackweave "
                  "cross-fiber C-handler-dispatch bug")

@@ -25,13 +25,13 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified empirically, not assumed):
   machinery inserts the result into the PROCESS-GLOBAL sys.modules["module"]
   slot.  Two fibers importing that one name then ALIAS each other: the second
   load() observes the first's module object (or its half-populated slot) and
-  reads a SIBLING's TEST_MARKER.  That is NOT a runloom isolation bug -- it is an
+  reads a SIBLING's TEST_MARKER.  That is NOT a stackweave isolation bug -- it is an
   unsatisfiable shared-global invariant: it reproduces under PLAIN OS THREADS with
   the GIL fully OFF.  An oracle that hard-failed on a shared-name mismatch would
-  be a FALSE-POSITIVE detector (it fires identically without runloom), so the
+  be a FALSE-POSITIVE detector (it fires identically without stackweave), so the
   shared-name aliasing is MEASURED and REPORTED, never failed.
 
-  What IS a genuine runloom M:N invariant -- and the LOAD-BEARING oracle here --
+  What IS a genuine stackweave M:N invariant -- and the LOAD-BEARING oracle here --
   is PER-SLOT MODULE-IDENTITY INTEGRITY.  The pool holds N slots; slot `i` owns:
     * a DISTINCT temp .zip file,
     * containing ONE module with a DISTINCT, slot-specific NAME (`p476mod_<i>`)
@@ -45,11 +45,11 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified empirically, not assumed):
   still runs concurrently across siblings with the GIL off; the fibers still PARK
   / yield / migrate hubs between and within imports.  Under run(1)/GIL each fiber
   ALWAYS reads its slot's marker (0 mismatches GIL on AND off); under a CORRECT
-  runloom it MUST too.  If runloom's import path desyncs across a hub migration --
+  stackweave it MUST too.  If stackweave's import path desyncs across a hub migration --
   the shared cache hands back a stale/torn TOC, a sibling's code object executes
   into THIS load's module dict, or the private module object's namespace tears --
   the fiber reads a marker that is NOT the slot's `i` (or a corrupt/absent one).
-  THAT is the runloom M:N bug, and the per-slot private load PASSES on a correct
+  THAT is the stackweave M:N bug, and the per-slot private load PASSES on a correct
   runtime (so the program exits 0 with no bug, and an injected wrong module body
   still fires exit 1).
 
@@ -62,7 +62,7 @@ ORACLES:
     WRONG body for slot i's uniquely-named module -- a stale/torn shared TOC
     parse, a sibling's code object executed into this load's private dict, or a
     namespace tear under a hub migration.  None reproduce under plain threads (GIL
-    on AND off), because there is no shared name slot: it is a true runloom M:N
+    on AND off), because there is no shared name slot: it is a true stackweave M:N
     signal.  A missing TEST_MARKER attribute (body never ran, or ran into the
     wrong dict) fails the same oracle.
   * NON-VACUITY (post, HARD): the load-bearing per-slot load hazard was actually
@@ -113,7 +113,7 @@ import tempfile
 import zipfile
 
 import harness
-import runloom
+import stackweave
 
 # Modest population.  Many fibers share the bounded pool of .zips via wid % N.
 MAX_WORKERS = 4000
@@ -153,7 +153,7 @@ def module_name_for(i):
     The load-bearing oracle relies on this being unique per slot: there is then
     no shared sys.modules name slot for siblings to alias through, so a marker
     mismatch can only come from the zipimport machinery handing back the wrong
-    body for a name only this slot uses (a true runloom M:N desync)."""
+    body for a name only this slot uses (a true stackweave M:N desync)."""
     return "p476mod_{0}".format(i)
 
 
@@ -165,7 +165,7 @@ def create_zip_with_module(tmpdir, i, marker_value):
     load of this module is keyed to THAT slot -- it cannot collide with another
     slot's load in a shared sys.modules slot.  A marker mismatch therefore
     indicates the wrong body was executed for this slot's uniquely-named module (a
-    runloom M:N import desync), not a shared-name alias.
+    stackweave M:N import desync), not a shared-name alias.
 
     Returns (zip_path, module_name).
     """
@@ -280,7 +280,7 @@ def worker(H, wid, rng, state):
                 # LOAD-BEARING: load THIS slot's uniquely-named module from its
                 # .zip into a PRIVATE module object.  No shared sys.modules name
                 # slot -> no sibling aliasing; the only way TEST_MARKER comes back
-                # wrong is a runloom M:N import-machinery desync.
+                # wrong is a stackweave M:N import-machinery desync.
                 mod = load_private(zpath, mname)
 
                 if mod is None or not hasattr(mod, "TEST_MARKER"):
@@ -289,7 +289,7 @@ def worker(H, wid, rng, state):
                     # Concurrent zipimport access is documented thread-unsafe: this
                     # reproduces IDENTICALLY under plain OS threads with the GIL ON
                     # and OFF (proven by the discriminator control), so it is NOT a
-                    # runloom M:N corruption.  Count it and move on; never H.fail.
+                    # stackweave M:N corruption.  Count it and move on; never H.fail.
                     state["import_errors"][wid & 1023] += 1
                 else:
                     got_marker = mod.TEST_MARKER
@@ -299,7 +299,7 @@ def worker(H, wid, rng, state):
                         # sys.modules name slot for this name, so a sibling cannot
                         # alias it -- the concurrent zipimport machinery executed the
                         # WRONG body into this load's private dict, or handed back a
-                        # stale/torn TOC across a hub migration.  A genuine runloom
+                        # stale/torn TOC across a hub migration.  A genuine stackweave
                         # M:N import-identity corruption (0 under plain threads GIL
                         # on AND off, where the per-name load is atomic).
                         H.fail("fiber {0}: TEST_MARKER mismatch on a PRIVATE load of "
@@ -313,7 +313,7 @@ def worker(H, wid, rng, state):
                 # MEASURED (report-only): a documented-unsafe zipimport exception
                 # (ZipImportError / FileNotFoundError / OSError EMFILE).  The
                 # discriminator control reproduces these identically under plain OS
-                # threads with the GIL ON -> not a runloom fault.  Count, never fail.
+                # threads with the GIL ON -> not a stackweave fault.  Count, never fail.
                 state["import_errors"][wid & 1023] += 1
 
             # MEASURED-A (report-only): every few iterations, also exercise the
@@ -324,9 +324,9 @@ def worker(H, wid, rng, state):
 
             # Yield/park between loads to encourage concurrent cache mutations and
             # hub migration around the import machinery.
-            runloom.yield_now()
+            stackweave.yield_now()
             if idx & 1:
-                runloom.sleep(0.0002)
+                stackweave.sleep(0.0002)
 
             H.op(wid)
             idx += 1
@@ -369,7 +369,7 @@ def post(H):
               "shared sys.modules name aliases siblings (the second loader sees "
               "the first's module object).  This DRIFTS under plain threads with "
               "the GIL OFF too, so it is documented-unsafe shared-global usage, "
-              "NOT a runloom bug; the load-bearing arm avoids it entirely by "
+              "NOT a stackweave bug; the load-bearing arm avoids it entirely by "
               "loading each slot's DISTINCT name into a PRIVATE module "
               "object.".format(alias_mismatches, alias_checks))
 
@@ -403,7 +403,7 @@ if __name__ == "__main__":
                  "find_spec()+module_from_spec()+exec_module() into a PRIVATE "
                  "module object (never the shared sys.modules).  LOAD-BEARING: "
                  "every private load's TEST_MARKER == slot index -- with no shared "
-                 "name slot to alias, a mismatch is a runloom M:N import-machinery "
+                 "name slot to alias, a mismatch is a stackweave M:N import-machinery "
                  "desync (concurrent TOC parse / code-exec across a hub migration; "
                  "0 under plain threads GIL on AND off).  MEASURED (report-only): "
                  "the shared-sys.modules-name aliasing rate (documented-unsafe, "

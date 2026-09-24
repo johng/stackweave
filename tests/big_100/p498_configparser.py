@@ -21,12 +21,12 @@ was garbage-collected and reused, or random corruption).
 
 Under plain threads (GIL on AND off -- verified) this is race-free: each OS
 thread has its own stack and local variables (cp is a stack-local Python
-object), so a sibling thread NEVER touches THIS thread's cp.  Under runloom
+object), so a sibling thread NEVER touches THIS thread's cp.  Under stackweave
 M:N with a CORRECT fiber implementation, each fiber ALSO has its own stack
-frame and local variables (fiber isolation), so the same holds.  If runloom
+frame and local variables (fiber isolation), so the same holds.  If stackweave
 leaks a shared object or fails to isolate the stack, a sibling's mutation
 will corrupt this fiber's instance across the yield, and the re-read will
-be wrong -- the runloom isolation bug.
+be wrong -- the stackweave isolation bug.
 
 WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain threads):
 
@@ -35,9 +35,9 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain threads):
   unique per-fiber config values, yields, and re-reads them.  If the values
   survive the yield unchanged, each fiber's cp was isolated (the correct
   behavior under plain threads, verified: GIL on AND off, 0/2560 mismatches).
-  Under a correct runloom each fiber gets an isolated stack, so it must ALSO
+  Under a correct stackweave each fiber gets an isolated stack, so it must ALSO
   hold (0 mismatches).  If a re-read value != expected (a sibling leaked in,
-  or corruption), that is the runloom isolation bug.  The oracle fires only
+  or corruption), that is the stackweave isolation bug.  The oracle fires only
   on a REAL desync, and the program exits 0 when there is no bug.
 
 ORACLES:
@@ -47,7 +47,7 @@ ORACLES:
     re-reads every value and asserts got == expected (the precomputed
     canonical value for this wid).  A re-read != expected is a corruption
     (a sibling's write, or a desync in the instance's internal state) --
-    runloom isolation bug.
+    stackweave isolation bug.
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber stranded mid-block
     (inside ConfigParser.__getitem__ or during a yield) never returns; the
     watchdog catches an outright strand and require_no_lost catches a parked-
@@ -66,13 +66,13 @@ mutation attempts.
 
 Standalone plain-threads control verifies the oracle is non-vacuous:
   PYTHON_GIL=1 python3 p498_control.py -> 0 mismatches (baseline)
-  PYTHON_GIL=0 python3 p498_control.py -> 0 mismatches (GIL-off, no runloom)
+  PYTHON_GIL=0 python3 p498_control.py -> 0 mismatches (GIL-off, no stackweave)
 """
 import configparser
 import io
 
 import harness
-import runloom
+import stackweave
 
 # Per-fiber section names: drawn from this band.
 SEC_MIN = 1
@@ -125,7 +125,7 @@ def worker(H, wid, rng, state):
 
     Create a ConfigParser, populate it with unique per-fiber sections/options,
     yield to let a sibling run, then re-read all values and assert they are
-    unchanged.  A re-read value != expected is a runloom isolation desync
+    unchanged.  A re-read value != expected is a stackweave isolation desync
     (the private instance was corrupted by a sibling on the same hub, or the
     fiber's stack was not isolated).
 
@@ -154,9 +154,9 @@ def worker(H, wid, rng, state):
                 # YIELD + SLEEP-PARK: a sibling fiber on this hub runs
                 # (and may be mutating its own ConfigParser, or attempting
                 # to corrupt shared state) while this fiber is PARKED.
-                runloom.yield_now()
+                stackweave.yield_now()
                 if idx & 1:
-                    runloom.sleep(0.0002)
+                    stackweave.sleep(0.0002)
 
                 # Re-read all values and assert they match the expected config.
                 # If a sibling's write leaked into THIS fiber's cp, a re-read
@@ -175,7 +175,7 @@ def worker(H, wid, rng, state):
                                 "ConfigParser ISOLATION BROKEN: re-read {0}/{1} "
                                 "raised {2} (wid {3}) -- a sibling's remove_option "
                                 "or remove_section leaked into this fiber's private "
-                                "instance (runloom fiber-stack isolation desync)".
+                                "instance (stackweave fiber-stack isolation desync)".
                                 format(sec, opt, type(e).__name__, wid))
                             return
 
@@ -205,7 +205,7 @@ def worker(H, wid, rng, state):
                                             "re-read sibling's value {2!r} (wid {3}, "
                                             "sibling {4}) -- a sibling fiber's write "
                                             "leaked into this fiber's private "
-                                            "instance (runloom M:N isolation bug)".
+                                            "instance (stackweave M:N isolation bug)".
                                             format(sec, opt, got_val, wid,
                                                    sibling_wid))
                                         return
@@ -217,7 +217,7 @@ def worker(H, wid, rng, state):
                                 "ConfigParser VALUE CORRUPTION: {0}/{1} re-read "
                                 "{2!r} != expected {3!r} (wid {4}) -- the private "
                                 "instance did not retain the value this fiber set "
-                                "(runloom isolation desync or corruption)".format(
+                                "(stackweave isolation desync or corruption)".format(
                                     sec, opt, got_val, expected_val, wid))
                             return
 
@@ -228,7 +228,7 @@ def worker(H, wid, rng, state):
                 state["exceptions"][wid & 1023] += 1
                 H.fail(
                     "ConfigParser UNEXPECTED EXCEPTION: {0}: {1} (wid {2}) -- "
-                    "the private instance raised during set/get (runloom "
+                    "the private instance raised during set/get (stackweave "
                     "isolation or state corruption)".format(
                         type(e).__name__, e, wid))
                 return
@@ -268,7 +268,7 @@ if __name__ == "__main__":
                  default_funcs=8000,
                  describe="configparser.ConfigParser is a mutable per-instance "
                           "container (sections dict, option key-value pairs); "
-                          "runloom M:N fibers on the same hub run concurrently "
+                          "stackweave M:N fibers on the same hub run concurrently "
                           "(GIL off), so a PRIVATE-INSTANCE isolation desync "
                           "would let a sibling's mutation reach this fiber's "
                           "instance across a yield.  LOAD-BEARING: each fiber "
@@ -276,6 +276,6 @@ if __name__ == "__main__":
                           "sections/options, yields, then re-reads all values "
                           "and asserts they are unchanged (the canonical "
                           "precomputed per-wid config).  A re-read value != "
-                          "expected is a runloom fiber-isolation bug (0 under "
+                          "expected is a stackweave fiber-isolation bug (0 under "
                           "plain threads GIL on AND off).  Non-recursive, no "
                           "nested I/O, pure instance-state stress")

@@ -3,7 +3,7 @@
 # by build_patched_cpython.sh, and require BOTH to be fully green:
 #
 #   A. CPython's own stdlib suite  (python -m test)  -- must report SUCCESS
-#   B. runloom's suite             (tests/run_isolated.py) -- validation only
+#   B. stackweave's suite             (tests/run_isolated.py) -- validation only
 #
 # Suite A closes a gap the patches shipped with: src/patches/README.md records
 # exec-home as "VALIDATED end-to-end ... **Not** run against the CPython test
@@ -19,19 +19,19 @@
 #
 # PHASES (each REQUIRED -- any failure fails the run):
 #   cpython       CPython's own stdlib suite       (--only=cpython)
-#   build-ext     build the runloom C extension + migration capability check
+#   build-ext     build the stackweave C extension + migration capability check
 #                                                   (--only=build-ext)
-#   runloom-tests runloom's suite, tests/run_isolated.py
+#   runloom-tests stackweave's suite, tests/run_isolated.py
 #                                                   (--only=runloom-tests)
-# `--only=runloom` = build-ext + runloom-tests; no --only (default) = all three.
+# `--only=stackweave` = build-ext + runloom-tests; no --only (default) = all three.
 # The workflow runs them as SEPARATE, individually-required steps; this script
 # runs any subset for local use.
 #
-# Usage:  tools/ci/test_patched_cpython.sh <version> [--only=cpython|build-ext|runloom-tests|runloom]
+# Usage:  tools/ci/test_patched_cpython.sh <version> [--only=cpython|build-ext|runloom-tests|stackweave]
 # Env:    RL_CI_WORK, RL_CI_PREFIX (as build_patched_cpython.sh)
 #         RL_CI_CPYTHON_TEST_ARGS  extra args for `python -m test`
 #         RL_CI_TEST_TIMEOUT       per-test timeout, seconds (default 900)
-#         RUNLOOM_TIMEOUT_MULT     run_isolated deadline scaler (default 1)
+#         STACKWEAVE_TIMEOUT_MULT     run_isolated deadline scaler (default 1)
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -42,16 +42,16 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 . "$HERE/versions.env"
 
 VERSION="${1:-}"
-[ -n "$VERSION" ] || rl_die "usage: $0 <version> [--only=cpython|build-ext|runloom-tests|runloom]"
+[ -n "$VERSION" ] || rl_die "usage: $0 <version> [--only=cpython|build-ext|runloom-tests|stackweave]"
 rl_validate_version "$VERSION"
 shift
 
 ONLY=all
 for a in "$@"; do
     case "$a" in
-        --only=cpython|--only=build-ext|--only=runloom-tests|--only=runloom|--only=all)
+        --only=cpython|--only=build-ext|--only=runloom-tests|--only=stackweave|--only=all)
                    ONLY="${a#--only=}" ;;
-        --only=*)  rl_die "unknown --only phase '${a#--only=}' (cpython|build-ext|runloom-tests|runloom|all)" ;;
+        --only=*)  rl_die "unknown --only phase '${a#--only=}' (cpython|build-ext|runloom-tests|stackweave|all)" ;;
         *)         rl_die "unknown argument: $a" ;;
     esac
 done
@@ -63,7 +63,7 @@ case "$ONLY" in
     cpython)       run_cpython=yes ;;
     build-ext)     run_buildext=yes ;;
     runloom-tests) run_runtests=yes ;;
-    runloom)       run_buildext=yes; run_runtests=yes ;;
+    stackweave)       run_buildext=yes; run_runtests=yes ;;
 esac
 
 WORK="${RL_CI_WORK:-$HOME/.cache/runloom-ci}"
@@ -131,10 +131,10 @@ if [ "$run_cpython" = yes ]; then
     fi
 fi
 
-# ---- B1. build the runloom C extension + migration capability ---------------
+# ---- B1. build the stackweave C extension + migration capability ---------------
 
 if [ "$run_buildext" = yes ]; then
-    rl_step "build runloom C extension against $VERSION"
+    rl_step "build stackweave C extension against $VERSION"
     # pytest is REQUIRED -- without it run_isolated.py reports every one of the
     # ~240 files as failed, which reads like a catastrophic regression rather
     # than a missing dependency.  Installed here so the runloom-tests phase (a
@@ -151,45 +151,45 @@ if [ "$run_buildext" = yes ]; then
         rl_warn "hypothesis unavailable on this interpreter (PyO3 has no free-threaded support below 3.14) -- the one dependent test is deselected"
     fi
     ( cd "$ROOT" && "$PYBIN" setup.py build_ext --inplace ) > "$WORK/runloom-build-$VERSION.log" 2>&1 \
-        || { tail -40 "$WORK/runloom-build-$VERSION.log" >&2; rl_die "runloom failed to build against the patched interpreter"; }
-    rl_log "runloom C extension built"
+        || { tail -40 "$WORK/runloom-build-$VERSION.log" >&2; rl_die "stackweave failed to build against the patched interpreter"; }
+    rl_log "stackweave C extension built"
 
     # The end-to-end proof that the patches reached an EXTENSION MODULE, not just
     # CPython's own TUs.  If pyconfig.h had not been armed, these read 0 while
     # the interpreter itself still worked -- exactly the silent-mismatch case.
     rl_step "verify migration capability bits"
     if ( cd "$ROOT" && PYTHONPATH=src "$PYBIN" - <<'PYEOF'
-import sys, runloom_c
+import sys, stackweave_c
 # src/runloom_c/ is the C SOURCE directory, so if the extension failed to build,
-# `import runloom_c` silently succeeds as an implicit namespace package with no
+# `import stackweave_c` silently succeeds as an implicit namespace package with no
 # attributes -- which surfaces later as a baffling AttributeError deep in
 # runtime.py rather than "the extension is missing".  Catch it here.
-if getattr(runloom_c, "__file__", None) is None:
-    sys.exit("FAIL: 'runloom_c' resolved to the src/runloom_c/ SOURCE directory as a "
+if getattr(stackweave_c, "__file__", None) is None:
+    sys.exit("FAIL: 'stackweave_c' resolved to the src/runloom_c/ SOURCE directory as a "
              "namespace package -- the extension module was not built")
-import runloom
-status = runloom.migration_status()
+import stackweave
+status = stackweave.migration_status()
 print("migration_status():", status)
-print("alloc_home_available:", runloom_c.alloc_home_available)
-print("exec_home_available: ", runloom_c.exec_home_available)
+print("alloc_home_available:", stackweave_c.alloc_home_available)
+print("exec_home_available: ", stackweave_c.exec_home_available)
 missing = [k for k in ("alloc_home", "exec_home") if not status.get(k)]
 if missing:
     sys.exit("FAIL: patched build does not advertise: %s -- the patch did not "
              "reach the extension module (check pyconfig.h)" % ", ".join(missing))
-if not runloom.migration_available():
+if not stackweave.migration_available():
     sys.exit("FAIL: migration_available() is False on a fully patched build")
 print("OK: both halves present, migration_available() is True")
 PYEOF
     ); then
-        rl_ci_summary "✅ **runloom extension** ($VERSION, $PLATFORM): built + migration_available()"
+        rl_ci_summary "✅ **stackweave extension** ($VERSION, $PLATFORM): built + migration_available()"
     else
         rl_warn "capability check FAILED"
-        rl_ci_summary "❌ **runloom extension** ($VERSION, $PLATFORM): build/capability FAILED"
+        rl_ci_summary "❌ **stackweave extension** ($VERSION, $PLATFORM): build/capability FAILED"
         rc_total=1
     fi
 fi
 
-# ---- B2. runloom's own test suite (REQUIRED) --------------------------------
+# ---- B2. stackweave's own test suite (REQUIRED) --------------------------------
 
 if [ "$run_runtests" = yes ]; then
     # Ensure pytest even when this phase runs standalone (the build-ext phase
@@ -215,12 +215,12 @@ if [ "$run_runtests" = yes ]; then
     # loud error instead of silently running nothing.
     case "${RL_CI_SUITE:-cheap}" in
       cheap)
-        rl_step "runloom suite (tests/run_isolated.py) -- REQUIRED"
+        rl_step "stackweave suite (tests/run_isolated.py) -- REQUIRED"
         if ( cd "$ROOT" && PYTHONPATH=src "$PYBIN" tests/run_isolated.py ); then
-            rl_ci_summary "✅ **runloom suite** ($VERSION, $PLATFORM): passed"
+            rl_ci_summary "✅ **stackweave suite** ($VERSION, $PLATFORM): passed"
         else
-            rl_warn "runloom suite FAILED"
-            rl_ci_summary "❌ **runloom suite** ($VERSION, $PLATFORM): FAILED"
+            rl_warn "stackweave suite FAILED"
+            rl_ci_summary "❌ **stackweave suite** ($VERSION, $PLATFORM): FAILED"
             rc_total=1
         fi
         rl_step "cheap scheduler phases (mn replay ctest) -- REQUIRED"

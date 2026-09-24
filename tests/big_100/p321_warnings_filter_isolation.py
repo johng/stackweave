@@ -23,19 +23,19 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified empirically, not assumed):
   atomic block that does no I/O inside it -- i.e. OVERLAPPING / unserialized
   catch_warnings is documented-unsafe usage for ANY concurrency model and ANY
   GIL setting, NOT a runloom-specific bug.  An oracle that hard-failed on that
-  would be a FALSE-POSITIVE detector (it fires identically without runloom).  So
+  would be a FALSE-POSITIVE detector (it fires identically without stackweave).  So
   the overlap drift is measured and REPORTED, never failed -- like p67's TLS leak
   rate.
 
-  What IS a genuine runloom M:N invariant -- and the LOAD-BEARING oracle here --
+  What IS a genuine stackweave M:N invariant -- and the LOAD-BEARING oracle here --
   is the SERIALIZED STRICT-LIFO arm: every catch_warnings block runs behind ONE
   shared cooperative Lock, so the blocks are globally strict-LIFO (never two open
   at once -- the documented-SAFE usage).  Workers still PARK / yield / migrate
   hubs OUTSIDE the lock between blocks, so a goroutine routinely opens its block
   on one hub and could be preempted / migrated during __enter__ / __exit__.
   Under run(1)/GIL this serialized usage ALWAYS restores the global to baseline
-  (verified); under M:N it MUST too.  If runloom's save/restore desyncs across a
-  hub migration or a preempt-mid-__exit__ -- a runloom regression, NOT a
+  (verified); under M:N it MUST too.  If stackweave's save/restore desyncs across a
+  hub migration or a preempt-mid-__exit__ -- a stackweave regression, NOT a
   documented caveat -- the baseline does not restore.  THAT is the bug this
   program uniquely catches, and the serialized arm PASSES on a correct runtime
   (so the program exits 0 when there is no bug).
@@ -48,8 +48,8 @@ ORACLES:
         global LIFO) but parks/migrates between blocks; post()
         H.check(tuple(warnings.filters) == snapshot).
     A leaked / dropped / re-ordered filter after the serialized arm quiesces is a
-    runloom save/restore desync (migration / preempt-mid-__exit__) -- it does NOT
-    reproduce under stock serialized LIFO use, so it is a true runloom signal.
+    stackweave save/restore desync (migration / preempt-mid-__exit__) -- it does NOT
+    reproduce under stock serialized LIFO use, so it is a true stackweave signal.
   * COMPLETENESS (post, HARD): require_no_lost -- a worker stranded inside
     catch_warnings.__exit__ on a corrupted stack, or holding the shared Lock when
     it vanished, never returns; the watchdog catches an outright strand and
@@ -88,7 +88,7 @@ import socket
 import warnings
 
 import harness
-import runloom
+import stackweave
 
 # Modest population.  Most workers run the LOAD-BEARING serialized strict-LIFO
 # arm; a minority run the report-only OVERLAP arm.
@@ -104,7 +104,7 @@ OVERLAP_FRACTION = 0.2
 # under ONE shared cooperative Lock, so the blocks are globally strict-LIFO
 # (never two open at once = the documented-SAFE usage).  Workers PARK / yield /
 # migrate hubs OUTSIDE the lock between blocks.  The global filters MUST restore
-# to baseline -- the run(1)/GIL behaviour a runloom save/restore desync across a
+# to baseline -- the run(1)/GIL behaviour a stackweave save/restore desync across a
 # hub migration / preempt-mid-__exit__ would break.
 # --------------------------------------------------------------------------
 def serialized_block(H, wid, r, rng, state):
@@ -113,8 +113,8 @@ def serialized_block(H, wid, r, rng, state):
     # Park / migrate hub OUTSIDE the critical section so the goroutine can be on a
     # different hub each time it takes the lock (exercises migration around the
     # save/restore), without ever overlapping another block.
-    runloom.sleep(0.0003)
-    runloom.yield_now()
+    stackweave.sleep(0.0003)
+    stackweave.yield_now()
     with lock:
         with warnings.catch_warnings(record=True) as w:
             # Mutates the GLOBAL warnings.filters (prepends a filter) -- the thing
@@ -208,7 +208,7 @@ def run_overlap_phase(H, state):
     noverlap = state["noverlap"]
     if noverlap <= 0:
         return
-    wg = runloom.WaitGroup()
+    wg = stackweave.WaitGroup()
     wg.add(noverlap)
 
     def run_one(wid):
@@ -258,7 +258,7 @@ def setup(H):
 
     H.state = {
         "snapshot": snapshot,             # the baseline global filter stack
-        "lock": runloom.sync.Lock(),      # serializes the load-bearing arm
+        "lock": stackweave.sync.Lock(),      # serializes the load-bearing arm
         "nworkers": nworkers,
         "noverlap": noverlap,             # report-only overlap pre-phase pop
         "pairs": pairs,
@@ -295,7 +295,7 @@ def post(H):
     # NET drift left in the global after the whole run is attributable to the
     # LOAD-BEARING serialized strict-LIFO arm: a serialized worker whose
     # catch_warnings.__exit__ desynced across a hub migration / preempt and failed
-    # to restore the global list.  That is the runloom bug.
+    # to restore the global list.  That is the stackweave bug.
     now = tuple(warnings.filters)
     H.log("serialized-LIFO blocks={0} (LOAD-BEARING) | overlap blocks={1} "
           "drifted={2} ({3:.1f}%, documented-unsafe non-LIFO -- REPORT ONLY) | "
@@ -306,7 +306,7 @@ def post(H):
     # LOAD-BEARING: the GLOBAL warnings.filters MUST be the exact baseline after
     # the run.  The overlap arm self-restored, so a residual leaked/dropped/
     # re-ordered filter is a SERIALIZED-arm save/restore desync under M:N (hub
-    # migration / preempt-mid-__exit__) -- a runloom bug, NOT a documented caveat
+    # migration / preempt-mid-__exit__) -- a stackweave bug, NOT a documented caveat
     # (serialized strict-LIFO use always restores under run(1)/GIL -- verified).
     if len(now) != len(snap):
         H.fail("GLOBAL FILTER STACK CORRUPTED: len(warnings.filters)={0} != "
@@ -334,7 +334,7 @@ def post(H):
         H.log("note: the overlap arm observed {0} per-block global-filter drifts "
               "across {1} overlapping blocks -- documented-unsafe non-LIFO "
               "catch_warnings usage (reproduces under plain GIL threads with "
-              "PYTHON_GIL=1), NOT a runloom bug; each overlap block self-restored "
+              "PYTHON_GIL=1), NOT a stackweave bug; each overlap block self-restored "
               "so this never reaches the load-bearing check".format(drift, ovl))
 
     # COMPLETENESS: no worker parked-then-vanished (e.g. stranded in
@@ -352,6 +352,6 @@ if __name__ == "__main__":
                           "LIFO arm (one shared lock, park+migrate between blocks) "
                           "MUST restore the global to its exact baseline under M:N "
                           "-- a save/restore desync across hub migration is the "
-                          "real runloom bug.  The non-LIFO OVERLAP drift + "
+                          "real stackweave bug.  The non-LIFO OVERLAP drift + "
                           "record=True cross-capture are documented-unsafe "
                           "(reproduce under plain GIL threads) -- report-only")

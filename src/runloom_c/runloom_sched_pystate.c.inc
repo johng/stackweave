@@ -52,7 +52,7 @@ static int runloom_dbg_excstate(void)
     static int v = -1;
     int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
     if (__builtin_expect(cur < 0, 0)) {
-        const char *e = getenv("RUNLOOM_DBG_EXCSTATE");
+        const char *e = getenv("STACKWEAVE_DBG_EXCSTATE");
         cur = (e != NULL && e[0] != '0') ? 1 : 0;
         __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
     }
@@ -67,7 +67,7 @@ static void runloom_dbg_check_excobj(PyObject *o, const char *where)
      * useful, it lands at the detection point with the crash handler armed). */
     if (!PyExceptionInstance_Check(o)) {
         fprintf(stderr,
-            "[RUNLOOM_DBG_EXCSTATE] %s: exc object %p is NOT an exception "
+            "[STACKWEAVE_DBG_EXCSTATE] %s: exc object %p is NOT an exception "
             "instance (ob_type=%p refcnt=%zd) -- STALE/CORRUPT exception state\n",
             where, (void *)o, (void *)Py_TYPE(o), (Py_ssize_t)Py_REFCNT(o));
         fflush(stderr);
@@ -613,7 +613,7 @@ static int runloom_chunk_grace_depth(void)
      * runloom_netpoll_stale_probe_ns in netpoll_register.c.inc. */
     int c = __atomic_load_n(&runloom_chunk_grace_cap, __ATOMIC_RELAXED);
     if (__builtin_expect(c < 0, 0)) {
-        const char *e = getenv("RUNLOOM_CHUNK_GRACE");
+        const char *e = getenv("STACKWEAVE_CHUNK_GRACE");
         c = (e != NULL && e[0] != '\0') ? atoi(e) : 128;
         if (c < 0) c = 0;
         if (c > (1 << 20)) c = 1 << 20;

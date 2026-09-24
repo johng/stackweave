@@ -15,32 +15,32 @@ import os
 
 os.environ.setdefault("PYTHON_GIL", "0")
 
-import runloom_c  # noqa: E402
+import stackweave_c  # noqa: E402
 
 
 def test_resident_scrub_contract():
-    # The secure resident wipe is the default (RUNLOOM_STACK_SCRUB_RESIDENT, opt-out =0);
+    # The secure resident wipe is the default (STACKWEAVE_STACK_SCRUB_RESIDENT, opt-out =0);
     # the toggle surface exists for the "secure"/"memory" profiles to drive.
-    assert callable(runloom_c.get_stack_scrub)
-    assert callable(runloom_c.set_stack_scrub)
+    assert callable(stackweave_c.get_stack_scrub)
+    assert callable(stackweave_c.set_stack_scrub)
 
 
 def test_optimize_throughput_wires_spawn_fastpath():
-    import runloom
-    eff = runloom.optimize("throughput")
-    for k in ("RUNLOOM_STACK_ARENA", "RUNLOOM_GON_BULK", "RUNLOOM_GON_FRESH"):
+    import stackweave
+    eff = stackweave.optimize("throughput")
+    for k in ("STACKWEAVE_STACK_ARENA", "STACKWEAVE_GON_BULK", "STACKWEAVE_GON_FRESH"):
         assert eff.get(k) == "1", (k, eff.get(k))
-    assert eff.get("RUNLOOM_GON_PCREATE") == "auto", eff.get("RUNLOOM_GON_PCREATE")
-    assert eff.get("RUNLOOM_GON_PCREATE_B") == "auto", eff.get("RUNLOOM_GON_PCREATE_B")
+    assert eff.get("STACKWEAVE_GON_PCREATE") == "auto", eff.get("STACKWEAVE_GON_PCREATE")
+    assert eff.get("STACKWEAVE_GON_PCREATE_B") == "auto", eff.get("STACKWEAVE_GON_PCREATE_B")
 
 
 def test_optimize_memory_overrides_throughput():
     # "memory" has higher precedence -> it claws back the RAM-spending arena + the
     # non-reclaiming resident scrub.  Resolve straight from the goal tables.
-    import runloom._optimize as opt
+    import stackweave._optimize as opt
     merged = {}
     for g in opt._PRECEDENCE:
         if g in ("throughput", "memory"):
             merged.update(opt._GOAL_ENV[g])
-    assert merged["RUNLOOM_STACK_ARENA"] == "0"
-    assert merged["RUNLOOM_STACK_SCRUB_RESIDENT"] == "0"
+    assert merged["STACKWEAVE_STACK_ARENA"] == "0"
+    assert merged["STACKWEAVE_STACK_SCRUB_RESIDENT"] == "0"

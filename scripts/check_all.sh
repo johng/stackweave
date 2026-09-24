@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# check_all.sh -- run every layer of runloom's correctness stack.
+# check_all.sh -- run every layer of stackweave's correctness stack.
 #
 # Layers, fastest first:
 #   static      security SAST on the C core (parallel across cores):     ~15s
@@ -57,8 +57,8 @@ cd "$ROOT"
 # pytest.  ~20 unrelated plugins are installed in this env and pytest imports
 # all of them per process (~4s/file of pure overhead), and one pulls _brotli
 # which re-enables the GIL -- wrong for the free-threaded target.  The suite
-# uses none of them.  Opt back in with RUNLOOM_TEST_PYTEST_PLUGINS=1.
-if [ "${RUNLOOM_TEST_PYTEST_PLUGINS:-}" != "1" ]; then
+# uses none of them.  Opt back in with STACKWEAVE_TEST_PYTEST_PLUGINS=1.
+if [ "${STACKWEAVE_TEST_PYTEST_PLUGINS:-}" != "1" ]; then
     export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
 fi
 
@@ -81,13 +81,13 @@ fi
 
 # ---- preflight: is the C extension built for THIS interpreter? -------------
 #
-# check_all.sh does NOT build anything.  If src/ holds no runloom_c matching
-# $PYTHON's ABI tag, `import runloom_c` does not fail -- it resolves to the
+# check_all.sh does NOT build anything.  If src/ holds no stackweave_c matching
+# $PYTHON's ABI tag, `import stackweave_c` does not fail -- it resolves to the
 # SOURCE DIRECTORY src/runloom_c/ as a namespace package, giving an empty
 # module with __file__ = None.  What you get then is not a clean "not built"
 # error but 200+ files failing on
 #
-#     AttributeError: module 'runloom_c' has no attribute '_fiber_register'
+#     AttributeError: module 'stackweave_c' has no attribute '_fiber_register'
 #
 # and, worse, lanes that tolerate import errors reporting PASS while testing
 # NOTHING.  Observed 2026-08-21: a full check_all_fast came back with 216
@@ -109,18 +109,18 @@ ctxcheck|dbgnetpoll|migdelay|combo|refleak|racerd)
       needs_ext=1 ;;
   esac
 done
-if [ "$needs_ext" = 1 ] && [ "${RUNLOOM_ALLOW_UNBUILT:-}" != "1" ]; then
+if [ "$needs_ext" = 1 ] && [ "${STACKWEAVE_ALLOW_UNBUILT:-}" != "1" ]; then
   _ext_probe="$(PYTHONPATH=src "$PYTHON" - <<'PY' 2>&1
 import sys, _imp
 try:
-    import runloom_c
+    import stackweave_c
 except Exception as exc:
     print("IMPORTFAIL|%s: %s" % (type(exc).__name__, exc)); raise SystemExit(0)
-path = getattr(runloom_c, "__file__", None)
+path = getattr(stackweave_c, "__file__", None)
 if not path or not any(path.endswith(s) for s in _imp.extension_suffixes()):
     # A namespace package over src/runloom_c/, not the compiled module.
     print("NOTBUILT|%s" % (path,)); raise SystemExit(0)
-if not hasattr(runloom_c, "_fiber_register"):
+if not hasattr(stackweave_c, "_fiber_register"):
     print("INCOMPLETE|%s" % (path,)); raise SystemExit(0)
 print("OK|%s" % (path,))
 PY
@@ -129,8 +129,8 @@ PY
     OK\|*) : ;;
     *)
       _want="$(PYTHONPATH=src "$PYTHON" -c 'import _imp; print(_imp.extension_suffixes()[0])' 2>/dev/null)"
-      _have="$(ls -1 src/runloom_c*.so 2>/dev/null | tr '\n' ' ')"
-      echo "check_all: the runloom_c extension is not usable by this interpreter." >&2
+      _have="$(ls -1 src/stackweave_c*.so 2>/dev/null | tr '\n' ' ')"
+      echo "check_all: the stackweave_c extension is not usable by this interpreter." >&2
       echo "" >&2
       echo "  interpreter : $PYTHON" >&2
       echo "  version     : $("$PYTHON" -VV 2>&1 | head -1)" >&2
@@ -139,7 +139,7 @@ PY
       echo "  probe       : ${_ext_probe}" >&2
       echo "" >&2
       echo "check_all.sh does not build. Without a matching extension," >&2
-      echo "'import runloom_c' silently becomes a namespace package over the" >&2
+      echo "'import stackweave_c' silently becomes a namespace package over the" >&2
       echo "SOURCE directory, and the suite reports mass AttributeErrors or" >&2
       echo "-- worse -- passes while testing nothing." >&2
       echo "" >&2
@@ -148,7 +148,7 @@ PY
       echo "Formal/supply-chain lanes need no build and can be run directly:" >&2
       echo "  scripts/check_all.sh verify-fast        (Spin/CBMC/TLA+)" >&2
       echo "  scripts/check_all.sh supplychain-fast" >&2
-      echo "Override (you know the phase does not need it): RUNLOOM_ALLOW_UNBUILT=1" >&2
+      echo "Override (you know the phase does not need it): STACKWEAVE_ALLOW_UNBUILT=1" >&2
       exit 2
       ;;
   esac
@@ -164,10 +164,10 @@ fi
 # So: one timestamped dir per run, `latest` pointing at the newest, the full
 # transcript, a per-phase split, and a summary that records what actually ran.
 #
-# RUNLOOM_LOG_DIR moves it; RUNLOOM_NO_LOG=1 turns it off.
+# STACKWEAVE_LOG_DIR moves it; STACKWEAVE_NO_LOG=1 turns it off.
 RUNDIR=""
-if [ "${RUNLOOM_NO_LOG:-}" != "1" ]; then
-    LOGROOT="${RUNLOOM_LOG_DIR:-$ROOT/.check-logs}"
+if [ "${STACKWEAVE_NO_LOG:-}" != "1" ]; then
+    LOGROOT="${STACKWEAVE_LOG_DIR:-$ROOT/.check-logs}"
     RUNDIR="$LOGROOT/$(date -u +%Y%m%dT%H%M%SZ)"
     if mkdir -p "$RUNDIR" 2>/dev/null; then
         ln -sfn "$RUNDIR" "$LOGROOT/latest" 2>/dev/null || true
@@ -193,8 +193,8 @@ fi
 #
 # So: say it once, up front, in one place.  Missing tools ONLY -- listing the
 # dozen that are present is the noise this is trying to remove.  Warning only;
-# never changes rc.  RUNLOOM_NO_TOOLCHECK=1 silences it.
-if [ "${RUNLOOM_NO_TOOLCHECK:-}" != "1" ]; then
+# never changes rc.  STACKWEAVE_NO_TOOLCHECK=1 silences it.
+if [ "${STACKWEAVE_NO_TOOLCHECK:-}" != "1" ]; then
   _tool_rows=""
   _tool_missing=0
   # Probe the SAME PATH the lanes do, or this lies. tools/supplychain/scan.sh
@@ -231,10 +231,10 @@ TOOLS
   # "never built" from "built but not exported" -- they need different actions,
   # and telling someone to spend 20 minutes rebuilding what is already on disk
   # is how a warning earns itself a filter rule.
-  if [ -z "${RUNLOOM_TSAN_PYTHON:-}" ] || [ ! -x "${RUNLOOM_TSAN_PYTHON:-/nonexistent}" ]; then
+  if [ -z "${STACKWEAVE_TSAN_PYTHON:-}" ] || [ ! -x "${STACKWEAVE_TSAN_PYTHON:-/nonexistent}" ]; then
     _tsan_built="$(ls "$HOME"/cpython-tsan/bin/python3.*t 2>/dev/null | tail -1)"
     if [ -n "$_tsan_built" ]; then
-      _tsan_hint="built already -- export RUNLOOM_TSAN_PYTHON=$_tsan_built"
+      _tsan_hint="built already -- export STACKWEAVE_TSAN_PYTHON=$_tsan_built"
     else
       _tsan_hint="tools/build_tsan_cpython.sh  (PY_VER= the version you SHIP)"
     fi
@@ -249,7 +249,7 @@ TOOLS
     printf '%s' "$_tool_rows"
     echo "  (skips are counted per-lane as 'N skipped'; a green run with tools"
     echo "   absent verifies LESS than the same run with them present.)"
-    echo "  Silence with RUNLOOM_NO_TOOLCHECK=1."
+    echo "  Silence with STACKWEAVE_NO_TOOLCHECK=1."
   fi
 fi
 
@@ -275,7 +275,7 @@ for ph in "${phases[@]}"; do
       "$PYTHON" tools/mn_stress.py --iters "${MN_ITERS:-150}" --stable || rc=1
       ;;
     replay)
-      hr "Controlled M:N deterministic replay (RUNLOOM_MN_BARRIER)"
+      hr "Controlled M:N deterministic replay (STACKWEAVE_MN_BARRIER)"
       # Same seed must reproduce one signature across reps; each probe exits
       # non-zero if any seed varies.  Guards the five replay levers
       # (tools/mn_controlled/README.md) against silent regression.
@@ -340,7 +340,7 @@ for ph in "${phases[@]}"; do
       VERIFY_FAST=1 PYTHON="$PYTHON" tools/verify/run_verify.sh || rc=1
       ;;
     ctxcheck)
-      hr "Lock-order + park/yield-safety checker (RUNLOOM_CTXCHECK build slice)"
+      hr "Lock-order + park/yield-safety checker (STACKWEAVE_CTXCHECK build slice)"
       # Activates the previously-never-built rank checker + the item-10 park
       # assert; fails on any lock-order inversion or yield-while-lock-held.
       PYTHON="$PYTHON" bash scripts/check_ctxcheck.sh || rc=1
@@ -350,11 +350,11 @@ for ph in "${phases[@]}"; do
       PYTHON="$PYTHON" bash scripts/check_chess.sh || rc=1
       ;;
     migdelay)
-      hr "Migration-window perturbation (RUNLOOM_DELAY on snap/load/adopt)"
+      hr "Migration-window perturbation (STACKWEAVE_DELAY on snap/load/adopt)"
       PYTHON="$PYTHON" bash scripts/check_migration_delay.sh || rc=1
       ;;
     dbgnetpoll)
-      hr "Stale-arm tripwire across the broad suite (RUNLOOM_DBG_NETPOLL=1)"
+      hr "Stale-arm tripwire across the broad suite (STACKWEAVE_DBG_NETPOLL=1)"
       # Runs netpoll/mn/aio under the inline arm-cache-vs-kernel check so
       # stale-cache drift surfaces anywhere, not just in the fd-reuse tests.
       PYTHON="$PYTHON" bash scripts/check_dbg_netpoll.sh || rc=1
@@ -364,8 +364,8 @@ for ph in "${phases[@]}"; do
       tools/stw_conform_ci.sh || rc=1
       ;;
     aioconform)
-      hr "Vendored CPython asyncio suite on the runloom bridge (tests/aio/, full)"
-      # tests/aio/ = pinned CPython test_asyncio bodies run on RunloomEventLoop,
+      hr "Vendored CPython asyncio suite on the stackweave bridge (tests/aio/, full)"
+      # tests/aio/ = pinned CPython test_asyncio bodies run on StackweaveEventLoop,
       # green on the DEFAULT bridge (divergences skipped in tests/aio/skips.py).
       # Per-file subprocess isolation (run_isolated --suite aio); NOT in the
       # default `tests` phase (discover() scans tests/ top-level only), so it runs
@@ -396,7 +396,7 @@ for ph in "${phases[@]}"; do
         echo "  SKIP: no conservation corpus (tests/big_100/*conservation*.py)"
       else
         for mp in "${mr_progs[@]}"; do
-          RUNLOOM_PYTHON="$PYTHON" "$PYTHON" tools/metamorphic/mr_runner.py "$mp" \
+          STACKWEAVE_PYTHON="$PYTHON" "$PYTHON" tools/metamorphic/mr_runner.py "$mp" \
             --hubs "${MR_HUBS:-2,8}" --seed "${MR_SEED:-7}" \
             --funcs "${MR_FUNCS:-150}" --rounds "${MR_ROUNDS:-1}" \
             --duration "${MR_DURATION:-3}" || rc=1
@@ -405,17 +405,17 @@ for ph in "${phases[@]}"; do
       ;;
     security)
       hr "Security -- deterministic subset S1-S4 (fuzzers S6-S9 -> daemon; cc/valgrind skip cleanly)"
-      RUNLOOM_SEC_FAST=1 PYTHON="$PYTHON" tools/security/run_all.sh || rc=1
+      STACKWEAVE_SEC_FAST=1 PYTHON="$PYTHON" tools/security/run_all.sh || rc=1
       ;;
     supplychain)
       hr "Supply-chain / backdoor scan -- semgrep+gitleaks+bandit + osv-scanner (deps)"
       # Scan the tree for a planted backdoor / secret / vulnerable dep.  Each tool
       # SELF-SKIPS if absent; DEPS=1 adds the network osv-scanner dep audit.
-      RUNLOOM_SC_DEPS=1 RUNLOOM_PYTHON="$PYTHON" bash tools/supplychain/scan.sh || rc=1
+      STACKWEAVE_SC_DEPS=1 STACKWEAVE_PYTHON="$PYTHON" bash tools/supplychain/scan.sh || rc=1
       ;;
     supplychain-fast)
       hr "Supply-chain / backdoor scan -- OFFLINE subset (semgrep+gitleaks+bandit)"
-      RUNLOOM_SC_FAST=1 RUNLOOM_PYTHON="$PYTHON" bash tools/supplychain/scan.sh || rc=1
+      STACKWEAVE_SC_FAST=1 STACKWEAVE_PYTHON="$PYTHON" bash tools/supplychain/scan.sh || rc=1
       ;;
     refleak)
       hr "Refcount/alloc leak hunt (--with-pydebug ABI; self-skips cleanly off the dev box)"
@@ -455,7 +455,7 @@ if [ -n "$RUNDIR" ]; then
         out { print >> out }
     ' "$RUNDIR/full.log" 2>/dev/null
     {
-        echo "runloom check_all"
+        echo "stackweave check_all"
         echo "  when     : $(date -u +%FT%TZ)"
         echo "  duration : $(( $(date +%s) - ${RUN_START:-$(date +%s)} ))s"
         echo "  phases   : ${phases[*]}"

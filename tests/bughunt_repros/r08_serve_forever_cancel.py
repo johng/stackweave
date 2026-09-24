@@ -2,7 +2,7 @@
 (stock asyncio: except CancelledError -> self.close(); await wait_closed()).
 Check loop.create_server's _ProtocolServer."""
 import sys, asyncio, socket
-import runloom.aio as aio
+import stackweave.aio as aio
 
 async def main():
     loop = asyncio.get_event_loop()

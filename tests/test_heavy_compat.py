@@ -3,8 +3,8 @@
 hashlib.sha*/md5/blake2 and zlib/gzip/bz2/lzma compress/decompress burn CPU in
 a tight C loop with no yield point -- a fiber can't hand off mid-sha256 and
 the sysmon preemptor can't interrupt a frameless C loop, so it pins the
-scheduler.  runloom.monkey can't make these cooperative, only RELOCATE them: above
-RUNLOOM_OFFLOAD_BYTES (default 256 KiB) the call runs on the backend pool so the
+scheduler.  stackweave.monkey can't make these cooperative, only RELOCATE them: above
+STACKWEAVE_OFFLOAD_BYTES (default 256 KiB) the call runs on the backend pool so the
 fiber parks and its siblings keep running.  KDFs (pbkdf2_hmac / scrypt) are
 always offloaded (cost is iterations, not size).
 
@@ -25,9 +25,9 @@ import hashlib
 import lzma
 import zlib
 
-import runloom
-import runloom.monkey
-import runloom_c
+import stackweave
+import stackweave.monkey
+import stackweave_c
 
 # ~4 MiB, comfortably above the 256 KiB default threshold.
 DATA = b"the quick brown fox jumps over the lazy dog\n" * 100_000
@@ -57,27 +57,27 @@ def _drive(fn):
         except BaseException as e:   # noqa: BLE001
             box[1] = e
 
-    runloom_c.fiber(runner)
-    runloom_c.run()
+    stackweave_c.fiber(runner)
+    stackweave_c.run()
     if box[1] is not None:
         raise box[1]
     return box[0]
 
 
 def setUpModule():
-    runloom.monkey.patch()
+    stackweave.monkey.patch()
 
 
 def tearDownModule():
-    runloom.monkey.unpatch()
+    stackweave.monkey.unpatch()
 
 
 def _ticker(ticks, stop):
     def t():
         while not stop["v"]:
             ticks.append(1)
-            runloom.sleep(0.003)
-    runloom_c.fiber(t)
+            stackweave.sleep(0.003)
+    stackweave_c.fiber(t)
 
 
 class TestInstalled(unittest.TestCase):

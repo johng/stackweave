@@ -1,10 +1,10 @@
 # dst -- Deterministic Simulation Testing
 
-`dst.py` drives REAL runloom channels / `select` on the single-thread cooperative
-scheduler (`runloom_c.fiber` + `run`), which is deterministic: for a fixed set of
+`dst.py` drives REAL stackweave channels / `select` on the single-thread cooperative
+scheduler (`stackweave_c.fiber` + `run`), which is deterministic: for a fixed set of
 goroutines making fixed yield decisions the run-queue order is fixed, so the whole
 execution is reproducible. A **seeded decision oracle** chooses *where* each
-goroutine yields (`runloom_c.sched_yield`) -- a different seed explores a different
+goroutine yields (`stackweave_c.sched_yield`) -- a different seed explores a different
 interleaving, the SAME seed reproduces an execution exactly. So a failing run
 reduces to a single integer seed (unlike a raw flake).
 

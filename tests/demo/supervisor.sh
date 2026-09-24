@@ -5,7 +5,7 @@
 #
 # Detection:
 #   crash  -- a child exits with a fatal signal (SEGV/ABRT/BUS/ILL/FPE) or
-#             any non-intentional non-zero code.  The in-process runloom
+#             any non-intentional non-zero code.  The in-process stackweave
 #             crash handler has already written a report + a core; we attach
 #             gdb to the core for C + Python backtraces.
 #   hang   -- server: /health stops answering AND run/health.json goes stale
@@ -29,7 +29,7 @@ export PYTHON_GIL=0
 export PYTHONPATH="$SRC"
 # goroutine dump + native backtrace, then chain to SIG_DFL -> core + die.
 # (Including 'py'/'wait'/'gdb' makes a fault wedge instead of coring under M:N.)
-export RUNLOOM_CRASH="${RUNLOOM_CRASH:-goroutine,backtrace}"
+export STACKWEAVE_CRASH="${STACKWEAVE_CRASH:-goroutine,backtrace}"
 
 SERVER_PORT="${SERVER_PORT:-8080}"
 SERVER_HUBS="${SERVER_HUBS:-4}"
@@ -134,7 +134,7 @@ incident_crash() {
         echo "# CRASH: $name exited code=$code (signal $sig $(signame $sig))"
         echo; echo "_$(date -Is)_  pid was ${5:-?}"; echo
         echo "## last 40 log lines ($logf)"; echo '```'; tail -40 "$logf" 2>/dev/null; echo '```'
-        echo "## runloom crash report ($crashf)"; echo '```'; tail -80 "$crashf" 2>/dev/null; echo '```'
+        echo "## stackweave crash report ($crashf)"; echo '```'; tail -80 "$crashf" 2>/dev/null; echo '```'
         if [ -n "$core" ]; then
             echo "## core: $core ($(du -h "$core" 2>/dev/null | cut -f1))"
             local full="${f%.md}.gdb.txt"

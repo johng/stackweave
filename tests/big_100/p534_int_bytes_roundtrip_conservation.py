@@ -5,7 +5,7 @@ array of 30-bit "digits" (`ob_digit[]` on the PyLongObject) whose length is the
 int's magnitude / 30 bits.  Every non-trivial int operation -- `int.to_bytes`,
 `int.from_bytes` (`_PyLong_FromByteArray` / `_PyLong_AsByteArray`), multiply,
 floor-divide, `bit_length`, `bin()` -- walks that digit array digit-by-digit in C.
-None of those C loops yields to the runloom scheduler mid-walk on a correct
+None of those C loops yields to the stackweave scheduler mid-walk on a correct
 runtime; the whole point of this probe is to confirm that.  If a hub migration or
 a torn scheduler wake were ever to corrupt a live PyLongObject's digit array while
 one of those C loops is mid-flight (or to hand a fiber a stale/half-updated int
@@ -53,7 +53,7 @@ single-owner closed-world bigint identities, checked fail-fast across a yield:
 
   Single-owner: N, -N, M, the boundary values, and the rng that built them are all
   fiber-local; nothing here is shared, so a failure CANNOT be documented shared-
-  object M:N semantics -- it can ONLY be a runloom bug.
+  object M:N semantics -- it can ONLY be a stackweave bug.
 
 ORACLES:
   * LOAD-BEARING -- BIGINT ROUND-TRIP CONSERVATION (worker, HARD, fail-fast).
@@ -87,7 +87,7 @@ localizes the corruption before the value law even fires.
 """
 
 import harness
-import runloom
+import stackweave
 
 # Size band (in bytes) for each fiber's private bigint magnitude.  Chosen so the
 # digit array is genuinely multi-hundred-digit (a real variable-length walk, not a
@@ -143,9 +143,9 @@ def int_check(H, wid, rng, state):
 
     # YIELD at the hazard boundary so a sibling reliably interleaves / a hub
     # migration can occur before we re-walk N's digit array.
-    runloom.yield_now()
+    stackweave.yield_now()
     if rng.getrandbits(1):
-        runloom.sleep(0.0003)
+        stackweave.sleep(0.0003)
 
     # ---- (7) value identity: N unchanged across the yield ---------------------
     if N != baseline_N:

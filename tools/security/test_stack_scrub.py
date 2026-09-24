@@ -1,13 +1,13 @@
 """Pooled-stack data-hygiene regression test (security campaign).
 
-runloom recycles a completed goroutine's coro WITH its stack attached and, in
+stackweave recycles a completed goroutine's coro WITH its stack attached and, in
 steady state (stack painting calibrated off for perf), does NOT scrub it -- so
 the next goroutine to reuse that stack can read the previous one's leftovers
 (TLS keys / request bodies; the aio bridge runs OpenSSL on these stacks).
 Only reachable via a C extension reading uninitialised stack (Python objects
 live on the heap), but real defense-in-depth.
 
-This verifies set_stack_scrub(True) / RUNLOOM_STACK_SCRUB=1 closes it: goroutine A
+This verifies set_stack_scrub(True) / STACKWEAVE_STACK_SCRUB=1 closes it: goroutine A
 writes a sentinel across its stack and records the exact addresses; goroutine B
 reuses the stack and reads those addresses back.
 """
@@ -16,7 +16,7 @@ import os
 import sys
 
 sys.path.insert(0, "src")
-import runloom_c
+import stackweave_c
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 _LIBNAME = ("stack_scrub_helper.dll" if sys.platform == "win32"
@@ -29,13 +29,13 @@ SENTINEL = 0xDEADBEEFCAFEF00D
 
 
 def leaked_points(scrub):
-    runloom_c.set_stack_scrub(scrub)
-    runloom_c.set_stack_size(128 * 1024)
-    runloom_c.fiber(lambda: lib.write_sentinel(SENTINEL))
-    runloom_c.run()                                  # A done -> stack recycled
+    stackweave_c.set_stack_scrub(scrub)
+    stackweave_c.set_stack_size(128 * 1024)
+    stackweave_c.fiber(lambda: lib.write_sentinel(SENTINEL))
+    stackweave_c.run()                                  # A done -> stack recycled
     r = {}
-    runloom_c.fiber(lambda: r.__setitem__("h", lib.read_recorded(SENTINEL)))
-    runloom_c.run()                                  # B reuses the stack
+    stackweave_c.fiber(lambda: r.__setitem__("h", lib.read_recorded(SENTINEL)))
+    stackweave_c.run()                                  # B reuses the stack
     return r["h"]
 
 

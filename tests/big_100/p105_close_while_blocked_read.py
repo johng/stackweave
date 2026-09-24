@@ -20,8 +20,8 @@ FINDINGS for the close-vs-parked-recv lost-wakeup this measures.
 import socket
 
 import harness
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
 WAIT_CEILING_MS = 2000          # bound so a lost wakeup backstops, never hangs
 
@@ -39,7 +39,7 @@ def reader(H, sock, ready, done):
     if fd < 0:
         done.send(1)
         return
-    r = runloom_c.wait_fd(fd, 1, WAIT_CEILING_MS)
+    r = stackweave_c.wait_fd(fd, 1, WAIT_CEILING_MS)
     # r != 0 -> a readiness/cancel event (the close woke us); r == 0 -> the ceiling
     # fired with no event (the close failed to wake us in time: a lost wakeup).
     done.send(1 if r != 0 else 2)
@@ -49,11 +49,11 @@ def unit(H, wid, rng, woken_close, woken_timeout):
     a, b = socket.socketpair()
     a.setblocking(True)
     b.setblocking(True)
-    ready = runloom.Chan(1)
-    done = runloom.Chan(1)
+    ready = stackweave.Chan(1)
+    done = stackweave.Chan(1)
     H.fiber(reader, H, a, ready, done)
     ready.recv()                              # reader is about to park
-    runloom.sleep(0.003)                      # let it actually reach the park
+    stackweave.sleep(0.003)                      # let it actually reach the park
     try:
         a.close()                             # cross-goroutine close of the read fd
     except OSError:

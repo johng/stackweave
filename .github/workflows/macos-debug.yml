@@ -5,7 +5,7 @@
 # one bug. From run 33941954149, across BOTH interpreters:
 #
 #   test_mn_sim_bytes::test_late_parker_gets_stashed_wake
-#       "[runloom] fd 4 exceeds preallocated netpoll capacity 0 (event dropped)"
+#       "[stackweave] fd 4 exceeds preallocated netpoll capacity 0 (event dropped)"
 #       -> OSError [Errno 89] Operation canceled  (ECANCELED; 125 on Linux)
 #       A STATE bug. Capacity 0 cannot come from sizing (the target floors at
 #       1024), so the per-fd arrays were never allocated -- i.e. netpoll was not
@@ -73,7 +73,7 @@ jobs:
           source: build
           github-token: ${{ github.token }}
 
-      - name: Build runloom extension
+      - name: Build stackweave extension
         run: tools/ci/test_patched_cpython.sh "${{ inputs.version }}" --only=build-ext
 
       - name: Resolve interpreter
@@ -91,7 +91,7 @@ jobs:
       - name: Netpoll capacity / init probe
         env:
           PYTHON_GIL: "0"
-          RUNLOOM_GIL: "0"
+          STACKWEAVE_GIL: "0"
         run: |
           set -u
           echo "=============================================="
@@ -102,9 +102,9 @@ jobs:
         if: inputs.probe_only != 'true'
         env:
           PYTHON_GIL: "0"
-          RUNLOOM_GIL: "0"
-          RUNLOOM_TIMEOUT_MULT: "2"
-          RUNLOOM_TEST_NORETRY: "1"      # the retry re-runs alone+unloaded: a different experiment
+          STACKWEAVE_GIL: "0"
+          STACKWEAVE_TIMEOUT_MULT: "2"
+          STACKWEAVE_TEST_NORETRY: "1"      # the retry re-runs alone+unloaded: a different experiment
         run: |
           set -u
           n="${{ inputs.iterations }}"

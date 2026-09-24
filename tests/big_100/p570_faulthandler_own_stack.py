@@ -6,7 +6,7 @@ is the SINGLE-OWNER ARTIFACT the module PRODUCES: the text of
 faulthandler.dump_traceback(file=fd, all_threads=False), which serializes the C
 frame chain of the CURRENT thread's live PyThreadState.
 
-WHERE M:N COULD BREAK IT (the gap this program probes).  runloom is an M:N
+WHERE M:N COULD BREAK IT (the gap this program probes).  stackweave is an M:N
 scheduler: a goroutine is a stackful coroutine whose entire Python frame chain is
 swapped into a hub OS thread's PyThreadState when it runs, and swapped back out at
 a cooperative yield (possibly resuming on a DIFFERENT hub thread).  faulthandler's
@@ -29,7 +29,7 @@ CLOSED-FORM SINGLE-OWNER ORACLE (no shared mutable state at all):
   BETWEEN them (so a sibling reliably interleaves and migrates hubs mid-check):
 
     for i in range(2):
-        if i == 1: runloom.yield_now()   # sibling runs / this fiber may migrate hub
+        if i == 1: stackweave.yield_now()   # sibling runs / this fiber may migrate hub
         dumps.append(do_dump(fd))        # SAME source line both iterations
 
   Because both dumps issue from the identical call site and every frame BENEATH is
@@ -85,7 +85,7 @@ import os
 import faulthandler
 
 import harness
-import runloom
+import stackweave
 
 # File/fd-per-fiber: cap the forever loop's --funcs 1000000 so we never open a
 # million sink files at once.  One small temp file + fd per worker, held for the
@@ -151,7 +151,7 @@ def fh_probe_recurse(n, fd):
         if i == 1:
             # Park here so a sibling interleaves and THIS fiber may resume on a
             # different hub before the second (identical-call-site) dump.
-            runloom.yield_now()
+            stackweave.yield_now()
         dumps.append(do_dump(fd, False))       # SAME source line both iterations
     return dumps[0], dumps[1]
 

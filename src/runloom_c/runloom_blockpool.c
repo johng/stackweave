@@ -260,7 +260,7 @@ static RUNLOOM_THREAD_RET runloom_blockpool_worker(void *arg)
 static int bp_resolve_nshard(void)
 {
     int n;
-    const char *e = getenv("RUNLOOM_BLOCKPOOL_SHARDS");
+    const char *e = getenv("STACKWEAVE_BLOCKPOOL_SHARDS");
     if (e != NULL && e[0] != '\0') {
         n = atoi(e);
     } else {
@@ -279,7 +279,7 @@ static int bp_resolve_nshard(void)
 static int bp_resolve_workers(int nshard)
 {
     int n;
-    const char *e = getenv("RUNLOOM_BLOCKPOOL_WORKERS");
+    const char *e = getenv("STACKWEAVE_BLOCKPOOL_WORKERS");
     if (e != NULL && e[0] != '\0') {
         n = atoi(e);
         if (n <= 0) n = RUNLOOM_BLOCKPOOL_DEFAULT;

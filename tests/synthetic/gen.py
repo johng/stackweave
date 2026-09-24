@@ -1,24 +1,24 @@
 # -*- coding: utf-8 -*-
-"""Generator for the 1000 synthetic runloom toy programs (fresh M:N corpus).
+"""Generator for the 1000 synthetic stackweave toy programs (fresh M:N corpus).
 
 A "project type" is  test_type x category x primitive x format  =
   2 x 10 x 10 x 5  =  1000 combinations.
 
 Every generated program:
-  * runs on runloom's M:N scheduler via the ONE public entry point
-    `runloom.run(NHUB, root)` with NHUB > 1 -- free-threaded 3.13t, GIL off,
+  * runs on stackweave's M:N scheduler via the ONE public entry point
+    `stackweave.run(NHUB, root)` with NHUB > 1 -- free-threaded 3.13t, GIL off,
     real multi-core parallelism;
   * exercises ONE cooperative primitive (the mechanism) themed by ONE
     category (naming + payload), carrying a payload in ONE format;
   * is "success" (drives the primitive to a correct result) or "failure"
     (drives it to a specific, reliable, offline error and asserts it);
-  * spawns workers with `runloom.fiber(...)` from the root goroutine and verifies
+  * spawns workers with `stackweave.fiber(...)` from the root goroutine and verifies
     AFTER `run()` returns (goroutine exceptions are swallowed by the scheduler,
     so the main thread must do the asserting);
-  * prints exactly "PASS" and exits 0 when runloom is healthy, else
+  * prints exactly "PASS" and exits 0 when stackweave is healthy, else
     prints "FAIL: ..." and exits 1.
 
-A real runloom bug therefore shows up as: a hang (harness timeout), a
+A real stackweave bug therefore shows up as: a hang (harness timeout), a
 crash (negative/abnormal exit), or a "FAIL"/non-PASS outcome.
 
 Paths are resolved relative to each program's own location at runtime, so the
@@ -179,8 +179,8 @@ def fmt_block(fmt, idx):
 # ----------------------------------------------------------------------
 # Primitive bodies.  Written with the raw mn_init / <spawns> / mn_run /
 # mn_fini envelope; to_run_envelope() rewrites that into the public
-# `runloom.run(NHUB, __root)` form before emission, and GO is rebound to
-# the public `runloom.fiber`.  Each body references module constants (THEME,
+# `stackweave.run(NHUB, __root)` form before emission, and GO is rebound to
+# the public `stackweave.fiber`.  Each body references module constants (THEME,
 # NW, NHUB, CERT, KEY, PY) and preamble helpers (finish, make_coordinator,
 # recvexact).
 # ----------------------------------------------------------------------
@@ -188,8 +188,8 @@ BODY = {}
 
 BODY[("sockets", "success")] = '''
 def main():
-    runloom.monkey.patch()
-    GO = runloom_c.mn_fiber
+    stackweave.monkey.patch()
+    GO = stackweave_c.mn_fiber
     payload = mk_payload()
     enc = encode(payload)
     assert decode(enc) == payload
@@ -198,7 +198,7 @@ def main():
     listener.bind(("127.0.0.1", 0))
     listener.listen(128)
     port = listener.getsockname()[1]
-    results = runloom.Chan(NW)
+    results = stackweave.Chan(NW)
     state = {"good": 0}
 
     def handle(conn):
@@ -232,21 +232,21 @@ def main():
             ok = False
         results.send(ok)
 
-    runloom.mn_init(NHUB)
+    stackweave.mn_init(NHUB)
     GO(make_coordinator(results, NW, state))
     GO(accept_loop)
     for _ in range(NW):
         GO(client)
-    runloom.mn_run()
-    runloom.mn_fini()
+    stackweave.mn_run()
+    stackweave.mn_fini()
     listener.close()
     finish(state["good"] == NW, state)
 '''
 
 BODY[("sockets", "failure")] = '''
 def main():
-    runloom.monkey.patch()
-    GO = runloom_c.mn_fiber
+    stackweave.monkey.patch()
+    GO = stackweave_c.mn_fiber
     payload = mk_payload()
     enc = encode(payload)
     assert decode(enc) == payload
@@ -266,17 +266,17 @@ def main():
         except OSError as exc:
             state["err"] = type(exc).__name__
 
-    runloom.mn_init(NHUB)
+    stackweave.mn_init(NHUB)
     GO(client)
-    runloom.mn_run()
-    runloom.mn_fini()
+    stackweave.mn_run()
+    stackweave.mn_fini()
     finish(bool(state.get("err")), state)
 '''
 
 BODY[("ssl", "success")] = '''
 def main():
-    runloom.monkey.patch()
-    GO = runloom_c.mn_fiber
+    stackweave.monkey.patch()
+    GO = stackweave_c.mn_fiber
     payload = mk_payload()
     enc = encode(payload)
     assert decode(enc) == payload
@@ -287,7 +287,7 @@ def main():
     listener.bind(("127.0.0.1", 0))
     listener.listen(128)
     port = listener.getsockname()[1]
-    results = runloom.Chan(NW)
+    results = stackweave.Chan(NW)
     state = {"good": 0}
 
     def handle(raw):
@@ -337,21 +337,21 @@ def main():
                     pass
         results.send(ok)
 
-    runloom.mn_init(NHUB)
+    stackweave.mn_init(NHUB)
     GO(make_coordinator(results, NW, state))
     GO(accept_loop)
     for _ in range(NW):
         GO(client)
-    runloom.mn_run()
-    runloom.mn_fini()
+    stackweave.mn_run()
+    stackweave.mn_fini()
     listener.close()
     finish(state["good"] == NW, state)
 '''
 
 BODY[("ssl", "failure")] = '''
 def main():
-    runloom.monkey.patch()
-    GO = runloom_c.mn_fiber
+    stackweave.monkey.patch()
+    GO = stackweave_c.mn_fiber
     payload = mk_payload()
     enc = encode(payload)
     assert decode(enc) == payload
@@ -392,23 +392,23 @@ def main():
                 except OSError:
                     pass
 
-    runloom.mn_init(NHUB)
+    stackweave.mn_init(NHUB)
     GO(server)
     GO(client)
-    runloom.mn_run()
-    runloom.mn_fini()
+    stackweave.mn_run()
+    stackweave.mn_fini()
     finish(bool(state.get("err")), state)
 '''
 
 BODY[("disk_files", "success")] = '''
 def main():
-    runloom.monkey.patch()
-    GO = runloom_c.mn_fiber
+    stackweave.monkey.patch()
+    GO = stackweave_c.mn_fiber
     payload = mk_payload()
     enc = encode(payload)
     assert decode(enc) == payload
     workdir = tempfile.mkdtemp(prefix="rlsyn_")
-    results = runloom.Chan(NW)
+    results = stackweave.Chan(NW)
     state = {"good": 0}
 
     def worker(idx):
@@ -424,20 +424,20 @@ def main():
             ok = False
         results.send(ok)
 
-    runloom.mn_init(NHUB)
+    stackweave.mn_init(NHUB)
     GO(make_coordinator(results, NW, state))
     for i in range(NW):
         GO(lambda i=i: worker(i))
-    runloom.mn_run()
-    runloom.mn_fini()
+    stackweave.mn_run()
+    stackweave.mn_fini()
     shutil.rmtree(workdir, ignore_errors=True)
     finish(state["good"] == NW, state)
 '''
 
 BODY[("disk_files", "failure")] = '''
 def main():
-    runloom.monkey.patch()
-    GO = runloom_c.mn_fiber
+    stackweave.monkey.patch()
+    GO = stackweave_c.mn_fiber
     payload = mk_payload()
     enc = encode(payload)
     assert decode(enc) == payload
@@ -452,10 +452,10 @@ def main():
         except FileNotFoundError as exc:
             state["err"] = type(exc).__name__
 
-    runloom.mn_init(NHUB)
+    stackweave.mn_init(NHUB)
     GO(worker)
-    runloom.mn_run()
-    runloom.mn_fini()
+    stackweave.mn_run()
+    stackweave.mn_fini()
     shutil.rmtree(workdir, ignore_errors=True)
     finish(state.get("err") == "FileNotFoundError", state)
 '''
@@ -464,12 +464,12 @@ BODY[("processes", "success")] = '''
 CHILD_ECHO = "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())"
 
 def main():
-    runloom.monkey.patch()
-    GO = runloom_c.mn_fiber
+    stackweave.monkey.patch()
+    GO = stackweave_c.mn_fiber
     payload = mk_payload()
     enc = encode(payload)
     assert decode(enc) == payload
-    results = runloom.Chan(NW)
+    results = stackweave.Chan(NW)
     state = {"good": 0}
 
     def worker():
@@ -482,19 +482,19 @@ def main():
             ok = False
         results.send(ok)
 
-    runloom.mn_init(NHUB)
+    stackweave.mn_init(NHUB)
     GO(make_coordinator(results, NW, state))
     for _ in range(NW):
         GO(worker)
-    runloom.mn_run()
-    runloom.mn_fini()
+    stackweave.mn_run()
+    stackweave.mn_fini()
     finish(state["good"] == NW, state)
 '''
 
 BODY[("processes", "failure")] = '''
 def main():
-    runloom.monkey.patch()
-    GO = runloom_c.mn_fiber
+    stackweave.monkey.patch()
+    GO = stackweave_c.mn_fiber
     payload = mk_payload()
     enc = encode(payload)
     assert decode(enc) == payload
@@ -508,17 +508,17 @@ def main():
         except subprocess.CalledProcessError as exc:
             state["err"] = exc.returncode
 
-    runloom.mn_init(NHUB)
+    stackweave.mn_init(NHUB)
     GO(worker)
-    runloom.mn_run()
-    runloom.mn_fini()
+    stackweave.mn_run()
+    stackweave.mn_fini()
     finish(state.get("err") == 3, state)
 '''
 
 BODY[("threads", "success")] = '''
 def main():
-    runloom.monkey.patch()
-    GO = runloom_c.mn_fiber
+    stackweave.monkey.patch()
+    GO = stackweave_c.mn_fiber
     payload = mk_payload()
     enc = encode(payload)
     assert decode(enc) == payload
@@ -546,17 +546,17 @@ def main():
         state["count"] = sum(1 for ok in collected if ok)
         state["total"] = len(collected)
 
-    runloom.mn_init(NHUB)
+    stackweave.mn_init(NHUB)
     GO(driver)
-    runloom.mn_run()
-    runloom.mn_fini()
+    stackweave.mn_run()
+    stackweave.mn_fini()
     finish(state.get("count") == NW and state.get("total") == NW, state)
 '''
 
 BODY[("threads", "failure")] = '''
 def main():
-    runloom.monkey.patch()
-    GO = runloom_c.mn_fiber
+    stackweave.monkey.patch()
+    GO = stackweave_c.mn_fiber
     payload = mk_payload()
     enc = encode(payload)
     assert decode(enc) == payload
@@ -569,10 +569,10 @@ def main():
         except RuntimeError as exc:
             state["err"] = type(exc).__name__
 
-    runloom.mn_init(NHUB)
+    stackweave.mn_init(NHUB)
     GO(worker)
-    runloom.mn_run()
-    runloom.mn_fini()
+    stackweave.mn_run()
+    stackweave.mn_fini()
     finish(state.get("err") == "RuntimeError", state)
 '''
 
@@ -581,8 +581,8 @@ def mp_echo(in_q, out_q):
     out_q.put(in_q.get())
 
 def main():
-    runloom.monkey.patch()
-    GO = runloom_c.mn_fiber
+    stackweave.monkey.patch()
+    GO = stackweave_c.mn_fiber
     payload = mk_payload()
     enc = encode(payload)
     assert decode(enc) == payload
@@ -600,10 +600,10 @@ def main():
         state["ok"] = decode(got) == payload
         state["exit"] = proc.exitcode
 
-    runloom.mn_init(NHUB)
+    stackweave.mn_init(NHUB)
     GO(driver)
-    runloom.mn_run()
-    runloom.mn_fini()
+    stackweave.mn_run()
+    stackweave.mn_fini()
     in_q.close()
     out_q.close()
     finish(state.get("ok") is True and state.get("exit") == 0, state)
@@ -615,8 +615,8 @@ def mp_fail(in_q):
     raise RuntimeError("intended child failure for synthetic test")
 
 def main():
-    runloom.monkey.patch()
-    GO = runloom_c.mn_fiber
+    stackweave.monkey.patch()
+    GO = stackweave_c.mn_fiber
     payload = mk_payload()
     enc = encode(payload)
     assert decode(enc) == payload
@@ -631,18 +631,18 @@ def main():
         proc.join()
         state["exit"] = proc.exitcode
 
-    runloom.mn_init(NHUB)
+    stackweave.mn_init(NHUB)
     GO(driver)
-    runloom.mn_run()
-    runloom.mn_fini()
+    stackweave.mn_run()
+    stackweave.mn_fini()
     in_q.close()
     finish(state.get("exit") not in (0, None), state)
 '''
 
 BODY[("select_selectors", "success")] = '''
 def main():
-    runloom.monkey.patch()
-    GO = runloom_c.mn_fiber
+    stackweave.monkey.patch()
+    GO = stackweave_c.mn_fiber
     payload = mk_payload()
     enc = encode(payload)
     assert decode(enc) == payload
@@ -652,7 +652,7 @@ def main():
     state = {}
 
     def writer():
-        runloom.sleep(0.01)
+        stackweave.sleep(0.01)
         right.sendall(struct.pack(">I", len(enc)) + enc)
         right.close()
 
@@ -682,18 +682,18 @@ def main():
             state["ok"] = False
         left.close()
 
-    runloom.mn_init(NHUB)
+    stackweave.mn_init(NHUB)
     GO(reader)
     GO(writer)
-    runloom.mn_run()
-    runloom.mn_fini()
+    stackweave.mn_run()
+    stackweave.mn_fini()
     finish(state.get("ok") is True, state)
 '''
 
 BODY[("select_selectors", "failure")] = '''
 def main():
-    runloom.monkey.patch()
-    GO = runloom_c.mn_fiber
+    stackweave.monkey.patch()
+    GO = stackweave_c.mn_fiber
     payload = mk_payload()
     enc = encode(payload)
     assert decode(enc) == payload
@@ -710,17 +710,17 @@ def main():
         except (ValueError, OSError) as exc:
             state["err"] = type(exc).__name__
 
-    runloom.mn_init(NHUB)
+    stackweave.mn_init(NHUB)
     GO(worker)
-    runloom.mn_run()
-    runloom.mn_fini()
+    stackweave.mn_run()
+    stackweave.mn_fini()
     finish(bool(state.get("err")), state)
 '''
 
 BODY[("queues", "success")] = '''
 def main():
-    runloom.monkey.patch()
-    GO = runloom_c.mn_fiber
+    stackweave.monkey.patch()
+    GO = stackweave_c.mn_fiber
     payload = mk_payload()
     enc = encode(payload)
     assert decode(enc) == payload
@@ -741,19 +741,19 @@ def main():
             bus.task_done()
         state["good"] = good
 
-    runloom.mn_init(NHUB)
+    stackweave.mn_init(NHUB)
     GO(consumer)
     for _ in range(NW):
         GO(producer)
-    runloom.mn_run()
-    runloom.mn_fini()
+    stackweave.mn_run()
+    stackweave.mn_fini()
     finish(state.get("good") == NW * per, state)
 '''
 
 BODY[("queues", "failure_empty")] = '''
 def main():
-    runloom.monkey.patch()
-    GO = runloom_c.mn_fiber
+    stackweave.monkey.patch()
+    GO = stackweave_c.mn_fiber
     payload = mk_payload()
     enc = encode(payload)
     assert decode(enc) == payload
@@ -766,17 +766,17 @@ def main():
         except queue.Empty:
             state["err"] = "Empty"
 
-    runloom.mn_init(NHUB)
+    stackweave.mn_init(NHUB)
     GO(worker)
-    runloom.mn_run()
-    runloom.mn_fini()
+    stackweave.mn_run()
+    stackweave.mn_fini()
     finish(state.get("err") == "Empty", state)
 '''
 
 BODY[("queues", "failure_full")] = '''
 def main():
-    runloom.monkey.patch()
-    GO = runloom_c.mn_fiber
+    stackweave.monkey.patch()
+    GO = stackweave_c.mn_fiber
     payload = mk_payload()
     enc = encode(payload)
     assert decode(enc) == payload
@@ -791,17 +791,17 @@ def main():
         except queue.Full:
             state["err"] = "Full"
 
-    runloom.mn_init(NHUB)
+    stackweave.mn_init(NHUB)
     GO(worker)
-    runloom.mn_run()
-    runloom.mn_fini()
+    stackweave.mn_run()
+    stackweave.mn_fini()
     finish(state.get("err") == "Full", state)
 '''
 
 BODY[("signals", "success")] = '''
 def main():
-    runloom.monkey.patch()
-    GO = runloom_c.mn_fiber
+    stackweave.monkey.patch()
+    GO = stackweave_c.mn_fiber
     payload = mk_payload()
     enc = encode(payload)
     fmt_ok = decode(enc) == payload
@@ -817,25 +817,25 @@ def main():
         for _ in range(400):
             if state["hit"]:
                 return
-            runloom.sleep(0.005)
+            stackweave.sleep(0.005)
 
     def raiser():
-        runloom.sleep(0.02)
+        stackweave.sleep(0.02)
         os.kill(os.getpid(), sig)
 
-    runloom.mn_init(NHUB)
+    stackweave.mn_init(NHUB)
     GO(waiter)
     GO(raiser)
-    runloom.mn_run()
-    runloom.mn_fini()
+    stackweave.mn_run()
+    stackweave.mn_fini()
     signal.signal(sig, previous)
     finish(fmt_ok and state["hit"], state)
 '''
 
 BODY[("signals", "failure")] = '''
 def main():
-    runloom.monkey.patch()
-    GO = runloom_c.mn_fiber
+    stackweave.monkey.patch()
+    GO = stackweave_c.mn_fiber
     payload = mk_payload()
     enc = encode(payload)
     assert decode(enc) == payload
@@ -848,21 +848,21 @@ def main():
         except (OSError, RuntimeError, ValueError) as exc:
             state["err"] = type(exc).__name__
 
-    runloom.mn_init(NHUB)
+    stackweave.mn_init(NHUB)
     GO(worker)
-    runloom.mn_run()
-    runloom.mn_fini()
+    stackweave.mn_run()
+    stackweave.mn_fini()
     finish(bool(state.get("err")), state)
 '''
 
 BODY[("dns", "success")] = '''
 def main():
-    runloom.monkey.patch()
-    GO = runloom_c.mn_fiber
+    stackweave.monkey.patch()
+    GO = stackweave_c.mn_fiber
     payload = mk_payload()
     enc = encode(payload)
     assert decode(enc) == payload
-    results = runloom.Chan(NW)
+    results = stackweave.Chan(NW)
     state = {"good": 0}
 
     def worker():
@@ -875,19 +875,19 @@ def main():
             ok = False
         results.send(ok)
 
-    runloom.mn_init(NHUB)
+    stackweave.mn_init(NHUB)
     GO(make_coordinator(results, NW, state))
     for _ in range(NW):
         GO(worker)
-    runloom.mn_run()
-    runloom.mn_fini()
+    stackweave.mn_run()
+    stackweave.mn_fini()
     finish(state["good"] == NW, state)
 '''
 
 BODY[("dns", "failure")] = '''
 def main():
-    runloom.monkey.patch()
-    GO = runloom_c.mn_fiber
+    stackweave.monkey.patch()
+    GO = stackweave_c.mn_fiber
     payload = mk_payload()
     enc = encode(payload)
     assert decode(enc) == payload
@@ -904,10 +904,10 @@ def main():
         except socket.gaierror:
             state["err"] = "gaierror"
 
-    runloom.mn_init(NHUB)
+    stackweave.mn_init(NHUB)
     GO(worker)
-    runloom.mn_run()
-    runloom.mn_fini()
+    stackweave.mn_run()
+    stackweave.mn_fini()
     finish(state.get("err") == "gaierror", state)
 '''
 
@@ -921,28 +921,28 @@ def body_for(prim, tt, idx):
 
 def to_run_envelope(body):
     """Rewrite the raw  mn_init(NHUB) / <spawns> / mn_run() / mn_fini()
-    envelope into the public  def __root(): <spawns>; runloom.run(NHUB, __root)
-    form, and rebind GO to the public runloom.fiber.  The spawns become the root
+    envelope into the public  def __root(): <spawns>; stackweave.run(NHUB, __root)
+    form, and rebind GO to the public stackweave.fiber.  The spawns become the root
     goroutine; run() drives the M:N scheduler to completion."""
-    body = body.replace("    GO = runloom_c.mn_fiber", "    GO = runloom.fiber")
+    body = body.replace("    GO = stackweave_c.mn_fiber", "    GO = stackweave.fiber")
     lines = body.split("\n")
     out = []
     i, n = 0, len(lines)
     while i < n:
         line = lines[i]
-        if line.strip() == "runloom.mn_init(NHUB)":
+        if line.strip() == "stackweave.mn_init(NHUB)":
             indent = line[:len(line) - len(line.lstrip())]
             out.append(indent + "def __root():")
             i += 1
-            while i < n and lines[i].strip() != "runloom.mn_run()":
+            while i < n and lines[i].strip() != "stackweave.mn_run()":
                 spawn = lines[i]
                 out.append("" if spawn.strip() == "" else "    " + spawn)
                 i += 1
-            if i < n and lines[i].strip() == "runloom.mn_run()":
+            if i < n and lines[i].strip() == "stackweave.mn_run()":
                 i += 1
-            if i < n and lines[i].strip() == "runloom.mn_fini()":
+            if i < n and lines[i].strip() == "stackweave.mn_fini()":
                 i += 1
-            out.append(indent + "runloom.run(NHUB, __root)")
+            out.append(indent + "stackweave.run(NHUB, __root)")
         else:
             out.append(line)
             i += 1
@@ -952,15 +952,15 @@ def to_run_envelope(body):
 PREAMBLE = '''# -*- coding: utf-8 -*-
 """@@DOC@@
 
-Synthetic runloom toy program (auto-generated).
+Synthetic stackweave toy program (auto-generated).
   test type : @@TT@@
   category  : @@CATTITLE@@
   primitive : @@PRIM@@
   format    : @@FMT@@ (@@FMTNAME@@)
-  scheduler : M:N via runloom.run(@@NHUB@@, root), free-threaded 3.13t, GIL off
+  scheduler : M:N via stackweave.run(@@NHUB@@, root), free-threaded 3.13t, GIL off
 
-Exercises runloom's main API -- the root goroutine spawns workers with
-runloom.fiber(...) onto @@NHUB@@ hub threads, using the monkey-patched cooperative
+Exercises stackweave's main API -- the root goroutine spawns workers with
+stackweave.fiber(...) onto @@NHUB@@ hub threads, using the monkey-patched cooperative
 @@PRIM@@ primitive to carry a @@FMT@@ payload.  Prints PASS and exits 0 when
 healthy; FAIL / hang / crash signals a bug.
 """
@@ -988,8 +988,8 @@ import multiprocessing as mp
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "..", "src"))
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
 THEME = "@@CATTITLE@@"
 CATSLUG = "@@CATSLUG@@"

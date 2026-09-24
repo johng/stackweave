@@ -5,7 +5,7 @@
 # -DBUG_SELFTEST run must FAIL (proving the monitor has teeth).
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
-ROOT="${RUNLOOM_ROOT:-$(cd "$HERE/../.." && pwd)}"
+ROOT="${STACKWEAVE_ROOT:-$(cd "$HERE/../.." && pwd)}"
 SRC="$ROOT/src/runloom_c"
 echo "-- CBMC INV_race disjointness monitor (real cldeque.c) --"
 if ! command -v cbmc >/dev/null 2>&1; then

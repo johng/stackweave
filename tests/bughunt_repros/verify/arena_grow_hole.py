@@ -1,6 +1,6 @@
-"""Verify: copy-on-grow munmaps a hole out of the RUNLOOM_STACK_ARENA arena.
+"""Verify: copy-on-grow munmaps a hole out of the STACKWEAVE_STACK_ARENA arena.
 
-Env (set before import): RUNLOOM_STACK_ARENA=1, RUNLOOM_STACK_ARENA_N=256.
+Env (set before import): STACKWEAVE_STACK_ARENA=1, STACKWEAVE_STACK_ARENA_N=256.
 A fiber on a SMALL arena-carved stack recurses through a C boundary (map)
 with a yield at every level, so maybe_grow sees a deep saved sp at a resume
 boundary and copy-grows the stack; runloom_coro_grow then munmaps the OLD
@@ -10,14 +10,14 @@ Detection: snapshot /proc/self/maps anonymous rw regions before and after;
 a hole splits a previously-contiguous arena mapping into two pieces.
 """
 import os
-os.environ["RUNLOOM_STACK_ARENA"] = "1"
-os.environ["RUNLOOM_STACK_ARENA_N"] = "256"
+os.environ["STACKWEAVE_STACK_ARENA"] = "1"
+os.environ["STACKWEAVE_STACK_ARENA_N"] = "256"
 
 import sys
 sys.setrecursionlimit(200000)
 
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 
 STACK = 32768
 GUARD = 4096
@@ -39,10 +39,10 @@ def anon_maps(minsize):
 
 
 def rec(n):
-    runloom.yield_now()
+    stackweave.yield_now()
     if n == 0:
         for _ in range(6):
-            runloom.yield_now()
+            stackweave.yield_now()
         return 0
     return next(map(rec, (n - 1,))) + 1
 
@@ -61,7 +61,7 @@ def companion():
     # keep every hub's ready queue non-empty so yields are REAL swaps
     # (the trivial-switch fast path skips the resume boundary otherwise)
     while not result:
-        runloom.yield_now()
+        stackweave.yield_now()
 
 
 def main():
@@ -88,5 +88,5 @@ def main():
     print("holes:", holes)
 
 
-runloom.run(2, main)
+stackweave.run(2, main)
 print("DONE")

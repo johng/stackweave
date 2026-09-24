@@ -6,21 +6,21 @@ lru_cache (fnmatch._compile_pattern / the module-level _cache).  The cache key
 is the pattern string; the cache is shared process-wide and mutated on every
 miss.
 
-WHERE M:N COULD BREAK IT (the gap this program catches).  Under runloom's M:N
+WHERE M:N COULD BREAK IT (the gap this program catches).  Under stackweave's M:N
 scheduler many fibers share ONE hub OS-thread and thus ONE Python interpreter
 state.  While fiber A is mid-glob.glob(pattern_A) -- its pattern_A compiled
 regex lives in the shared fnmatch cache -- and yields at a scheduling point, a
 SIBLING fiber B on the same hub that calls glob.glob(pattern_B) mutates the same
-shared cache.  If runloom does NOT isolate / serialize that shared regex cache
+shared cache.  If stackweave does NOT isolate / serialize that shared regex cache
 correctly across an interleave or a hub migration, fiber B (or A on resume) can
 read a CORRUPTED or WRONG cached compiled pattern and glob.glob returns the
 WRONG file set -- a sibling's match list rather than its own.  That is the
-runloom M:N isolation bug this program detects.
+stackweave M:N isolation bug this program detects.
 
-This is a runloom M:N invariant: stdlib glob is CORRECT under genuine OS-thread
+This is a stackweave M:N invariant: stdlib glob is CORRECT under genuine OS-thread
 semantics.  Verified with a standalone plain-threads control (same glob hazard,
-NO runloom): 0 wrong match-sets under PYTHON_GIL=1 AND PYTHON_GIL=0 -- each OS
-thread's glob call returns its own pattern's files.  Under a CORRECT runloom,
+NO stackweave): 0 wrong match-sets under PYTHON_GIL=1 AND PYTHON_GIL=0 -- each OS
+thread's glob call returns its own pattern's files.  Under a CORRECT stackweave,
 each fiber's glob.glob() over its own pattern must return that pattern's match
 set, never a sibling's.
 
@@ -51,7 +51,7 @@ ARMS:
     window (so fibers interleave their fnmatch-cache contention), and asserts
     the returned basenames EXACTLY equal the precomputed expected set for THAT
     slot.  The tree is read-only, so a mismatch is a shared fnmatch-cache
-    corruption (the runloom M:N bug).  On a CORRECT runtime (and plain threads
+    corruption (the stackweave M:N bug).  On a CORRECT runtime (and plain threads
     GIL on AND off) this NEVER fires, so the program exits 0 when there is no
     bug.
   * NON-VACUITY (post, HARD): glob_checks > 0 -- the hazard was exercised.
@@ -85,7 +85,7 @@ import shutil
 import tempfile
 
 import harness
-import runloom
+import stackweave
 
 # ---------------------------------------------------------------------------
 # BOUNDED TEMP POOL.  N distinct subtrees are built ONCE in setup() (each with a
@@ -204,9 +204,9 @@ def glob_check(H, wid, idx, state):
     # the shared fnmatch cache.  The sleep deschedules this fiber long enough
     # that many siblings' glob calls execute (mutating the shared cache) before
     # this fiber resumes.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0003)
+        stackweave.sleep(0.0003)
 
     got_paths = glob.glob(os.path.join(dirpath, pattern))
     got = sorted(os.path.basename(p) for p in got_paths)
@@ -235,7 +235,7 @@ def glob_check(H, wid, idx, state):
             "a FIXED read-only tree (dir {3!r}) and got FOREIGN files {4!r} that "
             "are NOT this slot's files (leaked slots={5}). Expected only {6!r}. "
             "A sibling's compiled fnmatch pattern leaked into this fiber's glob "
-            "-- a shared fnmatch-cache pollution (runloom M:N bug; 0 under plain "
+            "-- a shared fnmatch-cache pollution (stackweave M:N bug; 0 under plain "
             "threads GIL on AND off).".format(
                 wid, slot, pattern, dirpath, sorted(foreign),
                 sorted(other_slots), expected))
@@ -289,10 +289,10 @@ def post(H):
         H.log("note: the LOAD-BEARING glob arm observed FOREIGN files in a "
               "fiber's match set over a FIXED read-only tree -- glob.glob uses "
               "fnmatch to translate patterns, and fnmatch caches compiled "
-              "regexes in a shared per-interpreter lru_cache.  Runloom M:N fibers "
+              "regexes in a shared per-interpreter lru_cache.  Stackweave M:N fibers "
               "share one interpreter state, so many fibers' glob calls on "
               "DISTINCT patterns can collide on that shared cache, causing glob "
-              "to return a sibling's files.  This is a runloom M:N gap (0 under "
+              "to return a sibling's files.  This is a stackweave M:N gap (0 under "
               "plain threads GIL on AND off); the fix is to isolate the fnmatch "
               "cache per fiber (contextvar-backed) or guard it with a per-hub "
               "lock.")
@@ -320,7 +320,7 @@ if __name__ == "__main__":
         default_funcs=8000,
         describe="glob.glob uses fnmatch to translate patterns; fnmatch caches "
                  "compiled patterns in a shared per-interpreter lru_cache. "
-                 "Runloom M:N fibers share one interpreter state, so many "
+                 "Stackweave M:N fibers share one interpreter state, so many "
                  "fibers calling glob.glob with DISTINCT patterns over a FIXED "
                  "read-only tree can collide on the shared fnmatch cache, "
                  "causing glob to return a sibling's match set.  LOAD-BEARING: "

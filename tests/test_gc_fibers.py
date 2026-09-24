@@ -20,8 +20,8 @@ import unittest
 
 sys.path.insert(0, "src")
 
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
 
 class _Node(object):
@@ -56,16 +56,16 @@ class TestGCWithParkedGoroutines(unittest.TestCase):
             done.send(1)
 
         def main():
-            done = runloom_c.Chan(N)
+            done = stackweave_c.Chan(N)
             for i in range(N):
-                runloom.fiber(worker, i, done)
-            runloom.sleep(0.01)              # let them all park holding cycles
+                stackweave.fiber(worker, i, done)
+            stackweave.sleep(0.01)              # let them all park holding cycles
             for _ in range(30):           # hammer the cyclic GC
                 gc.collect()
             for _ in range(N):
                 done.recv()
 
-        runloom.run(1, main)
+        stackweave.run(1, main)
         self.assertEqual(len(results), N)
         self.assertTrue(all(results.values()),
                         "a cycle held by a parked fiber was collected")
@@ -79,14 +79,14 @@ class TestGCWithParkedGoroutines(unittest.TestCase):
         self.assertIsNone(wr(), "cycle should have been collected once unheld")
 
     def test_sleep_parked(self):
-        self._run(lambda i: runloom.sleep(0.06))
+        self._run(lambda i: stackweave.sleep(0.06))
 
     def test_chan_parked(self):
         # each worker parks recv-ing on its own channel; main sends after GC
         chans = {}
 
         def park(i):
-            ch = runloom_c.Chan(0)
+            ch = stackweave_c.Chan(0)
             chans[i] = ch
             ch.recv()                     # parks here holding the cycle
 
@@ -100,10 +100,10 @@ class TestGCWithParkedGoroutines(unittest.TestCase):
             done.send(1)
 
         def main():
-            done = runloom_c.Chan(N)
+            done = stackweave_c.Chan(N)
             for i in range(N):
-                runloom.fiber(worker, i, done)
-            runloom.sleep(0.02)              # let them park on their chans
+                stackweave.fiber(worker, i, done)
+            stackweave.sleep(0.02)              # let them park on their chans
             for _ in range(30):
                 gc.collect()
             for i in range(N):            # wake each
@@ -111,7 +111,7 @@ class TestGCWithParkedGoroutines(unittest.TestCase):
             for _ in range(N):
                 done.recv()
 
-        runloom.run(1, main)
+        stackweave.run(1, main)
         self.assertEqual(len(results), N)
         self.assertTrue(all(results.values()),
                         "a cycle held by a chan-parked fiber was collected")
@@ -121,17 +121,17 @@ class TestGCWithParkedGoroutines(unittest.TestCase):
 
         def worker(i, done):
             a, wr = _make_cycle(i)
-            handles[i] = runloom_c.current_g()
-            runloom_c.park_self()         # parks holding the cycle
+            handles[i] = stackweave_c.current_g()
+            stackweave_c.park_self()         # parks holding the cycle
             results_ok = _verify(a, wr, i)
             done.send(1 if results_ok else 0)
 
         def main():
             N = 150
-            done = runloom_c.Chan(N)
+            done = stackweave_c.Chan(N)
             for i in range(N):
-                runloom.fiber(worker, i, done)
-            runloom.sleep(0.02)
+                stackweave.fiber(worker, i, done)
+            stackweave.sleep(0.02)
             for _ in range(30):
                 gc.collect()
             for i in range(N):
@@ -141,7 +141,7 @@ class TestGCWithParkedGoroutines(unittest.TestCase):
                 oks += done.recv()[0]
             self.assertEqual(oks, N, "a cycle held by a park_self fiber was collected")
 
-        runloom.run(1, main)
+        stackweave.run(1, main)
 
 
 if __name__ == "__main__":

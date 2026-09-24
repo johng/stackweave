@@ -4,9 +4,9 @@
 Systematic first-order fault injection by AST instrumentation: find EVERY call
 to a fallible libc/syscall function in the (flattened) TU and wrap it so its
 return can be forced to a realistic failure at RUNTIME, one site at a time, via
-env RUNLOOM_FI_ENABLED.  No hand-picked site list -- the site set is exactly
+env STACKWEAVE_FI_ENABLED.  No hand-picked site list -- the site set is exactly
 "every fallible call clang's AST sees", which is the point (removes the human
-judgment the compiled-in RUNLOOM_FAULT_* sites carry).
+judgment the compiled-in STACKWEAVE_FAULT_* sites carry).
 
 Each matched call `f(args)` -> `RUNLOOM_FI_<T>(id, ERRNO, f(args))`, where the
 macro returns the failure value (-1 / NULL / MAP_FAILED) and sets errno when
@@ -86,7 +86,7 @@ def find_sites(flat_path, clang_args):
 
 
 PRELUDE = r'''
-/* ==== runloom systematic fault-injection prelude (inject_rewrite.py) ==== */
+/* ==== stackweave systematic fault-injection prelude (inject_rewrite.py) ==== */
 #include <errno.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -97,7 +97,7 @@ PRELUDE = r'''
 static int __rfi_ready = 0;
 static uint64_t __rfi_bits[%(nwords)d];
 static void __rfi_init(void) {
-    const char *e = getenv("RUNLOOM_FI_ENABLED");
+    const char *e = getenv("STACKWEAVE_FI_ENABLED");
     if (e) {
         const char *p = e;
         while (*p) {

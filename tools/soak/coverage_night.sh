@@ -16,11 +16,11 @@
 set -u
 
 MAIN="$(cd "$(dirname "$0")/../.." && pwd)"
-PY="${RUNLOOM_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
-WT="${RUNLOOM_COV_WORKTREE:-$HOME/projects/pygo-covnight}"
+PY="${STACKWEAVE_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
+WT="${STACKWEAVE_COV_WORKTREE:-$HOME/projects/pygo-covnight}"
 DATE="$(date +%F)"
-OUTDIR="${RUNLOOM_SOAK_DIR:-$HOME/runloom-soak}/coverage/$DATE"
-LEDGER="${RUNLOOM_SOAK_DIR:-$HOME/runloom-soak}/COVERAGE_LEDGER.md"
+OUTDIR="${STACKWEAVE_SOAK_DIR:-$HOME/runloom-soak}/coverage/$DATE"
+LEDGER="${STACKWEAVE_SOAK_DIR:-$HOME/runloom-soak}/COVERAGE_LEDGER.md"
 SMOKE=0
 [ "${1:-}" = "--smoke" ] && SMOKE=1
 
@@ -35,7 +35,7 @@ git -C "$WT" clean -fdxq >/dev/null 2>&1   # stale .so/objs from prior nights
 
 # --- run the measurement in the worktree ------------------------------------
 mkdir -p "$OUTDIR"
-RUNLOOM_COV_SMOKE="$SMOKE" PYTHON="$PY" \
+STACKWEAVE_COV_SMOKE="$SMOKE" PYTHON="$PY" \
     bash "$WT/tools/cov_measure.sh" > "$OUTDIR/run.log" 2>&1
 rc=$?
 cp -f "$WT/build/coverage/workloads.log" "$OUTDIR/" 2>/dev/null

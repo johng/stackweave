@@ -11,7 +11,7 @@ consulted when an argument is missing, which we never do).  getuser() likewise
 reads only the process-global os.environ / pwd database, which no fiber mutates,
 so it is a deterministic pure lookup here.
 
-WHERE M:N COULD BREAK IT (the gap this program probes).  runloom runs each fiber
+WHERE M:N COULD BREAK IT (the gap this program probes).  stackweave runs each fiber
 on its own Python frame stack across >1 hubs with the GIL off, inserting a
 cooperative yield at the hazard boundary so a sibling reliably interleaves.  If
 the runtime torn-copied a fiber's local StringIO handle, leaked another fiber's
@@ -34,9 +34,9 @@ WHY THIS IS A LEGITIMATE SINGLE-OWNER ORACLE (verified against plain threads):
     * echo_char='*':   return == pw            and out.getvalue() == prompt +
                                                    echo_char * len(pw)
   100% bit-identical across threads -- 0 cross-thread bleed.  Under a correct
-  runloom it must also hold.  A returned password that is not the fiber-local
+  stackweave it must also hold.  A returned password that is not the fiber-local
   plaintext, an out-stream that is not the exact prompt(+echo) string, or a
-  change in either across the yield, is a runloom isolation / lost-byte bug.
+  change in either across the yield, is a stackweave isolation / lost-byte bug.
 
 ORACLES:
   * LOAD-BEARING -- RAW_INPUT ROUND-TRIP PURITY (worker, HARD, fail-fast).  Each
@@ -52,7 +52,7 @@ ORACLES:
         and asserts the result is bit-identical to r1 AND still equals the
         closed-form law.  A drift means a torn handle or a leaked sibling stream.
     Single-owner: the StringIO pair is fiber-local, created per call, never
-    shared; the password/prompt are fiber-local.  A failure is a runloom bug.
+    shared; the password/prompt are fiber-local.  A failure is a stackweave bug.
 
   * LOAD-BEARING -- getuser() STABILITY (worker, HARD, fail-fast).  getuser()
     reads process-global os.environ / pwd (no fiber mutates it), so it must
@@ -87,7 +87,7 @@ import io
 import getpass
 
 import harness
-import runloom
+import stackweave
 
 # Password character alphabet: printable ASCII, EXCLUDING newline and every byte
 # the echo-char reader treats specially ('\n' '\r' '\x03' ETX, '\x7f'/'\b'
@@ -151,9 +151,9 @@ def raw_input_check(H, wid, idx, rng, state):
         return
 
     # YIELD: let a sibling on another hub run its own _raw_input concurrently.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 2:
-        runloom.sleep(0.0003)
+        stackweave.sleep(0.0003)
 
     # Re-run the SAME transform on fresh fiber-local streams; must be bit-
     # identical to r1 AND still equal the closed-form law.
@@ -173,7 +173,7 @@ def raw_input_check(H, wid, idx, rng, state):
     if r2 != pw or out2 != expected_out:
         H.fail("getpass._raw_input drifted off the closed-form law after the "
                "yield: got ({0!r},{1!r}) expected ({2!r},{3!r}) (wid {4}) -- a "
-               "runloom lost-byte/isolation bug".format(r2, out2, pw,
+               "stackweave lost-byte/isolation bug".format(r2, out2, pw,
                                                         expected_out, wid))
         return
 
@@ -253,4 +253,4 @@ if __name__ == "__main__":
                  "out==prompt(+echo*len) both before and (bit-identically) after "
                  "a yield, plus getpass.getuser() stable vs a baseline.  A "
                  "returned password != the plaintext, a wrong prompt/echo write, "
-                 "or drift across the yield is a runloom lost-byte/isolation bug")
+                 "or drift across the yield is a stackweave lost-byte/isolation bug")

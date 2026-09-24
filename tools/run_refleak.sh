@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # run_refleak.sh -- build the pydebug-ABI ext, then hunt per-iteration refcount /
-# alloc drift in runloom's hot ops (tools/refleak_hunt.py).  Companion to
+# alloc drift in stackweave's hot ops (tools/refleak_hunt.py).  Companion to
 # run_pydebug.sh: that uses CPython's internal ASSERTS as the oracle; this uses
 # the gettotalrefcount/getallocatedblocks DELTAS (steady drift = a leak or, for
 # the biased-refcount merge, an over-release).
 #
 # Usage:  tools/run_refleak.sh
-# Env:    RUNLOOM_PYDEBUG_PYTHON  the --with-pydebug --disable-gil interpreter
+# Env:    STACKWEAVE_PYDEBUG_PYTHON  the --with-pydebug --disable-gil interpreter
 #                                 (default: /home/x/projects/cpython-pydebug/python)
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
-PYD="${RUNLOOM_PYDEBUG_PYTHON:-/home/x/projects/cpython-pydebug/python}"
+PYD="${STACKWEAVE_PYDEBUG_PYTHON:-/home/x/projects/cpython-pydebug/python}"
 
 [ -x "$PYD" ] || { echo "run_refleak: no pydebug interpreter at $PYD (build: "
   "./configure --with-pydebug --disable-gil && make -j). SKIP."; exit 0; }

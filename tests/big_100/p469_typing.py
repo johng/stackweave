@@ -14,7 +14,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (the discriminator discipline):
   scheduling point, then re-subscribes List[p], the runtime MUST hand back an
   alias whose __origin__ is `list` and whose __args__ are exactly (p,) -- the
   value THIS fiber asked for.  That invariant holds on ANY correct runtime
-  (single-thread, plain threads GIL on AND off, runloom M:N): the alias's VALUE
+  (single-thread, plain threads GIL on AND off, stackweave M:N): the alias's VALUE
   is a pure function of what was subscribed, independent of caching.  If a fiber
   ever recovers an alias carrying a DIFFERENT type/args (a sibling's subscription
   leaking through a corrupted cache, or torn cache state) that is genuine
@@ -39,7 +39,7 @@ ORACLES:
     recovered alias has the CORRECT __origin__ AND the CORRECT __args__ for what
     THIS fiber subscribed.  A wrong origin/args = a sibling's value leaked through
     a corrupted cache -> H.fail -> exit 1.  Passes on every correct runtime
-    (single-thread, plain GIL on/off, runloom M:N) because the value is a pure
+    (single-thread, plain GIL on/off, stackweave M:N) because the value is a pure
     function of the subscription.
   * MEASURED -- EVICTION RATE (post, report-only, NEVER fails).  id(recovered) !=
     id(subscribed) counts a benign bounded-lru_cache eviction (the alias was
@@ -49,7 +49,7 @@ ORACLES:
     subscription never returns; the watchdog + require_no_lost catch hangs.
   * NON-VACUITY (post, HARD): the cache-access hazard was actually exercised.
 
-INJECTION (self-test): with RUNLOOM_P469_INJECT=1 the recovery returns a SIBLING
+INJECTION (self-test): with STACKWEAVE_P469_INJECT=1 the recovery returns a SIBLING
 alias (wrong __args__/__origin__) on a fraction of checks -- the load-bearing
 VALUE oracle MUST then fire exit 1, proving it is not vacuous.
 
@@ -71,12 +71,12 @@ import typing
 from typing import List, Dict, Tuple, Set
 
 import harness
-import runloom
+import stackweave
 
 # Self-test injection: when set, recovery returns a SIBLING alias (wrong
 # __args__/__origin__) on a fraction of checks so the LOAD-BEARING value oracle
 # must fire exit 1.  Off in normal runs (a correct runtime always passes).
-INJECT = os.environ.get("RUNLOOM_P469_INJECT") == "1"
+INJECT = os.environ.get("STACKWEAVE_P469_INJECT") == "1"
 
 # Per-fiber parameter-band size: each fiber rotates through parameter values
 # 0..PARAM_SPAN-1 when subscripting a generic (e.g., List[wid % PARAM_SPAN]).
@@ -140,9 +140,9 @@ def cache_check(H, wid, idx, state):
     # our entry from the _tp_cache's bounded lru_cache) while this fiber is
     # parked.  The optional sleep lengthens the park so concurrent evictions
     # reliably interleave across hub migrations.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
 
     # Recover the SAME type by re-subscripting.  On a correct runtime the VALUE
     # (origin + args) is exactly what we subscribed -- whether the cache served a

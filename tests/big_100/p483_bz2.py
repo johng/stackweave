@@ -24,7 +24,7 @@ the bytes MUST recover exactly D. Corruption manifests as:
 
 This is an M:N-SPECIFIC hazard (0 under plain OS threads): genuine threads own
 their own Python objects and C state structs, so no sharing or preemption-mid-
-state-update corruption occurs. A runloom M:N fiber can be preempted WHILE
+state-update corruption occurs. A stackweave M:N fiber can be preempted WHILE
 HOLDING a BZ2Compressor reference mid-method, then resume on a different hub
 where another fiber has acquired and mutated the SAME object (same id() but
 different logical owner).
@@ -35,9 +35,9 @@ ORACLE:
     fail-fast): each fiber compresses a unique data block via fresh
     BZ2Compressor, yields (to invite preemption and hub migration), then
     decompresses the result. The round-trip MUST recover the original data
-    exactly.  A mismatch is a torn/corrupted compressor state (runloom M:N
+    exactly.  A mismatch is a torn/corrupted compressor state (stackweave M:N
     corruption, not a documented caveat).  Single-owner per fiber: nothing but
-    THIS fiber touches its compressor; a failure is a runloom state-isolation
+    THIS fiber touches its compressor; a failure is a stackweave state-isolation
     desync.
 
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber that vanished mid-
@@ -63,7 +63,7 @@ fields, or a replay that migrates a hub between a compress() entry and exit.
 """
 import bz2
 import harness
-import runloom
+import stackweave
 
 # Per-fiber data payloads are drawn from this band.  Each plaintext yields a
 # DISTINCT, deterministic compressed output, so a leaked sibling's compressed
@@ -118,9 +118,9 @@ def distinct_check(H, wid, idx, state):
         # (if this fiber migrates hubs) the state struct may be left in an
         # inconsistent state. Upon resume, decompressing torn bytes fails or
         # produces wrong data.
-        runloom.yield_now()
+        stackweave.yield_now()
         if idx & 1:
-            runloom.sleep(0.0001)
+            stackweave.sleep(0.0001)
 
         # Decompress: the bytes MUST recover exactly the original plaintext.
         # If the compressed bytes are torn (compressor state was mid-update
@@ -133,7 +133,7 @@ def distinct_check(H, wid, idx, state):
             H.fail("bz2 DISTINCT-COMPRESSOR CORRUPTION: round-trip failed "
                    "(wid {0} idx {1}): plaintext {2} bytes != decompressed {3} "
                    "bytes (expected {4}). The compressor state was torn across "
-                   "the yield (runloom preemption/hub-migration desync).".format(
+                   "the yield (stackweave preemption/hub-migration desync).".format(
                        wid, idx, len(plaintext), len(decompressed),
                        len(plaintext)))
             state["distinct_fails"][wid & 1023] += 1
@@ -143,7 +143,7 @@ def distinct_check(H, wid, idx, state):
         state["distinct_fails"][wid & 1023] += 1
         H.fail("bz2 DISTINCT-COMPRESSOR EXCEPTION: round-trip raised {0} "
                "(wid {1} idx {2}): plaintext={3} bytes. The compressor state "
-               "is corrupted (torn mid-compress/decompress, runloom M:N "
+               "is corrupted (torn mid-compress/decompress, stackweave M:N "
                "desync).".format(type(exc).__name__, wid, idx, len(plaintext)))
         return
 
@@ -167,7 +167,7 @@ def concurrent_check(H, wid, idx, state):
         compressed += compressor.flush()
 
         # Park to invite a sibling's concurrent compress on the shared hub.
-        runloom.yield_now()
+        stackweave.yield_now()
 
         # Decompress: the bytes MUST recover this fiber's OWN plaintext.
         decompressed = bz2.decompress(compressed)
@@ -241,7 +241,7 @@ def post(H):
     if dfails:
         H.log("note: the LOAD-BEARING distinct-compressor arm observed {0} "
               "round-trip failures -- bz2.BZ2Compressor state was torn across "
-              "yields (runloom M:N preemption/hub-migration desync, not a "
+              "yields (stackweave M:N preemption/hub-migration desync, not a "
               "documented caveat; 0 under plain OS threads GIL on AND off).".format(
                   dfails))
 
@@ -273,7 +273,7 @@ if __name__ == "__main__":
                  "decompresses and asserts exact recovery.  LOAD-BEARING: a "
                  "single-owner compressor's plaintext MUST round-trip "
                  "identically (0 failures under plain threads GIL on AND off; "
-                 "a torn/corrupted state across yield is the runloom M:N "
+                 "a torn/corrupted state across yield is the stackweave M:N "
                  "bug).  MEASURED concurrent-compress (distinct data, many "
                  "fibers) also checks round-trip integrity -- a shared hub "
                  "thread could corrupt state if accessed concurrently without "

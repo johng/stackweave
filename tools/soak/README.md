@@ -18,7 +18,7 @@ python3 tools/soak/soak.py --workload leak_control --minutes 5
 
 # accelerated-life + mode knobs:
 python3 tools/soak/soak.py --workload mixed --hours 1 --compress \
-      --env RUNLOOM_PERHUB_EPOLL=1 --env RUNLOOM_IOURING_LOOP=1
+      --env STACKWEAVE_PERHUB_EPOLL=1 --env STACKWEAVE_IOURING_LOOP=1
 ```
 
 Each run writes `docs/dev/soak/soak_<workload>_<NNN>/` containing one
@@ -37,7 +37,7 @@ python3 tools/soak/oracle.py docs/dev/soak/soak_mixed_003/worker0.csv --warmup 6
 | file | role |
 |---|---|
 | `soak.py` | orchestrator: launch N workers, watch heartbeats for hangs/crashes, run the oracle, write REPORT.md |
-| `worker.py` | one worker process: run a workload continuously, self-sample `/proc/self` + `runloom.stats()` every interval to CSV + a heartbeat |
+| `worker.py` | one worker process: run a workload continuously, self-sample `/proc/self` + `stackweave.stats()` every interval to CSV + a heartbeat |
 | `workloads.py` | the workload shapes (below) + the `leak_control` negative control |
 | `oracle.py` | the slope oracle: least-squares fit + 95% CI + per-metric epsilon + absolute-change floor |
 
@@ -104,6 +104,6 @@ note otherwise.)
 ## Modes matrix
 
 Any `--env KEY=VAL` is passed to the workers, so the same workload can be soaked
-under each scheduler mode: `RUNLOOM_PERHUB_EPOLL`, `RUNLOOM_IOURING_LOOP`,
-`RUNLOOM_STACK_PARK_SWEEP`, hub count via the workload's own env.  R2
+under each scheduler mode: `STACKWEAVE_PERHUB_EPOLL`, `STACKWEAVE_IOURING_LOOP`,
+`STACKWEAVE_STACK_PARK_SWEEP`, hub count via the workload's own env.  R2
 (`tools/soak/matrix.sh`) drives these presets across durations and sanitizers.

@@ -11,7 +11,7 @@ two-fold and both halves are real M:N hazards:
   (A) COOPERATIVE-PARK proof (the p177 missing-wrapper class, for the ancillary-
       data path).  recvmsg() must be a COOPERATIVE park: a peer that DELAYS its
       SCM_RIGHTS send must NOT wedge the receiver's hub OS-thread.  socket.recvmsg
-      is monkey-patched cooperative (src/runloom/monkey/sockets.py:_patched_recvmsg
+      is monkey-patched cooperative (src/stackweave/monkey/sockets.py:_patched_recvmsg
       -- EAGAIN -> _wait_io -> park), so a receiver waiting on a delayed send
       parks the goroutine and frees the hub.  If that wrapper were missing (a raw
       blocking recvmsg) the hub OS-thread would OS-block for the whole delay and
@@ -74,7 +74,7 @@ import socket
 import sys
 
 import harness
-import runloom
+import stackweave
 
 # ---- availability guard ---------------------------------------------------
 # sendmsg/recvmsg + SCM_RIGHTS are POSIX-only; wait_fd is the generic raw-fd park
@@ -85,14 +85,14 @@ _HAVE_MSG = (hasattr(socket.socket, "sendmsg")
              and hasattr(socket, "CMSG_LEN"))
 
 try:
-    import runloom_c
-    _HAVE_WAITFD = hasattr(runloom_c, "wait_fd")
+    import stackweave_c
+    _HAVE_WAITFD = hasattr(stackweave_c, "wait_fd")
 except Exception:                       # pragma: no cover - import guard
-    runloom_c = None
+    stackweave_c = None
     _HAVE_WAITFD = False
 
 READ = 1                                # wait_fd events bitmask: 1 = readable
-CANCELLED = getattr(runloom_c, "WAIT_FD_CANCELLED", -1) if runloom_c else -1
+CANCELLED = getattr(stackweave_c, "WAIT_FD_CANCELLED", -1) if stackweave_c else -1
 
 # Tag length per passed fd.  Small (a pipe holds it without blocking the writer)
 # but big enough that a truncated / wrong-fd read is unmistakable, and carries a
@@ -145,8 +145,8 @@ def bystander(H, wid, shard, state):
     while budget > 0 and H.running():
         coop[shard] += 1
         budget -= 1
-        runloom.yield_now()
-        runloom.sleep(0.0005)
+        stackweave.yield_now()
+        stackweave.sleep(0.0005)
 
 
 def sender(H, sock_a, send_fd, delay, ready_ch):
@@ -160,7 +160,7 @@ def sender(H, sock_a, send_fd, delay, ready_ch):
     sent_ok = False
     try:
         # Cooperative sleep -> the receiver's recvmsg parks for this whole window.
-        runloom.sleep(delay)
+        stackweave.sleep(delay)
         if not H.running():
             ready_ch.send(False)
             return
@@ -238,7 +238,7 @@ def read_tag(H, got_fd, want):
     buf = bytearray()
     while len(buf) < want and H.running():
         try:
-            ready = runloom_c.wait_fd(got_fd, READ, WAIT_MS)
+            ready = stackweave_c.wait_fd(got_fd, READ, WAIT_MS)
         except OSError:
             break                       # fd closed at teardown
         if ready == CANCELLED:
@@ -305,7 +305,7 @@ def worker(H, wid, rng, state):
         except OSError:
             pass
 
-        ready_ch = runloom.Chan(1)
+        ready_ch = stackweave.Chan(1)
         # Spawn the bystanders (cooperative-progress proof, arm A) -- they share
         # whatever hub they land on; the sampler watches the global coop signal.
         for _ in range(BYSTANDERS):
@@ -411,7 +411,7 @@ def setup(H):
         return
     if not _HAVE_WAITFD:
         H.note_scale_limit(
-            "runloom_c.wait_fd unavailable -- cannot park the received fd; "
+            "stackweave_c.wait_fd unavailable -- cannot park the received fd; "
             "skipping")
         H.state = None
         return

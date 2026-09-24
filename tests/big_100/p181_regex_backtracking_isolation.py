@@ -15,7 +15,7 @@ cooperative goroutines; no full scheduler stall under C-bound work.
 import re
 
 import harness
-import runloom
+import stackweave
 
 # A small N keeps each backtracking match in the ~tens-of-ms range (it is
 # exponential in N, so a tiny bump is a big cost change).  The trailing '!'
@@ -40,7 +40,7 @@ def heavy_regex(H, wid, rng, state):
 
 def coop_worker(H, wid, rng, state):
     while H.running():
-        runloom.sleep(0.003)
+        stackweave.sleep(0.003)
         state["coop_ticks"][wid & 1023] += 1
         H.op(wid)
         H.task_done(wid)

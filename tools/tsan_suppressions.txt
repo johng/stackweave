@@ -1,9 +1,9 @@
-# ThreadSanitizer suppressions for the runloom ext TSan runs (run_sanitizers_ext.sh).
+# ThreadSanitizer suppressions for the stackweave ext TSan runs (run_sanitizers_ext.sh).
 #
-# We instrument ONLY runloom's extension (-fsanitize=thread) and run it under a
-# stock free-threaded CPython.  TSan therefore sees every access in runloom's C
+# We instrument ONLY stackweave's extension (-fsanitize=thread) and run it under a
+# stock free-threaded CPython.  TSan therefore sees every access in stackweave's C
 # but NOT the interpreter's internal synchronization, so a handful of races
-# *inside CPython itself* are reported that are not runloom bugs and that runloom
+# *inside CPython itself* are reported that are not stackweave bugs and that stackweave
 # cannot fix.  Suppress those by the CPython function/file they occur in.
 #
 # Keep this list MINIMAL and CPython-only.  Never suppress a frame in
@@ -20,7 +20,7 @@ race:_PyObjectStackChunk_New
 # --- CPython interpreter/GC internals that touch shared objects ---
 # (Add specific CPython functions here as broader suite runs surface them;
 #  prefer the narrowest function name over a whole-file match.  Do NOT use a
-#  blanket called_from_lib:libpython... rule -- every runloom race is "called
+#  blanket called_from_lib:libpython... rule -- every stackweave race is "called
 #  from" libpython via cfunction_call, so that would hide real bugs.)
 
 # --- CPython stop-the-world GC mark phase (Python/gc_free_threading.c) ---
@@ -33,9 +33,9 @@ race:_PyObjectStackChunk_New
 # pair as unordered.  Verified 2026-08-21 -- a gold run on a
 # --with-thread-sanitizer CPython 3.14.4t reports NONE of the three.
 #
-# Suppressed on the CPYTHON frame (the GC entry points), never on runloom's
+# Suppressed on the CPYTHON frame (the GC entry points), never on stackweave's
 # visit_g/visit_snap, per the rule at the top of this file: a genuine race
-# between two runloom threads inside those functions still reports, because
+# between two stackweave threads inside those functions still reports, because
 # neither of these frames would be on its stack.
 race:gc_propagate_alive
 race:gc_mark_alive_from_roots
@@ -50,7 +50,7 @@ race:os_readv_impl
 # --- CPython non-atomic eval-frame hook setter (Python/pystate.c) ---
 # _PyInterpreterState_SetEvalFrameFunc stores interp->eval_frame with a plain
 # (non-atomic) write, and _PyEval_EvalFrame reads it with a plain load + indirect
-# call.  runloom installs its RUNLOOM_PREEMPT eval-frame wrapper EXACTLY ONCE for
+# call.  stackweave installs its STACKWEAVE_PREEMPT eval-frame wrapper EXACTLY ONCE for
 # the process lifetime (runloom_preempt_install; it used to toggle per
 # mn_init/mn_fini, which raced a foreign thread's frame dispatch into a NULL
 # call -> SIGSEGV; that toggle is gone).  The lone remaining NULL->hook publish
@@ -59,7 +59,7 @@ race:os_readv_impl
 # the old default or the new hook, both valid).  This is an upstream FT gap (the
 # setter/reader would need to be atomic); an extension cannot close it
 # (_PyEval_StopTheWorld is not exported, and an atomic store on our side does not
-# make CPython's load atomic).  Suppressed on the CPython frame, not runloom's.
+# make CPython's load atomic).  Suppressed on the CPython frame, not stackweave's.
 race:_PyInterpreterState_SetEvalFrameFunc
 
 # ---------------------------------------------------------------------------
@@ -69,7 +69,7 @@ race:_PyInterpreterState_SetEvalFrameFunc
 # in CPython string/bytes code -- e.g. unicode_decode_utf8 (write, under
 # runloom_fcontext_entry) vs PyBytes_FromStringAndSize (read, another thread).
 #
-# These are CPYTHON-INTERNAL, not runloom's, and the ext-only harness already
+# These are CPYTHON-INTERNAL, not stackweave's, and the ext-only harness already
 # says so in its summary line. Gold (a --with-thread-sanitizer interpreter)
 # reports NONE of them: with CPython instrumented, TSan sees the interpreter's
 # own synchronisation and they resolve -- the same mechanism as the
@@ -83,7 +83,7 @@ race:_PyInterpreterState_SetEvalFrameFunc
 #   * The stack depot hands stacks between hubs under runloom_global_stack_lock,
 #     which on POSIX is a plain pthread_mutex_t -- TSan understands it natively,
 #     so that handoff already has a visible happens-before edge.
-#   * runloom ALREADY implements TSan's fiber API in full. See
+#   * stackweave ALREADY implements TSan's fiber API in full. See
 #     runloom_fiber_san.h / runloom_fiber_san_impl.h: __tsan_create_fiber,
 #     __tsan_destroy_fiber and __tsan_switch_to_fiber are called from
 #     runloom_coro_resume and runloom_coro_yield (fibersan_enter / left /
@@ -104,7 +104,7 @@ race:_PyInterpreterState_SetEvalFrameFunc
 # internal synchronisation (stop-the-world, biased refcounting, the allocator).
 # Every entry above exists because of that blindness, not because of a bug.
 #
-# GOLD is the verdict: RUNLOOM_TSAN_PYTHON=<--with-thread-sanitizer CPython>,
+# GOLD is the verdict: STACKWEAVE_TSAN_PYTHON=<--with-thread-sanitizer CPython>,
 # which instruments both sides.  Treat an ext-only report crossing that
 # boundary as a SUSPECT, and confirm it under gold before acting -- doing the
 # reverse cost a chunk of a session chasing an invariant that was never broken.

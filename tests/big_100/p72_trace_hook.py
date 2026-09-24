@@ -11,7 +11,7 @@ import sys
 import threading
 
 import harness
-import runloom
+import stackweave
 
 
 def setup(H):
@@ -32,8 +32,8 @@ def traced(depth):
     for i in range(depth):
         total += i
         if i % 4 == 0:
-            runloom.yield_now()
-    runloom.sleep(0.0003)
+            stackweave.yield_now()
+    stackweave.sleep(0.0003)
     return total
 
 

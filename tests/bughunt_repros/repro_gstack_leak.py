@@ -1,9 +1,9 @@
 """G.stack() leaks one str object per call (PyDict_SetItemString does not steal)."""
 import sys
-import runloom_c
+import stackweave_c
 
-h = runloom_c.fiber(lambda: None)   # spawn (not yet run) -> G handle
-runloom_c.run()                     # let it finish; handle stays valid
+h = stackweave_c.fiber(lambda: None)   # spawn (not yet run) -> G handle
+stackweave_c.run()                     # let it finish; handle stays valid
 
 # warm up
 for _ in range(1000):

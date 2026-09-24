@@ -6,7 +6,7 @@ registry dump.  Three gaps the existing introspect suites don't pin:
      patches -- alloc-home (Py_TSTATE_ALLOC_HOME) for the allocation half and
      exec-home (Py_TSTATE_EXEC_HOME) for the execution half -- so on anything
      less enable_migration() must RAISE RuntimeError *and must not leave the
-     process armed*: it must NOT set os.environ['RUNLOOM_MIGRATION'] on the way
+     process armed*: it must NOT set os.environ['STACKWEAVE_MIGRATION'] on the way
      out (a half-applied flag would silently enable the crash-prone per-g-tstate
      path at the next run()).  Mirrors src/patches/README.md's stated contract.
 
@@ -38,8 +38,8 @@ import pytest
 
 sys.path.insert(0, "src")
 
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 from adv_util import hang_guard, needs_free_threading
 
 
@@ -53,43 +53,43 @@ class TestEnableMigrationRefusesOnShippedBuild:
     def setup_method(self):
         # Snapshot the flag so a refusal (or a bug that sets it) can't leak
         # into any other test in the process.
-        self.had = "RUNLOOM_MIGRATION" in os.environ
-        self.prev = os.environ.get("RUNLOOM_MIGRATION")
-        os.environ.pop("RUNLOOM_MIGRATION", None)
+        self.had = "STACKWEAVE_MIGRATION" in os.environ
+        self.prev = os.environ.get("STACKWEAVE_MIGRATION")
+        os.environ.pop("STACKWEAVE_MIGRATION", None)
 
     def teardown_method(self):
-        os.environ.pop("RUNLOOM_MIGRATION", None)
+        os.environ.pop("STACKWEAVE_MIGRATION", None)
         if self.had:
-            os.environ["RUNLOOM_MIGRATION"] = self.prev
+            os.environ["STACKWEAVE_MIGRATION"] = self.prev
 
     @pytest.mark.skipif(
-        runloom.migration_available(),
+        stackweave.migration_available(),
         reason="fully patched build (alloc-home AND exec-home): "
                "enable_migration() is allowed to succeed here, so the "
                "'must refuse' contract doesn't apply")
     def test_raises_and_leaves_env_unset(self):
         # Precondition: this build is missing at least one migration patch.
-        assert runloom.migration_available() is False
-        assert "RUNLOOM_MIGRATION" not in os.environ
+        assert stackweave.migration_available() is False
+        assert "STACKWEAVE_MIGRATION" not in os.environ
 
         with pytest.raises(RuntimeError) as ei:
-            runloom.enable_migration()          # allow_unsafe defaults to False
+            stackweave.enable_migration()          # allow_unsafe defaults to False
 
         # The refusal must name every MISSING patch (the actionable remedy) --
         # naming only one half would send the user off to a half-fix.
         msg = str(ei.value)
-        status = runloom.migration_status()
+        status = stackweave.migration_status()
         if not status["alloc_home"]:
             assert "alloc-home" in msg
         if not status["exec_home"]:
             assert "exec-home" in msg
 
         # THE contract: a refused call must NOT arm the flag.  A half-applied
-        # RUNLOOM_MIGRATION=1 would enable the unsafe per-g-tstate path at the
+        # STACKWEAVE_MIGRATION=1 would enable the unsafe per-g-tstate path at the
         # next runtime start.
-        assert "RUNLOOM_MIGRATION" not in os.environ
+        assert "STACKWEAVE_MIGRATION" not in os.environ
         # ...and the higher-level view agrees nothing was requested.
-        assert runloom.migration_enabled() is False
+        assert stackweave.migration_enabled() is False
 
 
 # --------------------------------------------------------------------------
@@ -99,7 +99,7 @@ class TestEnableMigrationRefusesOnShippedBuild:
                     reason="observer-thread sampling of _quiescent() needs the "
                            "GIL disabled to run in parallel with the scheduler")
 def test_quiescent_false_during_unbuffered_ping_pong():
-    from runloom.sync import WaitGroup
+    from stackweave.sync import WaitGroup
 
     ROUNDS = 200000                     # ~0.8s of continuous rendezvous work
     ping = rc.Chan(0)                   # unbuffered: send blocks for a receiver
@@ -135,15 +135,15 @@ def test_quiescent_false_during_unbuffered_ping_pong():
             finally:
                 wg.done()
 
-        runloom.fiber(a)
-        runloom.fiber(b)
+        stackweave.fiber(a)
+        stackweave.fiber(b)
         wg.wait()
 
     t = threading.Thread(target=observer, name="q-observer", daemon=True)
     t.start()
     running.set()
     with hang_guard(60, "unbuffered ping-pong quiescent-false"):
-        runloom.run(1, main)
+        stackweave.run(1, main)
     running.clear()
     t.join(5)
 
@@ -184,7 +184,7 @@ def test_quiescent_settled_when_all_fibers_sleep():
         # alive until they all wake, so there is a long all-parked window in
         # which only the N sleepers are live (main itself is DONE).
         for _ in range(N):
-            runloom.fiber(lambda: rc.sched_sleep(NAP))
+            stackweave.fiber(lambda: rc.sched_sleep(NAP))
 
     # Idle baseline: no runtime -> trivially settled, nothing live.
     base = rc._quiescent()
@@ -194,7 +194,7 @@ def test_quiescent_settled_when_all_fibers_sleep():
     t.start()
     running.set()
     with hang_guard(30, "all-sleeping quiescent settle"):
-        runloom.run(1, main)
+        stackweave.run(1, main)
     running.clear()
     t.join(5)
 

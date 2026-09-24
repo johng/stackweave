@@ -18,12 +18,12 @@
 # its bounded idle wait, exercising the ~1ms poll backstop.
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
-PY="${RUNLOOM_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
+PY="${STACKWEAVE_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
 TR="$(mktemp /tmp/mnwake.XXXX.ndjson)"
 
 WL='import sys, time
 sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 rc.mn_init(2)                    # M:N hubs (route A) -- NOT the single-thread drain
 def offloader():
     # each blocking() parks the fiber foreign-wakeable on its hub; the blockpool
@@ -37,7 +37,7 @@ rc.mn_fini()'
 
 echo "== trace conformance: RunloomMNWake.tla vs the real M:N hub-submit wake path =="
 echo "-- capture a real M:N wake event trace (mn_run offload) --"
-RUNLOOM_MNWAKE_TRACE="$TR" PYTHON_GIL=0 PYTHONPATH=src "$PY" -c "$WL" >/dev/null 2>&1
+STACKWEAVE_MNWAKE_TRACE="$TR" PYTHON_GIL=0 PYTHONPATH=src "$PY" -c "$WL" >/dev/null 2>&1
 
 rc=0
 echo "-- TLC: real trace (expect CONFORMS) --"

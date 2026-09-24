@@ -392,7 +392,7 @@ int main(int argc, char **argv)
             runloom_diag_dump(2);
         } else {
             fprintf(stderr,
-                "[hint] re-run with RUNLOOM_DEBUG_DIAG=ring (or =all) to see "
+                "[hint] re-run with STACKWEAVE_DEBUG_DIAG=ring (or =all) to see "
                 "lifecycle events leading to the FAIL\n");
         }
         return 1;

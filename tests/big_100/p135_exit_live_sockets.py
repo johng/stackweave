@@ -1,13 +1,13 @@
 """big_100 / 135 -- interpreter exit with live sockets.
 
-Each iteration launches a CHILD runloom program that stands up a real loopback
+Each iteration launches a CHILD stackweave program that stands up a real loopback
 TCP echo server and a pool of client goroutines doing continuous round-trips --
 so at the moment of shutdown there are LIVE sockets actively parked in
 accept()/recv() with bytes in flight (not idle socketpairs).  Two shutdown
 shapes are exercised, chosen per child:
 
   * "clean": main flips a stop flag and closes every listener/socket so the
-    parked accept/recv wake; runloom.run() joins the woken goroutines and the
+    parked accept/recv wake; stackweave.run() joins the woken goroutines and the
     child exits 0, printing DONE-MARKER then MAIN-EXIT.  Tests deterministic
     socket teardown at scheduler shutdown.
   * "abrupt": main calls os._exit(0) while the server, accept loop, and clients
@@ -15,7 +15,7 @@ shapes are exercised, chosen per child:
     mn_fini / finalization.  Must terminate immediately with status 0, no
     segfault from tearing the process down on top of live netpoll registrations.
 
-(Per the runloom join semantic noted in p134, a child that *returns* from main()
+(Per the stackweave join semantic noted in p134, a child that *returns* from main()
 with goroutines parked FOREVER would hang run(); the clean path therefore wakes
 them as part of returning, and the abrupt path bypasses run()'s join entirely.)
 
@@ -31,9 +31,9 @@ import procutil
 CHILD = r'''
 import sys, os, socket, threading
 sys.path.insert(0, {src!r})
-import runloom
-import runloom.monkey
-runloom.monkey.patch()                    # cooperative socket I/O on the hubs
+import stackweave
+import stackweave.monkey
+stackweave.monkey.patch()                    # cooperative socket I/O on the hubs
 
 MODE = sys.argv[1] if len(sys.argv) > 1 else "clean"
 stop = [False]
@@ -63,7 +63,7 @@ def accept_loop(srv):
             except OSError:
                 break
             track(conn)
-            runloom.fiber(echo_conn, conn)
+            stackweave.fiber(echo_conn, conn)
     except OSError:
         pass
 
@@ -87,10 +87,10 @@ def main():
     srv.bind(("127.0.0.1", 0))
     srv.listen(128)
     addr = srv.getsockname()
-    runloom.fiber(accept_loop, srv)
+    stackweave.fiber(accept_loop, srv)
     for _ in range(24):
-        runloom.fiber(client, addr)
-    runloom.sleep(0.05)                  # let live traffic actually start
+        stackweave.fiber(client, addr)
+    stackweave.sleep(0.05)                  # let live traffic actually start
     sys.stdout.write("DONE-MARKER\n"); sys.stdout.flush()
     if MODE == "abrupt":
         # Server, accept loop, echo conns and clients are all live and parked
@@ -106,7 +106,7 @@ def main():
         try: s.close()
         except OSError: pass
 
-runloom.run(4, main)
+stackweave.run(4, main)
 sys.stdout.write("MAIN-EXIT\n"); sys.stdout.flush()
 '''
 
@@ -179,5 +179,5 @@ def post(H):
 if __name__ == "__main__":
     harness.main("p135_exit_live_sockets", body, setup=setup, post=post,
                  default_funcs=120,
-                 describe="child runloom exits (clean join AND abrupt os._exit) "
+                 describe="child stackweave exits (clean join AND abrupt os._exit) "
                           "with live TCP sockets in flight; no segfault, exit 0")

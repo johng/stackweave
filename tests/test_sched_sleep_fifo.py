@@ -12,10 +12,10 @@ This was previously exercised only by an asyncio-bridge integration repro
 (bughunt_repros/r04_timer_fifo.py) that has no `def test_` and is NOT collected
 by the suite -- so the raw sched_sleep tiebreak had zero running coverage.
 
-To make the tiebreak the SOLE discriminator we run under RUNLOOM_LOGICAL_CLOCK:
+To make the tiebreak the SOLE discriminator we run under STACKWEAVE_LOGICAL_CLOCK:
 the logical clock does not advance while there is runnable work, so every fiber
 that sleeps the same duration during the initial pass computes the identical
-wake_at.  Wake order is then decided purely by sleep_seq.  RUNLOOM_LOGICAL_CLOCK
+wake_at.  Wake order is then decided purely by sleep_seq.  STACKWEAVE_LOGICAL_CLOCK
 is lazy-read from env on first use; set it before import.  run_isolated gives
 this file its own subprocess.
 """
@@ -26,8 +26,8 @@ import unittest
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "src"))
 os.environ["PYTHON_GIL"] = "0"
-os.environ.setdefault("RUNLOOM_LOGICAL_CLOCK", "1")
-import runloom_c            # noqa: E402
+os.environ.setdefault("STACKWEAVE_LOGICAL_CLOCK", "1")
+import stackweave_c            # noqa: E402
 
 
 class TestSleepSeqFifo(unittest.TestCase):
@@ -42,18 +42,18 @@ class TestSleepSeqFifo(unittest.TestCase):
 
         def mk(k):
             def w():
-                runloom_c.sched_sleep(0.05)
+                stackweave_c.sched_sleep(0.05)
                 order.append(k)
             return w
 
         for k in range(N):
-            runloom_c.fiber(mk(k))
-        runloom_c.run()
+            stackweave_c.fiber(mk(k))
+        stackweave_c.run()
 
         self.assertEqual(len(order), N)
         self.assertEqual(order, list(range(N)),
                          "equal-deadline sleepers must wake in insertion (FIFO) order")
-        self.assertEqual(runloom_c._self_check(0), 0)
+        self.assertEqual(stackweave_c._self_check(0), 0)
 
     def test_distinct_deadlines_still_earliest_first(self):
         """Sanity companion: with DISTINCT deadlines the heap must still wake
@@ -64,19 +64,19 @@ class TestSleepSeqFifo(unittest.TestCase):
 
         def mk(k, secs):
             def w():
-                runloom_c.sched_sleep(secs)
+                stackweave_c.sched_sleep(secs)
                 order.append(k)
             return w
 
         # spawn latest-deadline first; nearest deadline (k=0) must wake first.
         n = 20
         for k in reversed(range(n)):
-            runloom_c.fiber(mk(k, 0.01 + k * 0.001))
-        runloom_c.run()
+            stackweave_c.fiber(mk(k, 0.01 + k * 0.001))
+        stackweave_c.run()
 
         self.assertEqual(order, list(range(n)),
                          "distinct deadlines must wake earliest-first")
-        self.assertEqual(runloom_c._self_check(0), 0)
+        self.assertEqual(stackweave_c._self_check(0), 0)
 
 
 if __name__ == "__main__":

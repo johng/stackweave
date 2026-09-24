@@ -81,7 +81,7 @@ chase (see the structured report's `exclusions` for the precise category):
     SIGSEGVs and kills the process.  CRASHONLY.
   * L180-181 (crash_thread_arm: munmap after a sigaltstack() failure) --
     sigaltstack only fails on a malformed stack_t (ss_size < MINSIGSTKSZ); the
-    code computes a valid size and there is no RUNLOOM_FAULT_ hook for
+    code computes a valid size and there is no STACKWEAVE_FAULT_ hook for
     sigaltstack, so the failure arm is unreachable without editing src.
     DEFENSIVE.
   * L507-558 (the entire #else _WIN32 path: runloom_crash_veh + the Windows
@@ -94,7 +94,7 @@ import sys
 
 import pytest
 
-import runloom_c as rc
+import stackweave_c as rc
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PY = sys.executable
@@ -107,16 +107,16 @@ requires_posix = pytest.mark.skipif(
 def _run_child(body, timeout=200, extra_env=None):
     """Run `body` in a fresh clean-exit child (so gcov flushes its counters).
 
-    The child starts with NO RUNLOOM_CRASH* env unless `extra_env` sets it, so a
+    The child starts with NO STACKWEAVE_CRASH* env unless `extra_env` sets it, so a
     parent's env never skews which install path the child takes.
     """
     env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
-    env.pop("RUNLOOM_CRASH", None)
-    env.pop("RUNLOOM_CRASH_FILE", None)
-    env.pop("RUNLOOM_CRASH_WAIT_SECS", None)
+    env.pop("STACKWEAVE_CRASH", None)
+    env.pop("STACKWEAVE_CRASH_FILE", None)
+    env.pop("STACKWEAVE_CRASH_WAIT_SECS", None)
     if extra_env:
         env.update(extra_env)
-    src = "import os, signal, time\nimport runloom, runloom_c as rc\n" + body
+    src = "import os, signal, time\nimport stackweave, stackweave_c as rc\n" + body
     return subprocess.run([PY, "-c", src], cwd=REPO, env=env,
                           capture_output=True, text=True, timeout=timeout)
 
@@ -133,17 +133,17 @@ def _run_child(body, timeout=200, extra_env=None):
 @requires_posix
 def test_install_wait_arms_ptracer_and_sigcont():
     body = r"""
-flags = runloom.inspect.install_crash_handler("wait")
+flags = stackweave.inspect.install_crash_handler("wait")
 assert isinstance(flags, int) and flags > 0, ("bad flags", flags)
 # "wait" must be reflected: re-parsing the same level gives the same flags and
 # the handler is live.
 assert rc.crash_handler_installed() is True, "wait-level did not install"
 WAIT_FLAGS = flags
 # A second install at a higher level keeps it installed (idempotent re-install).
-flags2 = runloom.inspect.install_crash_handler("gdb")   # GDB branch -> prctl too
+flags2 = stackweave.inspect.install_crash_handler("gdb")   # GDB branch -> prctl too
 assert isinstance(flags2, int) and flags2 > 0, ("bad gdb flags", flags2)
 assert rc.crash_handler_installed() is True
-runloom.inspect.uninstall_crash_handler()
+stackweave.inspect.uninstall_crash_handler()
 assert rc.crash_handler_installed() is False, "uninstall left handler armed"
 print("WAIT_INSTALL_OK", WAIT_FLAGS, flags2)
 """
@@ -175,7 +175,7 @@ print("WAIT_INSTALL_OK", WAIT_FLAGS, flags2)
 @requires_posix
 def test_sigcont_handler_runs_and_is_harmless():
     body = r"""
-runloom.inspect.install_crash_handler("wait")
+stackweave.inspect.install_crash_handler("wait")
 assert rc.crash_handler_installed() is True
 # Deliver SIGCONT N times -> crash_cont_handler runs each time (sets the latch,
 # returns).  If the WAIT-path SIGCONT handler were NOT installed, default
@@ -185,7 +185,7 @@ for _ in range(5):
     os.kill(os.getpid(), signal.SIGCONT)
 time.sleep(0.05)
 print("SIGCONT_SURVIVED")
-runloom.inspect.uninstall_crash_handler()
+stackweave.inspect.uninstall_crash_handler()
 # After uninstall the saved SIGCONT disposition is restored; another SIGCONT
 # must still be harmless.
 os.kill(os.getpid(), signal.SIGCONT)
@@ -215,15 +215,15 @@ print("SIGCONT_AFTER_UNINSTALL_OK")
 @requires_posix
 def test_uninstall_restores_sigcont_disposition():
     body = r"""
-runloom.inspect.install_crash_handler("wait")
+stackweave.inspect.install_crash_handler("wait")
 assert rc.crash_handler_installed() is True
-runloom.inspect.uninstall_crash_handler()          # restores SIGCONT (L497-498)
+stackweave.inspect.uninstall_crash_handler()          # restores SIGCONT (L497-498)
 assert rc.crash_handler_installed() is False
 # cont_saved is now cleared; a fresh "wait" install must re-take the SIGCONT
 # install branch (and a fresh uninstall must restore again, no double-restore).
-runloom.inspect.install_crash_handler("wait")
+stackweave.inspect.install_crash_handler("wait")
 assert rc.crash_handler_installed() is True
-runloom.inspect.uninstall_crash_handler()
+stackweave.inspect.uninstall_crash_handler()
 assert rc.crash_handler_installed() is False
 # A plain SIGCONT after the second uninstall is harmless -> disposition restored.
 os.kill(os.getpid(), signal.SIGCONT)
@@ -251,16 +251,16 @@ def test_reinstall_with_new_report_file_closes_old_fd(tmp_path):
     fileB = str(tmp_path / "crashB.log")
     body = r"""
 fileA, fileB = {a!r}, {b!r}
-f1 = runloom.inspect.install_crash_handler("on", fileA)
+f1 = stackweave.inspect.install_crash_handler("on", fileA)
 assert isinstance(f1, int) and f1 > 0
 assert os.path.exists(fileA), "first report file not created"
 # Re-install with a DIFFERENT file while the first fd is still open -> the
 # already-open report fd is closed and replaced (L421-423).
-f2 = runloom.inspect.install_crash_handler("on", fileB)
+f2 = stackweave.inspect.install_crash_handler("on", fileB)
 assert isinstance(f2, int) and f2 > 0
 assert os.path.exists(fileB), "second report file not created"
 assert rc.crash_handler_installed() is True
-runloom.inspect.uninstall_crash_handler()
+stackweave.inspect.uninstall_crash_handler()
 print("REPORT_REINSTALL_OK")
 """.format(a=fileA, b=fileB)
     try:
@@ -289,16 +289,16 @@ def test_uninstall_closes_report_fd(tmp_path):
     f = str(tmp_path / "crash_close.log")
     body = r"""
 f = {f!r}
-runloom.inspect.install_crash_handler("on", f)
+stackweave.inspect.install_crash_handler("on", f)
 assert os.path.exists(f)
 assert rc.crash_handler_installed() is True
-runloom.inspect.uninstall_crash_handler()           # closes report fd (L501-503)
+stackweave.inspect.uninstall_crash_handler()           # closes report fd (L501-503)
 assert rc.crash_handler_installed() is False
 # Re-install + re-uninstall many times: a fd leaked by a broken close would
 # accumulate; a clean close keeps the count flat across cycles.
 for _ in range(50):
-    runloom.inspect.install_crash_handler("on", f)
-    runloom.inspect.uninstall_crash_handler()
+    stackweave.inspect.install_crash_handler("on", f)
+    stackweave.inspect.uninstall_crash_handler()
 assert rc.crash_handler_installed() is False
 print("REPORT_CLOSE_OK")
 """.format(f=f)
@@ -327,7 +327,7 @@ import sys
 if not (hasattr(sys, "_is_gil_enabled") and not sys._is_gil_enabled()):
     print("SKIP_NO_FT"); raise SystemExit(0)
 # Install BEFORE any hub thread starts so each hub arms its sigaltstack.
-flags = runloom.inspect.install_crash_handler("on")
+flags = stackweave.inspect.install_crash_handler("on")
 assert flags and rc.crash_handler_installed() is True
 rc.mn_init(3)
 # Race-free counter under M:N: one distinct byte slot per fiber (single writer
@@ -346,7 +346,7 @@ rc.mn_run()
 rc.mn_fini()
 ran = sum(done)
 assert ran == N, ("not all fibers ran", ran)
-runloom.inspect.uninstall_crash_handler()
+stackweave.inspect.uninstall_crash_handler()
 print("MN_DISARM_OK", ran)
 """
     try:
@@ -371,11 +371,11 @@ print("MN_DISARM_OK", ran)
 def test_off_and_gdb_levels_roundtrip():
     body = r"""
 # "gdb" -> GDB bit set, prctl(PR_SET_PTRACER) branch (L449) taken.
-fg = runloom.inspect.install_crash_handler("gdb")
+fg = stackweave.inspect.install_crash_handler("gdb")
 assert isinstance(fg, int) and fg > 0
 assert rc.crash_handler_installed() is True
 # "off" -> parse_flags returns -1 -> install handler treats it as uninstall.
-r = runloom.inspect.install_crash_handler("off")
+r = stackweave.inspect.install_crash_handler("off")
 assert rc.crash_handler_installed() is False, "off-level did not uninstall"
 print("OFF_GDB_OK", fg, repr(r))
 """

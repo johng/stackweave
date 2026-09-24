@@ -8,7 +8,7 @@ test/test-tcp-* and test/test-timer.c.
 test_chan.py already covers channels in isolation.  The point *here* is that
 the blocking-API patches and the channel/scheduler primitives compose: many
 fibers parked on real socket I/O all make progress, data sourced from
-blocking reads flows through native channels in a pipeline, and runloom_c's
+blocking reads flows through native channels in a pipeline, and stackweave_c's
 select() picks among channels fed by blocking I/O -- with no starvation, no
 lost items, and genuine overlap rather than serialization.
 """
@@ -16,9 +16,9 @@ import socket
 import time
 import unittest
 
-import runloom
-import runloom.monkey
-import runloom_c
+import stackweave
+import stackweave.monkey
+import stackweave_c
 
 
 def _drive(fn):
@@ -30,19 +30,19 @@ def _drive(fn):
         except BaseException as e:   # noqa: BLE001
             box[1] = e
 
-    runloom_c.fiber(runner)
-    runloom_c.run()
+    stackweave_c.fiber(runner)
+    stackweave_c.run()
     if box[1] is not None:
         raise box[1]
     return box[0]
 
 
 def setUpModule():
-    runloom.monkey.patch()
+    stackweave.monkey.patch()
 
 
 def tearDownModule():
-    runloom.monkey.unpatch()
+    stackweave.monkey.unpatch()
 
 
 def _echo_pair():
@@ -70,7 +70,7 @@ class TestSchedulerFairness(unittest.TestCase):
                 done.append((idx, data))
 
             for i in range(N):
-                runloom_c.fiber(lambda i=i: worker(i))
+                stackweave_c.fiber(lambda i=i: worker(i))
 
             # Let them all park, then feed every peer in a burst.
             def feeder():
@@ -78,11 +78,11 @@ class TestSchedulerFairness(unittest.TestCase):
                 for _a, b in pairs:
                     b.send(b"go")
 
-            runloom_c.fiber(feeder)
+            stackweave_c.fiber(feeder)
 
             t0 = time.monotonic()
             while len(done) < N and time.monotonic() - t0 < 5:
-                runloom.sleep(0.005)
+                stackweave.sleep(0.005)
             for a, b in pairs:
                 a.close(); b.close()
             return done
@@ -107,7 +107,7 @@ class TestSchedulerFairness(unittest.TestCase):
                     time.sleep(DELAY)        # simulate work
                     a.send(b"pong")
 
-                runloom_c.fiber(responder)
+                stackweave_c.fiber(responder)
                 b.send(b"ping")
                 r = b.recv(8)
                 results.append((idx, r))
@@ -115,9 +115,9 @@ class TestSchedulerFairness(unittest.TestCase):
 
             t0 = time.monotonic()
             for i in range(N):
-                runloom_c.fiber(lambda i=i: round_trip(i))
+                stackweave_c.fiber(lambda i=i: round_trip(i))
             while len(results) < N and time.monotonic() - t0 < 5:
-                runloom.sleep(0.005)
+                stackweave.sleep(0.005)
             return len(results), time.monotonic() - t0
 
         n, elapsed = _drive(body)
@@ -134,8 +134,8 @@ class TestChannelPipeline(unittest.TestCase):
         producer."""
         def body():
             ITEMS = 50
-            src = runloom_c.Chan(8)
-            mid = runloom_c.Chan(8)
+            src = stackweave_c.Chan(8)
+            mid = stackweave_c.Chan(8)
             collected = []
 
             # Feed a socket from which stage 1 reads, one byte-record per item.
@@ -172,14 +172,14 @@ class TestChannelPipeline(unittest.TestCase):
                         break
                     collected.append(v)
 
-            runloom_c.fiber(producer)
-            runloom_c.fiber(stage1)
-            runloom_c.fiber(stage2)
-            runloom_c.fiber(collector)
+            stackweave_c.fiber(producer)
+            stackweave_c.fiber(stage1)
+            stackweave_c.fiber(stage2)
+            stackweave_c.fiber(collector)
 
             t0 = time.monotonic()
             while len(collected) < ITEMS and time.monotonic() - t0 < 5:
-                runloom.sleep(0.005)
+                stackweave.sleep(0.005)
             a.close(); b.close()
             return collected
 
@@ -193,7 +193,7 @@ class TestChannelPipeline(unittest.TestCase):
         def body():
             M, PER = 6, 20
             total = M * PER
-            hub = runloom_c.Chan(4)
+            hub = stackweave_c.Chan(4)
             got = []
 
             pairs = [_echo_pair() for _ in range(M)]
@@ -232,13 +232,13 @@ class TestChannelPipeline(unittest.TestCase):
                     got.append(v)
 
             for i in range(M):
-                runloom_c.fiber(lambda i=i: feeder(i))
-                runloom_c.fiber(lambda i=i: producer_wrap(i))
-            runloom_c.fiber(consumer)
+                stackweave_c.fiber(lambda i=i: feeder(i))
+                stackweave_c.fiber(lambda i=i: producer_wrap(i))
+            stackweave_c.fiber(consumer)
 
             t0 = time.monotonic()
             while len(got) < total and time.monotonic() - t0 < 5:
-                runloom.sleep(0.005)
+                stackweave.sleep(0.005)
             for a, b in pairs:
                 a.close(); b.close()
             return got
@@ -256,8 +256,8 @@ class TestSelectWithIO(unittest.TestCase):
         blocking socket read first.  select must return the one that becomes
         ready, and over repeated rounds both sources get serviced."""
         def body():
-            ch0 = runloom_c.Chan()
-            ch1 = runloom_c.Chan()
+            ch0 = stackweave_c.Chan()
+            ch1 = stackweave_c.Chan()
 
             def io_feeder(ch, pair, tag, delay):
                 a, b = pair
@@ -265,18 +265,18 @@ class TestSelectWithIO(unittest.TestCase):
                 def kick():
                     time.sleep(delay)
                     b.send(b"x")
-                runloom_c.fiber(kick)
+                stackweave_c.fiber(kick)
                 a.recv(4)
                 ch.send(tag)
                 a.close(); b.close()
 
             p0, p1 = _echo_pair(), _echo_pair()
-            runloom_c.fiber(lambda: io_feeder(ch0, p0, "zero", 0.04))
-            runloom_c.fiber(lambda: io_feeder(ch1, p1, "one", 0.02))
+            stackweave_c.fiber(lambda: io_feeder(ch0, p0, "zero", 0.04))
+            stackweave_c.fiber(lambda: io_feeder(ch1, p1, "one", 0.02))
 
             results = []
             for _ in range(2):
-                idx, val = runloom_c.select([("recv", ch0), ("recv", ch1)])
+                idx, val = stackweave_c.select([("recv", ch0), ("recv", ch1)])
                 results.append(val[0] if isinstance(val, tuple) else val)
             return sorted(results)
 
@@ -299,9 +299,9 @@ class TestConcurrentTimers(unittest.TestCase):
 
             t0 = time.monotonic()
             for i in range(N):
-                runloom_c.fiber(lambda i=i: napper(i))
+                stackweave_c.fiber(lambda i=i: napper(i))
             while len(fired) < N and time.monotonic() - t0 < 5:
-                runloom.sleep(0.002)
+                stackweave.sleep(0.002)
             return len(fired), time.monotonic() - t0
 
         n, elapsed = _drive(body)

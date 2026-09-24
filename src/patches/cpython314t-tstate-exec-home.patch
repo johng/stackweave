@@ -34,7 +34,7 @@
 # cpython313t-tstate-alloc-home.patch.  They are independent and both are needed:
 # alloc-home alone still segfaults at H>=2 under migration.
 #
-# MEASURED (runloom, CPython 3.14.4t, arm64 Darwin, release -O2; three
+# MEASURED (stackweave, CPython 3.14.4t, arm64 Darwin, release -O2; three
 # interpreters built identically apart from the patch; repro
 # tests/experiments/resume_rebuild/exec_home_min.py at 4 hubs, 10 runs each):
 #
@@ -76,7 +76,7 @@
 #   * APPLY BOTH HUNKS.  Py_TSTATE_EXEC_HOME is armed in pyconfig.h independently
 #     of whether the patch landed, so a partial build would advertise the feature
 #     while lacking it.  The object.h hunk defines _Py_TID_ASM in both arms as a
-#     compile-time witness; test for both (runloom does).  Check by hand with:
+#     compile-time witness; test for both (stackweave does).  Check by hand with:
 #         grep _Py_TID_ASM Include/object.h
 #   * MSVC thread-id reads are intrinsics, not asm, and are left untouched.
 #   * Same class, not covered (not read by a fiber across a park in any path

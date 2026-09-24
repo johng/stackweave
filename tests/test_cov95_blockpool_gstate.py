@@ -17,7 +17,7 @@ re-parked rather than unwinding into a UAF / wrong value / crash).
 
 The gstate fragment's transition-assert boundary (RUNLOOM_G_ASSERT_NOT, which
 calls runloom_g_state_in under RUNLOOM_DBG_GSTATE) is driven in a SUBPROCESS
-under RUNLOOM_DEBUG=gstate: the debug flag is read once at module init, so the
+under STACKWEAVE_DEBUG=gstate: the debug flag is read once at module init, so the
 mode must be set in a child env.  A clean exit there proves the abort() guard
 in runloom_g_assert_failure_ never fires on legitimate transitions -- it is a
 genuine "can't happen" invariant, not dead-on-bug code.
@@ -25,7 +25,7 @@ genuine "can't happen" invariant, not dead-on-bug code.
 UNREACHABLE-from-a-test lines are NOT faked; they are catalogued in the
 structured report's exclusions[] (the never-called runloom_blockpool_fini and
 its worker-stop path, the cond_init/thread_create OOM-cleanup branches that
-have no RUNLOOM_FAULT_ hook, the unused public runloom_g_state_cas/_get, and
+have no STACKWEAVE_FAULT_ hook, the unused public runloom_g_state_cas/_get, and
 the abort() crash guard).
 """
 import os
@@ -41,8 +41,8 @@ from adv_util import (needs_free_threading, hang_guard, assert_faster_than,
 sys.path.insert(0, os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 
 FT = needs_free_threading()
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -69,7 +69,7 @@ def test_blocking_result_and_kwargs_single_thread():
         return a + b + c
 
     def w():
-        out.append(runloom.blocking(add, 5, 7, c=100))
+        out.append(stackweave.blocking(add, 5, 7, c=100))
 
     with hang_guard(30, "blocking_result_single"):
         rc.fiber(w)
@@ -90,7 +90,7 @@ def test_blocking_exception_propagates():
 
     def w():
         try:
-            runloom.blocking(boom)
+            stackweave.blocking(boom)
         except ValueError as e:
             seen.append(str(e))
 
@@ -136,7 +136,7 @@ def test_blocking_spurious_wake_does_not_uaf_single_thread():
 
     def worker():
         hbox["g"] = rc.current_g()
-        result["v"] = runloom.blocking(slow)
+        result["v"] = stackweave.blocking(slow)
 
     def waker():
         for _ in range(500000):
@@ -171,14 +171,14 @@ def test_blocking_spurious_wake_does_not_uaf_mn_hub():
         return 9999
 
     def main():
-        from runloom.sync import WaitGroup
+        from stackweave.sync import WaitGroup
         wg = WaitGroup()
         wg.add(1)
 
         def worker():
             try:
                 hbox["g"] = rc.current_g()
-                result["v"] = runloom.blocking(slow)
+                result["v"] = stackweave.blocking(slow)
             finally:
                 wg.done()
 
@@ -198,7 +198,7 @@ def test_blocking_spurious_wake_does_not_uaf_mn_hub():
         wg.wait()
 
     with hang_guard(90, "blocking_spurious_mn"):
-        runloom.run(4, main)
+        stackweave.run(4, main)
     assert result.get("v") == 9999
 
 
@@ -211,7 +211,7 @@ def test_blocking_concurrent_offloads_overlap_on_one_hub():
 
     Real oracle: all N complete AND (on a pump-wake backend) their execution
     intervals genuinely overlap -- peak concurrency, not a wall-clock budget."""
-    from runloom.sync import WaitGroup
+    from stackweave.sync import WaitGroup
     N, NAP = 8, 0.2
     ov = OverlapTracker()
     done = bytearray(N)
@@ -223,7 +223,7 @@ def test_blocking_concurrent_offloads_overlap_on_one_hub():
         def w(i):
             try:
                 with ov.span():
-                    runloom.blocking(time.sleep, NAP)
+                    stackweave.blocking(time.sleep, NAP)
                 done[i] = 1
             finally:
                 wg.done()
@@ -233,7 +233,7 @@ def test_blocking_concurrent_offloads_overlap_on_one_hub():
         wg.wait()
 
     with hang_guard(90, "blocking_overlap"):
-        runloom.run(4, main)
+        stackweave.run(4, main)
     if _PUMP_WAKE:
         # "Half the serial time" was billed as a generous bar that still proved
         # concurrency, but any wall-clock budget measures the machine: the same
@@ -249,7 +249,7 @@ def test_blocking_storm_reuses_pool_no_leak():
     pool (blockpool.c L169 fast-path 'already up') and every inflight counter
     settles back to 0 (L299 add / L158 sub balanced).  Oracle: exact completion
     count across rounds + inflight()==0 at the end (no stuck job)."""
-    from runloom.sync import WaitGroup
+    from stackweave.sync import WaitGroup
     ROUNDS, PER = 4, 16
     total = {"n": 0}
 
@@ -260,7 +260,7 @@ def test_blocking_storm_reuses_pool_no_leak():
 
         def w(i):
             try:
-                runloom.blocking(lambda x=i: x * x)
+                stackweave.blocking(lambda x=i: x * x)
                 ok[i] = 1
             finally:
                 wg.done()
@@ -272,7 +272,7 @@ def test_blocking_storm_reuses_pool_no_leak():
 
     with hang_guard(120, "blocking_storm"):
         for _ in range(ROUNDS):
-            runloom.run(2, main)
+            stackweave.run(2, main)
     assert total["n"] == ROUNDS * PER
     # Every submitted job decremented inflight on completion (no stuck job):
     # the structural self_check would flag a leaked parker otherwise.
@@ -284,14 +284,14 @@ def test_blocking_storm_reuses_pool_no_leak():
 # ==========================================================================
 
 # This workload spins many M:N fibers through the full park/wake/done g-state
-# transitions, under RUNLOOM_DEBUG=gstate so every RUNLOOM_G_ASSERT_NOT site
+# transitions, under STACKWEAVE_DEBUG=gstate so every RUNLOOM_G_ASSERT_NOT site
 # (mn_api submit, sysmon, hub_main) actually evaluates runloom_g_state_in.  A
 # clean exit proves the abort() in runloom_g_assert_failure_ never fired on a
 # legitimate transition -- i.e. the guard is a real invariant, not dead code.
 _GSTATE_DBG = r'''
 import sys; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave, stackweave_c as rc
+from stackweave.sync import WaitGroup
 N = 96
 done = bytearray(N)
 def main():
@@ -306,20 +306,20 @@ def main():
     for i in range(N):
         rc.mn_fiber(lambda i=i: f(i))
     wg.wait()
-runloom.run(4, main)
+stackweave.run(4, main)
 sys.stdout.write("GSTATE_OK %d\n" % sum(done))
 '''
 
 
 @pytest.mark.skipif(not FT, reason="g-state transitions exercised under M:N")
 def test_gstate_assert_guard_holds_under_debug_mode():
-    """Run an M:N park/wake/done workload under RUNLOOM_DEBUG=gstate in a
+    """Run an M:N park/wake/done workload under STACKWEAVE_DEBUG=gstate in a
     subprocess.  This arms the RUNLOOM_G_ASSERT_NOT macro (gstate.c is the
     runloom_g_state_in predicate + runloom_g_assert_failure_ abort).  A clean
     exit (returncode 0, no 'ASSERT FAILED', all N fibers done) proves no
     legitimate transition tripped the abort guard."""
     env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src",
-               RUNLOOM_DEBUG="gstate")
+               STACKWEAVE_DEBUG="gstate")
     try:
         p = subprocess.run([PY, "-c", _GSTATE_DBG], cwd=REPO, env=env,
                            capture_output=True, text=True, timeout=240)

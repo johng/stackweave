@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation testing for runloom's C core -- does the suite actually have teeth?
+"""Mutation testing for stackweave's C core -- does the suite actually have teeth?
 
 Coverage says which lines run; mutation says whether a test would NOTICE if
 that line were wrong.  We introduce one small, compilable fault at a time

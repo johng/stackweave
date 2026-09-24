@@ -16,7 +16,7 @@ migration mid-burst, the g-stack guard page.
 import json
 
 import harness
-import runloom
+import stackweave
 
 # Depth of the nested structure.  The json C encoder/decoder recurse one C frame
 # per nesting level.  A 512KB g-stack comfortably holds a few-hundred-deep nest;
@@ -52,7 +52,7 @@ def worker(H, wid, rng, state):
         # 1) json round-trip with a migration point sandwiched in the middle.
         #    dumps recurses DEPTH frames down the C stack in one call.
         text = json.dumps(template)
-        runloom.yield_now()                  # likely resume on another hub
+        stackweave.yield_now()                  # likely resume on another hub
         back = json.loads(text)
         if not H.check(back == template,
                        "json round-trip mismatch wid={0} (depth={1})".format(
@@ -68,7 +68,7 @@ def worker(H, wid, rng, state):
         #    BETWEEN encode and decode, so the deep C decode frame materialises
         #    on a freshly-migrated hub.
         text2 = json.dumps(template)
-        runloom.sleep(0.0)                    # definite reschedule point
+        stackweave.sleep(0.0)                    # definite reschedule point
         back2 = json.loads(text2)
         if not H.check(back2 == template and depth_of(back2) == DEPTH,
                        "second json burst mismatch wid={0}".format(wid)):

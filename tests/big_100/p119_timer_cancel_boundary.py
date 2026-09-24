@@ -2,7 +2,7 @@
 
 Each round arranges a data delivery and a timeout to fire at ~the same instant
 and `select`s over them.  A helper goroutine `ch.send`s after a delay d; a
-`runloom.time.After(d')` timer races it with d' drawn near d (plus jitter).
+`stackweave.time.After(d')` timer races it with d' drawn near d (plus jitter).
 Exactly one case wins; the loser is left to be drained/GC'd; the op resolves
 exactly once -- no double-resume, no lost wakeup that wedges the round.
 
@@ -15,15 +15,15 @@ Stresses: select at the timer/data boundary, After() one-shot timer, park/wake
 race resolution, no double-resume.
 """
 import harness
-import runloom
-import runloom.time as rtime
+import stackweave
+import stackweave.time as rtime
 
 
 def helper(ch, delay):
     """Sleep `delay`, then try to deliver a token.  If the recv side already
     took the timeout branch nobody is listening; the unbuffered send would park
     forever, so use a 1-buffered channel (created by the worker) and try_send."""
-    runloom.sleep(delay)
+    stackweave.sleep(delay)
     try:
         ch.try_send(b"D")
     except Exception:
@@ -40,7 +40,7 @@ def worker(H, wid, rng, state):
             break
         # A 1-buffered data channel so the helper never blocks even if the
         # worker already resolved on the timeout branch.
-        ch = runloom.Chan(1)
+        ch = stackweave.Chan(1)
         # The post-check requires BOTH branches to win at least once, but at
         # small op counts the near-tie race occasionally hands every round to
         # the same side (data_wins=ops, timeout_wins=0 or vice-versa) and the
@@ -69,7 +69,7 @@ def worker(H, wid, rng, state):
         i += 1
         H.fiber(helper, ch, d)
         timer = rtime.After(dprime)
-        idx, _payload = runloom.select([("recv", ch), ("recv", timer)])
+        idx, _payload = stackweave.select([("recv", ch), ("recv", timer)])
         if idx == 0:
             data_wins[slot] += 1
         else:

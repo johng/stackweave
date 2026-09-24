@@ -1,14 +1,14 @@
 # M:N parallelism
 
-Runloom has two different scheduler models. One is single-threaded.
+Stackweave has two different scheduler models. One is single-threaded.
 It's intended purely for running legacy asyncio code on. The other
 is multi-threaded. You don't need to do anything special to choose
-the scheduler. When you call runloom.run the first parameter is the
+the scheduler. When you call stackweave.run the first parameter is the
 thread number.
 
-runloom.run(1, ...) -- one thread, single-threaded scheduler.
+stackweave.run(1, ...) -- one thread, single-threaded scheduler.
 
-runloom.run(2, ..) -- multi-threaded, work-stealing scheduler.
+stackweave.run(2, ..) -- multi-threaded, work-stealing scheduler.
 
 When its set to >= 2 it gives you the speed up of multiple threads.
 That's what this entire project is about. Leveraging multiple threads
@@ -42,7 +42,7 @@ Measured on 3.13t (GIL disabled, Linux x86_64, 8 cores):
 | 8 | 236 ms | 2.12 M ops/s | **2.50×** |
 
 For comparison: `threading.Thread` × 8 on the same hardware hits
-2.24 M ops/s.  runloom matches that within ~5% while keeping the
+2.24 M ops/s.  stackweave matches that within ~5% while keeping the
 fiber model (cheap spawn, no per-thread overhead).
 
 ## How it works
@@ -72,11 +72,11 @@ producers on hub A and consumers on hub B exchange via the same
 channel object:
 
 ```python
-import runloom
+import stackweave
 
-runloom.mn_init(n=4)
+stackweave.mn_init(n=4)
 
-ch = runloom.Chan(100)
+ch = stackweave.Chan(100)
 
 def producer():
     for i in range(1000):
@@ -88,10 +88,10 @@ def consumer():
         total += v
     print("consumed:", total)
 
-runloom.mn_fiber(producer)
-runloom.mn_fiber(consumer)
-runloom.mn_run()
-runloom.mn_fini()
+stackweave.mn_fiber(producer)
+stackweave.mn_fiber(consumer)
+stackweave.mn_run()
+stackweave.mn_fini()
 ```
 
 ## Network I/O on M:N
@@ -104,10 +104,10 @@ back there.  This means your accept loop and connection handlers stay on the sam
 hub by default, which is good for cache locality:
 
 ```python
-import socket, runloom
+import socket, stackweave
 
-runloom.monkey.patch()
-runloom.mn_init(n=4)
+stackweave.monkey.patch()
+stackweave.mn_init(n=4)
 
 def handle(conn):
     while True:
@@ -123,11 +123,11 @@ def accept_loop():
     srv.listen(128)
     while True:
         conn, _ = srv.accept()
-        runloom.mn_fiber(lambda c=conn: handle(c))
+        stackweave.mn_fiber(lambda c=conn: handle(c))
 
-runloom.mn_fiber(accept_loop)
-runloom.mn_run()
-runloom.mn_fini()
+stackweave.mn_fiber(accept_loop)
+stackweave.mn_run()
+stackweave.mn_fini()
 ```
 
 On a 4-core machine, four concurrent client requests get processed
@@ -158,8 +158,8 @@ yield naturally, preemption applies on whichever hub it's running on
 without affecting the others.
 
 ```python
-runloom.mn_init(n=8)
-runloom.preempt_init(quantum_us=10_000)
+stackweave.mn_init(n=8)
+stackweave.preempt_init(quantum_us=10_000)
 ```
 
 ## Caveats
@@ -200,14 +200,14 @@ def worker():
 
 **Yes, under both schedulers.** The interrupt comes out of `recv()` in that
 fiber, the same way it would out of a plain blocking `recv()` in a normal
-Python program, and `cleanup()` runs. `runloom.run(1, ...)` and
-`runloom.run(4, ...)` behave the same here.
+Python program, and `cleanup()` runs. `stackweave.run(1, ...)` and
+`stackweave.run(4, ...)` behave the same here.
 
 That covers the cooperative calls that park on a file descriptor, which is most
 of them: `recv`, `send`/`send_all`, `accept`, `connect`, `select.select`, and
 `selectors.EpollSelector`.
 
-It also covers **io_uring completions** when `RUNLOOM_TCPCONN_IOURING` is
+It also covers **io_uring completions** when `STACKWEAVE_TCPCONN_IOURING` is
 enabled (off by default), for both kinds of operation: a blocked `recv` (a
 multishot receive) and a blocked `send` (a single-shot op) each get the
 interrupt in the fiber's own stack.
@@ -218,7 +218,7 @@ anything: that sleeping fiber is a signal recipient too.
 
 There are no remaining paths that interrupt the run instead of the fiber.
 
-One requirement, if you use the `monkey` layer: call `runloom.monkey.patch()`
+One requirement, if you use the `monkey` layer: call `stackweave.monkey.patch()`
 **before** spawning fibers. Patching wraps the fiber-spawn entry points, and a
 fiber spawned before the patch is not wrapped -- its `select.poll` reprobe then
 degrades to a plain sleep, which is not a signal recipient, and the interrupt
@@ -253,7 +253,7 @@ practice this evens out under steady load.
 ## Inspecting hub state
 
 ```python
-runloom.mn_stats()
+stackweave.mn_stats()
 # {'hubs': 8,
 #  'ready_per_hub': [3, 0, 2, 1, 0, 0, 4, 0], 
 #  'completed_per_hub': [12431, 9854, ...],

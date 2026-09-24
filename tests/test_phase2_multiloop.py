@@ -1,7 +1,7 @@
-"""Phase 2 regression: concurrent runloom event loops on separate OS threads,
+"""Phase 2 regression: concurrent stackweave event loops on separate OS threads,
 each doing socket I/O.
 
-runloom runs one scheduler per OS thread (Phase C) but a SINGLE shared netpoll
+stackweave runs one scheduler per OS thread (Phase C) but a SINGLE shared netpoll
 epoll.  So the pump draining on one loop's thread can pick up an fd event for a
 fiber parked on ANOTHER loop's thread.  The wake must route to the parker's
 OWNER sched (Phase 2 -- runloom_sched_wake / runloom_mn_wake_g NULL-branch route to
@@ -25,7 +25,7 @@ import asyncio
 import threading
 import unittest
 
-import runloom.aio as paio
+import stackweave.aio as paio
 
 ROUND_TRIPS = 60
 PAYLOAD = b"phase2-cross-thread-wake"

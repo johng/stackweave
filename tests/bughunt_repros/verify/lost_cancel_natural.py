@@ -11,7 +11,7 @@ import sys
 import threading
 import time
 
-from runloom import context
+from stackweave import context
 
 NTHREADS = 24
 TRIALS = 400

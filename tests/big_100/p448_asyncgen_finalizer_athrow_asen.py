@@ -15,7 +15,7 @@ genobject.c).  Every async gen carries, embedded in one object:
     sys.set_asyncgen_hooks) clears it when a dropped ag is collected.
   * ag_origin_or_finalizer -- the per-interpreter firstiter/finalizer hook slot.
 
-Under the runloom M:N scheduler an async-gen step that PARKS mid-frame (it
+Under the stackweave M:N scheduler an async-gen step that PARKS mid-frame (it
 awaited something that suspended, leaving ag_running_async TRUE on a grown-down
 C stack) can be hit, on ANOTHER hub, by an aclose()/athrow() on the SAME gen.
 Two mutually-exclusive corruptions, BOTH made falsifiable here:
@@ -35,7 +35,7 @@ is TWO sends:
     asend = ag.asend(None)
     asend.send(None)         # crosses `await Pauser()`, SUSPENDS mid-step,
                              #   ag_running_async is now TRUE -- the park window
-    runloom.yield_now()      # hand off so a SIBLING on another hub runs HERE
+    stackweave.yield_now()      # hand off so a SIBLING on another hub runs HERE
     asend.send(None)         # resumes the frame -> StopIteration(value) == yield
 
 `Pauser.__await__` yields exactly once, so the first send parks the asend with
@@ -94,7 +94,7 @@ out-of-universe value under replay, localizes the double-step before the
 conservation sum even closes.
 """
 import harness
-import runloom
+import stackweave
 
 # Finite sentinel UNIVERSE: the values the async gen yields, in order.  A value an
 # asend yields that is NOT in this set is a torn/double-stepped frame read; a value
@@ -212,7 +212,7 @@ def step_one_value(H, ag, window_hook):
     if window_hook is not None:
         window_hook()                     # release sibling + rendezvous on its fire
     else:
-        runloom.yield_now()               # control / non-gated step: single hand-off
+        stackweave.yield_now()               # control / non-gated step: single hand-off
 
     try:
         asend.send(None)                  # RESUME the frame -> the gen's yield
@@ -310,9 +310,9 @@ def run_contended_case(H, wid, state, slot, sibling_op):
     close/inject/stop), or ("other", exc) for a fault.  Returns True on a clean
     (no-fault) round."""
     ag = make_gen(state, slot)
-    open_ch = runloom.Chan(1)              # owner -> sibling: window is open NOW
-    fired_ch = runloom.Chan(1)             # sibling -> owner: I have fired my op
-    sib_wg = runloom.WaitGroup()
+    open_ch = stackweave.Chan(1)              # owner -> sibling: window is open NOW
+    fired_ch = stackweave.Chan(1)             # sibling -> owner: I have fired my op
+    sib_wg = stackweave.WaitGroup()
     sib_wg.add(1)
     sib_busy = [0]
     fired_ever = [False]
@@ -513,7 +513,7 @@ def worker(H, wid, rng, state):
 
 
 def setup(H):
-    # Built INSIDE the root (monkey.patch() already ran), so runloom.Chan /
+    # Built INSIDE the root (monkey.patch() already ran), so stackweave.Chan /
     # WaitGroup / yield_now are the cooperative M:N primitives.  All tallies are
     # per-slot single-writer lists summed in post() -- no shared += under GIL-off.
     # One cell PER WORKER (slot == wid), not 1024 cells aliased across

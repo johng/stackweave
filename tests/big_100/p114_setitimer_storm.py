@@ -18,7 +18,7 @@ import socket as _socket
 import time as _time
 
 import harness
-import runloom
+import stackweave
 
 REAL_SLEEP = _time.sleep
 
@@ -65,7 +65,7 @@ def worker(H, wid, rng, pairs):
             if (got & 31) == 0:
                 H.task_done(wid)
             if rng.random() < 0.3:
-                runloom.sleep(rng.uniform(0.0, 0.002))
+                stackweave.sleep(rng.uniform(0.0, 0.002))
         H.recv_counts[wid >> 1] = got
     else:
         # The echoer on socket b: bounce whatever the pinger sent straight back.

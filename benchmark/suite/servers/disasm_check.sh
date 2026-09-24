@@ -7,7 +7,7 @@
 # arg-unpack wrapper (__pyx_pw_*, runs once per CONNECTION, not per request).
 # In the impl function the only calls must be:
 #   * the two INDIRECT capi calls  -- call *(%rax) / call *0x8(%rax)
-#     (recv_into / send_all fetched from the runloom_c.__tcp_capi__ table)
+#     (recv_into / send_all fetched from the stackweave_c.__tcp_capi__ table)
 #   * __stack_chk_fail@plt          -- the stack-canary epilogue, branched to
 #     only on a detected stack smash (never on the normal path)
 # Any call to a Py_/_Py_/PyObject_/PyLong_/PyBytes_/PyErr_/__Pyx_ symbol in the

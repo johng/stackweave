@@ -10,11 +10,11 @@ Stresses: unbuffered send/recv pairing correctness, wake handoff.
 import threading
 
 import harness
-import runloom
+import stackweave
 
 
 def setup(H):
-    H.state = {"ch": runloom.Chan(0), "lock": threading.Lock(),
+    H.state = {"ch": stackweave.Chan(0), "lock": threading.Lock(),
                "sent_sum": [0], "recv_sum": [0] * 1024,
                "sender_done": [0], "nsenders": [0]}
 

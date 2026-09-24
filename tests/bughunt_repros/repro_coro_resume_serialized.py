@@ -2,13 +2,13 @@
 threading.Lock -- distinguishes 'non-atomic executing guard' from 'cross-thread
 resume is UB even when serialized'."""
 import threading
-import runloom_c
+import stackweave_c
 
 def body():
     for _ in range(200000):
-        runloom_c.yield_()
+        stackweave_c.yield_()
 
-c = runloom_c.Coro(body)
+c = stackweave_c.Coro(body)
 lk = threading.Lock()
 
 def spin():

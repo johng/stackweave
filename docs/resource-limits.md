@@ -1,8 +1,8 @@
 # Resource limits & kernel tuning
 
-runloom is built to run **hundreds of thousands to millions** of fibers and
+stackweave is built to run **hundreds of thousands to millions** of fibers and
 connections in one process. At that scale you will hit **OS limits** long before
-you hit a runloom limit. None of these are runloom bugs — they are kernel/ulimit
+you hit a stackweave limit. None of these are stackweave bugs — they are kernel/ulimit
 ceilings that any high-concurrency runtime (Go, nginx, an event loop) must raise
 too. This page lists every limit that matters, why, and exactly how to raise it.
 
@@ -31,7 +31,7 @@ echo 'vm.max_map_count=4000000' | sudo tee /etc/sysctl.d/99-runloom.conf
 
 Rule of thumb: **`vm.max_map_count >= 2 × peak_live_fibers + slack`**.
 
-This is also the limit that **`prewarm()` and a raised `RUNLOOM_STACK_DEPOT_CAP`
+This is also the limit that **`prewarm()` and a raised `STACKWEAVE_STACK_DEPOT_CAP`
 push against** — pooled/prewarmed stacks each hold their VMAs even when idle (see
 [Tuning knobs](#runloom-tuning-knobs)). So if you prewarm 200k stacks, budget
 `max_map_count` for them too.
@@ -103,21 +103,21 @@ VMAs and fds run out before RAM, but size memory too:
   datastack — so a Python-per-connection design is RAM-bound well before a C one.
 - With the default **`MADV_FREE`** stack reclaim, freed/pooled stack pages stay
   *counted* in RSS until the kernel reclaims them under pressure — so RSS can look
-  higher than the live set. Set `RUNLOOM_STACK_MADV=dontneed` for eager reclaim if
+  higher than the live set. Set `STACKWEAVE_STACK_MADV=dontneed` for eager reclaim if
   your RSS metrics matter more than spawn/complete CPU.
 
 ---
 
-## Runloom tuning knobs
+## Stackweave tuning knobs
 
 These environment variables interact with the limits above:
 
 | Env var | Default | Effect on limits |
 |---|---|---|
 | `RUNLOOM_DEFAULT_STACK_SIZE` | `524288` (512 KiB) | bigger stacks → more virtual space + RSS per fiber |
-| `RUNLOOM_STACK_DEPOT_CAP` | `1024` | retained pooled stacks → **VMAs held when idle**; raise it (near your peak) only alongside `vm.max_map_count` |
-| `RUNLOOM_STACK_MADV` | `free` | `free` = lazy RSS (cheaper CPU); `dontneed` = eager RSS reclaim; `off` = keep resident |
-| `prewarm(n, ...)` / `prewarm_keep(target, ...)` | — | pre-maps `n`/`target` stacks → consumes `~2n` VMAs; needs `vm.max_map_count` + `RUNLOOM_STACK_DEPOT_CAP` budgeted for it (see [stack-sizing.md](stack-sizing.md#prewarming-the-stack-pool-burst-servers)) |
+| `STACKWEAVE_STACK_DEPOT_CAP` | `1024` | retained pooled stacks → **VMAs held when idle**; raise it (near your peak) only alongside `vm.max_map_count` |
+| `STACKWEAVE_STACK_MADV` | `free` | `free` = lazy RSS (cheaper CPU); `dontneed` = eager RSS reclaim; `off` = keep resident |
+| `prewarm(n, ...)` / `prewarm_keep(target, ...)` | — | pre-maps `n`/`target` stacks → consumes `~2n` VMAs; needs `vm.max_map_count` + `STACKWEAVE_STACK_DEPOT_CAP` budgeted for it (see [stack-sizing.md](stack-sizing.md#prewarming-the-stack-pool-burst-servers)) |
 
 ---
 
@@ -135,7 +135,7 @@ sudo sysctl -w net.core.somaxconn=65535
 ulimit -n 1048576
 
 # then run; if you prewarm, budget the depot cap + max_map_count for it
-RUNLOOM_STACK_DEPOT_CAP=200000 python your_server.py
+STACKWEAVE_STACK_DEPOT_CAP=200000 python your_server.py
 ```
 
 If something stalls or `ENOMEM`s around a few hundred thousand fibers, it is

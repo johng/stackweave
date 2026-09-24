@@ -10,7 +10,7 @@ Run:
 
 import os
 
-import runloom
+import stackweave
 
 # Free-threaded build: fan fibers across all cores (M:N scheduler).
 HUBS = os.cpu_count() or 4
@@ -23,13 +23,13 @@ def producer(pid, out):
         out.send((pid, i))
 
 def main():
-    merged = runloom.Chan(16)
+    merged = stackweave.Chan(16)
     for pid in range(NUM_PRODUCERS):
-        runloom.fiber(producer, pid, merged)
+        stackweave.fiber(producer, pid, merged)
 
     for _ in range(NUM_PRODUCERS * ITEMS_EACH):
         pid, item = merged.recv()[0]
         print("from producer {0}: item {1}".format(pid, item))
 
 if __name__ == "__main__":
-    runloom.run(HUBS, main)
+    stackweave.run(HUBS, main)

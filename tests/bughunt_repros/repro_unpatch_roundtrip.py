@@ -35,15 +35,15 @@ orig = {
     "socket.getaddrinfo": socket.getaddrinfo,
     "getpass.getpass": getpass.getpass,
     "sys._current_frames": sys._current_frames,
-    "runloom_c.fiber": None,
+    "stackweave_c.fiber": None,
     "tempfile._once_lock": None,
 }
 import tempfile
 orig["tempfile._once_lock"] = tempfile._once_lock
-import runloom_c
-orig["runloom_c.fiber"] = runloom_c.fiber
+import stackweave_c
+orig["stackweave_c.fiber"] = stackweave_c.fiber
 
-import runloom.monkey as monkey
+import stackweave.monkey as monkey
 monkey.patch()
 monkey.unpatch()
 
@@ -75,7 +75,7 @@ cur = {
     "socket.getaddrinfo": socket.getaddrinfo,
     "getpass.getpass": getpass.getpass,
     "sys._current_frames": sys._current_frames,
-    "runloom_c.fiber": runloom_c.fiber,
+    "stackweave_c.fiber": stackweave_c.fiber,
     "tempfile._once_lock": tempfile._once_lock,
 }
 

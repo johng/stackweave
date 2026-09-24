@@ -93,7 +93,7 @@ runloom_iouring_ring_t *runloom_iouring_ring_create(int defer_taskrun)
         {
             static int warned = 0;
             if (__atomic_exchange_n(&warned, 1, __ATOMIC_RELAXED) == 0)
-                fprintf(stderr, "[runloom] io_uring capability degrade: "
+                fprintf(stderr, "[stackweave] io_uring capability degrade: "
                         "DEFER_TASKRUN unsupported (kernel < 6.1) -- hub ring "
                         "fell back to SINGLE_ISSUER\n");
         }
@@ -106,7 +106,7 @@ runloom_iouring_ring_t *runloom_iouring_ring_create(int defer_taskrun)
         {
             static int warned = 0;
             if (__atomic_exchange_n(&warned, 1, __ATOMIC_RELAXED) == 0)
-                fprintf(stderr, "[runloom] io_uring capability degrade: "
+                fprintf(stderr, "[stackweave] io_uring capability degrade: "
                         "SINGLE_ISSUER unsupported (kernel < 5.18) -- hub ring "
                         "fell back to plain multi-issuer\n");
         }

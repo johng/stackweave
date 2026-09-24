@@ -16,8 +16,8 @@
 #                                       submitted op: the lost-wakeup the model forbids)
 #
 # THE OVERFLOW RECIPE (the novel value -- DrainFlushFirst is only exercised when the
-# kernel actually overflows the CQ).  RUNLOOM_IOURING_ENTRIES=4 makes the global
-# ring's CQ tiny; RUNLOOM_TCPCONN_IOURING=1 routes TCPConn.recv to the io_uring
+# kernel actually overflows the CQ).  STACKWEAVE_IOURING_ENTRIES=4 makes the global
+# ring's CQ tiny; STACKWEAVE_TCPCONN_IOURING=1 routes TCPConn.recv to the io_uring
 # multishot path; a loopback sender blasts a 32 KiB stream in 16 KiB chunks
 # (TCP_NODELAY) while the single recv fiber is parked, so the kernel posts more
 # provided-buffer CQEs than the CQ holds -> IORING_SQ_CQ_OVERFLOW -> the drain's
@@ -29,13 +29,13 @@
 # the sched_drain loop-top overflow flush (runloom_sched_drain.c.inc:155) guards.
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
-PY="${RUNLOOM_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
+PY="${STACKWEAVE_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
 TR="$(mktemp /tmp/iouwake.XXXX.ndjson)"
 RM="$(command -v safe-rm || echo rm)"
 
 WL='import sys, threading, socket, time
 sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 HOST = "127.0.0.1"
 TOTAL = 32768          # total bytes -- enough provided-buffer CQEs to overflow CQ=8
 CHUNK = 16384          # per-send chunk (NODELAY -> arrives while the recv is parked)
@@ -72,7 +72,7 @@ t.join()'
 
 echo "== trace conformance: RunloomIouringWake.tla vs the real io_uring CQE wake path =="
 echo "-- capture a real io_uring multishot-overflow event trace (tiny CQ ring) --"
-RUNLOOM_IOUWAKE_TRACE="$TR" RUNLOOM_TCPCONN_IOURING=1 RUNLOOM_IOURING_ENTRIES=4 \
+STACKWEAVE_IOUWAKE_TRACE="$TR" STACKWEAVE_TCPCONN_IOURING=1 STACKWEAVE_IOURING_ENTRIES=4 \
     PYTHON_GIL=0 PYTHONPATH=src "$PY" -c "$WL" >/dev/null 2>&1
 
 # OVERFLOW GATE: DrainFlushFirst (the novel value) is only exercised if the kernel

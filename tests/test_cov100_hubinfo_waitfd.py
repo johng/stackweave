@@ -1,7 +1,7 @@
 """Coverage-driven adversarial suite for two fragments:
 
   * src/runloom_c/mn_sched_hubinfo.c.inc   -- the per-hub diagnostic snapshot
-    (runloom.inspect.hubs() / rc.mn_hub_states()), in particular the `blocked_at`
+    (stackweave.inspect.hubs() / rc.mn_hub_states()), in particular the `blocked_at`
     capture of a DETACHED-wedged hub's top Python frame.
   * src/runloom_c/netpoll_wait_fd.c.inc    -- the drain/signal-wake CAS-retry
     loops and the wait_fd park/abort/resume cleanup paths.
@@ -11,7 +11,7 @@ WHY THE NORMAL CORPUS MISSES THESE
 hubinfo's `blocked_at` block runs ONLY when a hub has been DETACHED (its running
 fiber did Py_BEGIN_ALLOW_THREADS and is parked in a real blocking syscall) for
 longer than the sysmon wedge budget -- and the `resume_start_ns` clock that the
-dwell test reads is stamped ONLY when RUNLOOM_SYSMON is on
+dwell test reads is stamped ONLY when STACKWEAVE_SYSMON is on
 (runloom_hub_resume_begin).  None of that is in the default scheduler mode, so
 every line gated on it is dark unless a test deliberately manufactures a DETACHED
 wedge under those env modes AND samples mn_hub_states() during the wedge window.
@@ -53,7 +53,7 @@ import sys
 
 import pytest
 
-import runloom_c as rc
+import stackweave_c as rc
 from adv_util import hang_guard, needs_free_threading, pollable_pipe
 
 _IS_WINDOWS = sys.platform == "win32"
@@ -95,8 +95,8 @@ def _run_subprocess(script, env_extra, timeout=40):
 _HUBINFO_WEDGE = r'''
 import sys, time
 sys.path.insert(0, "src")
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 
 def main():
     import time as _t
@@ -119,7 +119,7 @@ def main():
     rc.mn_fiber(wedger)
     rc.mn_fiber(watcher)
 
-runloom.run(3, main)
+stackweave.run(3, main)
 '''
 
 
@@ -145,11 +145,11 @@ def test_hubinfo_blocked_at_for_detached_wedge():
     Adversarial property: the wedger's own frame is captured (not a spurious
     one), and the run still tears down cleanly."""
     env = {
-        "RUNLOOM_SYSMON": "1",
-        "RUNLOOM_SYSMON_QUIET": "1",
-        "RUNLOOM_SYSMON_MS": "30",
+        "STACKWEAVE_SYSMON": "1",
+        "STACKWEAVE_SYSMON_QUIET": "1",
+        "STACKWEAVE_SYSMON_MS": "30",
         # keep ATTACHED-preempt out of the picture -- we want a pure DETACHED wedge.
-        "RUNLOOM_PREEMPT": "0",
+        "STACKWEAVE_PREEMPT": "0",
     }
     script = _HUBINFO_WEDGE.format(sleep="0.5", watch="0.45")
     p = _run_subprocess(script, env, timeout=40)
@@ -277,7 +277,7 @@ def test_sched_reset_drains_many_same_thread_parkers():
 _SIGNAL_WAKE = r'''
 import sys, signal, socket
 sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 READ = 1
 
 class Boom(Exception):
@@ -379,7 +379,7 @@ def test_park_on_ready_sockets_across_hubs_post_register_recheck():
     structurally consistent with no leaked parker -- the only correct outcome
     whether a given park took the pending-consume fast path or the commit-CAS
     path."""
-    from runloom.sync import WaitGroup
+    from stackweave.sync import WaitGroup
     NWORK = 120
     socks = []
     wg = WaitGroup(); wg.add(NWORK)
@@ -405,8 +405,8 @@ def test_park_on_ready_sockets_across_hubs_post_register_recheck():
         wg.wait()
 
     with hang_guard(30, "post-register recheck race"):
-        import runloom
-        runloom.run(6, main)
+        import stackweave
+        stackweave.run(6, main)
 
     for a, b in socks:
         _drop(a.fileno()); _drop(b.fileno())

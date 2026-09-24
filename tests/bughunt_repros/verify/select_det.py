@@ -1,4 +1,4 @@
-import runloom_c as rc
+import stackweave_c as rc
 from collections import Counter
 def main():
     a, b = rc.Chan(1000), rc.Chan(1000)

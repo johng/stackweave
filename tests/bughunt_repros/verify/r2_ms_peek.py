@@ -1,6 +1,6 @@
-# run: RUNLOOM_TCPCONN_IOURING=1 timeout 20 .venv/bin/python r2_ms_peek.py
+# run: STACKWEAVE_TCPCONN_IOURING=1 timeout 20 .venv/bin/python r2_ms_peek.py
 import socket
-import runloom, runloom_c as rc
+import stackweave, stackweave_c as rc
 def _port(lst):
     s = socket.socket(fileno=socket.dup(lst.fileno()))
     try: return s.getsockname()[1]
@@ -11,12 +11,12 @@ def main():
     def server():
         conn = lst.accept()
         conn.send_all(b"first!")
-        runloom.sleep(0.3); conn.send_all(b"second")
-        runloom.sleep(3.0); conn.close()
+        stackweave.sleep(0.3); conn.send_all(b"second")
+        stackweave.sleep(3.0); conn.close()
     def client():
         c = rc.TCPConn.connect("127.0.0.1", port)
         out["first"] = c.recv(6)
-        runloom.sleep(0.8)
+        stackweave.sleep(0.8)
         out["peek"] = c.recv(6, socket.MSG_PEEK)
         out["second"] = c.recv(6)
         c.close(); lst.close()

@@ -1,4 +1,4 @@
-"""runloom_c.unpark_many + the _unpark_all batched fan-in wake path.
+"""stackweave_c.unpark_many + the _unpark_all batched fan-in wake path.
 
 unpark_many wakes a batch of fibers parked in wait_fd DIRECTLY (claim the
 parker + re-queue the g, bypassing the per-waiter os.write -> epoll -> drain
@@ -23,9 +23,9 @@ _IS_WINDOWS = _sys.platform == "win32"
 
 import pytest
 
-import runloom
-import runloom_c
-from runloom import monkey
+import stackweave
+import stackweave_c
+from stackweave import monkey
 
 monkey.patch()
 import threading  # noqa: E402  (cooperative after patch)
@@ -43,8 +43,8 @@ def _drive(fn):
         except BaseException as e:  # noqa: BLE001
             box[1] = e
 
-    runloom_c.fiber(runner)
-    runloom_c.run()
+    stackweave_c.fiber(runner)
+    stackweave_c.run()
     if box[1] is not None:
         raise box[1]
     return box[0]
@@ -73,26 +73,26 @@ def test_unpark_many_wakes_all_parked():
         woke = []
 
         def waiter(i):
-            handles.append((i, runloom_c.current_g()))
-            rv = runloom_c.wait_fd(r, READ, 5000)
+            handles.append((i, stackweave_c.current_g()))
+            rv = stackweave_c.wait_fd(r, READ, 5000)
             woke.append((i, rv))
 
         n = 300
         for i in range(n):
-            runloom.fiber(waiter, i)
+            stackweave.fiber(waiter, i)
         # Deterministic: wait until ALL n waiters have COMMITTED their wait_fd
         # park (netpoll_parked == n) before unparking.  A fixed sleep lets a
         # loaded scheduler leave some still RUNNING, which unpark_many then
         # reports as `missed`, false-failing `assert missed == []`.
         _spin = 0
-        while runloom_c.stats()["netpoll_parked"] < n and _spin < 2000000:
-            runloom.sleep(0); _spin += 1
+        while stackweave_c.stats()["netpoll_parked"] < n and _spin < 2000000:
+            stackweave.sleep(0); _spin += 1
         handles.sort()
-        missed = runloom_c.unpark_many([h for _, h in handles])
+        missed = stackweave_c.unpark_many([h for _, h in handles])
         # And wait until every unparked waiter has resumed + recorded its rv.
         _spin = 0
         while len(woke) < n and _spin < 2000000:
-            runloom.sleep(0); _spin += 1
+            stackweave.sleep(0); _spin += 1
         if _keep is not None:
             _keep[0].close(); _keep[1].close()   # closes the socket fds
         else:
@@ -111,8 +111,8 @@ def test_unpark_many_reports_unparked_g_as_missed():
     def main():
         # current_g() of the running main fiber: it is RUNNING, not parked,
         # so its netpoll_parker is NULL -> must be reported missed.
-        me = runloom_c.current_g()
-        return runloom_c.unpark_many([me])
+        me = stackweave_c.current_g()
+        return stackweave_c.unpark_many([me])
 
     missed = _drive(main)
     assert missed == [0], missed
@@ -120,9 +120,9 @@ def test_unpark_many_reports_unparked_g_as_missed():
 
 def test_unpark_many_empty_and_nonhandle():
     def main():
-        assert runloom_c.unpark_many([]) == []
+        assert stackweave_c.unpark_many([]) == []
         with pytest.raises(TypeError):
-            runloom_c.unpark_many([object()])
+            stackweave_c.unpark_many([object()])
         return True
     assert _drive(main)
 
@@ -140,10 +140,10 @@ def test_event_set_fiber_setter_wakes_all():
             out[i] = 1 if ev.wait(5.0) else 0
 
         for i in range(250):
-            runloom.fiber(waiter, i)
-        runloom.sleep(0.15)
+            stackweave.fiber(waiter, i)
+        stackweave.sleep(0.15)
         ev.set()
-        runloom.sleep(0.2)
+        stackweave.sleep(0.2)
         return sum(out)
     assert _drive(main) == 250
 
@@ -160,13 +160,13 @@ def test_event_set_foreign_thread_setter_wakes_all():
             out[i] = 1 if ev.wait(5.0) else 0
 
         for i in range(50):
-            runloom.fiber(waiter, i)
-        runloom.sleep(0.15)
+            stackweave.fiber(waiter, i)
+        stackweave.sleep(0.15)
         # set() from a real OS thread (foreign): must still wake every waiter.
         t = _real_threading_preimport.Thread(target=ev.set)
         t.start()
         t.join()
-        runloom.sleep(0.25)
+        stackweave.sleep(0.25)
         return sum(out)
     assert _drive(main) == 50
 
@@ -184,7 +184,7 @@ def test_event_mixed_fiber_and_foreign_waiters():
             gout[i] = 1 if ev.wait(5.0) else 0
 
         for i in range(40):
-            runloom.fiber(gwaiter, i)
+            stackweave.fiber(gwaiter, i)
 
         fresult = []
         # A real OS thread also waits on the same Event (foreign waiter ->
@@ -194,9 +194,9 @@ def test_event_mixed_fiber_and_foreign_waiters():
         ft = _real_threading_preimport.Thread(target=fwaiter)
         ft.start()
 
-        runloom.sleep(0.2)
+        stackweave.sleep(0.2)
         ev.set()                                # fiber setter: batch + write
-        runloom.sleep(0.2)
+        stackweave.sleep(0.2)
         ft.join()
         box["gor"] = sum(gout)
         box["foreign"] = fresult
@@ -217,11 +217,11 @@ def test_condition_notify_all_batched():
             out[i] = 1 if got else 0
 
         for i in range(120):
-            runloom.fiber(w, i)
-        runloom.sleep(0.2)
+            stackweave.fiber(w, i)
+        stackweave.sleep(0.2)
         with cond:
             cond.notify_all()
-        runloom.sleep(0.2)
+        stackweave.sleep(0.2)
         return sum(out)
     assert _drive(main) == 120
 
@@ -236,10 +236,10 @@ def test_semaphore_release_n_batched():
             got[i] = 1 if sem.acquire(timeout=5.0) else 0
 
         for i in range(60):
-            runloom.fiber(acq, i)
-        runloom.sleep(0.2)
+            stackweave.fiber(acq, i)
+        stackweave.sleep(0.2)
         sem.release(60)                         # one batched wake of all 60
-        runloom.sleep(0.2)
+        stackweave.sleep(0.2)
         return sum(got)
     assert _drive(main) == 60
 
@@ -258,10 +258,10 @@ def test_repeated_fanin_no_lost_or_double_wake():
                 out[i] = 1 if ev.wait(5.0) else 0
 
             for i in range(200):
-                runloom.fiber(waiter, i)
-            runloom.sleep(0.1)
+                stackweave.fiber(waiter, i)
+            stackweave.sleep(0.1)
             ev.set()
-            runloom.sleep(0.12)
+            stackweave.sleep(0.12)
             total += sum(out)
         return total
     assert _drive(main) == 8 * 200

@@ -1,16 +1,16 @@
-runloom - validated asyncio projects
+stackweave - validated asyncio projects
 ========================================
 
 222 name-brand Python asyncio projects whose own test suites (or
-equivalent end-to-end exercises) run GREEN under runloom's pure-Python
-M:N runtime -- driven through runloom.aio / RunloomEventLoop on free-threaded
+equivalent end-to-end exercises) run GREEN under stackweave's pure-Python
+M:N runtime -- driven through stackweave.aio / StackweaveEventLoop on free-threaded
 CPython 3.13t (PYTHON_GIL=0). 'pass==stock' means the result matches
 stock asyncio on the same interpreter; every residual failure traced to
 environment / version / test-framework issues that reproduce on stock,
-not to runloom.
+not to stackweave.
 
 Across these projects -- tens of thousands of third-party tests -- exactly
-one runloom bug surfaced, and it was found, fixed, and merged (the future
+one stackweave bug surfaced, and it was found, fixed, and merged (the future
 done-callback ordering / websocket-close fix).
 
 ------------------------------------------------------------
@@ -51,7 +51,7 @@ FRAMEWORKS, PROTOCOL STACKS & STDLIB CONFORMANCE  (54)
  33. asyncio TLS transport      - direct stress (tls_stress.py, trustme cert): 4/4 == stock — TLS echo via start_server/op
  34. strawberry-graphql         - tests/schema 615 passed == stock (1 env fail identical on both)
  35. ariadne                    - full suite 700 passed/1 skip == stock (2 errors identical = env)
- 36. anyio                      - Core structured-concurrency validated green on RunloomEventLoop via direct stress (anyio_st
+ 36. anyio                      - Core structured-concurrency validated green on StackweaveEventLoop via direct stress (anyio_st
  37. async-timeout              - present, green
  38. tenacity (async retry)     - test_asyncio.py 25/25 == stock
  39. backoff                    - 2.2.1 test_backoff_async.py 26 passed == stock (1 error == stock env)
@@ -106,7 +106,7 @@ NEXT-40 PUSH: utilities, ASGI adapters, sans-IO, DB (21)
  79. blacksheep                 - ASGI framework: routed GET -> 200 pong
  80. asgiref                    - Django bridge: sync_to_async offloads to worker thread
  81. async-asgi-testclient      - ASGI TestClient GET -> 200 pong
- 82. sniffio                    - current_async_library() -> asyncio under RunloomEventLoop
+ 82. sniffio                    - current_async_library() -> asyncio under StackweaveEventLoop
  83. outcome                    - capture Value/Error + unwrap
  84. a2wsgi                     - WSGI->ASGI adapter -> 200 pong (threadpool)
  85. aioitertools               - islice/zip/chain/enumerate over async iters
@@ -126,12 +126,12 @@ NEXT-40 PUSH (cont.): cache/limiter/proto/redis-lock (10)
  94. aiohttp-retry              - RetryClient retried 500,500->200 over aioresponses
  95. aioredlock                 - Redlock distributed lock acquire/is_locked/unlock vs real redis
 
-NOTE: one real runloom divergence found this push -- aiocsv: its C _Parser
+NOTE: one real stackweave divergence found this push -- aiocsv: its C _Parser
 async-iterator (self-referential awaitable delegating to an executor
-future) raises "_Parser has no attribute 'send'" under runloom but works on
-stock. Niche (only lib hit); fix lives in runloom's coro/task driver (FV-gated).
+future) raises "_Parser has no attribute 'send'" under stackweave but works on
+stock. Niche (only lib hit); fix lives in stackweave's coro/task driver (FV-gated).
 aiodebug also diverges by design: it monkey-patches asyncio Handle._run,
-which RunloomEventLoop doesn't use (callbacks run on goroutines).
+which StackweaveEventLoop doesn't use (callbacks run on goroutines).
 
 
 ------------------------------------------------------------
@@ -175,8 +175,8 @@ BEYOND 100 (cont.): task utils, sans-IO GitLab (2)
 111. aiotools                   - TaskGroup fan-out x5 (aclosing/async ctx utils)
 112. gidgetlab                  - sans-IO GitLab API getitem over mocked aiohttp
 
-NOTE: unsync diverges (runloom accepts awaiting a Future bound to another
-loop; stock raises 'attached to a different loop') -- runloom is MORE permissive
+NOTE: unsync diverges (stackweave accepts awaiting a Future bound to another
+loop; stock raises 'attached to a different loop') -- stackweave is MORE permissive
 on loop-affinity, not a failure. Not counted.
 
 
@@ -217,7 +217,7 @@ BEYOND 100 (cont.): retry + DI containers (3)
 ------------------------------------------------------------
 BEYOND 100 (cont.): UDP transport, event emitter (2)
 ------------------------------------------------------------
-127. asyncudp                   - real UDP datagram x10 over runloom netpoll
+127. asyncudp                   - real UDP datagram x10 over stackweave netpoll
 128. pyee                       - AsyncIOEventEmitter async handlers fired
 
 
@@ -289,10 +289,10 @@ BEYOND 100 (cont.): sans-IO IRC (1)
 151. bottom                     - sans-IO IRC client event trigger/handler
 
 NOTE: greenback diverges by design -- it reads asyncio.Task._coro via a
-hard-coded C struct offset (assumes the C _asyncio.Task layout); runloom's
+hard-coded C struct offset (assumes the C _asyncio.Task layout); stackweave's
 Task is a Python asyncio.Task subclass with no such C field, so greenback
 raises "Couldn't determine C offset". Same class as aiodebug/unsync: a lib
-reaching into CPython/asyncio internals runloom implements differently.
+reaching into CPython/asyncio internals stackweave implements differently.
 
 
 ------------------------------------------------------------
@@ -388,8 +388,8 @@ BEYOND 100 (bulk): langchain ecosystem (orjson-shimmed) (3)
 189. langgraph                  - StateGraph async nodes ainvoke
 
 NOTE: orjson (Rust, no 3.13t build) is provided as a pure-Python json-backed
-shim so orjson-dependent libs import; stock+runloom use it identically, so
-pass==stock still cleanly validates runloom's async machinery.
+shim so orjson-dependent libs import; stock+stackweave use it identically, so
+pass==stock still cleanly validates stackweave's async machinery.
 
 
 ------------------------------------------------------------
@@ -455,7 +455,7 @@ BEYOND 100 (bulk): diverse web/graphql/sse libs (5)
 222. langchain-upstage       - ChatUpstage ainvoke (openai-compatible, local server)
 
 NOTE: importing some frame-walking modules INSIDE a goroutine can hit
-runloom's goroutine-frame-chain limit (recursion); module-scope imports (the
+stackweave's goroutine-frame-chain limit (recursion); module-scope imports (the
 normal pattern) work -- confirmed for these via top-level imports.
 
 TOTAL DISTINCT PROJECTS PASSING: 222

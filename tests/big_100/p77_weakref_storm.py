@@ -13,7 +13,7 @@ import threading
 import weakref
 
 import harness
-import runloom
+import stackweave
 
 
 class Thing(object):

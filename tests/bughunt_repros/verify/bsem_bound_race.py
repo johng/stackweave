@@ -9,7 +9,7 @@ import sys, threading as _pre  # noqa
 
 USE_MONKEY = "--stock" not in sys.argv
 if USE_MONKEY:
-    import runloom.monkey as monkey
+    import stackweave.monkey as monkey
     monkey.patch()
 
 import threading

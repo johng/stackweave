@@ -24,11 +24,11 @@ The persistent id namespace is the isolation invariant: a fiber must only ever b
 asked to resolve ITS OWN externalized ids.  ``persistent_load`` raising on an
 out-of-namespace id is the hard-fail tripwire for ANY cross-fiber leak.
 
-WHY M:N MAKES IT REACHABLE.  Under runloom each fiber runs its OWN
+WHY M:N MAKES IT REACHABLE.  Under stackweave each fiber runs its OWN
 Pickler/Unpickler, but many fibers share one hub OS-thread (and its
 ``PyThreadState``).  ``persistent_id`` is a Python method the C pickler calls
-mid-dump for every object; we make it YIELD (``runloom.yield_now`` /
-``runloom.sleep``) WHILE the pickler is parked mid-dump, so the scheduler runs a
+mid-dump for every object; we make it YIELD (``stackweave.yield_now`` /
+``stackweave.sleep``) WHILE the pickler is parked mid-dump, so the scheduler runs a
 sibling fiber's Pickler on the SAME hub thread between this fiber's persid
 emissions.  If the C pickler keyed the persistent-object scratch (the pending
 PERSID buffer, a persid-in-progress flag) off the OS thread rather than the
@@ -57,10 +57,10 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain threads):
   identity + namespace hold for ANY GIL setting -- an oracle that fired there
   would be a false-positive detector; it does NOT fire on plain threads GIL on OR
   off (each thread resolves only its own namespaced ids).  Under a CORRECT
-  runloom it must ALSO hold (each fiber owns its Pickler/Unpickler/registry).  If
+  stackweave it must ALSO hold (each fiber owns its Pickler/Unpickler/registry).  If
   a persid resolves to a SIBLING's object, or persistent_load is handed a
   "W{other}:..." id (rejected by the namespace assertion), or the recovered owner
-  is not ``wid`` -- that is the runloom bug, and the single-owner arm PASSES on a
+  is not ``wid`` -- that is the stackweave bug, and the single-owner arm PASSES on a
   correct runtime (the program exits 0 when there is no bug).
 
 ORACLES:
@@ -69,7 +69,7 @@ ORACLES:
     Unpickler, registry, graph, and Externals.  ``g2 == g`` AND ``g2.owner == wid``
     at every level AND every resolved External ``is`` this fiber's registry object
     with ``owner == wid`` AND persistent_load never saw an out-of-namespace id.  A
-    failure is a runloom per-fiber persistent-object isolation desync.
+    failure is a stackweave per-fiber persistent-object isolation desync.
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber that vanished mid-dump
     (stranded inside persistent_id's yield, or inside the C pickler mid-PERSID)
     never returns; the watchdog + require_no_lost catch it.
@@ -97,7 +97,7 @@ import io
 import _pickle
 
 import harness
-import runloom
+import stackweave
 
 # Per-fiber graph depth.  Deep enough that persistent_id is invoked many times
 # per dump (several External references per level) so a leaked persid has many
@@ -124,7 +124,7 @@ INNER_CAP = 100000
 class PersidLeak(Exception):
     """Raised inside persistent_load when it is handed an id OUTSIDE this fiber's
     "W{wid}" namespace -- a cross-fiber leak of an externalized reference.  Caught
-    in roundtrip() and turned into H.fail (a real runloom isolation bug)."""
+    in roundtrip() and turned into H.fail (a real stackweave isolation bug)."""
 
 
 class External(object):
@@ -207,9 +207,9 @@ def make_pickler(wid, reg, buf):
                 # Externalize by wid-namespaced id.  YIELD WHILE mid-dump: the C
                 # pickler is parked here holding its PERSID scratch, so the
                 # scheduler runs a sibling fiber's Pickler on this hub thread.
-                runloom.yield_now()
+                stackweave.yield_now()
                 if (obj.owner + len(obj.key)) & 1:
-                    runloom.sleep(0.0002)
+                    stackweave.sleep(0.0002)
                 return ns + obj.key
             return None
 
@@ -272,7 +272,7 @@ def roundtrip(H, wid, state):
         H.fail("pickle persid round-trip CORRUPTED: recovered graph != original "
                "(wid {0}) -- a sibling fiber's persistent-object scratch bled into "
                "this fiber's _pickle.Pickler/Unpickler across the mid-dump yield "
-               "(runloom shares the hub PyThreadState across fibers)".format(wid))
+               "(stackweave shares the hub PyThreadState across fibers)".format(wid))
         return
 
     # (2) owner is OURS at every level AND every resolved External is THIS fiber's
@@ -348,7 +348,7 @@ def setup(H):
           and g2.refs[0] is reg["ext0"] and g2.refs[0] is g2.child.refs[0])
     if not ok:
         H.fail("setup self-test: persid round-trip / external resolution broken in "
-               "isolation -- the test scaffold is wrong, not runloom")
+               "isolation -- the test scaffold is wrong, not stackweave")
         return
 
     H.state = {
@@ -381,7 +381,7 @@ if __name__ == "__main__":
         default_funcs=8000,
         describe="the C _pickle Pickler.persistent_id externalizes objects by id "
                  "and Unpickler.persistent_load resolves them from a FIBER-PRIVATE "
-                 "table; runloom shares one hub PyThreadState across fibers.  "
+                 "table; stackweave shares one hub PyThreadState across fibers.  "
                  "LOAD-BEARING: each fiber builds a DISTINCT wid-tagged graph "
                  "referencing several Externals from its OWN private registry, "
                  "pickles with its OWN Pickler (persistent_id YIELDS mid-dump, "
@@ -391,5 +391,5 @@ if __name__ == "__main__":
                  "right owner at every level + every External resolving to the "
                  "fiber's OWN object.  An out-of-namespace persid reaching "
                  "persistent_load, or a resolved external that is a sibling's "
-                 "object, is the runloom persistent-object isolation bug.  Fully "
+                 "object, is the stackweave persistent-object isolation bug.  Fully "
                  "single-owner (private table); no shared-mutable arm")

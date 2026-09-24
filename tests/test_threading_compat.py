@@ -17,9 +17,9 @@ import threading
 import time
 import unittest
 
-import runloom
-import runloom.monkey
-import runloom_c
+import stackweave
+import stackweave.monkey
+import stackweave_c
 
 
 def _drive(fn):
@@ -31,19 +31,19 @@ def _drive(fn):
         except BaseException as e:   # noqa: BLE001
             box[1] = e
 
-    runloom_c.fiber(runner)
-    runloom_c.run()
+    stackweave_c.fiber(runner)
+    stackweave_c.run()
     if box[1] is not None:
         raise box[1]
     return box[0]
 
 
 def setUpModule():
-    runloom.monkey.patch()
+    stackweave.monkey.patch()
 
 
 def tearDownModule():
-    runloom.monkey.unpatch()
+    stackweave.monkey.unpatch()
 
 
 class TestLock(unittest.TestCase):
@@ -84,14 +84,14 @@ class TestLock(unittest.TestCase):
             def worker(name):
                 with lk:
                     log.append((name, "in"))
-                    runloom.sleep(0.005)        # yield while holding the lock
+                    stackweave.sleep(0.005)        # yield while holding the lock
                     log.append((name, "out"))
 
             for n in "ABCD":
-                runloom_c.fiber(lambda n=n: worker(n))
+                stackweave_c.fiber(lambda n=n: worker(n))
             t0 = time.monotonic()
             while len(log) < 8 and time.monotonic() - t0 < 5:
-                runloom.sleep(0.005)
+                stackweave.sleep(0.005)
             return log
 
         log = _drive(body)
@@ -113,14 +113,14 @@ class TestLock(unittest.TestCase):
                 for _ in range(M):
                     with lk:
                         v = state["n"]
-                        runloom.yield_()        # widen the race window
+                        stackweave.yield_()        # widen the race window
                         state["n"] = v + 1
 
             for _ in range(N):
-                runloom_c.fiber(bump)
+                stackweave_c.fiber(bump)
             t0 = time.monotonic()
             while state["n"] < N * M and time.monotonic() - t0 < 10:
-                runloom.sleep(0.005)
+                stackweave.sleep(0.005)
             return state["n"]
 
         self.assertEqual(_drive(body), 8 * 200)
@@ -147,21 +147,21 @@ class TestRLock(unittest.TestCase):
             def a():
                 with rl:
                     log.append("A-in")
-                    runloom.sleep(0.02)
+                    stackweave.sleep(0.02)
                     log.append("A-out")
 
             def b():
-                runloom.sleep(0.005)
+                stackweave.sleep(0.005)
                 got = rl.acquire(blocking=False)  # A holds it -> False
                 log.append(("B-nonblock", got))
                 with rl:                          # now block until A frees
                     log.append("B-in")
 
-            runloom_c.fiber(a)
-            runloom_c.fiber(b)
+            stackweave_c.fiber(a)
+            stackweave_c.fiber(b)
             t0 = time.monotonic()
             while "B-in" not in log and time.monotonic() - t0 < 5:
-                runloom.sleep(0.005)
+                stackweave.sleep(0.005)
             return log
 
         log = _drive(body)
@@ -210,16 +210,16 @@ class TestEvent(unittest.TestCase):
                 woke.append(i)
 
             for i in range(3):
-                runloom_c.fiber(lambda i=i: waiter(i))
+                stackweave_c.fiber(lambda i=i: waiter(i))
 
             def setter():
-                runloom.sleep(0.02)
+                stackweave.sleep(0.02)
                 ev.set()
 
-            runloom_c.fiber(setter)
+            stackweave_c.fiber(setter)
             t0 = time.monotonic()
             while len(woke) < 3 and time.monotonic() - t0 < 5:
-                runloom.sleep(0.005)
+                stackweave.sleep(0.005)
             return sorted(woke), ev.is_set()
 
         woke, isset = _drive(body)
@@ -256,20 +256,20 @@ class TestCondition(unittest.TestCase):
                     woke.append(i)
 
             for i in range(2):
-                runloom_c.fiber(lambda i=i: waiter(i))
+                stackweave_c.fiber(lambda i=i: waiter(i))
 
             def notifier():
-                runloom.sleep(0.02)
+                stackweave.sleep(0.02)
                 with cv:
                     cv.notify(1)            # wake exactly one
-                runloom.sleep(0.02)
+                stackweave.sleep(0.02)
                 with cv:
                     cv.notify(1)            # then the other
 
-            runloom_c.fiber(notifier)
+            stackweave_c.fiber(notifier)
             t0 = time.monotonic()
             while len(woke) < 2 and time.monotonic() - t0 < 5:
-                runloom.sleep(0.005)
+                stackweave.sleep(0.005)
             return sorted(woke)
 
         self.assertEqual(_drive(body), [0, 1])
@@ -286,16 +286,16 @@ class TestCondition(unittest.TestCase):
                     got.append(True)
 
             def setter():
-                runloom.sleep(0.02)
+                stackweave.sleep(0.02)
                 with cv:
                     state["ready"] = True
                     cv.notify_all()
 
-            runloom_c.fiber(waiter)
-            runloom_c.fiber(setter)
+            stackweave_c.fiber(waiter)
+            stackweave_c.fiber(setter)
             t0 = time.monotonic()
             while not got and time.monotonic() - t0 < 5:
-                runloom.sleep(0.005)
+                stackweave.sleep(0.005)
             return got
 
         self.assertEqual(_drive(body), [True])
@@ -330,11 +330,11 @@ class TestCondition(unittest.TestCase):
                         consumed.append(buf.pop(0))
                         cv.notify()
 
-            runloom_c.fiber(producer)
-            runloom_c.fiber(consumer)
+            stackweave_c.fiber(producer)
+            stackweave_c.fiber(consumer)
             t0 = time.monotonic()
             while len(consumed) < TOTAL and time.monotonic() - t0 < 10:
-                runloom.sleep(0.005)
+                stackweave.sleep(0.005)
             return consumed
 
         consumed = _drive(body)
@@ -374,16 +374,16 @@ class TestSemaphore(unittest.TestCase):
                 with s:
                     inside["now"] += 1
                     inside["max"] = max(inside["max"], inside["now"])
-                    runloom.sleep(0.01)
+                    stackweave.sleep(0.01)
                     inside["now"] -= 1
 
             for _ in range(12):
-                runloom_c.fiber(worker)
+                stackweave_c.fiber(worker)
             t0 = time.monotonic()
             while inside["now"] != 0 or time.monotonic() - t0 < 0.2:
                 if time.monotonic() - t0 > 5:
                     break
-                runloom.sleep(0.005)
+                stackweave.sleep(0.005)
             return inside["max"]
 
         self.assertLessEqual(_drive(body), 3)
@@ -407,7 +407,7 @@ class TestThreadJoin(unittest.TestCase):
                     time.sleep(0.005)
                     log.append("sib")
 
-            runloom_c.fiber(sib)
+            stackweave_c.fiber(sib)
             th.join()
             log.append("joined")
             return log
@@ -478,11 +478,11 @@ class TestBarrier(unittest.TestCase):
                 done["v"] += 1
 
             for i in range(parties):
-                runloom_c.fiber(lambda i=i: worker(i))
+                stackweave_c.fiber(lambda i=i: worker(i))
 
             t0 = time.monotonic()
             while done["v"] < parties and time.monotonic() - t0 < 5:
-                runloom.sleep(0.005)
+                stackweave.sleep(0.005)
             return order, done["v"]
 
         order, n = _drive(body)
@@ -506,10 +506,10 @@ class TestBarrier(unittest.TestCase):
                 counts.append(1)
 
             for _ in range(3):
-                runloom_c.fiber(worker)
+                stackweave_c.fiber(worker)
             t0 = time.monotonic()
             while len(counts) < 3 and time.monotonic() - t0 < 5:
-                runloom.sleep(0.005)
+                stackweave.sleep(0.005)
             return len(counts)
         self.assertEqual(_drive(body), 3)
 
@@ -527,17 +527,17 @@ class TestBarrier(unittest.TestCase):
                     broken["n"] += 1
 
             # only two of three parties ever arrive; a third fiber aborts
-            runloom_c.fiber(worker)
-            runloom_c.fiber(worker)
+            stackweave_c.fiber(worker)
+            stackweave_c.fiber(worker)
 
             def breaker():
-                runloom.sleep(0.02)
+                stackweave.sleep(0.02)
                 b.abort()
 
-            runloom_c.fiber(breaker)
+            stackweave_c.fiber(breaker)
             t0 = time.monotonic()
             while broken["n"] < 2 and time.monotonic() - t0 < 5:
-                runloom.sleep(0.005)
+                stackweave.sleep(0.005)
             return broken["n"]
         self.assertEqual(_drive(body), 2)
 

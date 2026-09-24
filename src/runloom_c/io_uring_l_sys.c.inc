@@ -283,7 +283,7 @@ static void runloom_iouring_lock_ensure_inited(void)
  * smallest ring the kernel allows -- ideal for forcing overflow. */
 static unsigned runloom_iouring_setup_entries(void)
 {
-    const char *e = getenv("RUNLOOM_IOURING_ENTRIES");
+    const char *e = getenv("STACKWEAVE_IOURING_ENTRIES");
     long v;
     if (e == NULL || e[0] == '\0') return 64;
     v = strtol(e, NULL, 10);

@@ -1,6 +1,6 @@
 """Two OS threads racing run(2, work): instrumented, faulthandler dump on hang."""
 import threading, sys, faulthandler
-import runloom
+import stackweave
 
 faulthandler.dump_traceback_later(20, exit=True)
 ROUNDS = int(sys.argv[1]) if len(sys.argv) > 1 else 30
@@ -13,11 +13,11 @@ for rnd in range(ROUNDS):
     def t(i):
         def work():
             for _ in range(50):
-                runloom.yield_now()
+                stackweave.yield_now()
             ran[i] = 1
         barrier.wait()
         try:
-            runloom.run(2, work)
+            stackweave.run(2, work)
         except Exception as e:
             errs.append((i, type(e).__name__))
 

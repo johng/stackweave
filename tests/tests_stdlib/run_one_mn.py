@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run ONE CPython stdlib test module inside a runloom goroutine on the M:N
+"""Run ONE CPython stdlib test module inside a stackweave goroutine on the M:N
 scheduler (free-threaded, GIL off).
 
 This is the child process spawned one-per-module by ``sweep_mn.py``.  Running a
@@ -33,14 +33,14 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))      # tests_stdlib/
 REPO = os.path.dirname(HERE)
 
-# Put the runloom build first so ``import runloom_c`` finds the in-tree .so, and
+# Put the stackweave build first so ``import stackweave_c`` finds the in-tree .so, and
 # put tests_stdlib/ first so ``import test.test_xxx`` resolves to our *vendored*
 # copy (which shadows the installed stdlib `test` package), not the original.
 sys.path.insert(0, os.path.join(REPO, "src"))
 sys.path.insert(0, HERE)
 
 import unittest
-import runloom_c as rc
+import stackweave_c as rc
 
 
 def main():
@@ -69,14 +69,14 @@ def main():
             holder["exc"] = repr(exc)
             traceback.print_exc()
 
-    # RUNLOOM_MN_STACK (bytes) overrides the default 128 KB goroutine stack.
-    # RUNLOOM_RUN_MODE selects the scheduler:
+    # STACKWEAVE_MN_STACK (bytes) overrides the default 128 KB goroutine stack.
+    # STACKWEAVE_RUN_MODE selects the scheduler:
     #   "mn" (default) -> mn_init/mn_fiber/mn_run on `hubs` hubs (the real target);
     #   "go"           -> the 1:1 scheduler go()/run(), which (unlike mn_fiber)
     #                     accepts a stack_size, used as a STACK-ISOLATION control
     #                     to measure how many crashes are pure C-stack overflow.
-    stack = int(os.environ.get("RUNLOOM_MN_STACK", "0"))
-    mode = os.environ.get("RUNLOOM_RUN_MODE", "mn")
+    stack = int(os.environ.get("STACKWEAVE_MN_STACK", "0"))
+    mode = os.environ.get("STACKWEAVE_RUN_MODE", "mn")
 
     if mode == "go":
         if stack > 0:

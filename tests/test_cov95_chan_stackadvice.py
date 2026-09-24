@@ -1,4 +1,4 @@
-"""Coverage recovery for two cold runloom_c fragments:
+"""Coverage recovery for two cold stackweave_c fragments:
 
   * src/runloom_c/chan_select_main.c.inc -- the select() PARK path
     (runloom_chan_select Phase-2).  Round-1 suites only ever drove select
@@ -9,7 +9,7 @@
 
   * src/runloom_c/runloom_stackadvice.c -- the per-fiber-kind stack-usage
     profiler.  Its autosize/prescan/learned-size paths are gated behind
-    enable_stack_autosize() (which resolves RUNLOOM_STACK_AUTOSIZE_START once),
+    enable_stack_autosize() (which resolves STACKWEAVE_STACK_AUTOSIZE_START once),
     so they need fresh SUBPROCESSES that exit cleanly for gcov to flush.
 
 Oracles are real: exact delivered value/index, exact (val, ok) on close,
@@ -41,8 +41,8 @@ import sys
 
 import pytest
 
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 from adv_util import hang_guard, needs_free_threading
 
 FT = needs_free_threading()
@@ -247,12 +247,12 @@ def test_select_multicase_nonfiring_send_value_dropped():
 
 @pytest.mark.skipif(not FT, reason="the M:N hub park branch needs a real hub")
 def test_select_recv_parks_in_mn_hub_then_woken():
-    """Under runloom.run(N) a select parked inside an M:N HUB takes the
+    """Under stackweave.run(N) a select parked inside an M:N HUB takes the
     runloom_mn_current_hub_opaque() != NULL park branch (distinct from the
     single-thread one).  The sender deliberately sleeps so the chooser is surely
     parked in the hub before any value is ready (forcing the park, not a
     Phase-1 rendezvous)."""
-    from runloom.sync import WaitGroup
+    from stackweave.sync import WaitGroup
     res = {}
 
     def main():
@@ -278,7 +278,7 @@ def test_select_recv_parks_in_mn_hub_then_woken():
         wg.wait()
 
     with hang_guard(30, "mn hub select park"):
-        runloom.run(3, main)
+        stackweave.run(3, main)
 
     assert res["r"] == (0, "mn-payload", True), res
 
@@ -290,7 +290,7 @@ def test_select_mn_recv_integrity_stress():
     duplicated across the cross-hub select wake handoff (a count alone would
     miss a lost+dup pair that nets out).  Opportunistically exercises the
     install-time RECV-abort/retry race; the integrity oracle is what matters."""
-    from runloom.sync import WaitGroup
+    from stackweave.sync import WaitGroup
     K, NPROD, PER = 6, 12, 80
     TOTAL = NPROD * PER
     chans = [rc.Chan(0) for _ in range(K)]
@@ -335,7 +335,7 @@ def test_select_mn_recv_integrity_stress():
                 pass
 
     with hang_guard(90, "mn recv-select integrity"):
-        runloom.run(4, main)
+        stackweave.run(4, main)
 
     expected = set((p, r) for p in range(NPROD) for r in range(PER))
     assert len(collected) == len(expected), (
@@ -349,7 +349,7 @@ def test_select_mn_send_integrity_stress():
     shared cap-0 channels) feeding many plain receivers.  Asserts every value
     is received exactly once (no loss/dup across the SEND-side select handoff).
     Opportunistically exercises the SEND-abort/retry install race."""
-    from runloom.sync import WaitGroup
+    from stackweave.sync import WaitGroup
     K, NSEL, PER = 6, 10, 80
     TOTAL = NSEL * PER
     chans = [rc.Chan(0) for _ in range(K)]
@@ -392,7 +392,7 @@ def test_select_mn_send_integrity_stress():
         wgS.wait()
 
     with hang_guard(90, "mn send-select integrity"):
-        runloom.run(4, main)
+        stackweave.run(4, main)
 
     expected = set((s, r, i)
                    for s in range(NSEL) for r in range(PER) for i in range(K))
@@ -419,8 +419,8 @@ _ADVICE_LEARNED = r'''
 import sys, os; sys.path.insert(0, "src")
 # Start above the FT-3.14 256 KiB spawn floor (p226, 289ecb99): at the default
 # 256 KiB start the floor equals the start there, so nothing could shrink.
-os.environ["RUNLOOM_STACK_AUTOSIZE_START"] = str(1024 * 1024)
-import runloom, runloom_c as rc
+os.environ["STACKWEAVE_STACK_AUTOSIZE_START"] = str(1024 * 1024)
+import stackweave, stackweave_c as rc
 rc.enable_stack_autosize(True, False)   # autosize ON, prescan OFF
 
 def worker():
@@ -434,7 +434,7 @@ def main():
         rc.mn_fiber(worker)
     rc.sched_sleep(0.3)
 
-runloom.run(2, main)
+stackweave.run(2, main)
 rep = rc.stack_advice()
 wk = [r for r in rep if "worker" in r["kind"]]
 assert wk, "worker kind not recorded"
@@ -469,7 +469,7 @@ def test_stackadvice_learned_size_shrinks_from_start():
 #     floor is remembered so learn-down can't shrink it under that. ---
 _ADVICE_PRESCAN = r'''
 import sys; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
+import stackweave, stackweave_c as rc
 from decimal import Decimal
 rc.enable_stack_autosize(True, True)    # prescan ON
 
@@ -484,7 +484,7 @@ def main():
         rc.mn_fiber(crypto_like)           # spawned DIRECTLY -> size_for sees it
     rc.sched_sleep(0.3)
 
-runloom.run(2, main)
+stackweave.run(2, main)
 rep = rc.stack_advice()
 ck = [r for r in rep if "crypto_like" in r["kind"]]
 assert ck, "crypto_like kind not recorded"
@@ -507,11 +507,11 @@ def test_stackadvice_prescan_cold_start_raises_floor():
         "prescan floor did not raise the cold-start size: " + line[0])
 
 
-# --- the RUNLOOM_STACK_AUTOSIZE_START env override (atol parse). ---
+# --- the STACKWEAVE_STACK_AUTOSIZE_START env override (atol parse). ---
 _ADVICE_ENV_START = r'''
 import sys; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
-rc.enable_stack_autosize(True, False)   # parses RUNLOOM_STACK_AUTOSIZE_START
+import stackweave, stackweave_c as rc
+rc.enable_stack_autosize(True, False)   # parses STACKWEAVE_STACK_AUTOSIZE_START
 
 def fresh():                            # an UNSEEN kind -> starts at the env size
     return 1
@@ -520,7 +520,7 @@ def main():
     rc.mn_fiber(fresh)                     # first spawn: no sample -> autosize start
     rc.sched_sleep(0.2)
 
-runloom.run(2, main)
+stackweave.run(2, main)
 rep = rc.stack_advice()
 fk = [r for r in rep if r["kind"].endswith(":%d)" % fresh.__code__.co_firstlineno)
       or "fresh" in r["kind"]]
@@ -533,7 +533,7 @@ sys.stdout.write("ENVSTART reserved=%d\n" % fk[0]["reserved"])
 def test_stackadvice_env_start_override():
     # 393216 = 384 KiB, a non-default value not equal to the 256 KiB default
     # nor any pow2 the cold path would otherwise pick.
-    p = _run_subproc(_ADVICE_ENV_START, {"RUNLOOM_STACK_AUTOSIZE_START": "393216"})
+    p = _run_subproc(_ADVICE_ENV_START, {"STACKWEAVE_STACK_AUTOSIZE_START": "393216"})
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1600:])
     line = [l for l in p.stdout.splitlines() if l.startswith("ENVSTART ")]
     assert line, (p.stdout[-400:], p.stderr[-800:])
@@ -548,7 +548,7 @@ def test_stackadvice_env_start_override():
 #     wrapper's. ---
 _ADVICE_WRAPPED = r'''
 import sys, functools; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
+import stackweave, stackweave_c as rc
 from decimal import Decimal
 rc.enable_stack_autosize(True, True)
 
@@ -567,7 +567,7 @@ def main():
         rc.mn_fiber(wrapper)               # unwrap -> real_target's bytecode
     rc.sched_sleep(0.3)
 
-runloom.run(2, main)
+stackweave.run(2, main)
 rep = rc.stack_advice()
 # the kind is attributed to real_target, NOT wrapper (the unwrap worked)
 tk = [r for r in rep if "real_target" in r["kind"]]
@@ -594,7 +594,7 @@ def test_stackadvice_unwrap_follows_wrapped():
 #     no-filename else branch of the name builder. ---
 _ADVICE_NOCODE = r'''
 import sys; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
+import stackweave, stackweave_c as rc
 rc.enable_stack_autosize(True, True)
 
 class Callable:                          # an instance: no __code__, no __qualname__
@@ -609,7 +609,7 @@ def main():
         rc.mn_fiber(c)                      # name_of: code==NULL -> "module.<callable>"
     rc.sched_sleep(0.2)
 
-runloom.run(2, main)
+stackweave.run(2, main)
 rep = rc.stack_advice()
 ck = [r for r in rep if r["kind"].endswith("<callable>")]
 assert ck, "no-__code__ callable not recorded with the <callable> name"
@@ -630,7 +630,7 @@ def test_stackadvice_name_of_callable_without_code():
 #     !PyTuple_Check guard returns the generic size. ---
 _ADVICE_BADNAMES = r'''
 import sys; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
+import stackweave, stackweave_c as rc
 rc.enable_stack_autosize(True, True)
 
 class FakeCode:
@@ -652,7 +652,7 @@ def main():
         rc.mn_fiber(w)                      # cold_start: co_names not tuple -> generic
     rc.sched_sleep(0.2)
 
-runloom.run(2, main)
+stackweave.run(2, main)
 rep = rc.stack_advice()
 wk = [r for r in rep if r["kind"].startswith("probe.")]
 assert wk, "Weird kind not recorded"
@@ -677,7 +677,7 @@ def test_stackadvice_cold_start_non_tuple_co_names():
 #     samples on completion; report + reset + disable. ---
 _ADVICE_RECORD = r'''
 import sys; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
+import stackweave, stackweave_c as rc
 rc.enable_stack_advice(True)            # measurement only (no autosize)
 assert rc.stack_advice_enabled() is True
 
@@ -689,7 +689,7 @@ def main():
         rc.mn_fiber(w)
     rc.sched_sleep(0.2)
 
-runloom.run(2, main)
+stackweave.run(2, main)
 n = len(rc.stack_advice())
 rc.reset_stack_advice()
 m = len(rc.stack_advice())
@@ -715,7 +715,7 @@ def test_stackadvice_record_report_reset_disable():
 #     calls find() and probes the now-empty slot. ---
 _ADVICE_FINDMISS = r'''
 import sys; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
+import stackweave, stackweave_c as rc
 rc.enable_stack_advice(True)
 
 def slow():
@@ -728,7 +728,7 @@ def main():
     rc.reset_stack_advice()             # clears the table -> slow's key gone
     rc.sched_sleep(0.4)                 # slow completes -> record_g -> find MISS
 
-runloom.run(2, main)
+stackweave.run(2, main)
 sys.stdout.write("FINDMISS entries=%d\n" % len(rc.stack_advice()))
 '''
 
@@ -747,7 +747,7 @@ def test_stackadvice_find_miss_on_reset_in_flight():
 #     insert() returns NULL once the table fills (note_spawn yields key 0). ---
 _ADVICE_TABLEFULL = r'''
 import sys; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
+import stackweave, stackweave_c as rc
 rc.enable_stack_advice(True)
 
 N = 2100
@@ -760,7 +760,7 @@ def main():
         rc.mn_fiber(f)                     # each distinct qualname -> distinct kind
     rc.sched_sleep(0.6)
 
-runloom.run(2, main)
+stackweave.run(2, main)
 # the table caps at RUNLOOM_ADVICE_CAP (2048); the rest hit insert-full.
 sys.stdout.write("TABLEFULL entries=%d\n" % len(rc.stack_advice()))
 '''
@@ -781,7 +781,7 @@ def test_stackadvice_insert_table_full():
 #     the advice lock; we then prove advice still works). ---
 _ADVICE_MISC = r'''
 import sys; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
+import stackweave, stackweave_c as rc
 assert rc.stack_autosize_enabled() is False
 rc.enable_stack_autosize(True, False)
 assert rc.stack_autosize_enabled() is True
@@ -798,7 +798,7 @@ def main():
         rc.mn_fiber(w)
     rc.sched_sleep(0.15)
 
-runloom.run(2, main)
+stackweave.run(2, main)
 sys.stdout.write("MISC entries=%d enabled=%s\n"
                  % (len(rc.stack_advice()), rc.stack_advice_enabled()))
 '''

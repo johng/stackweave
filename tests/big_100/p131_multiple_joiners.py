@@ -22,7 +22,7 @@ Stresses: channel-close broadcast wake, many-receiver fan-out, shared-cell
 publication ordering, no lost wake.
 """
 import harness
-import runloom
+import stackweave
 
 
 def joiner(ready, cell, results, idx, wg):
@@ -44,10 +44,10 @@ def worker(H, wid, rng, state):
         if not H.running():
             break
         J = rng.randint(3, 12)
-        ready = runloom.Chan(0)
+        ready = stackweave.Chan(0)
         cell = [None]
         results = [None] * J            # one writer slot per joiner
-        wg = runloom.WaitGroup()
+        wg = stackweave.WaitGroup()
         wg.add(J)
         for i in range(J):
             H.fiber(joiner, ready, cell, results, i, wg)

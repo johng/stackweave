@@ -16,7 +16,7 @@ actually lean on process-global scratch:
 WHERE M:N COULD BREAK IT (the hazard this program probes).  The CRC lookup table
 and the codec scratch buffer are meant to be read-only / stack-local per call.
 But if any of that scratch is thread-affine (a per-OS-thread static buffer, a
-cached module-level bytearray, a table lazily filled once), then under runloom a
+cached module-level bytearray, a table lazily filled once), then under stackweave a
 fiber that PARKS (yields) in the MIDDLE of a chained-CRC computation and is
 resumed after a SIBLING ran crc32/hexlify on a DIFFERENT hub could have its
 running digest corrupted -- the sibling would have clobbered a buffer the first
@@ -31,7 +31,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY.
     1. Computes the one-shot digest  expected = binascii.crc32(whole)  up front.
     2. Re-derives the SAME digest incrementally: it walks `whole` in random-sized
        chunks, threading a SINGLE-OWNER scalar `crc` through
-       crc = binascii.crc32(chunk, crc), and YIELDS (runloom.yield_now) after
+       crc = binascii.crc32(chunk, crc), and YIELDS (stackweave.yield_now) after
        every chunk so a sibling reliably interleaves its own crc32/codec work on
        another hub while this fiber's chain is half-built.
     3. Asserts the chained digest equals the one-shot digest.  `crc` is a plain
@@ -46,7 +46,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY.
   Because the CRC-chaining law is a pure mathematical identity (associativity of
   CRC32 over concatenation) and the operands are single-owner, the load-bearing
   oracle PASSES on a correct runtime (program exits 0 when there is no bug).  A
-  mismatch is a genuine desync of binascii's C state across a runloom park/resume.
+  mismatch is a genuine desync of binascii's C state across a stackweave park/resume.
 
 ORACLES:
   * LOAD-BEARING -- CHAINED-CRC == ONE-SHOT (worker, HARD, fail-fast).  Single-
@@ -63,7 +63,7 @@ ORACLES:
     load-bearing arms actually ran.
 
 FAIL ON: a chained CRC that differs from the one-shot CRC of the same private
-buffer, or a hex/base64 roundtrip that is not the identity, across a runloom
+buffer, or a hex/base64 roundtrip that is not the identity, across a stackweave
 park/resume.  There is NO shared-mutable oracle here -- every operand is single-
 owner -- so any failure is a real torn-C-scratch / cross-fiber-leak bug.
 
@@ -80,7 +80,7 @@ the torn digest before the associativity law even closes.
 import binascii
 
 import harness
-import runloom
+import stackweave
 
 # Per-fiber private stream length band.  Big enough that the chunked chain spans
 # many chunks (hence many yields, so a sibling reliably interleaves mid-chain),
@@ -142,7 +142,7 @@ def crc_check(H, wid, idx, rng, state):
         chunk = whole[pos:pos + clen]
         crc = binascii.crc32(chunk, crc)
         pos += clen
-        runloom.yield_now()                # sibling runs mid-chain (park/resume)
+        stackweave.yield_now()                # sibling runs mid-chain (park/resume)
 
     if crc != expected:
         H.fail("chained-CRC != one-shot: binascii.crc32 chained over {0} chunks "
@@ -165,7 +165,7 @@ def codec_check(H, wid, idx, rng, state):
 
     # ---- hex roundtrip: a2b_hex(b2a_hex(x)) == x ----
     hexed = binascii.b2a_hex(whole)
-    runloom.yield_now()                     # sibling codecs against shared scratch
+    stackweave.yield_now()                     # sibling codecs against shared scratch
     back = binascii.a2b_hex(hexed)
     if back != whole:
         H.fail("hex roundtrip broken: a2b_hex(b2a_hex(x)) != x for a {0}-byte "
@@ -175,7 +175,7 @@ def codec_check(H, wid, idx, rng, state):
 
     # ---- base64 roundtrip: a2b_base64(b2a_base64(x)) == x ----
     b64 = binascii.b2a_base64(whole)
-    runloom.yield_now()
+    stackweave.yield_now()
     back2 = binascii.a2b_base64(b64)
     if back2 != whole:
         H.fail("base64 roundtrip broken: a2b_base64(b2a_base64(x)) != x for a "

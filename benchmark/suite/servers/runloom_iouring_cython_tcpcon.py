@@ -2,14 +2,14 @@
 runloom_epoll_cython_tcpcon and the ..._opt tier; the orchestrator selects the
 backend + optimize per spec).
 
-Server tiers 4 & 5: runloom_c.serve + the zero-PyObject CYTHON handler. Backend
-is io_uring when the orchestrator sets RUNLOOM_IOURING_LOOP=1, else epoll.
+Server tiers 4 & 5: stackweave_c.serve + the zero-PyObject CYTHON handler. Backend
+is io_uring when the orchestrator sets STACKWEAVE_IOURING_LOOP=1, else epoll.
 
   tier 4: no optimize()
-  tier 5: runloom.optimize("throughput") first  (--optimize throughput)
+  tier 5: stackweave.optimize("throughput") first  (--optimize throughput)
 
-The handler (handler_cy.handler) calls runloom's cooperative recv/send as plain
-C functions via the runloom_c.__tcp_capi__ capsule, so the per-request hot loop
+The handler (handler_cy.handler) calls stackweave's cooperative recv/send as plain
+C functions via the stackweave_c.__tcp_capi__ capsule, so the per-request hot loop
 allocates no Python objects (proven by disasm_check.sh).
 """
 import argparse
@@ -18,8 +18,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # find handler_cy*.so
 
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
 
 def main():
@@ -31,21 +31,21 @@ def main():
     ap.add_argument("--token", default="")
     args = ap.parse_args()
 
-    # optimize() must run BEFORE runloom.run() (decision: tier 5 = tier 4 + this).
+    # optimize() must run BEFORE stackweave.run() (decision: tier 5 = tier 4 + this).
     if args.optimize == "throughput":
-        eff = runloom.optimize("throughput")
+        eff = stackweave.optimize("throughput")
         print("OPTIMIZE %s" % eff, flush=True)
 
     import handler_cy  # imported after optimize so the capsule/runtime are set
 
     def root():
-        port, listeners = runloom_c.serve(
+        port, listeners = stackweave_c.serve(
             args.host, args.port, handler_cy.handler,
             acceptors=args.hubs, backlog=4096)
         print("LISTENING %d" % port, flush=True)
-        runloom.sleep(float("inf"))
+        stackweave.sleep(float("inf"))
 
-    runloom.run(args.hubs, main_fn=root)
+    stackweave.run(args.hubs, main_fn=root)
 
 
 if __name__ == "__main__":

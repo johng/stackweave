@@ -97,7 +97,7 @@ surface; a data-race on the chan closed-flag / waiter list, or a missed wake, is
 often the first signal before the conservation oracle even fires.
 """
 import harness
-import runloom
+import stackweave
 
 W = 4                     # rangers (workers) per group -- share ONE work chan
 C = 3                     # collectors per group draining the results chan
@@ -179,8 +179,8 @@ def worker(H, wid, rng, state):
         if not H.running():
             break
 
-        work = runloom.Chan(WORK_CAP)
-        results = runloom.Chan(RESULTS_CAP)
+        work = stackweave.Chan(WORK_CAP)
+        results = stackweave.Chan(RESULTS_CAP)
         # Each ranger and each collector owns its OWN set (single writer) -> the
         # union is computed at the end with no shared-set mutation race.
         ranger_sets = [set() for _ in range(W)]
@@ -194,11 +194,11 @@ def worker(H, wid, rng, state):
         # Fence the W rangers so we can close the results chan ONLY after the
         # LAST ranger has returned (otherwise a collector could see results-close
         # while a ranger still wants to send -> send-on-closed raise).
-        rangers_wg = runloom.WaitGroup()
+        rangers_wg = stackweave.WaitGroup()
         rangers_wg.add(W)
         # Fence everyone (rangers + collectors + dispatcher + the closer) so the
         # group can't advance to its conservation audit while a fiber is live.
-        all_wg = runloom.WaitGroup()
+        all_wg = stackweave.WaitGroup()
         all_wg.add(W + C + 1 + 1)              # W rangers, C collectors, disp, closer
 
         def run_ranger(ri):

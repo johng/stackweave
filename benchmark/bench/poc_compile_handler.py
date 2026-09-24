@@ -23,13 +23,13 @@ Usage:  poc_compile_handler.py <mode> <N> <hubs> <dur>
 """
 import os, sys, time, random
 sys.path.insert(0, "src")
-os.environ.setdefault("RUNLOOM_SYSMON_QUIET", "1")
+os.environ.setdefault("STACKWEAVE_SYSMON_QUIET", "1")
 import cython
 import cycompile
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
-TCPConn = runloom_c.TCPConn
+TCPConn = stackweave_c.TCPConn
 REAL_MONO = time.monotonic
 
 mode = sys.argv[1] if len(sys.argv) > 1 else "io"
@@ -212,7 +212,7 @@ def acceptor(ln, handler):
             conn = ln.accept()
         except OSError:
             break
-        runloom.fiber(handler, conn, stop, stack_size=512 * 1024)
+        stackweave.fiber(handler, conn, stop, stack_size=512 * 1024)
 
 
 def client(idx, port):
@@ -242,21 +242,21 @@ def client(idx, port):
 def root(handler):
     port, listeners = open_listeners("127.0.0.1", HUBS, min(N, 65535))
     for ln in listeners:
-        runloom.fiber(acceptor, ln, handler, stack_size=256 * 1024)
+        stackweave.fiber(acceptor, ln, handler, stack_size=256 * 1024)
     for i in range(N):
-        runloom.fiber(client, i, port)
+        stackweave.fiber(client, i, port)
 
     def controller():
         t0 = REAL_MONO()
         while sum(conn_flags) < N:
-            runloom.sleep(0.01)
+            stackweave.sleep(0.01)
             if REAL_MONO() - t0 > 60:
                 break
         est = sum(conn_flags)
-        runloom.sleep(WARM)
+        stackweave.sleep(WARM)
         start = sum(rts)
         m0 = REAL_MONO()
-        runloom.sleep(DUR)
+        stackweave.sleep(DUR)
         w = REAL_MONO() - m0
         win[0] = sum(rts) - start
         stop[0] = True
@@ -268,9 +268,9 @@ def root(handler):
         print("RESULT mode=%-12s N=%-6d hubs=%d est=%d/%d  %.1fK req/s"
               % (mode, N, HUBS, est, N, win[0] / w / 1000.0))
 
-    runloom.fiber(controller)
+    stackweave.fiber(controller)
     while not stop[0]:
-        runloom.sleep(0.05)
+        stackweave.sleep(0.05)
 
 
 def main():
@@ -281,7 +281,7 @@ def main():
         print("COMPILE mode=%-12s built/imported in %.2fs gil=%s"
               % (mode, compile_s,
                  sys._is_gil_enabled() if hasattr(sys, "_is_gil_enabled") else "?"))
-    runloom.run(HUBS, lambda: root(handler))
+    stackweave.run(HUBS, lambda: root(handler))
 
 
 if __name__ == "__main__":

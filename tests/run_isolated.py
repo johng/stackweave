@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the runloom test suite one FILE per subprocess.
+"""Run the stackweave test suite one FILE per subprocess.
 
 The in-process pytest run is order- and load-sensitive: a file that leaves a
 hub thread running, leaks a parker, or SIGSEGVs under contention can wedge or
@@ -22,7 +22,7 @@ Usage:
   tests/run_isolated.py                 # every tests/test_*.py
   tests/run_isolated.py test_aio_net.py test_chan.py
   tests/run_isolated.py -k cancel       # pass-through pytest args after files
-  RUNLOOM_TEST_TIMEOUT=600 tests/run_isolated.py
+  STACKWEAVE_TEST_TIMEOUT=600 tests/run_isolated.py
 
 Exit status is non-zero if any file failed, timed out, or crashed.
 """
@@ -38,14 +38,14 @@ REPO = os.path.dirname(HERE)
 
 # Per-file wall-clock ceiling.  A hang (lost wake / un-interruptible park)
 # trips this and is reported as TIMEOUT rather than blocking the whole run.
-DEFAULT_TIMEOUT = int(os.environ.get("RUNLOOM_TEST_TIMEOUT", "300"))
+DEFAULT_TIMEOUT = int(os.environ.get("STACKWEAVE_TEST_TIMEOUT", "300"))
 
 # Global deadline scaler (libuv's UV_TEST_TIMEOUT_MULTIPLIER).  A slow / loaded /
 # emulated machine multiplies EVERY per-file ceiling (and the post-SIGABRT grace)
 # by this, so "the box was busy" reads as slow rather than a false TIMEOUT --
 # without changing any individual timeout.  Default 1; a genuine wedge still trips
-# eventually.  Set e.g. RUNLOOM_TIMEOUT_MULT=3 on a contended host.
-TIMEOUT_MULT = max(0.01, float(os.environ.get("RUNLOOM_TIMEOUT_MULT", "1")))
+# eventually.  Set e.g. STACKWEAVE_TIMEOUT_MULT=3 on a contended host.
+TIMEOUT_MULT = max(0.01, float(os.environ.get("STACKWEAVE_TIMEOUT_MULT", "1")))
 
 # Files that need a longer ceiling (soak / stress spin many fibers).
 SLOW_FILES = {
@@ -96,10 +96,10 @@ MAX_FAIL_LINES = 400
 # false failures.  On a 64-core box the tests phase measured 149s @ 8 workers,
 # 91s @ 32 (both green), but FLAKED @ 48 and @ 64 -- so the knee is ~cpu/2,
 # capped at 32.  Floor at the historical min(8,n) so small boxes are unchanged.
-# Override with -jN / --jobs N or RUNLOOM_TEST_JOBS (e.g. =64 on a big idle box).
+# Override with -jN / --jobs N or STACKWEAVE_TEST_JOBS (e.g. =64 on a big idle box).
 def _default_jobs():
     try:
-        env = os.environ.get("RUNLOOM_TEST_JOBS")
+        env = os.environ.get("STACKWEAVE_TEST_JOBS")
         if env:
             return max(1, int(env))
         n = os.cpu_count() or 4
@@ -131,14 +131,14 @@ def run_file(name, pytest_args):
     timeout = (SLOW_FILES.get(name, DEFAULT_TIMEOUT)) * TIMEOUT_MULT
     env = dict(os.environ)
     env["PYTHON_GIL"] = "0"
-    env["RUNLOOM_GIL"] = "0"
-    # TLBC now stays ON by default: runloom_c's GC frames anchor
+    env["STACKWEAVE_GIL"] = "0"
+    # TLBC now stays ON by default: stackweave_c's GC frames anchor
     # (module_gcframes.c.inc) makes parked-fiber frames visible to the free-
     # threaded collector, so the specializing interpreter is safe -- the p565/p524
     # crash the old PYTHON_TLBC=0 preset used to avoid is fixed at the source.
     # Running the suite TLBC-on matches production and exercises the anchor under
     # every test.  We no longer preset PYTHON_TLBC=0, and because the anchor is
-    # active runloom.run() no longer os.execv's mid-pytest (the old
+    # active stackweave.run() no longer os.execv's mid-pytest (the old
     # capture-corruption hazard that motivated the preset is gone).  Diagnostic
     # axis preserved: export PYTHON_TLBC=0 (inherited into env via the copy above)
     # to force a TLBC-off run, e.g. for the gc.disable() discriminator or a bisect.
@@ -147,8 +147,8 @@ def run_file(name, pytest_args):
     # pytest imports every one of them per process -- ~4s of pure overhead per
     # file, and one of them pulls _brotli which RE-ENABLES the GIL (wrong for
     # the free-threaded target).  The suite uses none of them.  Opt back in
-    # with RUNLOOM_TEST_PYTEST_PLUGINS=1 if a test ever needs one.
-    if os.environ.get("RUNLOOM_TEST_PYTEST_PLUGINS") != "1":
+    # with STACKWEAVE_TEST_PYTEST_PLUGINS=1 if a test ever needs one.
+    if os.environ.get("STACKWEAVE_TEST_PYTEST_PLUGINS") != "1":
         env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
     # Keep the in-tree .so importable regardless of how the runner was invoked.
     src = os.path.join(REPO, "src")
@@ -329,7 +329,7 @@ def main(argv):
     # it.  The conftest keeps collect_ignore_glob for a plain
     # `pytest tests/aio` invocation; this covers the isolated runner.
     if SUITE == "aio" and sys.version_info < (3, 14) and files:
-        print("== runloom isolated suite: SKIPPING tests/aio -- bodies are "
+        print("== stackweave isolated suite: SKIPPING tests/aio -- bodies are "
               "pinned from CPython 3.14 and this is {0}.{1} "
               "({2} file(s) skipped) ==".format(
                   sys.version_info[0], sys.version_info[1], len(files)))
@@ -339,7 +339,7 @@ def main(argv):
     serial   = [f for f in files if f in SERIAL_FILES]
     jobs = min(jobs, len(parallel)) or 1
 
-    print("== runloom isolated suite: {0} file(s), j={1} parallel + {2} serial, "
+    print("== stackweave isolated suite: {0} file(s), j={1} parallel + {2} serial, "
           "{3} ==".format(len(files), jobs, len(serial), sys.executable))
 
     results = []
@@ -378,8 +378,8 @@ def main(argv):
     # tight wall-clock assert can be starved into a FALSE failure -- it then
     # passes when re-run alone.  A genuine failure fails again.  Every retry is
     # logged (RECOVERED vs STILL FAILING) so a chronically-flaky file stays
-    # visible instead of being silently masked.  Disable with RUNLOOM_TEST_NORETRY=1.
-    if os.environ.get("RUNLOOM_TEST_NORETRY") != "1":
+    # visible instead of being silently masked.  Disable with STACKWEAVE_TEST_NORETRY=1.
+    if os.environ.get("STACKWEAVE_TEST_NORETRY") != "1":
         flaky = [i for i, r in enumerate(results) if r[1] not in ("PASS", "SKIP")]
         if flaky:
             print("-" * 60)

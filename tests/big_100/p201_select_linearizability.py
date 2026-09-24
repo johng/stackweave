@@ -16,14 +16,14 @@ Stresses: select send/recv linearizability under M:N, buffered-channel
 hand-off, cancellation of the losing select cases, no lost/duplicated value.
 """
 import harness
-import runloom
+import stackweave
 
 NCHAN = 16
 CHAN_CAP = 4
 
 
 def setup(H):
-    chans = [runloom.Chan(CHAN_CAP) for _ in range(NCHAN)]
+    chans = [stackweave.Chan(CHAN_CAP) for _ in range(NCHAN)]
     for ch in chans:
         H.register_close(ch)
     half = H.funcs // 2
@@ -49,11 +49,11 @@ def sender(H, wid, rng, state):
         # send-select over every channel; take whichever is ready.
         cases = [("send", ch, tok) for ch in chans]
         try:
-            r = runloom.select(cases, default=True)
+            r = stackweave.select(cases, default=True)
         except Exception:
             break                   # channels closed at teardown
         if isinstance(r, int):      # -1: every channel full right now
-            runloom.sleep(0.0002)
+            stackweave.sleep(0.0002)
             seq -= 1                # token not sent; reuse this seq
             continue
         sent += 1
@@ -75,11 +75,11 @@ def receiver(H, wid, rng, state):
     while H.running():
         cases = [("recv", ch) for ch in chans]
         try:
-            r = runloom.select(cases, default=True)
+            r = stackweave.select(cases, default=True)
         except Exception:
             break
         if isinstance(r, int):      # nothing ready
-            runloom.sleep(0.0002)
+            stackweave.sleep(0.0002)
             continue
         _idx, (val, ok) = r
         if ok:
@@ -108,7 +108,7 @@ def receiver(H, wid, rng, state):
             # finished), yield and retry; once all closed+empty, exit.
             if all(ch.closed for ch in chans):   # `.closed` is a bool attr
                 break
-            runloom.yield_now()
+            stackweave.yield_now()
 
 
 def worker(H, wid, rng, state):

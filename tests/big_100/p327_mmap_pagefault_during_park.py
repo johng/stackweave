@@ -15,7 +15,7 @@ THE HAZARD (distinct from p322's unmap-at-teardown race and from p206/p226's
 stack-guard faults).  A goroutine:
   1. mmaps a large deterministic file (byte at offset i is a closed-form pattern),
   2. reads + checksums a BEFORE region while resident,
-  3. PARKS -- runloom.sleep + a Chan round-trip + yield_now -- so the M:N
+  3. PARKS -- stackweave.sleep + a Chan round-trip + yield_now -- so the M:N
      scheduler is free to resume it on a DIFFERENT hub's OS thread (with
      --hubs>=2 and many parking fibers this resume genuinely lands foreign),
   4. madvise(MADV_DONTNEED) on an AFTER region to GUARANTEE its PTEs are torn
@@ -66,7 +66,7 @@ import mmap
 import os
 
 import harness
-import runloom
+import stackweave
 
 PAGE = mmap.PAGESIZE                 # 4096 on this box
 
@@ -127,10 +127,10 @@ def park_and_migrate(H):
     With --hubs>=2 and many parking fibers, a large fraction resume foreign --
     which is all the content-conservation oracle needs (it does not assert the
     migration, only that content survives whichever hub serviced the fault)."""
-    runloom.sleep(PARK_SLEEP)
-    runloom.yield_now()
-    runloom.sleep(PARK_SLEEP)
-    runloom.yield_now()
+    stackweave.sleep(PARK_SLEEP)
+    stackweave.yield_now()
+    stackweave.sleep(PARK_SLEEP)
+    stackweave.yield_now()
 
 
 def file_worker(H, wid, rng, state):
@@ -219,7 +219,7 @@ def anon_worker(H, wid, rng, state):
             except (OSError, ValueError):
                 pass
             am[:] = pat                       # post-migration write-fault
-            runloom.yield_now()               # another migration window
+            stackweave.yield_now()               # another migration window
             got = bytes(am[:])                # read back through any fresh fault
 
             if not H.check(

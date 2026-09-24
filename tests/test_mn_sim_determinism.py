@@ -3,7 +3,7 @@
 Two jobs:
 
 1. FREEZE the empirically-proven property the whole native mn-sim plane builds
-   on: under RUNLOOM_MN_SEED the M:N scheduler is deterministic -- same
+   on: under STACKWEAVE_MN_SEED the M:N scheduler is deterministic -- same
    (workload, hubs, seed) gives a bit-identical fiber completion order across
    fresh processes, and a different seed gives a different order.  Probed
    2026-07-09 (P1 CPU+yield 7/7, P2 timers 5/5); locked here for CPU+yield,
@@ -11,9 +11,9 @@ Two jobs:
    contract #3's first empirical support), at H=2 and H=4 (first H>2 coverage;
    a choose()/census issue at H=4 must not surface five increments late).
 
-2. FENCE the silently-broken combo: RUNLOOM_SIM=1 + mn_init must raise a
-   RuntimeError naming RUNLOOM_SIM_MN (probe P4 found wait_fd timeouts collapse
-   silently under it), and RUNLOOM_SIM_MN=1 must open the bring-up path.
+2. FENCE the silently-broken combo: STACKWEAVE_SIM=1 + mn_init must raise a
+   RuntimeError naming STACKWEAVE_SIM_MN (probe P4 found wait_fd timeouts collapse
+   silently under it), and STACKWEAVE_SIM_MN=1 must open the bring-up path.
 
 Digests come from tools/dst/mn_digest.py: subprocess per run, PYTHONHASHSEED
 pinned, assertions on PRINTED digests never exit codes (mn fiber exceptions are
@@ -102,8 +102,8 @@ class TestBatonDeterminism:
 
 class TestSimMnFence:
     def run_snippet(self, code, extra_env):
-        # hermetic_env strips inherited RUNLOOM_* -- several sim test modules
-        # set os.environ["RUNLOOM_SIM"] at import, so an in-process
+        # hermetic_env strips inherited STACKWEAVE_* -- several sim test modules
+        # set os.environ["STACKWEAVE_SIM"] at import, so an in-process
         # `pytest tests/` run would otherwise contaminate these subprocesses
         # (e.g. test_plain_mn_unaffected would trip the fence it asserts absent).
         env = mn_digest.hermetic_env(extra_env)
@@ -112,57 +112,57 @@ class TestSimMnFence:
                               stderr=subprocess.PIPE, text=True)
 
     def test_sim_plus_mn_init_raises(self):
-        """RUNLOOM_SIM without the opt-in: mn_init raises, the message names
-        RUNLOOM_SIM_MN (the silent-corruption fence, probe P4)."""
+        """STACKWEAVE_SIM without the opt-in: mn_init raises, the message names
+        STACKWEAVE_SIM_MN (the silent-corruption fence, probe P4)."""
         p = self.run_snippet(
-            "import runloom_c as rc\n"
+            "import stackweave_c as rc\n"
             "try:\n"
             "    rc.mn_init(2)\n"
             "    print('FENCE_MISSING')\n"
             "except RuntimeError as e:\n"
-            "    print('FENCE_RAISED' if 'RUNLOOM_SIM_MN' in str(e)\n"
+            "    print('FENCE_RAISED' if 'STACKWEAVE_SIM_MN' in str(e)\n"
             "          else 'FENCE_WRONG_MSG', str(e)[:120])\n",
-            {"RUNLOOM_SIM": "1"})
+            {"STACKWEAVE_SIM": "1"})
         assert "FENCE_RAISED" in p.stdout, (p.stdout, p.stderr[-800:])
 
     def test_sim_mn_optin_opens_path(self):
-        """RUNLOOM_SIM_MN=1 + RUNLOOM_MN_SEED opens the native path (since I2
+        """STACKWEAVE_SIM_MN=1 + STACKWEAVE_MN_SEED opens the native path (since I2
         the opt-in also requires the seed -- the census dispatches the ledger,
         and no census exists without controlled mode)."""
         # NOTE: an mn_run before mn_fini is required here -- mn_fini WITHOUT a
-        # prior mn_run hangs under ANY controlled-mode (RUNLOOM_MN_SEED) init,
+        # prior mn_run hangs under ANY controlled-mode (STACKWEAVE_MN_SEED) init,
         # sim or not: hubs park at the ctrl_wait_armed gate and fini never
         # releases them.  Verified PRE-EXISTING (plain-seed control hangs
         # identically); not an mn-sim regression.
         p = self.run_snippet(
-            "import runloom_c as rc\n"
+            "import stackweave_c as rc\n"
             "print('OPTIN_OK', rc.mn_init(2))\n"
             "rc.mn_fiber(lambda: None)\n"
             "rc.mn_run()\n"
             "rc.mn_fini()\n"
             "print('FINI_OK')\n",
-            {"RUNLOOM_SIM": "1", "RUNLOOM_SIM_MN": "1",
-             "RUNLOOM_MN_SEED": "12345"})
+            {"STACKWEAVE_SIM": "1", "STACKWEAVE_SIM_MN": "1",
+             "STACKWEAVE_MN_SEED": "12345"})
         assert "OPTIN_OK 2" in p.stdout and "FINI_OK" in p.stdout, \
             (p.stdout, p.stderr[-800:])
 
     def test_sim_mn_zero_still_fenced(self):
-        """RUNLOOM_SIM_MN=0 is NOT an opt-in (flag semantics, not seed
-        semantics -- unlike RUNLOOM_SIM itself, where '0' is a valid seed)."""
+        """STACKWEAVE_SIM_MN=0 is NOT an opt-in (flag semantics, not seed
+        semantics -- unlike STACKWEAVE_SIM itself, where '0' is a valid seed)."""
         p = self.run_snippet(
-            "import runloom_c as rc\n"
+            "import stackweave_c as rc\n"
             "try:\n"
             "    rc.mn_init(2)\n"
             "    print('FENCE_MISSING')\n"
             "except RuntimeError:\n"
             "    print('FENCE_RAISED')\n",
-            {"RUNLOOM_SIM": "1", "RUNLOOM_SIM_MN": "0"})
+            {"STACKWEAVE_SIM": "1", "STACKWEAVE_SIM_MN": "0"})
         assert "FENCE_RAISED" in p.stdout, (p.stdout, p.stderr[-800:])
 
     def test_plain_mn_unaffected(self):
-        """No RUNLOOM_SIM: mn_init works exactly as before (fence inert)."""
+        """No STACKWEAVE_SIM: mn_init works exactly as before (fence inert)."""
         p = self.run_snippet(
-            "import runloom_c as rc\n"
+            "import stackweave_c as rc\n"
             "print('PLAIN_OK', rc.mn_init(2))\n"
             "rc.mn_fini()\n",
             {})

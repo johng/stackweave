@@ -2,7 +2,7 @@
 transport constructor) is unguarded -> the accept fiber dies -> the server
 NEVER accepts again. Stock asyncio logs the error and keeps accepting."""
 import sys, asyncio, socket
-import runloom.aio as aio
+import stackweave.aio as aio
 
 async def main():
     loop = asyncio.get_event_loop()

@@ -1,4 +1,4 @@
-# runloom CI -- one workflow, one required check.
+# stackweave CI -- one workflow, one required check.
 #
 # ONE workflow that ALWAYS runs so the single top-level check (`ci-success`) is
 # always present and can be the sole required status; the individual matrix jobs
@@ -9,7 +9,7 @@
 #   changes  -> run? / build?   (dorny/paths-filter; path rules inline, no script)
 #   test      if run: provision ONE interpreter -- built from source when an
 #             interpreter input changed (build=true), else DOWNLOADED from the
-#             newest matching Release -- then run the runloom extension + suite
+#             newest matching Release -- then run the stackweave extension + suite
 #             against it.  Provisioning and validation are TIED in one job: one
 #             interpreter, validated once.  Skipped for a docs-only change.
 #             The from-source path is CACHED on an exact key covering every
@@ -53,15 +53,15 @@ jobs:
   #   build   = the change touches the interpreter OR the build/CI tooling
   #             (src/patches, all of tools/ci, the composite actions, this
   #             workflow) -> compile CPython from source.
-  #   runloom = a pure runloom Python-side change -> reuse the newest Release.
-  #   run     = build OR runloom (else skip; e.g. a docs-only change).
+  #   stackweave = a pure stackweave Python-side change -> reuse the newest Release.
+  #   run     = build OR stackweave (else skip; e.g. a docs-only change).
   # workflow_dispatch forces build=true (you dispatched it to (re)build).
   changes:
     name: classify (build vs reuse)
     runs-on: ubuntu-latest
     outputs:
       build: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.f.outputs.build }}
-      run: ${{ github.event_name == 'workflow_dispatch' && 'true' || (steps.f.outputs.build == 'true' || steps.f.outputs.runloom == 'true') }}
+      run: ${{ github.event_name == 'workflow_dispatch' && 'true' || (steps.f.outputs.build == 'true' || steps.f.outputs.stackweave == 'true') }}
       # Deliberately NARROWER than `build`.  Rebuilding to check that a CI script
       # edit still works is cheap and worth doing; PUBLISHING a new interpreter
       # for it is not -- the binaries would be byte-identical to the last one.
@@ -96,8 +96,8 @@ jobs:
               - 'tools/ci/versions.env'
               - 'tools/ci/build_patched_cpython.sh'
               - 'tools/ci/lib.sh'
-            runloom:
-              - 'src/runloom/**'
+            stackweave:
+              - 'src/stackweave/**'
               - 'src/runloom_c/**'
               - 'tests/**'
               - 'setup.py'
@@ -160,7 +160,7 @@ jobs:
           echo "versions=[${json%,}]" >> "$GITHUB_OUTPUT"
           echo "matrix: [${json%,}]"
 
-  # ---- provision ONE interpreter (built | prebuilt) + run runloom -----------
+  # ---- provision ONE interpreter (built | prebuilt) + run stackweave -----------
   test:
     needs: [changes, resolve]
     # `!cancelled()` is load-bearing, not decoration.  A needed job that SKIPS
@@ -189,11 +189,11 @@ jobs:
         os: [ubuntu-latest, macos-14]
     runs-on: ${{ matrix.os }}
     continue-on-error: ${{ matrix.os != 'ubuntu-latest' }}
-    # Subject is runloom-cpython: CPython patched with runloom's migration
+    # Subject is runloom-cpython: CPython patched with stackweave's migration
     # features (matches the release artifact name).  The prefix shows how it was
     # provisioned -- "build" = patched + compiled from source, "reuse" =
     # downloaded the newest matching Release -- and it is then tested (the CPython
-    # stdlib suite on the build path; runloom's own suite either way).
+    # stdlib suite on the build path; stackweave's own suite either way).
     name: "${{ needs.changes.outputs.build == 'true' && 'build' || 'reuse' }} & test runloom-cpython ${{ matrix.version }} (${{ matrix.os }})"
     timeout-minutes: 35
     env:
@@ -225,8 +225,8 @@ jobs:
           source: ${{ needs.changes.outputs.build == 'true' && 'build' || 'prebuilt' }}
           github-token: ${{ github.token }}
 
-      # Build the runloom extension + run its suite against that interpreter.
-      - name: Run runloom validation ${{ matrix.version }}
+      # Build the stackweave extension + run its suite against that interpreter.
+      - name: Run stackweave validation ${{ matrix.version }}
         uses: ./.github/actions/runloom-tests
         with:
           version: ${{ matrix.version }}
@@ -311,7 +311,7 @@ jobs:
             echo "::notice::$TAG already published -- identical inputs, nothing to do"
             exit 0
           fi
-          NOTES="Free-threaded CPython patched with runloom's cross-hub migration
+          NOTES="Free-threaded CPython patched with stackweave's cross-hub migration
           features (Py_TSTATE_ALLOC_HOME + Py_TSTATE_EXEC_HOME), generated from
           commit ${{ github.sha }}. Each .json records the exact upstream release,
           patch content hashes, and build prefix.

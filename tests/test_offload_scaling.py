@@ -19,7 +19,7 @@ propagate.  Throughput is exercised but not asserted (machine-dependent).
 """
 import unittest
 
-import runloom
+import stackweave
 
 
 class TestOffloadScaling(unittest.TestCase):
@@ -32,9 +32,9 @@ class TestOffloadScaling(unittest.TestCase):
 
         def main():
             for i in range(N):
-                runloom.fiber(lambda i=i: res.__setitem__(i, runloom.blocking(lambda n=i: n ^ 0x5a5a)))
+                stackweave.fiber(lambda i=i: res.__setitem__(i, stackweave.blocking(lambda n=i: n ^ 0x5a5a)))
 
-        runloom.run(8, main)
+        stackweave.run(8, main)
         missing = [i for i in range(N) if res[i] is None]
         wrong = [i for i in range(N) if res[i] != (i ^ 0x5a5a)]
         self.assertEqual(missing, [], "%d offloads never completed" % len(missing))
@@ -50,10 +50,10 @@ class TestOffloadScaling(unittest.TestCase):
 
             def main():
                 for i in range(N):
-                    runloom.fiber(lambda i=i: (runloom.blocking(lambda: None),
+                    stackweave.fiber(lambda i=i: (stackweave.blocking(lambda: None),
                                                done.__setitem__(i, True)))
 
-            runloom.run(8, main)
+            stackweave.run(8, main)
             missing = [i for i in range(N) if not done[i]]
             self.assertEqual(missing, [], "cycle %d: %d offloads lost" % (cycle, len(missing)))
 
@@ -68,13 +68,13 @@ class TestOffloadScaling(unittest.TestCase):
         def main():
             def f():
                 try:
-                    runloom.blocking(boom)
+                    stackweave.blocking(boom)
                 except ValueError as e:
                     seen["msg"] = str(e)
 
-            runloom.fiber(f)
+            stackweave.fiber(f)
 
-        runloom.run(4, main)
+        stackweave.run(4, main)
         self.assertEqual(seen.get("msg"), "kaboom-42")
 
 

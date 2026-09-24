@@ -17,12 +17,12 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "src"))
-import runloom_c
+import stackweave_c
 
 import os as _crashos
-if _crashos.environ.get("RUNLOOM_CRASH"):
-    runloom_c.install_crash_handler(_crashos.environ["RUNLOOM_CRASH"],
-                                 _crashos.environ.get("RUNLOOM_CRASH_FILE"))
+if _crashos.environ.get("STACKWEAVE_CRASH"):
+    stackweave_c.install_crash_handler(_crashos.environ["STACKWEAVE_CRASH"],
+                                 _crashos.environ.get("STACKWEAVE_CRASH_FILE"))
 
 from hypothesis import given, settings, seed as hseed, strategies as st, HealthCheck
 
@@ -43,16 +43,16 @@ def run_program(p):
     specs = p["gs"]
     ncoll = p["ncoll"]
     crounds = p["coll_rounds"]
-    done = runloom_c.Chan(len(specs) + ncoll)
+    done = stackweave_c.Chan(len(specs) + ncoll)
     stop = [False]
 
     def mk(spec):
-        ch = runloom_c.Chan(1)
+        ch = stackweave_c.Chan(1)
 
         def body():
             for op in spec:
                 if op == YIELD:
-                    runloom_c.sched_yield_classic()
+                    stackweave_c.sched_yield_classic()
                 elif op == CYCLE:
                     a = {}; b = {}; a["b"] = b; b["a"] = a; a["self"] = a
                     del a, b
@@ -68,14 +68,14 @@ def run_program(p):
             if stop[0]:
                 break
             gc.collect()
-            runloom_c.sched_yield_classic()
+            stackweave_c.sched_yield_classic()
         done.send(2)
 
-    runloom_c.mn_init(nhub)
+    stackweave_c.mn_init(nhub)
     for s in specs:
-        runloom_c.mn_fiber(mk(s))
+        stackweave_c.mn_fiber(mk(s))
     for _ in range(ncoll):
-        runloom_c.mn_fiber(collector)
+        stackweave_c.mn_fiber(collector)
 
     def reaper():
         for _ in range(len(specs)):
@@ -84,10 +84,10 @@ def run_program(p):
         for _ in range(ncoll):
             done.recv()
 
-    runloom_c.mn_fiber(reaper)
-    runloom_c.mn_run()
-    runloom_c.mn_fini()
-    assert runloom_c._self_check(0) == 0, "self_check failed for {0}".format(p)
+    stackweave_c.mn_fiber(reaper)
+    stackweave_c.mn_run()
+    stackweave_c.mn_fini()
+    assert stackweave_c._self_check(0) == 0, "self_check failed for {0}".format(p)
 
 
 def main():

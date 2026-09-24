@@ -25,13 +25,13 @@
 #   pkill -f lifefuzz_forever.sh; pkill -f 'lifefuzz.py sweep'
 set +e
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-PY="${RUNLOOM_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
+PY="${STACKWEAVE_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
 BATCH="${1:-100000}"
 KIND="${2:-grammar}"
 TIMEOUT="${3:-20}"
 SEED0="${4:-1}"
 WORKERS="${5:-}"                     # empty -> sweep's default (cpu-2)
-SUM="${RUNLOOM_SOAK_DIR:-$HOME/runloom-soak}/forever_lifefuzz_${KIND}_SUMMARY.txt"
+SUM="${STACKWEAVE_SOAK_DIR:-$HOME/runloom-soak}/forever_lifefuzz_${KIND}_SUMMARY.txt"
 cd "$ROOT" || exit 1
 
 export PYTHON_GIL=0

@@ -1,8 +1,8 @@
 # Run as: printf 'a\nb\n' | python stdin_natural.py  (with a held-open pipe)
 import os, sys, time, threading
-import runloom.monkey as monkey
+import stackweave.monkey as monkey
 monkey.patch()
-import runloom_c as rc
+import stackweave_c as rc
 results = []
 
 def reader():

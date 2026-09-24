@@ -5,12 +5,12 @@
 # rotation's summary.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-PY="${RUNLOOM_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
-SOAK="${RUNLOOM_SOAK_DIR:-$HOME/runloom-soak}"
+PY="${STACKWEAVE_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
+SOAK="${STACKWEAVE_SOAK_DIR:-$HOME/runloom-soak}"
 LEDGER="$SOAK/LEDGER.md"
 INBOX="$SOAK/INBOX.md"
 
-echo "==================== runloom reliability status ===================="
+echo "==================== stackweave reliability status ===================="
 
 echo
 echo "-- machine-days (soak matrix ledger) --"

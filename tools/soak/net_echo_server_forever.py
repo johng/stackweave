@@ -1,6 +1,6 @@
 """net_echo_server_forever.py -- continuous pygo TCP echo SERVER over the internet.
 
-Runs runloom_c.serve() bound to a PUBLIC interface (default :: / port 7777) so a
+Runs stackweave_c.serve() bound to a PUBLIC interface (default :: / port 7777) so a
 remote pygo client (this project's net_echo_forever.py) can soak it OVER THE
 INTERNET.  This is the SERVER-side counterpart to net_echo_forever.py: it
 exercises pygo's C accept/spawn scaffold + a per-connection handler fiber doing
@@ -14,11 +14,11 @@ oracle (byte-exact echo) lives on the CLIENT side; here the heartbeat proves the
 server scheduler is still alive and shows the live fiber count.
 
 Env knobs:
-  RUNLOOM_ECHO_BIND     bind address     (default :: -- all v6; "0.0.0.0" for v4)
-  RUNLOOM_ECHO_PORT     listen port      (default 7777)
-  RUNLOOM_ECHO_HUBS     M:N hubs / SO_REUSEPORT acceptors (default 4)
-  RUNLOOM_ECHO_BACKLOG  listen backlog   (default 1024)
-  RUNLOOM_ECHO_REPORT   seconds between heartbeat lines (default 15)
+  STACKWEAVE_ECHO_BIND     bind address     (default :: -- all v6; "0.0.0.0" for v4)
+  STACKWEAVE_ECHO_PORT     listen port      (default 7777)
+  STACKWEAVE_ECHO_HUBS     M:N hubs / SO_REUSEPORT acceptors (default 4)
+  STACKWEAVE_ECHO_BACKLOG  listen backlog   (default 1024)
+  STACKWEAVE_ECHO_REPORT   seconds between heartbeat lines (default 15)
 """
 import faulthandler
 import os
@@ -28,14 +28,14 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
-BIND = os.environ.get("RUNLOOM_ECHO_BIND", "::")
-PORT = int(os.environ.get("RUNLOOM_ECHO_PORT", "7777"))
-HUBS = int(os.environ.get("RUNLOOM_ECHO_HUBS", "4"))
-BACKLOG = int(os.environ.get("RUNLOOM_ECHO_BACKLOG", "1024"))
-REPORT = float(os.environ.get("RUNLOOM_ECHO_REPORT", "15"))
+BIND = os.environ.get("STACKWEAVE_ECHO_BIND", "::")
+PORT = int(os.environ.get("STACKWEAVE_ECHO_PORT", "7777"))
+HUBS = int(os.environ.get("STACKWEAVE_ECHO_HUBS", "4"))
+BACKLOG = int(os.environ.get("STACKWEAVE_ECHO_BACKLOG", "1024"))
+REPORT = float(os.environ.get("STACKWEAVE_ECHO_REPORT", "15"))
 CHUNK = 65536
 STOP = [False]
 
@@ -56,9 +56,9 @@ def handle(conn):
 
 def reporter(t_start):
     while not STOP[0]:
-        runloom_c.sched_sleep(REPORT)
+        stackweave_c.sched_sleep(REPORT)
         try:
-            fc = runloom_c.fiber_count()
+            fc = stackweave_c.fiber_count()
         except Exception:                       # noqa: BLE001 - best-effort liveness
             fc = -1
         sys.stderr.write(
@@ -69,17 +69,17 @@ def reporter(t_start):
 
 def root():
     t_start = time.monotonic()
-    port, listeners = runloom_c.serve(
+    port, listeners = stackweave_c.serve(
         BIND, PORT, handle, acceptors=HUBS, backlog=BACKLOG)
     sys.stderr.write(
         "[net_echo_srv] LISTENING {0}:{1} acceptors={2} backlog={3}\n".format(
             BIND, port, HUBS, BACKLOG))
     sys.stderr.flush()
-    runloom.fiber(lambda: reporter(t_start))
+    stackweave.fiber(lambda: reporter(t_start))
     # serve()'s C accept loops run under the hubs; park root until a signal flips
     # STOP, then close the listeners so the accept loops (and run()) drain.
     while not STOP[0]:
-        runloom_c.sched_sleep(3600)
+        stackweave_c.sched_sleep(3600)
     for l in listeners:
         l.close()
 
@@ -98,7 +98,7 @@ def main():
         "continuous, NO restart (a crash stays crashed so it is visible)\n".format(
             os.getpid(), BIND, PORT, HUBS, BACKLOG))
     sys.stderr.flush()
-    runloom.run(HUBS, main_fn=root)
+    stackweave.run(HUBS, main_fn=root)
 
 
 if __name__ == "__main__":

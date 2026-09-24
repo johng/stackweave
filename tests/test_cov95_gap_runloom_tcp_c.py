@@ -4,8 +4,8 @@ Targets the uncovered-but-reachable lines classified COVER in
 build/cover_by_tu.json under "runloom_tcp.c":
 
   runloom_tcp.c
-    L90        resolve_mode: RUNLOOM_TCPCONN_IOURING="auto" -> MODE_AUTO branch
-    L94-95     resolve_mode: RUNLOOM_TCPCONN_IOURING_THRESHOLD set -> atoi>0 latch
+    L90        resolve_mode: STACKWEAVE_TCPCONN_IOURING="auto" -> MODE_AUTO branch
+    L94-95     resolve_mode: STACKWEAVE_TCPCONN_IOURING_THRESHOLD set -> atoi>0 latch
     L116-121   use_iouring auto-choice block (count<threshold -> 0 ; >=threshold -> 1)
   runloom_tcp_conn_send.c.inc
     L30        send while(1) loop back-edge (resume after an EAGAIN park)
@@ -44,7 +44,7 @@ from adv_util import hang_guard  # noqa: E402
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PY = sys.executable
 
-import runloom_c as rc  # noqa: E402
+import stackweave_c as rc  # noqa: E402
 
 pytestmark = pytest.mark.skipif(
     not sys.platform.startswith("linux"),
@@ -77,14 +77,14 @@ def _run_child(script, env_extra, timeout=60):
 # ===========================================================================
 # 1. resolve_mode "auto" branch (runloom_tcp.c L90) + the auto-choice block
 #    with count < threshold -> choice=0 (pure epoll; L116/117/118/121).
-#    RUNLOOM_TCPCONN_IOURING=auto with the DEFAULT threshold (2048) and a couple
+#    STACKWEAVE_TCPCONN_IOURING=auto with the DEFAULT threshold (2048) and a couple
 #    of conns: live_count never crosses 2048, so the auto branch picks epoll.
 #    The send/recv still round-trips (oracle: echo), proving the auto-epoll path
 #    is clean.
 # ===========================================================================
 _AUTO_EPOLL = r'''
 import sys; sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 res = [None]
 def main():
     def server():
@@ -115,16 +115,16 @@ sys.stdout.write("AUTO_EPOLL %r\n" % (res[0] == b"ping",))
 
 @needs_iouring
 def test_resolve_mode_auto_below_threshold_picks_epoll():
-    # RUNLOOM_TCPCONN_IOURING=auto -> L90 strcmp("auto") branch + the auto-choice
+    # STACKWEAVE_TCPCONN_IOURING=auto -> L90 strcmp("auto") branch + the auto-choice
     # block taking the count<threshold (default 2048) -> epoll path (L121).
-    p = _run_child(_AUTO_EPOLL, {"RUNLOOM_TCPCONN_IOURING": "auto"})
+    p = _run_child(_AUTO_EPOLL, {"STACKWEAVE_TCPCONN_IOURING": "auto"})
     assert p.returncode == 0, (p.stdout[-500:], p.stderr[-1500:])
     assert "AUTO_EPOLL True" in p.stdout, (p.stdout[-500:], p.stderr[-1500:])
 
 
 # ===========================================================================
 # 2. resolve_mode threshold parse (L94-95) + the auto-choice io_uring branch
-#    (L119): RUNLOOM_TCPCONN_IOURING=auto + THRESHOLD=1.  atoi("1")=1>0 latches
+#    (L119): STACKWEAVE_TCPCONN_IOURING=auto + THRESHOLD=1.  atoi("1")=1>0 latches
 #    the threshold (L94-95); a single live conn makes live_count>=1>=threshold,
 #    so the auto block picks io_uring (choice=1).  We drive use_iouring via a
 #    bounded TCPConn.send (io_uring SEND -- NOT a backpressured recv), so no
@@ -132,7 +132,7 @@ def test_resolve_mode_auto_below_threshold_picks_epoll():
 # ===========================================================================
 _AUTO_IOURING_SEND = r'''
 import sys, socket; sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 res = [None]
 def _port(lst):
     s = socket.socket(fileno=socket.dup(lst.fileno()))
@@ -168,15 +168,15 @@ sys.stdout.write("AUTO_IOURING_SEND %r\n" % (res[0],))
 @needs_iouring
 def test_resolve_mode_threshold_one_auto_picks_iouring_send():
     p = _run_child(_AUTO_IOURING_SEND,
-                   {"RUNLOOM_TCPCONN_IOURING": "auto",
-                    "RUNLOOM_TCPCONN_IOURING_THRESHOLD": "1"})
+                   {"STACKWEAVE_TCPCONN_IOURING": "auto",
+                    "STACKWEAVE_TCPCONN_IOURING_THRESHOLD": "1"})
     assert p.returncode == 0, (p.stdout[-500:], p.stderr[-1500:])
     assert "AUTO_IOURING_SEND 4" in p.stdout, (p.stdout[-500:], p.stderr[-1500:])
 
 
 # ===========================================================================
 # 3. recv_into single-shot io_uring RECV fallback (conn_io.c.inc L265-268).
-#    RUNLOOM_TCPCONN_IOURING=1 + recv_into(buf, n, flags=MSG_PEEK): flags!=0
+#    STACKWEAVE_TCPCONN_IOURING=1 + recv_into(buf, n, flags=MSG_PEEK): flags!=0
 #    bypasses the pbuf multishot fast-path and takes the single-shot
 #    runloom_iouring_recv fallback.  The peer has ALREADY sent the bytes (they
 #    sit in the socket buffer) so the op completes inline via io_uring FAST_POLL
@@ -185,7 +185,7 @@ def test_resolve_mode_threshold_one_auto_picks_iouring_send():
 # ===========================================================================
 _PEEK_SINGLESHOT = r'''
 import sys, socket; sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 res = {}
 def _port(lst):
     s = socket.socket(fileno=socket.dup(lst.fileno()))
@@ -222,7 +222,7 @@ def test_recv_into_msg_peek_singleshot_fallback():
     # MSG_PEEK + pre-ready bytes -> the single-shot io_uring RECV fallback
     # (L265-268) completes inline.  This is the SAFE single tiny bounded op, not
     # the backpressured-recv deadlock path.
-    p = _run_child(_PEEK_SINGLESHOT, {"RUNLOOM_TCPCONN_IOURING": "1"},
+    p = _run_child(_PEEK_SINGLESHOT, {"STACKWEAVE_TCPCONN_IOURING": "1"},
                    timeout=40)
     assert p.returncode == 0, (p.stdout[-500:], p.stderr[-1800:])
     # The single-shot RECV completed and returned the peeked bytes (or, if the
@@ -458,12 +458,12 @@ def test_send_all_on_closed_conn_raises():
 #    whose errno is not in {EAGAIN,EWOULDBLOCK,EINTR,ECONNABORTED} -> L110 true
 #    -> L111 PyErr_SetFromErrno -> clean OSError.  No in-process FINJ hook on
 #    Linux (RUNLOOM_TCP_FINJ==0), so use strace -e inject=accept:error=EINVAL.
-#    NB: runloom's accept path uses the bare accept() syscall (NOT accept4),
+#    NB: stackweave's accept path uses the bare accept() syscall (NOT accept4),
 #    confirmed by `strace -e trace=accept,accept4`.
 # ===========================================================================
 _ACCEPT_FATAL = r'''
 import sys, socket; sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 box = {}
 def main():
     lst = rc.TCPConn.listen("127.0.0.1", 0)
@@ -512,7 +512,7 @@ def test_accept_fatal_error_surfaces_oserror():
     # EINVAL is not in {EAGAIN,EWOULDBLOCK,EINTR,ECONNABORTED} -> L110 fatal.
     cmd = [strace, "-f", "-e", "signal=none",
            # the accept path now uses accept4(SOCK_NONBLOCK) on Linux by default
-           # (RUNLOOM_TCP_ACCEPT4); inject on BOTH so the fault fires whichever runs.
+           # (STACKWEAVE_TCP_ACCEPT4); inject on BOTH so the fault fires whichever runs.
            "-e", "inject=accept,accept4:error=EINVAL:when=1+",
            PY, "-c", _ACCEPT_FATAL]
     try:

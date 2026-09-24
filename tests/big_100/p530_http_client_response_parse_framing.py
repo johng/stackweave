@@ -43,7 +43,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY.
       X-Wid==wid, X-Salt==salt, and body==the exact wid+salt-tagged bytes.
     The HTTPResponse object, both socket ends, and the expected bytes are all
     single-owner (per round, one fiber) -- so a mismatch is NOT the documented
-    "HTTPResponse is not shared-safe" semantics; it is a runloom framing-state
+    "HTTPResponse is not shared-safe" semantics; it is a stackweave framing-state
     desync across the park (a real runtime bug: lost/torn body, framing int
     corrupted across the yield, or a cross-fiber leak of one fiber's parser state).
 
@@ -72,7 +72,7 @@ import http.client
 import socket
 
 import harness
-import runloom
+import stackweave
 
 # ---- the wid+salt-tagged response ----------------------------------------
 # The body is a fixed-length run of the fiber's own "W<wid>R<salt>" tag so EVERY
@@ -153,7 +153,7 @@ def writer_fiber(H, wsock, response, split, wg):
     try:
         try:
             wsock.sendall(response[:split])
-            runloom.sleep(WRITER_GAP)
+            stackweave.sleep(WRITER_GAP)
             wsock.sendall(response[split:])
             try:
                 wsock.shutdown(socket.SHUT_WR)     # signal EOF (harmless for both)
@@ -171,7 +171,7 @@ def read_body_two_parts(resp):
     framing state (self.length / self.chunk_left) is carried across a cooperative
     park (the second read must recv the writer's tail slice)."""
     first = resp.read(HALF)                # satisfied from the first wire slice
-    runloom.yield_now()                    # force a sibling interleave at the hazard
+    stackweave.yield_now()                    # force a sibling interleave at the hazard
     rest = resp.read()                     # PARKS on recv for the writer's tail
     return first + rest
 
@@ -185,7 +185,7 @@ def run_round(H, wid, idx, case, salt, state):
     rsock.setblocking(True)
     wsock.setblocking(True)
 
-    wg = runloom.WaitGroup()
+    wg = stackweave.WaitGroup()
     wg.add(1)
     resp = None
     try:
@@ -333,4 +333,4 @@ if __name__ == "__main__":
                  "X-Wid/X-Salt headers, and every body byte MUST exactly match what "
                  "was written, with the body read in two read() calls straddling a "
                  "yield.  A body length/content mismatch, a wrong header, or a torn "
-                 "status is a runloom framing-state desync across the park")
+                 "status is a stackweave framing-state desync across the park")

@@ -2,7 +2,7 @@
 while as_completed() / result() waiters park on other hubs.
 
 No existing program drives the fiber-backed ThreadPoolExecutor.  Under
-runloom.monkey.patch() concurrent.futures.ThreadPoolExecutor is the
+stackweave.monkey.patch() concurrent.futures.ThreadPoolExecutor is the
 CoThreadPoolExecutor: each submitted callable runs as an M:N fiber, and the
 stock concurrent.futures.Future resolves through a (now cooperative) Condition.
 The FT hazard lives in the completion path:
@@ -78,7 +78,7 @@ workers.
 import logging
 
 import harness
-import runloom
+import stackweave
 
 # Futures per worker round.  Big enough that the executor's max_workers bound
 # forces real queue backlog (so some submits race completion of earlier ones and

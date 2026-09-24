@@ -16,12 +16,12 @@ WHERE M:N COULD BREAK IT (the gap this program probes).  tcgetattr() runs the C
 `tcgetattr(2)` syscall and then ALLOCATES several Python objects (the outer list,
 the cc sub-list, the per-control-char bytes/int objects) with the GIL OFF while a
 sibling fiber on another hub is simultaneously doing the same in ITS own
-tcgetattr()/tcsetattr().  If runloom's cooperative machinery torn the returned
+tcgetattr()/tcsetattr().  If stackweave's cooperative machinery torn the returned
 list, leaked another fiber's freshly-built list into this fiber's call, or the
 struct-to-list conversion raced object allocation, this fiber would observe an
 attr list that DIFFERS from the one it just read on the same unchanged fd, or
 whose fiber-unique fingerprint (VMIN/VTIME set from wid+round) is another fiber's
-value.  We force a hub interleave with runloom.yield_now() between the two reads
+value.  We force a hub interleave with stackweave.yield_now() between the two reads
 so a sibling reliably runs in the window.
 
 WHICH ORACLE IS LOAD-BEARING, AND WHY.  Two laws on a SINGLE-OWNER pty slave fd:
@@ -90,7 +90,7 @@ except ImportError:
     sys.exit(0)
 
 import harness
-import runloom
+import stackweave
 
 # Each concurrent worker holds master+slave (2 pty devices); the kernel caps
 # ptys at /proc/sys/kernel/pty/max (default 4096).  Cap so <=1024 devices are
@@ -178,9 +178,9 @@ def run_session(H, wid, rnd, rng, state):
         # semantics (single-owner fd, no sibling touches it).
         idx = 0
         while H.running() and idx < INNER_CAP:
-            runloom.yield_now()             # force a sibling to interleave here
+            stackweave.yield_now()             # force a sibling to interleave here
             if idx & 1:
-                runloom.sleep(0.0002)
+                stackweave.sleep(0.0002)
             again = termios.tcgetattr(slave)
             if not attrs_equal(again, post):
                 H.fail("termios attr list CHANGED across a yield on an untouched "

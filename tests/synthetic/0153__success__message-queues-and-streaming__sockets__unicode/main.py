@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 """Message queues and streaming -- a message queues and streaming toy using the sockets primitive with a unicode payload, expecting success.
 
-Synthetic runloom toy program (auto-generated).
+Synthetic stackweave toy program (auto-generated).
   test type : success
   category  : message queues and streaming
   primitive : sockets
   format    : unicode (utf-8)
-  scheduler : M:N via runloom.run(8, root), free-threaded 3.13t, GIL off
+  scheduler : M:N via stackweave.run(8, root), free-threaded 3.13t, GIL off
 
-Exercises runloom's main API -- the root goroutine spawns workers with
-runloom.fiber(...) onto 8 hub threads, using the monkey-patched cooperative
+Exercises stackweave's main API -- the root goroutine spawns workers with
+stackweave.fiber(...) onto 8 hub threads, using the monkey-patched cooperative
 sockets primitive to carry a unicode payload.  Prints PASS and exits 0 when
 healthy; FAIL / hang / crash signals a bug.
 """
@@ -37,8 +37,8 @@ import multiprocessing as mp
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "..", "src"))
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
 THEME = "message queues and streaming"
 CATSLUG = "message-queues-and-streaming"
@@ -93,8 +93,8 @@ def decode(buf):
 
 # ---- body ----
 def main():
-    runloom.monkey.patch()
-    GO = runloom.fiber
+    stackweave.monkey.patch()
+    GO = stackweave.fiber
     payload = mk_payload()
     enc = encode(payload)
     assert decode(enc) == payload
@@ -103,7 +103,7 @@ def main():
     listener.bind(("127.0.0.1", 0))
     listener.listen(128)
     port = listener.getsockname()[1]
-    results = runloom.Chan(NW)
+    results = stackweave.Chan(NW)
     state = {"good": 0}
 
     def handle(conn):
@@ -142,7 +142,7 @@ def main():
         GO(accept_loop)
         for _ in range(NW):
             GO(client)
-    runloom.run(NHUB, __root)
+    stackweave.run(NHUB, __root)
     listener.close()
     finish(state["good"] == NW, state)
 

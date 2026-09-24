@@ -1,9 +1,9 @@
 """Hammer: many selects (SEND and RECV cases mixed, multiple consumers)
 racing across hubs.  Integrity: every produced value received exactly once."""
 import sys
-import runloom
-import runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave
+import stackweave_c as rc
+from stackweave.sync import WaitGroup
 
 HUBS = int(sys.argv[1]) if len(sys.argv) > 1 else 8
 K = 4            # channels
@@ -57,7 +57,7 @@ def main():
         rc.mn_fiber(lambda pid=p: producer(pid))
     wg.wait()
 
-runloom.run(HUBS, main)
+stackweave.run(HUBS, main)
 
 got = [v for slot in sink for v in slot]
 expected = set(range(TOTAL))

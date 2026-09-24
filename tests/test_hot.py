@@ -1,4 +1,4 @@
-"""@runloom.hot + auto per-core handler scaling.
+"""@stackweave.hot + auto per-core handler scaling.
 
 The contention these fix is SHARED CLOSURE CELLS: one closure (e.g.
 ``handler = make_app(config)``) run by many fibers across many cores makes the
@@ -10,13 +10,13 @@ Runnable standalone or under pytest.
 import os
 import threading
 
-import runloom
+import stackweave
 
 
 def test_hot_splits_cells_per_thread_and_shares_code():
     captured = {"n": 7}                       # a read-only capture
 
-    @runloom.hot
+    @stackweave.hot
     def work(x):
         return x * captured["n"]              # reads the captured dict
 
@@ -47,7 +47,7 @@ def test_hot_splits_cells_per_thread_and_shares_code():
 def test_hot_noop_on_module_level_def():
     def plain(x):                             # captures nothing -> already scales
         return x + 1
-    assert runloom.hot(plain) is plain        # returned unchanged, a true no-op
+    assert stackweave.hot(plain) is plain        # returned unchanged, a true no-op
 
 
 def test_hot_noop_on_rebound_capture():
@@ -56,22 +56,22 @@ def test_hot_noop_on_rebound_capture():
     def acc():
         nonlocal total                        # REBINDS a capture -> unsafe to split
         total += 1
-    assert runloom.hot(acc) is acc            # left shared, not split
+    assert stackweave.hot(acc) is acc            # left shared, not split
 
 
 def test_hot_is_noop_when_disabled():
-    os.environ["RUNLOOM_HOT_HANDLERS"] = "0"
+    os.environ["STACKWEAVE_HOT_HANDLERS"] = "0"
     try:
         cfg = {"k": 1}
 
-        @runloom.hot
+        @stackweave.hot
         def work():
             return cfg["k"]
 
         work(); work()
         assert work._runloom_copies == {}     # disabled -> never made a copy
     finally:
-        os.environ.pop("RUNLOOM_HOT_HANDLERS", None)
+        os.environ.pop("STACKWEAVE_HOT_HANDLERS", None)
 
 
 def test_hot_noop_on_non_function():
@@ -79,26 +79,26 @@ def test_hot_noop_on_non_function():
         def __call__(self):
             return 7
     c = C()
-    assert runloom.hot(c) is c                # passthrough, no crash
+    assert stackweave.hot(c) is c                # passthrough, no crash
 
 
 def test_hot_under_mn_scheduler():
     out = bytearray(64)                       # captured, mutated in place (safe)
 
-    @runloom.hot
+    @stackweave.hot
     def w(i):
         out[i] = (i * 3) & 0xff               # distinct slot -> race-free
 
     def root():
         for i in range(64):
-            runloom.fiber(w, i)
+            stackweave.fiber(w, i)
 
-    runloom.run(4, root)
+    stackweave.run(4, root)
     assert all(out[i] == ((i * 3) & 0xff) for i in range(64)), bytes(out)
 
 
 def test_auto_promotes_busy_closure():
-    from runloom import _hot
+    from stackweave import _hot
     a = _hot._AutoHot()
     a.after, a.budget = 4, 2
     cfg = object()
@@ -116,7 +116,7 @@ def test_auto_promotes_busy_closure():
 
 
 def test_auto_skips_module_level_def():
-    from runloom import _hot
+    from stackweave import _hot
     a = _hot._AutoHot()
     a.after = 1
 
@@ -130,7 +130,7 @@ def test_auto_skips_module_level_def():
 
 def test_auto_budget_caps_and_warns():
     import warnings
-    from runloom import _hot
+    from stackweave import _hot
     a = _hot._AutoHot()
     a.after, a.budget = 1, 1
     c1, c2 = object(), object()

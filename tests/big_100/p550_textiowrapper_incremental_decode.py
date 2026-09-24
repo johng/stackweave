@@ -87,7 +87,7 @@ conservation check even closes.
 import io
 
 import harness
-import runloom
+import stackweave
 
 # A palette of characters spanning all four UTF-8 encoded lengths.  Every entry is
 # unambiguously valid UTF-8, and the multibyte ones (2/3/4 bytes) are what get
@@ -133,7 +133,7 @@ class TinyChunkRaw(io.RawIOBase):
     Backed by an in-memory io.BytesIO (no fds).  Because it returns at most 3 bytes
     per call, TextIOWrapper's chunked decode repeatedly stalls in the MIDDLE of a
     multibyte character, with the leading bytes held as pending decoder state.  The
-    runloom.yield_now() inside readinto deschedules the fiber at exactly that
+    stackweave.yield_now() inside readinto deschedules the fiber at exactly that
     moment, with the live C TextIOWrapper.read() frame on the saved native stack.
 
     Single-owner: each fiber constructs its own TinyChunkRaw; no sharing."""
@@ -159,7 +159,7 @@ class TinyChunkRaw(io.RawIOBase):
         # leading bytes -- the whole point of the program.  A sibling fiber on
         # another hub is in the same state on its OWN TextIOWrapper right now.
         self.parks += 1
-        runloom.yield_now()
+        stackweave.yield_now()
         return n
 
 
@@ -185,7 +185,7 @@ def decode_round(H, wid, rnd, rng, state):
             if piece == "":
                 break
             out.append(piece)
-            runloom.yield_now()        # park between reads too (decoder at rest here)
+            stackweave.yield_now()        # park between reads too (decoder at rest here)
     except UnicodeDecodeError as exc:
         # The source is valid UTF-8 and the decoder is single-owner: a decode error
         # can only mean the pending continuation bytes were dropped across a park or

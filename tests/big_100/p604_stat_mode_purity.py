@@ -13,7 +13,7 @@ boundary or is observed mid-flight by a sibling.
 WHERE M:N COULD BREAK IT (the gap this program probes).  Each stat function is a
 mathematical map: the SAME mode word must ALWAYS yield the SAME S_IFMT / S_IMODE /
 predicate tuple / filemode string, and that output is fixed by a closed form
-(mode & 0o170000, mode & 0o7777, a fixed bit table).  runloom parks a fiber at a
+(mode & 0o170000, mode & 0o7777, a fixed bit table).  stackweave parks a fiber at a
 cooperative yield and may resume it on a DIFFERENT hub while siblings hammer the
 same C functions with THEIR OWN mode words.  If the C stat path kept any hidden
 mutable/global scratch (a shared buffer for the filemode char list, a cached last-
@@ -29,7 +29,7 @@ mutable container in the oracle.  So a mismatch cannot be "documented shared-obj
 racing" (there is no shared object) -- it can only be the runtime tearing a pure
 computation.  We verified the closed-form laws below against the C `_stat` on plain
 threads (GIL on and off): every mode word decodes identically every time, 0
-mismatches.  Under a CORRECT runloom the oracle therefore PASSES (exit 0).
+mismatches.  Under a CORRECT stackweave the oracle therefore PASSES (exit 0).
 
 ORACLES:
   * LOAD-BEARING -- STAT PURITY (worker, HARD, fail-fast).  Each fiber draws a
@@ -49,7 +49,7 @@ ORACLES:
         hubs;
       - recomputes the bundle A and asserts A == B bit-identical (purity across the
         yield) AND A still matches the closed form.
-    Single-owner: `mode` is a fiber-local int, never shared; a mismatch is a runloom
+    Single-owner: `mode` is a fiber-local int, never shared; a mismatch is a stackweave
     purity/tearing bug, not documented Python semantics.
 
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber stranded inside a C stat
@@ -76,7 +76,7 @@ tear before the string-equality oracle fires.
 import stat
 
 import harness
-import runloom
+import stackweave
 
 # The seven file-type format words that the real predicates recognize (Linux;
 # S_IFDOOR/PORT/WHT are 0 fallbacks and their predicates are hardwired False).
@@ -265,9 +265,9 @@ def check_once(H, wid, mode, state):
         return
 
     # ---- YIELD: let siblings hammer the same C functions on other hubs ------
-    runloom.yield_now()
+    stackweave.yield_now()
     if mode & 1:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
 
     # ---- purity across the yield: recompute must be bit-identical ----------
     a_fmt, a_imode, a_preds, a_fm = decode(mode)
@@ -337,5 +337,5 @@ if __name__ == "__main__":
                  "the self-consistency laws, yields so siblings interleave on other "
                  "hubs, then recomputes and asserts the decode is bit-identical and "
                  "still matches the closed form.  A decode that disagrees with the "
-                 "closed form, changes across a yield, or breaks a law is a runloom "
+                 "closed form, changes across a yield, or breaks a law is a stackweave "
                  "purity/tearing bug (no shared mutable state exists here)")

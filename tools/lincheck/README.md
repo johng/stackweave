@@ -1,4 +1,4 @@
-# lincheck -- linearizability checking for runloom channels
+# lincheck -- linearizability checking for stackweave channels
 
 A real concurrent send/recv/close history from an M:N run, checked against the
 sequential FIFO-channel spec with [Porcupine](porcupine) -- proving the channel

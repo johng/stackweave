@@ -15,5 +15,5 @@ PY="/home/x/.pyenv/versions/3.14.4t/bin/python3"
 # Raise this shell's fd ceiling (idempotent; needs passwordless sudo).
 sudo -n prlimit --pid $$ --nofile=8388608:8388608 2>/dev/null
 
-exec env RUNLOOM_SYSMON_QUIET=1 PYTHON_GIL=0 PYTHONPATH="$ROOT/src" \
+exec env STACKWEAVE_SYSMON_QUIET=1 PYTHON_GIL=0 PYTHONPATH="$ROOT/src" \
     "$PY" "$ROOT/tests_c/bench_server_py.py" "$@"

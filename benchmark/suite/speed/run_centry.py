@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Driver for the c_entry scheduler capstone. Mirrors runloom_epoll_py_fiber.py's
 ctxswitch/spawn but spawns tstate-free c_entry fibers (no Python eval, no shared
-closure cells) via centry_probe. Resolves runloom_c's exported scheduler symbols
-by promoting runloom_c.so to RTLD_GLOBAL before importing the probe.
+closure cells) via centry_probe. Resolves stackweave_c's exported scheduler symbols
+by promoting stackweave_c.so to RTLD_GLOBAL before importing the probe.
 
 The orchestrator subtracts an n=0 baseline (same as run_speed.py).
 """
@@ -14,10 +14,10 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import runloom_c
-ctypes.CDLL(runloom_c.__file__, mode=ctypes.RTLD_GLOBAL)   # promote exported symbols
+import stackweave_c
+ctypes.CDLL(stackweave_c.__file__, mode=ctypes.RTLD_GLOBAL)   # promote exported symbols
 import centry_probe                                          # noqa: E402
-import runloom                                               # noqa: E402
+import stackweave                                               # noqa: E402
 
 
 def m_ctxswitch(n, hubs):
@@ -26,14 +26,14 @@ def m_ctxswitch(n, hubs):
     def root():
         centry_probe.spawn_yielders_c(G, K)
     t0 = time.perf_counter()
-    runloom.run(hubs, root)
+    stackweave.run(hubs, root)
     return {"seconds": time.perf_counter() - t0, "switches": G * K, "n": n,
             "hubs": hubs, "fibers": G}
 
 
 def m_spawn(n, hubs, warm=0):
     # warm>0: run the spawn `warm` extra times in-process first and report the
-    # BEST timed pass, so the one-time runloom.run() scheduler boot is excluded --
+    # BEST timed pass, so the one-time stackweave.run() scheduler boot is excluded --
     # the same basis Go is measured on (its runtime is already up at main()).
     # warm=0: single raw pass (boot included), the cold first-burst.
     def root():
@@ -41,7 +41,7 @@ def m_spawn(n, hubs, warm=0):
     best = None
     for _ in range(warm + 1):
         t0 = time.perf_counter()
-        runloom.run(hubs, root)
+        stackweave.run(hubs, root)
         dt = time.perf_counter() - t0
         best = dt if best is None else min(best, dt)
     return {"seconds": best, "n": n, "hubs": hubs, "warm": warm}

@@ -10,7 +10,7 @@ os.fork() in an M:N runtime copies ONLY the calling OS thread, so the child
 inherits a FROZEN scheduler: every other hub thread is GONE in the child, yet the
 child's address space still holds parked-g state, a duplicated open listener +
 recv-parked sockets' netpoll fds, AND -- the genuinely new stressor -- the
-pid-keyed state of an offload (`runloom_c.blocking(...)`) that is STILL
+pid-keyed state of an offload (`stackweave_c.blocking(...)`) that is STILL
 OUTSTANDING at fork time.  The blockpool keys its in-flight work / wait state by
 identity that the child now duplicates while its pool thread does NOT exist in the
 child.  If the fork-child does anything COOPERATIVE before exec/_exit (touch the
@@ -88,10 +88,10 @@ sys.path.insert(0, __SRC_PATH__)
 RAW_WAITPID = os.waitpid
 RAW_EXIT = os._exit
 REAL_SLEEP = time.sleep
-import runloom
-import runloom_c
-import runloom.monkey
-runloom.monkey.patch()                     # cooperative socket I/O on the hubs
+import stackweave
+import stackweave_c
+import stackweave.monkey
+stackweave.monkey.patch()                     # cooperative socket I/O on the hubs
 
 K = int(sys.argv[1]) if len(sys.argv) > 1 else 8
 
@@ -103,7 +103,7 @@ recv_done = [0]                            # recv g's that observed wake (diagno
 
 def slow_fstat(path):
     # Body of the OUTSTANDING offload: a genuinely blocking syscall on a pool
-    # thread (runloom_c.blocking parks the calling fiber on the blockpool with
+    # thread (stackweave_c.blocking parks the calling fiber on the blockpool with
     # pid-keyed wait state).  A short real sleep keeps it IN FLIGHT across the
     # fork + DONE-MARKER instant so the fork duplicates the offload's wait state
     # while its pool thread does NOT exist in the child.
@@ -126,11 +126,11 @@ def recv_parked(s):
 
 def offload_holder():
     # A goroutine whose ONLY job is to be parked on an outstanding offload at the
-    # fork instant.  runloom.blocking parks here on the blockpool until slow_fstat
+    # fork instant.  stackweave.blocking parks here on the blockpool until slow_fstat
     # returns; we spawn it just before DONE-MARKER and never join it before the
     # fork, so the offload's pid-keyed state is live across fork().
     try:
-        runloom.blocking(slow_fstat, 0.6)
+        stackweave.blocking(slow_fstat, 0.6)
     except Exception:
         pass                               # torn down at teardown -> done
 
@@ -153,7 +153,7 @@ def fork_at_exit():
         # otherwise wedge any cooperative op here), then RAW _exit -- NO
         # cooperative op, NO offload wait, NO scheduler touch (heeds p111).
         try:
-            runloom_c.reset_after_fork()
+            stackweave_c.reset_after_fork()
         except Exception:
             pass                           # even if unavailable, still _exit so the
                                            # parent's WEXITSTATUS oracle is precise
@@ -189,13 +189,13 @@ def main():
     for _ in range(K):
         a, b = socket.socketpair()
         live.append(a); live.append(b)
-        runloom.fiber(recv_parked, a)       # parks in recv; peer b never sends
+        stackweave.fiber(recv_parked, a)       # parks in recv; peer b never sends
 
     # The OUTSTANDING offload: spawn the holder so an offload is in flight (its
     # pid-keyed blockpool wait state is live across the fork).
-    runloom.fiber(offload_holder)
+    stackweave.fiber(offload_holder)
 
-    runloom.sleep(0.05)                      # settle: recv g's parked, offload in flight
+    stackweave.sleep(0.05)                      # settle: recv g's parked, offload in flight
     # DONE-MARKER proves the hazard is fully set up: listener open, K recv g's
     # PARKED, offload OUTSTANDING -- right before we fork from a goroutine.
     sys.stdout.write("DONE-MARKER\n"); sys.stdout.flush()
@@ -204,8 +204,8 @@ def main():
     # RETURN so run()/mn_fini drains the still-in-flight resources (the teardown
     # the fork raced).  Run it on its OWN goroutine and join via a tiny settle so
     # the fork happens with the recv g's still parked + offload still outstanding.
-    runloom.fiber(fork_at_exit)
-    runloom.sleep(0.15)                      # let the fork+reap complete before drain
+    stackweave.fiber(fork_at_exit)
+    stackweave.sleep(0.15)                      # let the fork+reap complete before drain
 
     # Close the live sockets so the parked recv g's wake (EOF/ECANCELED) and the
     # listener closes -- then fall off main(): run() joins the woken g's + the
@@ -219,7 +219,7 @@ def main():
     # would SIGSEGV here before MAIN-EXIT; a wedged drain would hang (-> timeout).
 
 
-runloom.run(4, main)
+stackweave.run(4, main)
 # Reached only if the fork raced the teardown cleanly: run() joined the recv g's,
 # the outstanding offload drained, and mn_fini ran with no crash/wedge.
 sys.stdout.write("MAIN-EXIT\n"); sys.stdout.flush()
@@ -335,7 +335,7 @@ if __name__ == "__main__":
     # boundary, not goroutine count.
     harness.main("p323_fork_at_exit_inflight", body, setup=setup, post=post,
                  default_funcs=40, max_funcs=40,
-                 describe="child runloom forks from a goroutine AT the teardown "
+                 describe="child stackweave forks from a goroutine AT the teardown "
                           "instant with a parked recv g + open listener + "
                           "OUTSTANDING offload in flight; fork-child "
                           "reset_after_fork + _exit(7) reaped via raw waitpid; "

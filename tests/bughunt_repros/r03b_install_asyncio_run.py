@@ -1,7 +1,7 @@
 """Same as r03 but through aio.install() + stdlib asyncio.run (whose Runner
 cancels remaining tasks and RUNS them to completion)."""
 import sys, asyncio
-import runloom.aio as aio
+import stackweave.aio as aio
 
 aio.install()
 flag = []

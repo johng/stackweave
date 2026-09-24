@@ -2,13 +2,13 @@
 
 Runs ONE workload continuously for --seconds, self-sampling every --interval:
 process metrics (RSS, VmSize, VMA count, open fds, threads) from /proc/self +
-the full runloom.stats() gauge dict, appended to a CSV.  Each sample also
+the full stackweave.stats() gauge dict, appended to a CSV.  Each sample also
 writes a heartbeat file "<elapsed> <progress> <alive>" so the orchestrator can
 tell a live-but-slow worker from a wedged one (progress frozen) or a dead
 sampler (heartbeat mtime stale).
 
 The sampler is a plain OS thread, NOT a fiber: it must keep sampling even while
-the scheduler is busy or wedged.  runloom.stats() is safe to call from it (the
+the scheduler is busy or wedged.  stackweave.stats() is safe to call from it (the
 C half is lock-free; the Python half is plain len()/qsize() on PEP703).  It
 snapshots the workload's progress counter, so a scheduler wedge shows up as a
 heartbeat whose progress stops advancing while its mtime keeps ticking.
@@ -26,10 +26,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 import time as _time
 _raw_sleep = _time.sleep
 
-import runloom
-import runloom.monkey
-runloom.monkey.patch()
-import runloom_c  # noqa: F401
+import stackweave
+import stackweave.monkey
+stackweave.monkey.patch()
+import stackweave_c  # noqa: F401
 
 from tools.soak.workloads import WORKLOADS
 
@@ -112,7 +112,7 @@ def _cpu_pct():
     workload is steady, climbing when the runtime starts burning CPU it
     did not used to burn.
 
-    This exists because of a bug the soak ran straight past. runloom's
+    This exists because of a bug the soak ran straight past. stackweave's
     netpoll disarmed a stale EPOLLOUT arm but not a stale EPOLLIN one, so
     fds left armed with no parker made every epoll_wait return instantly.
     On soupchan's production box that accrued over 48 hours until eight hub
@@ -210,7 +210,7 @@ def _liveness_gauges(blame_path):
 
 
 try:
-    runloom_c.set_introspect_timestamps(True)  # populate fiber ages for the dwell gauge
+    stackweave_c.set_introspect_timestamps(True)  # populate fiber ages for the dwell gauge
 except Exception:
     pass
 
@@ -226,7 +226,7 @@ def _sampler(ctx, csv_path, hb_path, interval, t0):
             prog = ctx.progress
             import gc
             gc.collect()   # separate a real leak from GC lag before sampling
-            stats = {k: v for k, v in runloom.stats().items()
+            stats = {k: v for k, v in stackweave.stats().items()
                      if isinstance(v, int)}
             proc = _proc_metrics()
             row = {"t": round(elapsed, 1), "progress": prog}

@@ -7,9 +7,9 @@ Each test below drives ONE such dark region with a real adverse condition and
 asserts the behaviour that line implements -- not just that it executed.
 
 Almost every test runs in a SUBPROCESS, because:
-  * env-gated modes (RUNLOOM_GON_BULK, RUNLOOM_STACK_ARENA_N, the SPAWN_G fault,
-    RUNLOOM_GILSTATE_DELETE_ON_MAIN) are read once at import / first-run, so the
-    parent pytest's already-imported runloom_c has them fixed; and
+  * env-gated modes (STACKWEAVE_GON_BULK, STACKWEAVE_STACK_ARENA_N, the SPAWN_G fault,
+    STACKWEAVE_GILSTATE_DELETE_ON_MAIN) are read once at import / first-run, so the
+    parent pytest's already-imported stackweave_c has them fixed; and
   * the error/teardown paths call mn_init/mn_fini directly and/or shrink process
     rlimits, which must not perturb the parent runtime or the autouse
     self-check / parked-leak fixture.
@@ -25,16 +25,16 @@ Regions driven (uncovered line -> how):
   L249-250  sleep-heap leftover drain at fini -> long-sleepers + mn_fini
             WITHOUT mn_run (gs sitting in the sleep heap when the hub stops).
   L333-335  hub-tstate delete on the MAIN thread (negative control) ->
-            RUNLOOM_GILSTATE_DELETE_ON_MAIN leaves h->tstate live for fini.
+            STACKWEAVE_GILSTATE_DELETE_ON_MAIN leaves h->tstate live for fini.
   L480-491  runloom_mn_fiber_core coro==NULL cleanup -> RLIMIT_AS capped just above
             VmSize + an 8 MiB explicit stack so coro_new's mmap fails; asserts
             the admission slot was RELEASED (set_max_fibers -> limit_counted).
-  L694-698  fiber_n bulk-arena coro_init FAILURE fallback -> RUNLOOM_GON_BULK=1 +
-            RUNLOOM_STACK_ARENA_N=1 (1-slot arena) so the bulk path falls back
+  L694-698  fiber_n bulk-arena coro_init FAILURE fallback -> STACKWEAVE_GON_BULK=1 +
+            STACKWEAVE_STACK_ARENA_N=1 (1-slot arena) so the bulk path falls back
             to the per-g mn_fiber_core loop; asserts all (indexed) fibers still ran.
   L742-744  fiber_n bulk splice signalling an IDLE hub's cond -> GON_BULK + let the
             hubs idle, then a bulk fiber_n.
-  L764      fiber_n non-bulk loop spawn-failure return -1 -> RUNLOOM_FAULT_SPAWN_G
+  L764      fiber_n non-bulk loop spawn-failure return -1 -> STACKWEAVE_FAULT_SPAWN_G
             forces the first slab alloc to fail; fiber_n raises.
 
 See the module docstring's `unreachable` notes in the structured report for the
@@ -73,7 +73,7 @@ def _run_worker(body, env_extra=None, timeout=60):
     `body` is dedented and prefixed with the standard src-on-path + import so
     each test only writes the adversarial part.
     """
-    src = "import sys\nsys.path.insert(0, 'src')\nimport runloom_c as rc\n" + textwrap.dedent(body)
+    src = "import sys\nsys.path.insert(0, 'src')\nimport stackweave_c as rc\n" + textwrap.dedent(body)
     env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
     if env_extra:
         env.update(env_extra)
@@ -215,7 +215,7 @@ def test_fini_drains_ready_ring_leftovers():
 # L333-335 : hub tstate deleted on the MAIN thread (negative control)
 # --------------------------------------------------------------------------
 def test_fini_deletes_hub_tstate_on_main():
-    """RUNLOOM_GILSTATE_DELETE_ON_MAIN makes each hub LEAVE its tstate alive
+    """STACKWEAVE_GILSTATE_DELETE_ON_MAIN makes each hub LEAVE its tstate alive
     (the pre-c28e5ca bug path) instead of self-deleting it, so h->tstate is
     non-NULL at fini and the main-thread sweep clears + deletes it
     (L328-336: the gilstate trace + PyThreadState_Clear/Delete).  On this
@@ -231,7 +231,7 @@ def test_fini_deletes_hub_tstate_on_main():
         rc.mn_init(2); rc.mn_fiber(lambda: None); rc.mn_run(); rc.mn_fini()
         print("DELETE_ON_MAIN_OK")
     """
-    p = _run_worker(body, env_extra={"RUNLOOM_GILSTATE_DELETE_ON_MAIN": "1"})
+    p = _run_worker(body, env_extra={"STACKWEAVE_GILSTATE_DELETE_ON_MAIN": "1"})
     _assert_clean(p, "DELETE_ON_MAIN_OK")
 
 
@@ -286,7 +286,7 @@ def test_mn_fiber_core_coro_alloc_failure_releases_admission():
 # L764 : runloom_mn_fiber_n non-bulk loop -- a mid-loop spawn failure returns -1
 # --------------------------------------------------------------------------
 def test_fiber_n_loop_spawn_failure_returns_error():
-    """RUNLOOM_FAULT_SPAWN_G=always:12 forces every g slab alloc to fail.  In the
+    """STACKWEAVE_FAULT_SPAWN_G=always:12 forces every g slab alloc to fail.  In the
     non-bulk fiber_n loop (GON_BULK unset), the first mn_fiber_core fails -> fiber_n
     returns -1 with a Python error set (L761-765, the L764 return).  Asserts
     fiber_n raised."""
@@ -302,7 +302,7 @@ def test_fiber_n_loop_spawn_failure_returns_error():
         assert raised, "fiber_n did not raise on a spawn failure"
         print("GON_LOOP_FAIL_OK")
     """
-    p = _run_worker(body, env_extra={"RUNLOOM_FAULT_SPAWN_G": "always:12"})
+    p = _run_worker(body, env_extra={"STACKWEAVE_FAULT_SPAWN_G": "always:12"})
     _assert_clean(p, "GON_LOOP_FAIL_OK")
 
 
@@ -310,14 +310,14 @@ def test_fiber_n_loop_spawn_failure_returns_error():
 # L694-698 : fiber_n bulk-arena path falls back to the per-g loop on arena failure
 # --------------------------------------------------------------------------
 def test_fiber_n_bulk_arena_failure_falls_back_to_per_g_loop():
-    """RUNLOOM_GON_BULK=1 takes the bulk-arena spawn path; RUNLOOM_STACK_ARENA_N=1
+    """STACKWEAVE_GON_BULK=1 takes the bulk-arena spawn path; STACKWEAVE_STACK_ARENA_N=1
     makes the stack arena hold a single slot, so runloom_arena_alloc(n>1) fails
     and runloom_coro_bulk_init returns -1.  go_n_bulk then frees its arenas and
     FALLS BACK to the per-g mn_fiber_core loop (L694-698), re-spawning each fiber
     with its index.  We assert every indexed fiber still ran with the CORRECT
     index (the fallback passes `indexed ? i : -1`)."""
     body = """
-        from runloom.sync import WaitGroup
+        from stackweave.sync import WaitGroup
         N = 8
         seen = bytearray(N)
         def main():
@@ -332,8 +332,8 @@ def test_fiber_n_bulk_arena_failure_falls_back_to_per_g_loop():
         assert sum(seen) == N, ("only %d/%d fibers ran via the fallback" % (sum(seen), N))
         print("GON_BULK_FALLBACK_OK")
     """
-    p = _run_worker(body, env_extra={"RUNLOOM_GON_BULK": "1",
-                                     "RUNLOOM_STACK_ARENA_N": "1"})
+    p = _run_worker(body, env_extra={"STACKWEAVE_GON_BULK": "1",
+                                     "STACKWEAVE_STACK_ARENA_N": "1"})
     _assert_clean(p, "GON_BULK_FALLBACK_OK")
 
 
@@ -341,7 +341,7 @@ def test_fiber_n_bulk_arena_failure_falls_back_to_per_g_loop():
 # L742-744 : fiber_n bulk splice signals an IDLE hub's condvar
 # --------------------------------------------------------------------------
 def test_fiber_n_bulk_wakes_idle_hubs():
-    """RUNLOOM_GON_BULK=1 with a real (large) arena -> the bulk path SUCCEEDS and
+    """STACKWEAVE_GON_BULK=1 with a real (large) arena -> the bulk path SUCCEEDS and
     splices each hub's whole batch under one lock.  We first let the hubs settle
     into their idle condvar wait, then issue the bulk fiber_n; the per-hub splice
     finds idle_waiting set and signals idle_cond (L741-744) to drain the batch
@@ -349,7 +349,7 @@ def test_fiber_n_bulk_wakes_idle_hubs():
     would strand the batch until idle_ns expiry / hang)."""
     body = """
         import time
-        from runloom.sync import WaitGroup
+        from stackweave.sync import WaitGroup
         N = 32
         seen = bytearray(N)
         def main():
@@ -368,7 +368,7 @@ def test_fiber_n_bulk_wakes_idle_hubs():
         assert sum(seen) == N, ("only %d/%d bulk fibers ran" % (sum(seen), N))
         print("GON_BULK_IDLEWAKE_OK")
     """
-    p = _run_worker(body, env_extra={"RUNLOOM_GON_BULK": "1"})
+    p = _run_worker(body, env_extra={"STACKWEAVE_GON_BULK": "1"})
     _assert_clean(p, "GON_BULK_IDLEWAKE_OK")
 
 

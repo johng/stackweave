@@ -1,6 +1,6 @@
 import asyncio
-import runloom.aio as aio
-loop = aio.RunloomEventLoop(); asyncio.set_event_loop(loop)
+import stackweave.aio as aio
+loop = aio.StackweaveEventLoop(); asyncio.set_event_loop(loop)
 out={}
 async def main():
     try:

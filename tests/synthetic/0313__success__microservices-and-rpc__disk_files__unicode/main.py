@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 """Microservices and rpc -- a microservices and RPC toy using the disk_files primitive with a unicode payload, expecting success.
 
-Synthetic runloom toy program (auto-generated).
+Synthetic stackweave toy program (auto-generated).
   test type : success
   category  : microservices and RPC
   primitive : disk_files
   format    : unicode (utf-8)
-  scheduler : M:N via runloom.run(8, root), free-threaded 3.13t, GIL off
+  scheduler : M:N via stackweave.run(8, root), free-threaded 3.13t, GIL off
 
-Exercises runloom's main API -- the root goroutine spawns workers with
-runloom.fiber(...) onto 8 hub threads, using the monkey-patched cooperative
+Exercises stackweave's main API -- the root goroutine spawns workers with
+stackweave.fiber(...) onto 8 hub threads, using the monkey-patched cooperative
 disk_files primitive to carry a unicode payload.  Prints PASS and exits 0 when
 healthy; FAIL / hang / crash signals a bug.
 """
@@ -37,8 +37,8 @@ import multiprocessing as mp
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "..", "src"))
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
 THEME = "microservices and RPC"
 CATSLUG = "microservices-and-rpc"
@@ -93,13 +93,13 @@ def decode(buf):
 
 # ---- body ----
 def main():
-    runloom.monkey.patch()
-    GO = runloom.fiber
+    stackweave.monkey.patch()
+    GO = stackweave.fiber
     payload = mk_payload()
     enc = encode(payload)
     assert decode(enc) == payload
     workdir = tempfile.mkdtemp(prefix="rlsyn_")
-    results = runloom.Chan(NW)
+    results = stackweave.Chan(NW)
     state = {"good": 0}
 
     def worker(idx):
@@ -119,7 +119,7 @@ def main():
         GO(make_coordinator(results, NW, state))
         for i in range(NW):
             GO(lambda i=i: worker(i))
-    runloom.run(NHUB, __root)
+    stackweave.run(NHUB, __root)
     shutil.rmtree(workdir, ignore_errors=True)
     finish(state["good"] == NW, state)
 

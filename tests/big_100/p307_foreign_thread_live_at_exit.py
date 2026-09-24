@@ -14,7 +14,7 @@ The CLAUDE.md "FOREIGN-OS-THREAD-safe" invariant requires a patched primitive
 reached from a non-goroutine thread to DETECT the foreign thread (TLS peek NULL,
 no current g) and fall back to REAL-OS blocking -- never park a non-existent
 goroutine, never lazily allocate scheduler state.  At teardown that fallback path
-reads runloom TLS / hub state that `mn_fini()` is concurrently freeing: a foreign
+reads stackweave TLS / hub state that `mn_fini()` is concurrently freeing: a foreign
 thread that wakes from its patched `Condition.wait` AFTER the scheduler TLS / hub
 array is freed reads now-freed state -> UAF / SIGSEGV, or it pins teardown forever
 (the join never completes -> the process hangs).
@@ -23,7 +23,7 @@ BUG HUNTED: foreign-OS-thread vs mn_fini teardown race -- a patched primitive's
 real-OS fallback touching freed scheduler TLS/hub state at the exit instant, or a
 foreign thread parked on a torn-down primitive wedging teardown.
 
-A CHILD runloom program is launched per worker.  The child:
+A CHILD stackweave program is launched per worker.  The child:
   * captures `_thread` BEFORE monkey.patch(), then patches;
   * spawns M FOREIGN OS threads, each looping FOREVER (never signalled to stop):
     take a patched `Lock`, then `Condition.wait(timeout=0.05)` on shared state
@@ -84,9 +84,9 @@ sys.path.insert(0, __SRC_PATH__)
 # the real OS.
 import _thread as _rt
 REAL_SLEEP = time.sleep
-import runloom
-import runloom.monkey
-runloom.monkey.patch()                    # threading.Lock/Condition now cooperative
+import stackweave
+import stackweave.monkey
+stackweave.monkey.patch()                    # threading.Lock/Condition now cooperative
 
 MODE = sys.argv[1] if len(sys.argv) > 1 else "return"
 NTHREADS = 6                              # modest foreign-OS-thread pool
@@ -130,7 +130,7 @@ def worker(wid):
     for _ in range(50):
         with cond:                         # contend the SAME patched primitive
             shared[0] += 1
-        runloom.yield_now()
+        stackweave.yield_now()
 
 def main():
     # Spawn the foreign OS threads first; they start cycling immediately.
@@ -138,8 +138,8 @@ def main():
         _rt.start_new_thread(foreign_loop, (tid,))
     # A handful of goroutines that all return.
     for wid in range(NWORKERS):
-        runloom.fiber(worker, wid)
-    runloom.sleep(0.08)                    # let the foreign threads get mid-wait
+        stackweave.fiber(worker, wid)
+    stackweave.sleep(0.08)                    # let the foreign threads get mid-wait
     # Prove the foreign threads are actually live and cycling before we tear down.
     sys.stdout.write("DONE-MARKER live={0}\n".format(live_threads[0]))
     sys.stdout.flush()
@@ -152,7 +152,7 @@ def main():
     # interpreter runs mn_fini WHILE the foreign threads are still mid-wait on the
     # patched Condition.
 
-runloom.run(4, main)
+stackweave.run(4, main)
 # Reached only on the "return" variant: run() joined cleanly with foreign threads
 # still live in the patched primitive, and the interpreter is now finalizing.
 sys.stdout.write("MAIN-EXIT\n"); sys.stdout.flush()
@@ -253,6 +253,6 @@ def post(H):
 if __name__ == "__main__":
     harness.main("p307_foreign_thread_live_at_exit", body, setup=setup, post=post,
                  default_funcs=100,
-                 describe="child runloom exits (mn_fini-join AND abrupt os._exit) "
+                 describe="child stackweave exits (mn_fini-join AND abrupt os._exit) "
                           "with a foreign OS thread still cycling a patched "
                           "Condition/Lock; returncode>=0, no crash, no hang")

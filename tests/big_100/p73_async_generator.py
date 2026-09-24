@@ -10,7 +10,7 @@ Stresses: async-generator frame finalization and state across goroutine
 switches -- without the event loop.
 """
 import harness
-import runloom
+import stackweave
 
 
 async def agen(n, raise_at):
@@ -47,7 +47,7 @@ def worker(H, wid, rng, state):
         ag = agen(n, -1)
         out = []
         while True:
-            runloom.yield_now()
+            stackweave.yield_now()
             r = anext_value(ag)
             if r[0] == "stop":
                 break

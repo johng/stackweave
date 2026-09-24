@@ -21,7 +21,7 @@ FUNCS="${1:-100000}"; HUBS="${2:-8}"; DUR="${3:-10}"; TMO="${4:-240}"; DRAIN="${
 RES=/tmp/sweep100_results.txt
 LOGD=/tmp/sweep100_logs
 mkdir -p "$LOGD"; : > "$RES"
-export PYTHON_GIL=0 PYTHONPATH=src RUNLOOM_SYSMON_QUIET=1 BIG100_BACKLOG=200000
+export PYTHON_GIL=0 PYTHONPATH=src STACKWEAVE_SYSMON_QUIET=1 BIG100_BACKLOG=200000
 echo "big_100 first-100 @ funcs=$FUNCS hubs=$HUBS dur=${DUR}s drain=${DRAIN}s (mac)" | tee -a "$RES"
 pass=0; total=0; bad=""
 for prog in big_100/p[0-9]*.py; do

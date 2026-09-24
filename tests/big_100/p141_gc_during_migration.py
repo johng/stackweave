@@ -14,7 +14,7 @@ walk under M:N.
 import gc
 
 import harness
-import runloom
+import stackweave
 
 # Real-thread entry points captured before monkey.patch() turns them
 # cooperative -- the gc-storm thread must be a genuine OS thread.
@@ -59,7 +59,7 @@ def walk_sum(node, k):
     for i in range(k):
         total += cur.val
         if i == k // 2:
-            runloom.yield_now()     # migrate with the ring graph live
+            stackweave.yield_now()     # migrate with the ring graph live
         cur = cur.nxt
     return total
 
@@ -75,7 +75,7 @@ def recurse_build(H, depth, k, owner, acc):
         # treat it as live.  Walk it across a migration.
         s = walk_sum(nodes[0], k)
         return acc + s
-    runloom.yield_now()
+    stackweave.yield_now()
     return recurse_build(H, depth - 1, k, owner, acc + depth)
 
 
@@ -109,7 +109,7 @@ def worker(H, wid, rng, state):
         H.op(wid)
         H.task_done(wid)
         if rng.random() < 0.1:
-            runloom.sleep(0.0002)
+            stackweave.sleep(0.0002)
 
 
 def setup(H):

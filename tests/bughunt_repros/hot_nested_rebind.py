@@ -1,11 +1,11 @@
-"""@runloom.hot promises: "If the handler REBINDS a captured name (nonlocal
-x; x = ...), per-core copies could drift, so runloom leaves it shared."
+"""@stackweave.hot promises: "If the handler REBINDS a captured name (nonlocal
+x; x = ...), per-core copies could drift, so stackweave leaves it shared."
 But _rebinds_capture() only scans the handler's OWN bytecode; a rebind done
 in a NESTED function (which shares the same cell) is invisible, so hot()
 splits the cell anyway and per-core copies silently diverge.
 optimize("throughput") applies this automatically with NO decorator."""
 import threading
-from runloom._hot import hot
+from stackweave._hot import hot
 
 def make_counter_handler():
     count = 0

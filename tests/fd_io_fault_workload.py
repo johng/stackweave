@@ -1,6 +1,6 @@
 """Subprocess workload for the fd_read/fd_write (module.c) fault harness.
 
-Drives cooperative runloom_c.fd_read / fd_write over an os.pipe() as fibers,
+Drives cooperative stackweave_c.fd_read / fd_write over an os.pipe() as fibers,
 so an injected read()/write() error lands on the live EINTR-continue /
 EAGAIN-park / surface-OSError loop.  Modes:
   echo      -- writer sends b"ping", reader reads it; must print "OK ping".
@@ -16,7 +16,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))), "src"))
-import runloom_c
+import stackweave_c
 
 
 def _drive(*fibers):
@@ -31,8 +31,8 @@ def _drive(*fibers):
         return runner
 
     for g in fibers:
-        runloom_c.fiber(wrap(g))
-    runloom_c.run()
+        stackweave_c.fiber(wrap(g))
+    stackweave_c.run()
     return box
 
 
@@ -48,11 +48,11 @@ def mode_echo():
     out = {}
 
     def writer():
-        runloom_c.fd_write(w, b"ping")
+        stackweave_c.fd_write(w, b"ping")
 
     def reader():
         buf = bytearray(64)
-        n = runloom_c.fd_read(r, buf, 64)
+        n = stackweave_c.fd_read(r, buf, 64)
         out["data"] = bytes(buf[:n])
 
     errs = _drive(writer, reader)
@@ -75,7 +75,7 @@ def mode_readfail():
     def reader():
         try:
             buf = bytearray(64)
-            n = runloom_c.fd_read(r, buf, 64)
+            n = stackweave_c.fd_read(r, buf, 64)
             box["data"] = bytes(buf[:n])
         except OSError as e:
             box["errno"] = e.errno
@@ -93,7 +93,7 @@ def mode_writefail():
 
     def writer():
         try:
-            runloom_c.fd_write(w, b"ping")
+            stackweave_c.fd_write(w, b"ping")
             box["wrote"] = True
         except OSError as e:
             box["errno"] = e.errno
@@ -116,7 +116,7 @@ def main():
     site = os.environ.get("FAULT_SITE")
     if site:
         try:
-            print("FAULTS=%d" % runloom_c._fault_count(site))
+            print("FAULTS=%d" % stackweave_c._fault_count(site))
         except Exception:
             pass
     return rc

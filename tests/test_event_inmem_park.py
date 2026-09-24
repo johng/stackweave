@@ -1,5 +1,5 @@
 """Event/Condition/Semaphore waits park IN MEMORY (0 per-waiter fds), via
-runloom_c.park()[/park(timeout=...)] + g.wake(), instead of one OS pipe/socketpair
+stackweave_c.park()[/park(timeout=...)] + g.wake(), instead of one OS pipe/socketpair
 per waiter.  A million coroutines on event.wait() previously cost ~2M fds; now ~1
 (the shared run-alive anchor).  TIMED fiber waits are ALSO fd-free: they ride
 the scheduler's per-hub timer heap (runloom_park_generic_timed -- the same
@@ -13,8 +13,8 @@ import os
 import threading
 import time
 
-import runloom
-import runloom.monkey as monkey
+import stackweave
+import stackweave.monkey as monkey
 
 monkey.patch()
 import threading as th   # noqa: E402  (patched -> Co* primitives)
@@ -43,7 +43,7 @@ def test_untimed_event_waiters_are_fd_free():
             woke[i] = 1
 
         for i in range(300):
-            runloom.fiber(waiter, i)
+            stackweave.fiber(waiter, i)
         # Wait for the condition, not the clock.  A flat sleep here asserts
         # that 300 fibers get scheduled inside 150ms, which is a statement
         # about the machine: on a loaded 3-core runner they may not, and the
@@ -52,20 +52,20 @@ def test_untimed_event_waiters_are_fd_free():
         # once all 300 are in, one short settle covers park completion.
         deadline = time.monotonic() + 10.0
         while sum(entered) < 300 and time.monotonic() < deadline:
-            runloom.sleep(0.005)
+            stackweave.sleep(0.005)
         assert sum(entered) == 300, "only %d/300 waiters reached the park" % sum(entered)
-        runloom.sleep(0.05)              # let the last ones settle into the park
+        stackweave.sleep(0.05)              # let the last ones settle into the park
         parked = _count_fds()
         ev.set()
         # Likewise: wait for every waiter to wake rather than assuming 150ms is
         # enough for 300 wakes.
         deadline = time.monotonic() + 10.0
         while sum(woke) < 300 and time.monotonic() < deadline:
-            runloom.sleep(0.005)
+            stackweave.sleep(0.005)
         out["woke"] = sum(woke)
         out["delta"] = parked - before
 
-    runloom.run(8, main)
+    stackweave.run(8, main)
     assert out["woke"] == 300                      # all woke
     # 300 in-memory waiters add at most a couple of fds (the shared anchor),
     # NOT ~600 (2 per waiter).  Generous bound to stay robust.
@@ -85,7 +85,7 @@ def test_event_foreign_thread_setter_wakes_inmem_waiter():
                 ev.wait()
                 done[0] = 1
 
-            runloom.fiber(waiter)
+            stackweave.fiber(waiter)
             # Event is sticky: a set() that beats the park is NOT lost (the
             # wake_pending handshake, proven by test_event_wake_before_park),
             # so no pre-set sleep is needed to "park first".
@@ -96,12 +96,12 @@ def test_event_foreign_thread_setter_wakes_inmem_waiter():
             # byte, instead of a fixed sleep that a loaded scheduler can outrun.
             j = 0
             while not done[0] and j < 1000000:
-                runloom.sleep(0)
+                stackweave.sleep(0)
                 j += 1
             ok += done[0]
         out["ok"] = ok
 
-    runloom.run(8, main)
+    stackweave.run(8, main)
     assert out["ok"] == 15
 
 
@@ -118,16 +118,16 @@ def test_event_wake_before_park():
                 ev.wait()
                 done[0] = 1
 
-            runloom.fiber(waiter)
+            stackweave.fiber(waiter)
             ev.set()                                # races the park commit
             for _ in range(200):
                 if done[0]:
                     break
-                runloom.sleep(0.001)
+                stackweave.sleep(0.001)
             ok += done[0]
         out["ok"] = ok
 
-    runloom.run(8, main)
+    stackweave.run(8, main)
     assert out["ok"] == 80
 
 
@@ -141,11 +141,11 @@ def test_timed_and_condition_and_semaphore_still_work():
         got = []
         # Sticky Event: set() before the timed park is not lost.  Set, then poll
         # for the result instead of a fixed sleep a loaded scheduler can outrun.
-        runloom.fiber(lambda: got.append(ev.wait(2.0)))
+        stackweave.fiber(lambda: got.append(ev.wait(2.0)))
         ev.set()
         i = 0
         while not got and i < 1000000:
-            runloom.sleep(0)
+            stackweave.sleep(0)
             i += 1
         out["timed_set"] = got                     # [True]
 
@@ -159,7 +159,7 @@ def test_timed_and_condition_and_semaphore_still_work():
                 cond.wait()            # atomically releases cond as it parks
             cwoke[0] = 1
 
-        runloom.fiber(cw)
+        stackweave.fiber(cw)
         # Condition has NO sticky pending state (unlike Event/Semaphore): a
         # notify that beats the park is LOST and the waiter hangs forever.
         # Deterministic park-before-notify handshake: wait for the waiter to be
@@ -167,13 +167,13 @@ def test_timed_and_condition_and_semaphore_still_work():
         # acquired until cond.wait() has released it, i.e. the waiter is parked.
         i = 0
         while not cwaiting[0] and i < 1000000:
-            runloom.sleep(0)
+            stackweave.sleep(0)
             i += 1
         with cond:
             cond.notify_all()
         i = 0
         while not cwoke[0] and i < 1000000:
-            runloom.sleep(0)
+            stackweave.sleep(0)
             i += 1
         out["cond"] = cwoke[0]
 
@@ -181,15 +181,15 @@ def test_timed_and_condition_and_semaphore_still_work():
         swoke = bytearray(1)
         # Sticky counter: release() before acquire() parks is not lost (the
         # token is banked).  Release, then poll for the result.
-        runloom.fiber(lambda: (sem.acquire(), swoke.__setitem__(0, 1)))
+        stackweave.fiber(lambda: (sem.acquire(), swoke.__setitem__(0, 1)))
         sem.release()
         i = 0
         while not swoke[0] and i < 1000000:
-            runloom.sleep(0)
+            stackweave.sleep(0)
             i += 1
         out["sem"] = swoke[0]
 
-    runloom.run(8, main)
+    stackweave.run(8, main)
     assert out["timeout"] is False
     assert out["timed_set"] == [True]
     assert out["cond"] == 1
@@ -208,13 +208,13 @@ def test_timed_event_waiters_are_fd_free():
             done[i] = 1 if evs[i].wait(0.12) else 0   # 0 == timed out (expected)
 
         for i in range(150):
-            runloom.fiber(waiter, i)
-        runloom.sleep(0.05)
+            stackweave.fiber(waiter, i)
+        stackweave.sleep(0.05)
         out["delta"] = _count_fds() - before          # while all parked, timed
-        runloom.sleep(0.15)                            # let them time out
+        stackweave.sleep(0.15)                            # let them time out
         out["all_timed_out"] = sum(done) == 0
 
-    runloom.run(8, main)
+    stackweave.run(8, main)
     assert out["all_timed_out"]                        # every wait(0.12) -> False
     assert out["delta"] <= 8, out["delta"]             # ~the shared anchor, not ~300
 
@@ -227,15 +227,15 @@ def test_timed_wait_woken_before_deadline():
         got = []
         # Sticky Event + a 5s deadline: set() always wins the wake (never lost,
         # never a timeout), even if it beats the park.  Poll for the result.
-        runloom.fiber(lambda: got.append(ev.wait(5.0)))
+        stackweave.fiber(lambda: got.append(ev.wait(5.0)))
         ev.set()
         i = 0
         while not got and i < 1000000:
-            runloom.sleep(0)
+            stackweave.sleep(0)
             i += 1
         out["got"] = got                               # [True] -- woken, not timed out
 
-    runloom.run(8, main)
+    stackweave.run(8, main)
     assert out["got"] == [True]
 
 
@@ -260,8 +260,8 @@ def test_timed_wake_vs_timeout_exactly_once():
                 box["rd"] = (r, time.monotonic() - t0)   # single atomic write (no
                 resumes[i] += 1                          # torn read of r vs dt)
 
-            runloom.fiber(waiter)
-            runloom.sleep(dl * (0.5 + (i % 7) / 7.0))
+            stackweave.fiber(waiter)
+            stackweave.sleep(dl * (0.5 + (i % 7) / 7.0))
             ev.set()
             # Wait for the waiter to actually resume before classifying.  A woken
             # fiber under 8-hub load may not be SCHEDULED to write box for many
@@ -271,7 +271,7 @@ def test_timed_wake_vs_timeout_exactly_once():
             # Poll to a generous ceiling; only a genuine no-resume past it is a bug.
             deadline = time.monotonic() + 0.5
             while box.get("rd") is None and time.monotonic() < deadline:
-                runloom.sleep(0.002)
+                stackweave.sleep(0.002)
             rd = box.get("rd")
             if rd is None:
                 bad[0] += 1                            # never resumed (real bug)
@@ -285,7 +285,7 @@ def test_timed_wake_vs_timeout_exactly_once():
         out["bad"] = bad[0]
         out["not_once"] = sum(1 for x in resumes if x != 1)
 
-    runloom.run(8, main)
+    stackweave.run(8, main)
     assert out["bad"] == 0, out
     assert out["not_once"] == 0, out
 
@@ -311,23 +311,23 @@ def test_condition_timeout_does_not_steal_a_later_notify():
                 waiting[0] = 1                 # inside the cond block, holds it
                 woke.append(cond.wait(2.0))    # releases cond as it parks
 
-        runloom.fiber(w)
+        stackweave.fiber(w)
         # Condition notify has no sticky pending state: a notify that beats the
         # park is LOST.  Deterministic park-before-notify handshake -- wait for
         # the waiter to enter the cond block, then take the cond lock, which it
         # cannot hand over until cond.wait() released it (waiter now parked).
         i = 0
         while not waiting[0] and i < 1000000:
-            runloom.sleep(0)
+            stackweave.sleep(0)
             i += 1
         with cond:
             cond.notify()
         i = 0
         while not woke and i < 1000000:
-            runloom.sleep(0)
+            stackweave.sleep(0)
             i += 1
         out["woke"] = woke                             # [True] -- notify reached it
 
-    runloom.run(8, main)
+    stackweave.run(8, main)
     assert out["timed_out"]
     assert out["woke"] == [True], out["woke"]

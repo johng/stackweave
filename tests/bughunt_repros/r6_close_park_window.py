@@ -14,8 +14,8 @@ import sys
 import threading
 import time
 
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 
 N = int(sys.argv[1]) if len(sys.argv) > 1 else 4000
 

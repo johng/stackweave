@@ -5,7 +5,7 @@ have work to reflect: steady echo round-trips + chat participation, plus a
 periodic CHURN BURST (a wave of short-lived connections) that ages the
 connection create/destroy cycle -- the shape a real service sees daily.
 
-Runs its OWN runloom scheduler (it is itself a runloom program), so a canary
+Runs its OWN stackweave scheduler (it is itself a stackweave program), so a canary
 deployment is runloom-on-both-ends.  Can also run on the Windows VMs via the
 existing SSH tooling, or locally in a netns (tools/soak/netns_chaos.sh) for a
 lossy-path canary.
@@ -22,10 +22,10 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 import time as _time
-import runloom
-import runloom.monkey
-runloom.monkey.patch()
-import runloom_c
+import stackweave
+import stackweave.monkey
+stackweave.monkey.patch()
+import stackweave_c
 
 _STOP = [False]
 
@@ -45,10 +45,10 @@ def _echo_client(host, port, start, seconds):
                 c.sendall(b"ping")
                 if c.recv(64) != b"ping":
                     break
-                runloom_c.sched_sleep(0.02)
+                stackweave_c.sched_sleep(0.02)
             c.close()
         except OSError:
-            runloom_c.sched_sleep(0.5)   # server not up yet / transient
+            stackweave_c.sched_sleep(0.5)   # server not up yet / transient
 
 
 def _chat_client(host, port, start, seconds, cid):
@@ -64,15 +64,15 @@ def _chat_client(host, port, start, seconds, cid):
                             break
                 except OSError:
                     pass
-            runloom.fiber(drain)
+            stackweave.fiber(drain)
             for i in range(30):
                 if _STOP[0] or _deadline_expired(start, seconds):
                     break
                 c.sendall(b"hello from %d msg %d\n" % (cid, i))
-                runloom_c.sched_sleep(0.1)
+                stackweave_c.sched_sleep(0.1)
             c.close()
         except OSError:
-            runloom_c.sched_sleep(0.5)
+            stackweave_c.sched_sleep(0.5)
 
 
 def _churn_burst(host, port, n):
@@ -89,7 +89,7 @@ def _churn_burst(host, port, n):
     for _ in range(n):
         if _STOP[0]:
             break
-        runloom.fiber(one)
+        stackweave.fiber(one)
 
 
 def main(argv):
@@ -113,10 +113,10 @@ def main(argv):
 
     def root():
         for _ in range(args.echo_clients):
-            runloom.fiber(lambda: _echo_client(
+            stackweave.fiber(lambda: _echo_client(
                 args.host, args.echo_port, start, args.seconds))
         for i in range(args.chat_clients):
-            runloom.fiber(lambda i=i: _chat_client(
+            stackweave.fiber(lambda i=i: _chat_client(
                 args.host, args.chat_port, start, args.seconds, i))
 
         def burster():
@@ -125,10 +125,10 @@ def main(argv):
                 if _time.monotonic() >= nxt:
                     _churn_burst(args.host, args.echo_port, args.burst_n)
                     nxt = _time.monotonic() + args.burst_every
-                runloom_c.sched_sleep(0.5)
-        runloom.fiber(burster)
-    runloom.fiber(root)
-    runloom_c.run()
+                stackweave_c.sched_sleep(0.5)
+        stackweave.fiber(burster)
+    stackweave.fiber(root)
+    stackweave_c.run()
     print("[canary-client] stopped after %.0fs" % (_time.monotonic() - start))
     return 0
 

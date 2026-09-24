@@ -12,7 +12,7 @@ its OWN still-registered key with the correct data.
 WHY THIS STRESSES FT
 --------------------
 `selectors.DefaultSelector` mutates a SHARED `_fd_to_key` dict and `_map` across
-register/modify/unregister, and runloom makes the underlying epoll/poll
+register/modify/unregister, and stackweave makes the underlying epoll/poll
 COOPERATIVE -- so the poller's `select()` parks (and on resume re-reads the
 selector map) while, on OTHER hubs, thousands of workers concurrently
 register/unregister fds on the SAME selector.  With the GIL off, register's
@@ -59,7 +59,7 @@ import selectors
 import socket
 
 import harness
-import runloom
+import stackweave
 
 # A small pool of SHARED selectors -- few enough that thousands of workers pile
 # onto each one's _fd_to_key dict concurrently (that contention is the point),
@@ -114,7 +114,7 @@ def poller(H, sel, registry, slot_dispatched, slot_torn, sel_idx):
             # under us -- benign during shutdown; re-check running() and loop.
             if not H.running():
                 break
-            runloom.yield_now()
+            stackweave.yield_now()
             continue
         for key, mask in events:
             tag = key.data
@@ -159,7 +159,7 @@ def do_round(H, wid, rng, seq, mode, sel, registry,
     Returns the mode actually run (so the worker can tally coverage)."""
     a, b = make_pair()
     tag = pack_tag(wid, seq)
-    ch = runloom.Chan(1)
+    ch = stackweave.Chan(1)
     afd = a.fileno()
     try:
         # Publish into the SHARED registry BEFORE register() so the poller can
@@ -285,8 +285,8 @@ def dispatch_wait(H, ch):
     `stop` (cap 1) is set by the selecting side the instant it returns, so the
     timer fiber notices and exits promptly instead of sleeping the full
     backstop."""
-    timer = runloom.Chan(1)
-    stop = runloom.Chan(1)
+    timer = stackweave.Chan(1)
+    stop = stackweave.Chan(1)
 
     def fire():
         waited = 0.0
@@ -294,15 +294,15 @@ def dispatch_wait(H, ch):
         while waited < DISPATCH_WAIT_S and H.running():
             if stop.try_recv() is not None:
                 return                  # worker already woken; don't fire
-            runloom.sleep(step)
+            stackweave.sleep(step)
             waited += step
         try:
             timer.send(True)
         except Exception:               # noqa: BLE001
             pass
 
-    runloom.fiber(fire)
-    r = runloom.select([("recv", ch), ("recv", timer)])
+    stackweave.fiber(fire)
+    r = stackweave.select([("recv", ch), ("recv", timer)])
     idx, (_val, _ok) = r
     # Tell the timer fiber to stop (no-op if it already fired).
     try:

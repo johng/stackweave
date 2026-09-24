@@ -78,7 +78,7 @@ preemption.
 import ntpath
 
 import harness
-import runloom
+import stackweave
 
 # Fiber-local segment alphabet.  DELIBERATELY excludes the path separators
 # ('\\','/'), the drive-letter marker (':') and the extension marker ('.') so a
@@ -267,9 +267,9 @@ def purity_check(H, wid, idx, state):
 
     # YIELD: let siblings run their own ntpath churn, possibly on another hub,
     # while this fiber is parked holding its path + expected pieces.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0003)
+        stackweave.sleep(0.0003)
 
     # (2) purity across the park: recompute the whole bundle; every piece must
     # still equal its closed form (nothing drifted while the fiber was parked).

@@ -1,11 +1,11 @@
-"""R7 item 2: foreign-thread PRE-RUN scheduling on a runloom asyncio loop.
+"""R7 item 2: foreign-thread PRE-RUN scheduling on a stackweave asyncio loop.
 
 If a foreign thread calls call_soon / call_later / create_task on a loop BEFORE
 it starts running, the work used to spawn onto the foreign thread's own
 scheduler (never drained by the loop) and was silently lost.  The fix
 (DESIGN_loop_run_prerun_scheduling.md): claim the driver thread at run entry
 (_pg_driver_tid), route foreign pre-run work into the loop's _ts_queue, and give
-RunloomTask a deferred-spawn mode so pre-run create_task is non-blocking.
+StackweaveTask a deferred-spawn mode so pre-run create_task is non-blocking.
 
 These are the gated promotion of tests/bughunt_repros/r01 + the cases the adversarial
 review of the design flagged: both callback orderings, the schedule-then-start-
@@ -20,7 +20,7 @@ import threading
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import asyncio
-import runloom.aio as aio
+import stackweave.aio as aio
 
 
 def _run_on_worker(loop, timeout=10.0):
@@ -56,7 +56,7 @@ def _run_on_worker(loop, timeout=10.0):
 def test_prerun_foreign_call_soon_and_create_task_run_in_order():
     """The r01 bug: main thread schedules call_soon THEN create_task, worker
     thread runs the loop.  Both must run, in order ['cb', 'task']."""
-    loop = aio.RunloomEventLoop()
+    loop = aio.StackweaveEventLoop()
     results = []
 
     def cb():
@@ -75,7 +75,7 @@ def test_prerun_foreign_call_soon_and_create_task_run_in_order():
 def test_prerun_reverse_order_create_task_then_call_soon():
     """The ordering the r01 repro does NOT test (must-fix #1): create_task THEN
     call_soon.  Stock asyncio runs the task's first step then the callback."""
-    loop = aio.RunloomEventLoop()
+    loop = aio.StackweaveEventLoop()
     results = []
 
     async def task_body():
@@ -94,7 +94,7 @@ def test_prerun_reverse_order_create_task_then_call_soon():
 def test_prerun_call_later_runs_not_lost():
     """A foreign pre-run call_later timer must fire, not strand on the foreign
     thread's sched."""
-    loop = aio.RunloomEventLoop()
+    loop = aio.StackweaveEventLoop()
     fired = []
     loop.call_later(0.01, lambda: fired.append(1))
     _run_on_worker(loop)
@@ -107,7 +107,7 @@ def test_prerun_create_task_is_nonblocking_schedule_then_start():
     (must-fix / Trap B) -- else 'schedule then start the worker' deadlocks.  We
     schedule on the main thread and only THEN start the worker; if create_task
     blocked, the worker would never start."""
-    loop = aio.RunloomEventLoop()
+    loop = aio.StackweaveEventLoop()
     ran = []
 
     async def body():
@@ -134,7 +134,7 @@ def test_run_until_complete_own_pre_run_create_task_still_works():
 def test_prerun_create_task_under_task_factory():
     """must-fix #3: a foreign pre-run create_task with a custom task_factory
     (stock asyncio.Task) must run without an AttributeError at drain."""
-    loop = aio.RunloomEventLoop()
+    loop = aio.StackweaveEventLoop()
     made = []
 
     def factory(lp, coro, **kw):
@@ -156,7 +156,7 @@ def test_prerun_create_task_under_task_factory():
 def test_prerun_task_cancelled_before_spawn_settles_clean():
     """must-fix: a task cancelled before its deferred spawn settles CANCELLED,
     never runs its coro, and doesn't wedge -- the loop still completes."""
-    loop = aio.RunloomEventLoop()
+    loop = aio.StackweaveEventLoop()
     ran = []
 
     async def body():
@@ -174,7 +174,7 @@ def test_prerun_deferred_task_no_refcycle():
     explicit gc.collect() -- i.e. self._body must be cleared so no
     task->_body->self cycle survives refcounting."""
     import weakref
-    loop = aio.RunloomEventLoop()
+    loop = aio.StackweaveEventLoop()
     ref = {}
 
     async def body():

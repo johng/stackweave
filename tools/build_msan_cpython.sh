@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # build_msan_cpython.sh -- build a --disable-gil free-threaded CPython 3.13t under
 # MemorySanitizer (clang -fsanitize=memory) so uninitialized-memory reads in
-# runloom's C (recycled goroutine stacks, the intrusive free-list pool headers in
+# stackweave's C (recycled goroutine stacks, the intrusive free-list pool headers in
 # coro.c, structs handed across hubs before full init) are caught.  The MSan
 # complement to build_tsan_cpython.sh -- the one bug class ASan/TSan/CBMC do NOT
 # cover (confirmed gap, 2026-06-17 OSS-scanner sweep).

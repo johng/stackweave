@@ -3,7 +3,7 @@ ORIGINAL deadline even after handle.cancel() (asyncio removes >=50% cancelled
 timers from the heap). With aiohttp-style 1h timeouts per request this
 accumulates a live fiber (+stack) per request. Measure RSS + do they go away?"""
 import sys, os, gc, asyncio
-import runloom.aio as aio
+import stackweave.aio as aio
 
 def rss():
     with open("/proc/self/status") as f:

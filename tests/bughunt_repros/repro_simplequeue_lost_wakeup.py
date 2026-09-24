@@ -11,12 +11,12 @@ import os
 import sys
 import threading as _th_pre   # real threading captured before patch for watchdog
 
-import runloom.monkey as monkey
+import stackweave.monkey as monkey
 monkey.patch()
 
 import time
 import queue
-import runloom_c as rc
+import stackweave_c as rc
 
 q = queue.SimpleQueue()
 results = []

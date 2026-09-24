@@ -10,7 +10,7 @@ no wall-clock/mtime term to perturb it.
 
 WHERE M:N COULD BREAK IT (the gap this program probes).  py_compile.compile is meant
 to be a stateless, reentrant pure-ish function: read file -> compile -> marshal ->
-write file.  Under runloom with the GIL off and tens of thousands of goroutines each
+write file.  Under stackweave with the GIL off and tens of thousands of goroutines each
 compiling their OWN fiber-local source across hubs, the hazards are:
   * the compile/marshal path leaks a sibling fiber's code object, constant pool, or
     intermediate buffer into THIS fiber's .pyc (a cross-fiber leak of single-owner
@@ -29,7 +29,7 @@ text (RESULT = v, plus a tiny function derived from v and a mixed-type const tup
 the marshalled const pool is non-trivial).  It then:
   1. writes the source file (fiber-local, single-owner),
   2. compiles it to pyc #1 via py_compile.compile(UNCHECKED_HASH) and reads the bytes,
-  3. YIELDS (runloom.yield_now / sleep) so a sibling reliably interleaves its own
+  3. YIELDS (stackweave.yield_now / sleep) so a sibling reliably interleaves its own
      compile on this or another hub,
   4. re-compiles the SAME source file to pyc #2 and reads the bytes,
   5. asserts pyc #2 == pyc #1  BYTE-FOR-BYTE (determinism across the yield -- with
@@ -42,7 +42,7 @@ the marshalled const pool is non-trivial).  It then:
 
 Single-owner: the source file, both pyc byte strings, the unmarshalled code object and
 the exec namespace are all fiber-local -- nothing is shared, so a mismatch cannot be
-"documented shared-object races".  It can only be a runloom isolation/tearing bug.
+"documented shared-object races".  It can only be a stackweave isolation/tearing bug.
 
 COMPLETENESS (post): require_no_lost -- a fiber that vanished mid-compile (stranded in
 the offloaded file read/write or the marshal loop) never returns; the watchdog +
@@ -64,7 +64,7 @@ import os
 import py_compile
 
 import harness
-import runloom
+import stackweave
 
 # 16-byte pyc header since CPython 3.7: magic(4) + bitfield(4) + hash-or-mtime(8).
 # Under UNCHECKED_HASH the trailing 8 bytes are the source hash, so the whole
@@ -116,9 +116,9 @@ def compile_check(H, wid, idx, srcpath, pycpath):
         b1 = f.read()
 
     # (3) YIELD so a sibling interleaves its own compile before we recompile.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0003)
+        stackweave.sleep(0.0003)
 
     # (4) re-compile the SAME source -> pyc #2, read bytes.
     py_compile.compile(srcpath, cfile=pycpath, doraise=True,
@@ -244,5 +244,5 @@ if __name__ == "__main__":
                  "BYTE-IDENTICAL (deterministic, no mtime term) and the "
                  "unmarshalled+exec'd code object carries THIS fiber's constant "
                  "(RESULT==v, const pool + derive() closed-form) -- a differing "
-                 "pyc across the yield or a leaked sibling constant is a runloom "
+                 "pyc across the yield or a leaked sibling constant is a stackweave "
                  "compile-path isolation/tearing bug")

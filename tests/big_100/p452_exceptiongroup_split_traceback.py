@@ -93,7 +93,7 @@ import sys
 import traceback
 
 import harness
-import runloom
+import stackweave
 
 
 # Finite sentinel UNIVERSE of leaf TAGS.  A leaf whose tag is NOT in this set is a
@@ -326,7 +326,7 @@ def walker(H, group, leaves, orig_ids, done_ch):
                 return
         if done_ch.try_recv() is not None:
             break
-        runloom.yield_now()                 # hand off so a split lands mid-walk
+        stackweave.yield_now()                 # hand off so a split lands mid-walk
 
 
 def do_split_case(H, group, leaves, id_to_kind, orig_ids, case, gate):
@@ -337,7 +337,7 @@ def do_split_case(H, group, leaves, id_to_kind, orig_ids, case, gate):
     # Trip the gate just before split parks, so the walker/second-splitter run
     # DURING the rebuild window.
     gate.done()
-    runloom.yield_now()
+    stackweave.yield_now()
 
     if case == CASE_SPLIT_A:
         match, rest = group.split(MarkA)
@@ -485,10 +485,10 @@ def run_round_impl(H, wid, rng, slot, state):
     # gate: the primary splitter trips it the instant before it parks; the walker
     # and second-splitter wait on it so their work provably lands inside the
     # rebuild park window.
-    gate = runloom.WaitGroup()
+    gate = stackweave.WaitGroup()
     gate.add(1)
-    done_ch = runloom.Chan(1)
-    wg = runloom.WaitGroup()
+    done_ch = stackweave.Chan(1)
+    wg = stackweave.WaitGroup()
     wg.add(3)                               # splitter + walker + second-splitter
 
     result = {"halves": None}

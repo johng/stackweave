@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# run_sanitizers.sh -- build + run runloom's C concurrency harnesses under
+# run_sanitizers.sh -- build + run stackweave's C concurrency harnesses under
 # AddressSanitizer / ThreadSanitizer / UndefinedBehaviorSanitizer.
 #
 # Hunts use-after-free, out-of-bounds, data races, and UB in the
@@ -53,7 +53,7 @@ run_one() {  # label, needs_setarch(0/1), env, binary, args...
     fi
 }
 
-echo "================ runloom sanitizer harnesses ================"
+echo "================ stackweave sanitizer harnesses ================"
 echo "  deque stress: $PUSHES pushes x $THIEVES thieves x $ROUNDS rounds"
 [ -z "$SETARCH" ] && echo "  (setarch not found; TSan may abort under high-entropy ASLR)"
 echo "-- building --"
@@ -73,7 +73,7 @@ run_one cldeque-ubsan 0 "UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1" \
 
 # Barrier-amplified per-primitive race finder (deque push/steal + handle
 # pin/reclaim), collide-every-round under a fiber-correct TSan.
-BR_T="${RUNLOOM_BARRIER_THREADS:-4}"; BR_R="${RUNLOOM_BARRIER_ROUNDS:-20000}"
+BR_T="${STACKWEAVE_BARRIER_THREADS:-4}"; BR_R="${STACKWEAVE_BARRIER_ROUNDS:-20000}"
 for m in deque handle; do
   run_one "barrier-$m-plain" 0 "" "$TC/test_barrier_race" "$m" "$BR_T" "$BR_R"
   run_one "barrier-$m-asan"  0 "ASAN_OPTIONS=detect_leaks=$DETECT_LEAKS:halt_on_error=1" \

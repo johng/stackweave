@@ -1,6 +1,6 @@
 """Regression guard for the foreign-OS-thread-safe cooperative mutex (CoFMutex).
 
-CoFMutex (runloom.monkey._base) closes the deadlock CLASS where a foreign OS
+CoFMutex (stackweave.monkey._base) closes the deadlock CLASS where a foreign OS
 thread holds a channel-backed cooperative mutex that a fiber also locks: the
 fiber chan-parks, single-thread run() abandons it (a chan-park is deliberately
 not counted as live work), and the foreign unlock's cross-thread wake lands on a
@@ -23,7 +23,7 @@ _ENV = dict(os.environ, PYTHON_GIL="0")
 
 
 def _run(body, timeout=40):
-    script = "import runloom_c as rc, threading, time, sys\n" + textwrap.dedent(body)
+    script = "import stackweave_c as rc, threading, time, sys\n" + textwrap.dedent(body)
     return subprocess.run([_PY, "-c", script], env=_ENV,
                           capture_output=True, timeout=timeout)
 
@@ -34,7 +34,7 @@ def test_cofmutex_mutual_exclusion_fibers_and_foreign_threads():
     # exact; a lost update (no exclusion) shows a short count.  A strand shows a
     # TimeoutExpired.
     p = _run("""
-        from runloom.monkey.locks import CoLock
+        from stackweave.monkey.locks import CoLock
         lk = CoLock(); counter = [0]; K = 2000; NFIB = 4; NFOR = 4
         go = threading.Event()
         def bump_foreign():
@@ -64,7 +64,7 @@ def test_cofmutex_foreign_holder_does_not_strand_fiber():
     # (foreign_wakeable, keeps run() alive) and the foreign release wakes it.
     # Run several rounds to exercise the rare race.
     p = _run("""
-        from runloom.monkey.locks import CoLock
+        from stackweave.monkey.locks import CoLock
         for _round in range(6):
             lk = CoLock(); out = {}
             def fiber_worker():
@@ -91,7 +91,7 @@ def test_waitgroup_foreign_waiter_not_stranded():
     # A foreign thread WAITs on a WaitGroup while a fiber does the decrement; the
     # WaitGroup guard is CoFMutex, so the fiber that contends it is never stranded.
     p = _run("""
-        from runloom.sync import WaitGroup
+        from stackweave.sync import WaitGroup
         for _round in range(6):
             wg = WaitGroup(); wg.add(1); out = {}
             def fiber_worker():

@@ -1,5 +1,5 @@
 """Realistic workload patterns: scenarios that approximate how real
-applications use runloom / paio.
+applications use stackweave / paio.
 
 Each test exercises a complete request/response or pipeline pattern
 end-to-end -- the goal is to surface integration bugs that pure unit
@@ -11,8 +11,8 @@ import os
 import socket
 import unittest
 
-import runloom_c
-import runloom.aio as paio
+import stackweave_c
+import stackweave.aio as paio
 
 
 def _pick_port():
@@ -125,8 +125,8 @@ class TestWorkerPool(unittest.TestCase):
         N_WORKERS = 8
         N_JOBS = 200
 
-        jobs = runloom_c.Chan(N_JOBS)
-        results = runloom_c.Chan(N_JOBS)
+        jobs = stackweave_c.Chan(N_JOBS)
+        results = stackweave_c.Chan(N_JOBS)
 
         def worker():
             while True:
@@ -141,23 +141,23 @@ class TestWorkerPool(unittest.TestCase):
             jobs.close()
 
         for _ in range(N_WORKERS):
-            runloom_c.fiber(worker)
-        runloom_c.fiber(feeder)
+            stackweave_c.fiber(worker)
+        stackweave_c.fiber(feeder)
 
         out = []
         def collector():
             for _ in range(N_JOBS):
                 v, _ = results.recv()
                 out.append(v)
-        runloom_c.fiber(collector)
-        runloom_c.run()
+        stackweave_c.fiber(collector)
+        stackweave_c.run()
         self.assertEqual(sorted(out), [i * 2 for i in range(N_JOBS)])
 
     def test_pipeline_three_stages(self):
         """Stage 1 emits 0..99, stage 2 doubles, stage 3 sums."""
-        in_ch = runloom_c.Chan(10)
-        mid_ch = runloom_c.Chan(10)
-        out_ch = runloom_c.Chan(1)
+        in_ch = stackweave_c.Chan(10)
+        mid_ch = stackweave_c.Chan(10)
+        out_ch = stackweave_c.Chan(1)
 
         def stage1():
             for i in range(100):
@@ -175,10 +175,10 @@ class TestWorkerPool(unittest.TestCase):
                 total += v
             out_ch.send(total)
 
-        runloom_c.fiber(stage1)
-        runloom_c.fiber(stage2)
-        runloom_c.fiber(stage3)
-        runloom_c.run()
+        stackweave_c.fiber(stage1)
+        stackweave_c.fiber(stage2)
+        stackweave_c.fiber(stage3)
+        stackweave_c.run()
         v, _ = out_ch.recv()
         self.assertEqual(v, sum(i * 2 for i in range(100)))
 
@@ -261,7 +261,7 @@ class TestMixedExecution(unittest.TestCase):
     def test_fiber_feeds_into_asyncio_chan(self):
         """A raw fiber produces values; an asyncio task consumes
         them via Chan."""
-        ch = runloom_c.Chan(50)
+        ch = stackweave_c.Chan(50)
         N = 30
         out = []
 
@@ -286,7 +286,7 @@ class TestMixedExecution(unittest.TestCase):
                 count += 1
 
         async def main():
-            runloom_c.fiber(producer)
+            stackweave_c.fiber(producer)
             await consumer()
 
         paio.run(main())

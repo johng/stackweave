@@ -61,13 +61,13 @@ import os
 import sys
 
 import harness
-import runloom
+import stackweave
 
 try:
-    import runloom_c
-    _HAVE_WAITFD = hasattr(runloom_c, "wait_fd")
+    import stackweave_c
+    _HAVE_WAITFD = hasattr(stackweave_c, "wait_fd")
 except Exception:                       # pragma: no cover - import guard
-    runloom_c = None
+    stackweave_c = None
     _HAVE_WAITFD = False
 
 # os.dup is universally available; the targeted hazard needs the NUMBER-keyed
@@ -75,7 +75,7 @@ except Exception:                       # pragma: no cover - import guard
 _HAVE_DUP = hasattr(os, "dup")
 
 READ = 1                                # wait_fd events bitmask: 1 = readable
-CANCELLED = getattr(runloom_c, "WAIT_FD_CANCELLED", -1) if runloom_c else -1
+CANCELLED = getattr(stackweave_c, "WAIT_FD_CANCELLED", -1) if stackweave_c else -1
 
 # Per-park readiness ceiling (ms).  SHORT so a parker re-probes promptly across
 # a cross-pass spawn gap, but the ceiling is the lost-vs-slow discriminator: a
@@ -121,7 +121,7 @@ def park_read_one(running, fd, want, slot, results, kind):
     got = None
     while running():
         try:
-            ready = runloom_c.wait_fd(fd, READ, WAIT_MS)
+            ready = stackweave_c.wait_fd(fd, READ, WAIT_MS)
         except OSError:
             break                        # fd closed at teardown
         if ready == CANCELLED:
@@ -159,7 +159,7 @@ def close_quiet(fd):
     if fd is None or fd < 0:
         return
     try:
-        runloom_c.netpoll_release_if_idle(fd)
+        stackweave_c.netpoll_release_if_idle(fd)
     except Exception:                    # noqa: BLE001
         pass
     try:
@@ -214,8 +214,8 @@ def driver_a_pass(H, wid, rng, state):
         unit["fd2"] = fd2
         ta = tag_byte(wid, rno, 0)       # byte parker A (rfd) must read
         tb = tag_byte(wid, rno, 1)       # byte parker B (fd2) must read
-        adone = runloom.Chan(1)
-        bdone = runloom.Chan(1)
+        adone = stackweave.Chan(1)
+        bdone = stackweave.Chan(1)
 
         # Spawn BOTH alias parkers.  Two different fd NUMBERS aliasing one kernel
         # file; the spawns fan out so A and B very likely park on DIFFERENT hubs.
@@ -263,11 +263,11 @@ def driver_a_pass(H, wid, rng, state):
         unit["fd2"] = None
         if H.running():
             tc = tag_byte(wid, rno, 2)
-            sdone = runloom.Chan(1)
+            sdone = stackweave.Chan(1)
             # Re-park the SURVIVING alias (rfd) -- its sibling number was just
             # DEL'd; a poisoned arm would never wake on the write below.
             H.fiber(park_reader_chan, H.running, rfd, sdone)
-            runloom.yield_now()           # let it re-arm before the write
+            stackweave.yield_now()           # let it re-arm before the write
             try:
                 os.write(wfd, bytes([tc]))
             except OSError:
@@ -325,7 +325,7 @@ def churn_worker(H, wid, rng, state):
                 except OSError:
                     pass
                 try:
-                    runloom_c.wait_fd(stale_fd, READ, 1)   # 1ms: arm then abandon
+                    stackweave_c.wait_fd(stale_fd, READ, 1)   # 1ms: arm then abandon
                 except OSError:
                     pass
             except OSError:
@@ -358,7 +358,7 @@ def churn_worker(H, wid, rng, state):
                 return
             tag = tag_byte(wid, (it << 8) ^ 0xB, 3)
             res = [None]
-            wg = runloom.WaitGroup()
+            wg = stackweave.WaitGroup()
             wg.add(1)
 
             def fresh_reader(rfd=rfd, res=res, wg=wg):
@@ -368,7 +368,7 @@ def churn_worker(H, wid, rng, state):
                     wg.done()
 
             H.fiber(fresh_reader)
-            runloom.yield_now()
+            stackweave.yield_now()
             try:
                 os.write(wfd, bytes([tag]))
             except OSError:
@@ -397,7 +397,7 @@ def churn_worker(H, wid, rng, state):
 def setup(H):
     if not _HAVE_WAITFD:
         H.note_scale_limit(
-            "runloom_c.wait_fd unavailable -- cannot park on a raw fd number; "
+            "stackweave_c.wait_fd unavailable -- cannot park on a raw fd number; "
             "skipping the dup-alias arm/pending conservation test")
         H.state = None
         return

@@ -93,7 +93,7 @@ even closes, and the private-control set makes a non-crashing divergence falsifi
 import random
 
 import harness
-import runloom
+import stackweave
 
 # Finite sentinel UNIVERSE: a fixed, recognizable set of members.  A member NOT in
 # this set yielded by the iterator or returned by a membership probe is a torn/
@@ -190,7 +190,7 @@ def merger(H, wid, shared, private, lock, ops, gate, case_tally, slot):
             if not tripped:
                 tripped = True
                 gate.done()
-            runloom.yield_now()             # reader walks/probes during the swap
+            stackweave.yield_now()             # reader walks/probes during the swap
         # Mirror the SAME op into the private single-owner control set (outside the
         # lock: it is single-writer -> race-free by construction).
         apply_case(private, case, donor_list)
@@ -249,7 +249,7 @@ def reader(H, shared, gate, done_ch, counts, slot):
             return
         if done_ch.try_recv() is not None:
             break
-        runloom.yield_now()
+        stackweave.yield_now()
     counts["clean"][slot] += clean
     counts["rterror"][slot] += rterror
 
@@ -270,17 +270,17 @@ def run_round_impl(H, wid, rng, slot, state):
     # The lock's only job is "writes to THIS set are serialized so the oracle is a
     # conservation test"; nothing outside this round touches this set, so a local
     # lock gives exactly that with no cross-worker contention.
-    lock = runloom.sync.Lock()
+    lock = stackweave.sync.Lock()
 
     shared = fresh_shared_set()
     private = fresh_shared_set()            # private single-owner control (same seed)
 
-    gate = runloom.WaitGroup()              # merger trips it on first held op
+    gate = stackweave.WaitGroup()              # merger trips it on first held op
     gate.add(1)
-    done_ch = runloom.Chan(1)
-    merger_wg = runloom.WaitGroup()
+    done_ch = stackweave.Chan(1)
+    merger_wg = stackweave.WaitGroup()
     merger_wg.add(1)
-    reader_wg = runloom.WaitGroup()
+    reader_wg = stackweave.WaitGroup()
     reader_wg.add(1)
     mseed = [rng.getrandbits(48)]
 

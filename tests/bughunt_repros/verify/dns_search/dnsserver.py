@@ -1,4 +1,4 @@
-"""Fake DNS server (stock python, no runloom).
+"""Fake DNS server (stock python, no stackweave).
 Answers A 1.2.3.4 for mysvc.corp.example.; NOERROR/0-answers for its AAAA;
 NXDOMAIN for everything else. Logs every query to the file in argv[1].
 """

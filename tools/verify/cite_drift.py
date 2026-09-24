@@ -10,12 +10,12 @@ silently mis-describes what is verified -- the proofs are fine, the *map* lies.
 
 This linter resolves every citation against the live tree and fails on drift:
 
-  * `<file>.c[.inc]:<line>` / `:<l1>-<l2>` where <file> is one of runloom's OWN
+  * `<file>.c[.inc]:<line>` / `:<l1>-<l2>` where <file> is one of stackweave's OWN
     sources (present in src/runloom_c/): the file must exist AND the line(s) must
     be within range.  Out-of-range or a vanished file  ->  HARD FAIL (drift).
-  * the same form where <file> is NOT a runloom source (a CPython-internal file
+  * the same form where <file> is NOT a stackweave source (a CPython-internal file
     like pystate.c / brc.c / drain.c): classified EXTERNAL.  Resolved against
-    $RUNLOOM_CPYTHON_SRC if set, otherwise reported (not failed) -- those live in
+    $STACKWEAVE_CPYTHON_SRC if set, otherwise reported (not failed) -- those live in
     the patched interpreter, not this repo.
   * a cited `runloom_*` / `m_select`-style symbol that appears nowhere in
     src/runloom_c/  ->  WARN (likely renamed/removed; soft because some are
@@ -28,7 +28,7 @@ citations that remain.
 Usage:
     tools/verify/cite_drift.py                  # lint, human report, exit 1 on drift
     tools/verify/cite_drift.py --json           # machine-readable
-    RUNLOOM_CPYTHON_SRC=/path/to/cpython tools/verify/cite_drift.py   # also resolve external
+    STACKWEAVE_CPYTHON_SRC=/path/to/cpython tools/verify/cite_drift.py   # also resolve external
 
 Exit: 0 = no hard drift; 1 = >=1 runloom-file citation is out-of-range/missing.
 Wire into scripts/check_all_fast.sh (cheap, no build).
@@ -55,7 +55,7 @@ SYM_RE = re.compile(r"\b(runloom_[a-z0-9_]+|m_[a-z][a-z0-9_]+)\b")
 
 
 def runloom_sources():
-    """basename -> abspath for every runloom C source (.c / .c.inc / .h)."""
+    """basename -> abspath for every stackweave C source (.c / .c.inc / .h)."""
     out = {}
     if not os.path.isdir(SRC_C):
         return out
@@ -85,7 +85,7 @@ def iter_scan_files():
 
 
 def all_source_text():
-    """Concatenated text of every runloom source, for symbol-existence checks."""
+    """Concatenated text of every stackweave source, for symbol-existence checks."""
     chunks = []
     for p in runloom_sources().values():
         try:
@@ -166,9 +166,9 @@ def main(argv):
     as_json = "--json" in argv
     sources = runloom_sources()
     src_line_counts = {n: line_count(p) for n, p in sources.items()}
-    cpy_src = os.environ.get("RUNLOOM_CPYTHON_SRC")
+    cpy_src = os.environ.get("STACKWEAVE_CPYTHON_SRC")
 
-    drift = []        # hard failures (runloom file, out of range / missing)
+    drift = []        # hard failures (stackweave file, out of range / missing)
     external = []     # cpython-internal citations
     ok = 0
     cited_syms = set()
@@ -240,7 +240,7 @@ def main(argv):
                 print("  {0:<48} {1:<32} {2}".format(w, c, y))
         ext_unresolved = [(w, c) for w, c, r in external if r is False]
         if ext_unresolved:
-            print("\nEXTERNAL citations out of range vs $RUNLOOM_CPYTHON_SRC:")
+            print("\nEXTERNAL citations out of range vs $STACKWEAVE_CPYTHON_SRC:")
             for w, c in ext_unresolved:
                 print("  {0:<48} {1}".format(w, c))
         if missing_syms:
@@ -251,7 +251,7 @@ def main(argv):
             if len(missing_syms) > 40:
                 print("  ... +{0} more".format(len(missing_syms) - 40))
         if not cpy_src and external:
-            print("\n(set RUNLOOM_CPYTHON_SRC=/path/to/cpython to also resolve "
+            print("\n(set STACKWEAVE_CPYTHON_SRC=/path/to/cpython to also resolve "
                   "the {0} external cpython-internal citations)".format(len(external)))
 
         if new_docs:

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# run_msan.sh -- build runloom's C extension under MemorySanitizer against the
+# run_msan.sh -- build stackweave's C extension under MemorySanitizer against the
 # MSan-instrumented free-threaded CPython (tools/build_msan_cpython.sh) and run a
-# workload so uninitialized-memory reads in runloom's C abort/report at the source
+# workload so uninitialized-memory reads in stackweave's C abort/report at the source
 # line.  The MSan complement to run_pydebug.sh / run_sanitizers_ext.sh.
 #
 # MSan needs EVERY linked object instrumented.  The interpreter is (build_msan_
-# cpython.sh) and we build runloom_c with -fsanitize=memory here, but system
+# cpython.sh) and we build stackweave_c with -fsanitize=memory here, but system
 # libc/openssl/_socket are NOT -- so values they return read as uninit unless MSan
 # intercepts them.  TRIAGE RULE: a report whose top runloom_c/* frame is the use
 # is REAL; one rooted only in libc/_ssl/_socket interceptors is the uninstrumented-
@@ -20,9 +20,9 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
 # OpenSSL) and terminates under MSan, but building the .so itself only needs a
 # setuptools-capable driver + clang with MSan flags.  Same 3.13t free-threaded
 # ABI, so the MSan-instrumented .so loads in the MSan interpreter.
-PY="${RUNLOOM_MSAN_PYTHON:-$HOME/cpython-msan/bin/python3.13t}"
+PY="${STACKWEAVE_MSAN_PYTHON:-$HOME/cpython-msan/bin/python3.13t}"
 [ -x "$PY" ] || PY="$HOME/cpython-msan/bin/python3"
-BUILD_PY="${RUNLOOM_BUILD_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
+BUILD_PY="${STACKWEAVE_BUILD_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
 ITERS="${1:-4}"
 RM="$(command -v safe-rm || echo rm)"
 SA=""; command -v setarch >/dev/null 2>&1 && SA="setarch $(uname -m) -R"
@@ -35,8 +35,8 @@ export MSAN_OPTIONS="halt_on_error=0:exitcode=0:print_stats=0:origin_history_siz
 echo "MSan interpreter: $PY"
 $SA "$PY" -c 'import sysconfig;print("GIL_DISABLED",sysconfig.get_config_var("Py_GIL_DISABLED"))'
 
-echo "=== build runloom_c under MSan (clang -fsanitize=memory), driven by the clean build python ==="
-$RM -rf build/lib.* build/temp.* src/runloom_c*.so 2>/dev/null
+echo "=== build stackweave_c under MSan (clang -fsanitize=memory), driven by the clean build python ==="
+$RM -rf build/lib.* build/temp.* src/stackweave_c*.so 2>/dev/null
 env PYTHON_GIL=0 \
    CC=clang CXX=clang++ \
    CFLAGS="-fsanitize=memory -fsanitize-memory-track-origins=2 -fno-omit-frame-pointer -g -O1" \
@@ -45,20 +45,20 @@ env PYTHON_GIL=0 \
 echo "build_ext_rc=$?"; tail -3 msan_build_ext.log
 echo "--- the .so loads in the MSan interp? (ABI smoke) ---"
 $SA env PYTHON_GIL=0 PYTHONPATH=src "$PY" -c \
-   "import runloom_c; f=getattr(runloom_c,'__file__',None); assert f and f.endswith('.so'); print('MSAN_EXT_LOADS', f)" 2>&1 | grep -E 'MSAN_EXT_LOADS|Error|Segmentation|MemorySanitizer' | head -3
+   "import stackweave_c; f=getattr(stackweave_c,'__file__',None); assert f and f.endswith('.so'); print('MSAN_EXT_LOADS', f)" 2>&1 | grep -E 'MSAN_EXT_LOADS|Error|Segmentation|MemorySanitizer' | head -3
 
 echo "=== run workload(s) under MSan ==="
 LOG="$(mktemp)"
-# CRITICAL: drive runloom_c DIRECTLY -- do NOT `import runloom` (the high-level
+# CRITICAL: drive stackweave_c DIRECTLY -- do NOT `import stackweave` (the high-level
 # package eagerly loads the aio/TLS layer -> _ssl -> uninstrumented OpenSSL, whose
-# FPs are NOT runloom's code and would drown the signal + terminate the run).
+# FPs are NOT stackweave's code and would drown the signal + terminate the run).
 # (1) goroutine churn via the C API: g-stack alloc/recycle + coro stack-switch.
 $SA env PYTHON_GIL=0 PYTHONPATH=src "$PY" -c \
-   'import runloom_c
+   'import stackweave_c
 for _ in range('"$ITERS"'):
     for _ in range(128):
-        runloom_c.fiber(lambda: None)
-    runloom_c.run()
+        stackweave_c.fiber(lambda: None)
+    stackweave_c.run()
 print("LIFECYCLE_DONE")' >>"$LOG" 2>&1
 # (2) mn_stress -- the M:N scheduler fuzzer (TLS-free): deque / pool / cross-hub
 #     struct handoff -- the paths where an uninitialized read would live.

@@ -2,9 +2,9 @@
 # ci.sh -- the patched-CPython CI, for THIS host.
 #
 # For each pinned series (tools/ci/versions.env): fetch the exact upstream
-# release, apply runloom's migration patches at zero fuzz, build it
+# release, apply stackweave's migration patches at zero fuzz, build it
 # free-threaded with both feature flags, and require BOTH CPython's own stdlib
-# suite AND runloom's suite to pass clean against it -- then package the result.
+# suite AND stackweave's suite to pass clean against it -- then package the result.
 #
 # THE CONTRACT is deliberately simple: each pinned release is one whose patches
 # apply cleanly AND whose suites are fully green.  If a release does not pass,
@@ -60,7 +60,7 @@ for a in "$@"; do
 done
 
 PLATFORM="$(rl_platform)"
-rl_step "runloom patched-CPython CI on $PLATFORM"
+rl_step "stackweave patched-CPython CI on $PLATFORM"
 rl_log "versions: $RL_CI_VERSIONS"
 
 # ---- fast lane: the patch gate on its own ----------------------------------

@@ -1,7 +1,7 @@
 """aio.run() vs asyncio.run(): asyncio.run cancels remaining tasks AND runs
 them to completion, so their `finally:` cleanup executes. Does aio.run?"""
 import sys, asyncio
-import runloom.aio as aio
+import stackweave.aio as aio
 
 flag = []
 

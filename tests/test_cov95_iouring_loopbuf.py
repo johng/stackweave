@@ -1,24 +1,24 @@
 """Round-3 coverage recovery for three io_uring fragments:
 
-  - src/runloom_c/io_uring_l_loop.c.inc  (the RUNLOOM_IOURING_LOOP backend:
+  - src/runloom_c/io_uring_l_loop.c.inc  (the STACKWEAVE_IOURING_LOOP backend:
     Stage-2 single-shot proactor recv + Stage-3 per-hub multishot recv)
   - src/runloom_c/io_uring_l_buf.c.inc   (the GLOBAL-ring provided-buffer pool +
-    global CQE drain -- used by TCPConn.recv under RUNLOOM_TCPCONN_IOURING=1)
+    global CQE drain -- used by TCPConn.recv under STACKWEAVE_TCPCONN_IOURING=1)
   - src/runloom_c/io_uring_l_sys.c.inc   (lazy ring setup; almost entirely
     syscall-failure cleanup -- see the module docstring / report exclusions)
 
 WHY a NEW suite when test_cov100b_iouring already drives the loop backend:
-that suite always runs WITH RUNLOOM_IOURING_MS=1, so the all-C echo uses the
+that suite always runs WITH STACKWEAVE_IOURING_MS=1, so the all-C echo uses the
 Stage-3 multishot recv for *receive* and never touches the Stage-2
 `loop_recv` single-shot path, and it only ever closes a connection on an
 orderly EOF (the multishot is already de-armed by then), so the
 `ms_close`-while-still-armed ASYNC_CANCEL path and its buffer-reclaim loop
 never run.  It also never exercises the GLOBAL-ring multishot at all
-(that needs RUNLOOM_TCPCONN_IOURING=1 + TCPConn.recv, a different backend
+(that needs STACKWEAVE_TCPCONN_IOURING=1 + TCPConn.recv, a different backend
 from the loop ring).  This suite targets exactly those gaps.
 
 ALL env-mode / io_uring coverage is via a clean-exiting SUBPROCESS: the parent
-pytest imports runloom_c once, so the backend/mode is frozen for the process;
+pytest imports stackweave_c once, so the backend/mode is frozen for the process;
 only a child started with the right env runs the path, and it must EXIT
 CLEANLY for gcov to flush.  Timeouts are treated as box contention (this host
 shares io_uring + CPU with a CI runner) -> pytest.skip, never a flaky fail.
@@ -46,8 +46,8 @@ pytestmark = pytest.mark.skipif(
 
 def _iou_available():
     try:
-        import runloom_c
-        return bool(runloom_c.iouring_available())
+        import stackweave_c
+        return bool(stackweave_c.iouring_available())
     except Exception:
         return False
 
@@ -76,8 +76,8 @@ def _run(script, env_extra, timeout=300):
 # ===========================================================================
 _LOOP_RECV = r'''
 import sys, struct; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave, stackweave_c as rc
+from stackweave.sync import WaitGroup
 N = 32
 got = [None] * N
 def main():
@@ -96,7 +96,7 @@ def main():
     wg.wait()
     for ln in lst:
         ln.close()
-runloom.run(2, main)
+stackweave.run(2, main)
 ok = sum(1 for i in range(N) if got[i] == struct.pack(">Q", i))
 sys.stdout.write("LOOPRECV_OK %d\n" % ok)
 '''
@@ -105,7 +105,7 @@ sys.stdout.write("LOOPRECV_OK %d\n" % ok)
 @needs_iouring
 def test_loop_single_shot_recv_ms_off():
     # LOOP on, MS explicitly OFF -> loop_recv (not ms_recv) is the recv path.
-    p = _run(_LOOP_RECV, {"RUNLOOM_IOURING_LOOP": "1", "RUNLOOM_IOURING_MS": "0"})
+    p = _run(_LOOP_RECV, {"STACKWEAVE_IOURING_LOOP": "1", "STACKWEAVE_IOURING_MS": "0"})
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1500:])
     assert "LOOPRECV_OK 32" in p.stdout, (p.stdout[-400:], p.stderr[-800:])
 
@@ -129,7 +129,7 @@ def test_loop_single_shot_recv_ms_off():
 # ===========================================================================
 _MS_CANCEL = r'''
 import sys, struct, socket, threading; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
+import stackweave, stackweave_c as rc
 RealThread = threading.Thread          # captured pre-import; never patched here
 N = 12
 got_first = [0] * N
@@ -166,7 +166,7 @@ def main():
     ready.set()
     rc.sched_sleep(0.8)                            # let servers run ms_close(armed)
     for ln in lst: ln.close()
-runloom.run(2, main)
+stackweave.run(2, main)
 for t in threads: t.join(timeout=3)
 sys.stdout.write("MSCANCEL_FIRST %d\n" % sum(got_first))
 '''
@@ -174,7 +174,7 @@ sys.stdout.write("MSCANCEL_FIRST %d\n" % sum(got_first))
 
 @needs_iouring
 def test_loop_ms_close_while_armed_on_peer_rst():
-    p = _run(_MS_CANCEL, {"RUNLOOM_IOURING_LOOP": "1", "RUNLOOM_IOURING_MS": "1"})
+    p = _run(_MS_CANCEL, {"STACKWEAVE_IOURING_LOOP": "1", "STACKWEAVE_IOURING_MS": "1"})
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-2000:])
     # All 12 must have gotten the FIRST echo back (the steady stream is correct);
     # the RST/cancel of the SECOND chunk must not corrupt or hang any of them.
@@ -192,8 +192,8 @@ def test_loop_ms_close_while_armed_on_peer_rst():
 # ===========================================================================
 _HICONC = r'''
 import sys, struct; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave, stackweave_c as rc
+from stackweave.sync import WaitGroup
 N = 192
 got = [None] * N
 def main():
@@ -211,21 +211,21 @@ def main():
         rc.mn_fiber(lambda i=i: client(i))
     wg.wait()
     for ln in lst: ln.close()
-runloom.run(2, main)
+stackweave.run(2, main)
 sys.stdout.write("HICONC_OK %d\n" % sum(1 for i in range(N) if got[i] == struct.pack(">Q", i)))
 '''
 
 
 @needs_iouring
 def test_loop_high_concurrency_sq_pressure():
-    p = _run(_HICONC, {"RUNLOOM_IOURING_LOOP": "1", "RUNLOOM_IOURING_MS": "1"},
+    p = _run(_HICONC, {"STACKWEAVE_IOURING_LOOP": "1", "STACKWEAVE_IOURING_MS": "1"},
              timeout=300)
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1500:])
     assert "HICONC_OK 192" in p.stdout, (p.stdout[-400:], p.stderr[-1000:])
 
 
 # ===========================================================================
-# 4. DEFAULT backend, GLOBAL-ring multishot (RUNLOOM_TCPCONN_IOURING=1):
+# 4. DEFAULT backend, GLOBAL-ring multishot (STACKWEAVE_TCPCONN_IOURING=1):
 #    TCPConn.recv with flags==0 + pbuf_available() routes through the global
 #    provided-buffer ring (io_uring_l_buf.c.inc).  Drives:
 #      - runloom_iouring_pbuf_available  (L42-46)
@@ -237,8 +237,8 @@ def test_loop_high_concurrency_sq_pressure():
 # ===========================================================================
 _GLOBAL_MS = r'''
 import sys, struct; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave, stackweave_c as rc
+from stackweave.sync import WaitGroup
 N = 48
 got = [None] * N
 def main():
@@ -256,7 +256,7 @@ def main():
         rc.mn_fiber(lambda i=i: client(i))
     wg.wait()
     for ln in lst: ln.close()
-runloom.run(4, main)
+stackweave.run(4, main)
 sys.stdout.write("GLOBALMS_OK %d avail=%r\n" %
                  (sum(1 for i in range(N) if got[i] == struct.pack(">Q", i)),
                   rc.iouring_available()))
@@ -265,9 +265,9 @@ sys.stdout.write("GLOBALMS_OK %d avail=%r\n" %
 
 @needs_iouring
 def test_global_ring_multishot_recv():
-    # RUNLOOM_TCPCONN_IOURING=1 -> TCPConn.recv uses the global pbuf multishot.
+    # STACKWEAVE_TCPCONN_IOURING=1 -> TCPConn.recv uses the global pbuf multishot.
     # Loop backend OFF so this is the GLOBAL ring (not a per-hub ring).
-    p = _run(_GLOBAL_MS, {"RUNLOOM_TCPCONN_IOURING": "1"})
+    p = _run(_GLOBAL_MS, {"STACKWEAVE_TCPCONN_IOURING": "1"})
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1500:])
     assert "GLOBALMS_OK 48" in p.stdout, (p.stdout[-400:], p.stderr[-1000:])
 
@@ -286,8 +286,8 @@ def test_global_ring_multishot_recv():
 # ===========================================================================
 _GLOBAL_CANCEL = r'''
 import sys, struct; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave, stackweave_c as rc
+from stackweave.sync import WaitGroup
 N = 32
 ok = [0] * N
 def main():
@@ -316,14 +316,14 @@ def main():
     wg.wait()
     rc.sched_sleep(0.2)                # let the cancel CQEs drain (free the op records)
     for ln in lst: ln.close()
-runloom.run(4, main)
+stackweave.run(4, main)
 sys.stdout.write("GLOBALCANCEL_OK %d\n" % sum(ok))
 '''
 
 
 @needs_iouring
 def test_global_ring_multishot_close_while_armed():
-    p = _run(_GLOBAL_CANCEL, {"RUNLOOM_TCPCONN_IOURING": "1"})
+    p = _run(_GLOBAL_CANCEL, {"STACKWEAVE_TCPCONN_IOURING": "1"})
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1800:])
     assert "GLOBALCANCEL_OK 32" in p.stdout, (p.stdout[-400:], p.stderr[-1200:])
 
@@ -337,8 +337,8 @@ def test_global_ring_multishot_close_while_armed():
 # ===========================================================================
 _GLOBAL_RECV_INTO = r'''
 import sys, struct; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave, stackweave_c as rc
+from stackweave.sync import WaitGroup
 N = 40
 got = [None] * N
 def main():
@@ -358,14 +358,14 @@ def main():
         rc.mn_fiber(lambda i=i: client(i))
     wg.wait()
     for ln in lst: ln.close()
-runloom.run(4, main)
+stackweave.run(4, main)
 sys.stdout.write("RECVINTO_OK %d\n" % sum(1 for i in range(N) if got[i] == struct.pack(">Q", i)))
 '''
 
 
 @needs_iouring
 def test_global_ring_multishot_recv_into():
-    p = _run(_GLOBAL_RECV_INTO, {"RUNLOOM_TCPCONN_IOURING": "1"})
+    p = _run(_GLOBAL_RECV_INTO, {"STACKWEAVE_TCPCONN_IOURING": "1"})
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1500:])
     assert "RECVINTO_OK 40" in p.stdout, (p.stdout[-400:], p.stderr[-1000:])
 

@@ -102,7 +102,7 @@
         "rss_per_fiber": 8844.013568
       }
     },
-    "runloom_c": {
+    "stackweave_c": {
       "empty": {
         "n": 200000,
         "rss_total": 1005305856,

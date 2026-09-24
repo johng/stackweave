@@ -35,13 +35,13 @@ Under plain OS threads (one thread = one select() call at a time, one fd set per
 thread), a thread's fd sets are private: no sibling thread mutates them while
 this thread is inside select().  Even with PYTHON_GIL=0 a plain thread select()
 holds its fd sets private to that OS thread.  We verified with a standalone
-plain-threads control (64 threads, same hazard, NO runloom): 0 torn/wrong/
+plain-threads control (64 threads, same hazard, NO stackweave): 0 torn/wrong/
 spurious results in multiple runs under PYTHON_GIL=1 AND PYTHON_GIL=0 -- each
 OS thread's select() is isolated from sibling threads' mutations.  Under a
-CORRECT runloom with per-fiber fd-set isolation (not sharing the SAME mutable
+CORRECT stackweave with per-fiber fd-set isolation (not sharing the SAME mutable
 list across hubs), each fiber gets its own fd-set snapshot, and the oracle must
 hold -- select() must return only the fds that WERE requested at call time,
-not some sibling-mutated set.  If runloom leaks a sibling's close() into the
+not some sibling-mutated set.  If stackweave leaks a sibling's close() into the
 ready-set, or fails to isolate the input fd sets, the closed-world IDENTITY and
 CONSERVATION invariants break.
 
@@ -56,7 +56,7 @@ ORACLES (LOAD-BEARING):
      that is not in the fiber's registry (owned by a sibling or already closed)
      is a torn/corrupted result (the fiber inspects the post-select rlist and
      validates each ready fd against its local registry). got != expected =>
-     H.fail "select() returned a torn/wrong fd" -- a runloom fd-set leak.
+     H.fail "select() returned a torn/wrong fd" -- a stackweave fd-set leak.
 
   2. CONSERVATION (worker, HARD, fail-fast): a fiber calls select() with a KNOWN
      set of fds (disjoint from siblings' sets via wid-based id), records what it
@@ -65,7 +65,7 @@ ORACLES (LOAD-BEARING):
      sibling's activity on a different hub's fd).  An fd in rlist that was not
      in the pre-select rlist is corruption (sibling's fd leaked in, or a stale
      kernel-visible fd that was closed mid-flight but the fd number got reused
-     and the kernel still thinks it's ready -- both are runloom FD STATE
+     and the kernel still thinks it's ready -- both are stackweave FD STATE
      ISOLATION failures).
 
   3. ERROR HANDLING (worker, HARD, fail-fast): select() exercises negative fd
@@ -73,7 +73,7 @@ ORACLES (LOAD-BEARING):
      (e.g. duplicate fds, massive fd numbers).  A raised exception (OSError,
      ValueError) must be the DOCUMENTED one for the error condition; a silent
      corruption (returning a wrong ready-set instead of raising) or an UNDECLARED
-     exception (segfault) is the runloom bug (the fd sets or error-check code
+     exception (segfault) is the stackweave bug (the fd sets or error-check code
      were corrupted).
 
 SECONDARY-MEASURED ARMS (REPORT-ONLY, NEVER FAIL):
@@ -101,7 +101,7 @@ import threading
 import time
 
 import harness
-import runloom
+import stackweave
 
 # A modest population of persistent socketpairs (not churned per-op like p418).
 # Kept alive across the whole run so select() can repeatedly poll them without
@@ -254,7 +254,7 @@ def do_plain_select(H, wid, rng, rlist, my_pairs, state):
         # Our fd should have been ready (we wrote to the peer).
         # This is a missed-wake or a torn result.
         H.fail("select() did not return the fd we made ready (wid {0}, fd {1}) "
-               "-- lost ready fd (runloom isolation failure or missing wake)"
+               "-- lost ready fd (stackweave isolation failure or missing wake)"
                .format(wid, a.fileno()))
         return
 

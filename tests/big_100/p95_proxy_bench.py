@@ -11,7 +11,7 @@ import time
 
 import harness
 import netutil
-import runloom
+import stackweave
 
 
 def pipe(src, dst, done):
@@ -40,7 +40,7 @@ def proxy_conn(H, client_sock, backend_addr):
         netutil.close_quiet(client_sock)
         netutil.close_quiet(backend)
         return
-    done = runloom.Chan(2)
+    done = stackweave.Chan(2)
     H.fiber(pipe, client_sock, backend, done)
     H.fiber(pipe, backend, client_sock, done)
     done.recv()

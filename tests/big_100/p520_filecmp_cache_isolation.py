@@ -42,20 +42,20 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY.
   fiber's own ground truth.  Since every key in ``_cache`` for this fiber is
   built from its UNIQUE paths, a correct runtime returns the fiber's true verdict
   every time; a wrong verdict means the shared cache leaked a sibling's answer
-  into this single-owner lookup -- a runloom isolation bug.  On a correct runtime
+  into this single-owner lookup -- a stackweave isolation bug.  On a correct runtime
   the load-bearing arm PASSES (program exits 0).
 
   Verified against plain threads: a standalone control (8 OS threads, GIL on and
   off, each thread owning a private identical-or-different file pair, all sharing
   the one ``filecmp._cache``) returns the correct verdict 100% of the time -- 0
   cross-thread verdict leaks and no crash in the concurrent get/set/clear.  Under
-  a correct runloom it must hold too.
+  a correct stackweave it must hold too.
 
 ORACLES:
   * LOAD-BEARING -- FILECMP VERDICT ISOLATION (worker, HARD, fail-fast).  Private
     file pair + private dir pair, known ground truth, cmp + dircmp verdicts must
     equal ground truth before AND after a yield.  Single-owner: nobody else reads
-    or writes this fiber's paths.  A wrong verdict is a runloom cache-isolation
+    or writes this fiber's paths.  A wrong verdict is a stackweave cache-isolation
     desync; a crash inside the shared ``_cache`` get/set/clear is a hard fault.
 
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber stranded inside a
@@ -93,7 +93,7 @@ import filecmp
 import os
 
 import harness
-import runloom
+import stackweave
 
 # Content sizes for the private file pair.  Identical case: both files hold the
 # SAME bytes.  Different case: different bytes AND different sizes so the verdict
@@ -207,9 +207,9 @@ def worker(H, wid, rng, state):
                                    identical, "pre-yield"):
                 return
             # YIELD: let siblings interleave their _cache get/set/clear.
-            runloom.yield_now()
+            stackweave.yield_now()
             if idx & 1:
-                runloom.sleep(0.0002)
+                stackweave.sleep(0.0002)
             # ... and the SAME verdict after the yield.
             if not verdict_matches(H, wid, fileA, fileB, dirA, dirB,
                                    identical, "post-yield"):
@@ -272,7 +272,7 @@ def post(H):
     if sleaks:
         H.log("note: the shared filecmp._cache key observed {0} verdict "
               "disagreements across {1} checks -- this is contention on a shared "
-              "cache entry (documented shared-object behavior), NOT a runloom bug, "
+              "cache entry (documented shared-object behavior), NOT a stackweave bug, "
               "and never reaches the load-bearing single-owner oracle".format(
                   sleaks, schecks))
 
@@ -297,5 +297,5 @@ if __name__ == "__main__":
                  "filecmp.cmp(shallow=False) and a single-owner dircmp(shallow="
                  "False) must return that ground truth before AND after a yield.  "
                  "A wrong verdict means the shared cache leaked a sibling's answer "
-                 "into a private-key lookup -- a runloom isolation bug.  MEASURED "
+                 "into a private-key lookup -- a stackweave isolation bug.  MEASURED "
                  "shared-key arm (report-only) proves the cache was contended")

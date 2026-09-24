@@ -11,7 +11,7 @@ Stresses: Condition wait/notify, lost-wakeup correctness.
 import threading
 
 import harness
-import runloom
+import stackweave
 
 # A SINGLE Condition + work list is intrinsically low-concurrency: every
 # producer and consumer serialises on the one condition lock, and a notify_all()
@@ -45,7 +45,7 @@ def producer(H, wid, rng, state):
         p += 1
         H.op(wid)
         if rng.random() < 0.1:
-            runloom.yield_now()
+            stackweave.yield_now()
     with cond:
         state["produced"][0] += p
 

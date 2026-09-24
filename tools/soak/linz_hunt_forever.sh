@@ -13,14 +13,14 @@
 # linearizability-only (wake order not seed-governed -- see battery.py).
 #
 # Niced to 19 (alongside the rr fleet / simfd hunt) so it never starves
-# big100/cserve.  Log: ${RUNLOOM_SOAK_DIR:-$HOME/runloom-soak}/linz_hunt/.
+# big100/cserve.  Log: ${STACKWEAVE_SOAK_DIR:-$HOME/runloom-soak}/linz_hunt/.
 set +e
 cd "$(dirname "$0")/../.." || exit 9
-DIR="${RUNLOOM_SOAK_DIR:-$HOME/runloom-soak}/linz_hunt"
+DIR="${STACKWEAVE_SOAK_DIR:-$HOME/runloom-soak}/linz_hunt"
 mkdir -p "$DIR"
 SUMMARY="$DIR/SUMMARY.txt"
 PY="${PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
-export RUNLOOM_PYTHON="$PY"
+export STACKWEAVE_PYTHON="$PY"
 N="${HUNT_BATCH:-40}"                 # seeds per primitive per round
 seed0="${HUNT_SEED0:-0}"
 round=0

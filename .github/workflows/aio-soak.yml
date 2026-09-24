@@ -14,7 +14,7 @@
 # iterations, and (b) bisect a suspected regression without waiting on the full
 # matrix.
 #
-# RUNLOOM_TEST_NORETRY=1 is not optional here. The harness's retry re-runs a
+# STACKWEAVE_TEST_NORETRY=1 is not optional here. The harness's retry re-runs a
 # failing file ALONE, unloaded -- a different experiment, which passes and hides
 # exactly the load-dependent failure being hunted. That is why CI reported these
 # as "absorbed" for weeks.
@@ -30,13 +30,13 @@ on:
         description: "How many times to run the aio files."
         default: "20"
       jobs:
-        description: "RUNLOOM_TEST_JOBS (contention knob; the runner has 4 cores)."
+        description: "STACKWEAVE_TEST_JOBS (contention knob; the runner has 4 cores)."
         default: "4"
       files:
         description: "Space-separated test files to loop."
         default: "test_swarm_aio_bridge.py test_adv_aio.py test_cov_aio_lifecycle_edge.py test_cov_aio_pause_reading.py"
       spurious_park:
-        description: "RUNLOOM_FAULT_SPURIOUS_PARK=N (0 = off). Forces 1-in-N park_safe calls to return without parking, so a consumer that fails to re-park breaks deterministically instead of on an unlucky runner."
+        description: "STACKWEAVE_FAULT_SPURIOUS_PARK=N (0 = off). Forces 1-in-N park_safe calls to return without parking, so a consumer that fails to re-park breaks deterministically instead of on an unlucky runner."
         default: "0"
 
 permissions:
@@ -64,15 +64,15 @@ jobs:
           source: build
           github-token: ${{ github.token }}
 
-      - name: Build runloom extension
+      - name: Build stackweave extension
         run: tools/ci/test_patched_cpython.sh "${{ inputs.version }}" --only=build-ext
 
       - name: Soak the aio files
         env:
-          RUNLOOM_TEST_JOBS: ${{ inputs.jobs }}
-          RUNLOOM_TIMEOUT_MULT: "2"
-          RUNLOOM_TEST_NORETRY: "1"
-          RUNLOOM_FAULT_SPURIOUS_PARK: ${{ inputs.spurious_park }}
+          STACKWEAVE_TEST_JOBS: ${{ inputs.jobs }}
+          STACKWEAVE_TIMEOUT_MULT: "2"
+          STACKWEAVE_TEST_NORETRY: "1"
+          STACKWEAVE_FAULT_SPURIOUS_PARK: ${{ inputs.spurious_park }}
         run: |
           set -u
           # Locate the interpreter the same way test_patched_cpython.sh does:
@@ -81,10 +81,10 @@ jobs:
           WORK="${RL_CI_WORK}"
           PYBIN="$(cat "$WORK/pybin-${{ inputs.version }}-$(rl_platform).txt")"
           [ -x "$PYBIN" ] || { echo "::error::no interpreter for ${{ inputs.version }}"; exit 1; }
-          export PYTHON_GIL=0 RUNLOOM_GIL=0
+          export PYTHON_GIL=0 STACKWEAVE_GIL=0
           # 0 means "off"; the C side already ignores <2, but do not export a
           # value that reads as armed when the user asked for off.
-          [ "${RUNLOOM_FAULT_SPURIOUS_PARK}" = "0" ] && unset RUNLOOM_FAULT_SPURIOUS_PARK
+          [ "${STACKWEAVE_FAULT_SPURIOUS_PARK}" = "0" ] && unset STACKWEAVE_FAULT_SPURIOUS_PARK
 
           mkdir -p soak-logs
           n="${{ inputs.iterations }}"; fails=0

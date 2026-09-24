@@ -16,19 +16,19 @@
   "baseline_default_s": 0.023749531945213675,
   "baseline_throughput_s": 0.024520695907995105,
   "optimize_throughput_eff": {
-   "RUNLOOM_TCPCONN_IOURING": "auto",
-   "RUNLOOM_TCPCONN_IOURING_THRESHOLD": "512",
-   "RUNLOOM_BLOCKPOOL_WORKERS": "16",
-   "RUNLOOM_STACK_ARENA": "1",
-   "RUNLOOM_GON_BULK": "1",
-   "RUNLOOM_GON_FRESH": "1",
-   "RUNLOOM_GON_PCREATE": "auto",
-   "RUNLOOM_GON_PCREATE_B": "auto",
-   "RUNLOOM_PREWARM_KEEP": "1",
-   "RUNLOOM_HOT_HANDLERS": "1",
-   "RUNLOOM_HOT_AUTO": "1"
+   "STACKWEAVE_TCPCONN_IOURING": "auto",
+   "STACKWEAVE_TCPCONN_IOURING_THRESHOLD": "512",
+   "STACKWEAVE_BLOCKPOOL_WORKERS": "16",
+   "STACKWEAVE_STACK_ARENA": "1",
+   "STACKWEAVE_GON_BULK": "1",
+   "STACKWEAVE_GON_FRESH": "1",
+   "STACKWEAVE_GON_PCREATE": "auto",
+   "STACKWEAVE_GON_PCREATE_B": "auto",
+   "STACKWEAVE_PREWARM_KEEP": "1",
+   "STACKWEAVE_HOT_HANDLERS": "1",
+   "STACKWEAVE_HOT_AUTO": "1"
   },
-  "note": "WARM steady-state (in-process passes, the rate a long-running server sustains), this box, single NUMA node, 8 hubs. naked=default runloom.fiber (grow-down); batch=fiber_n (one C call). NO Go batch-spawn equivalent (Go has no bulk-spawn API) -- runloom capability, not a Go comparison. Like-for-like vs Go is naked single-spawn (fiber_fast ~Go, in spawn_curve)."
+  "note": "WARM steady-state (in-process passes, the rate a long-running server sustains), this box, single NUMA node, 8 hubs. naked=default stackweave.fiber (grow-down); batch=fiber_n (one C call). NO Go batch-spawn equivalent (Go has no bulk-spawn API) -- stackweave capability, not a Go comparison. Like-for-like vs Go is naked single-spawn (fiber_fast ~Go, in spawn_curve)."
  },
  "modes": {
   "default": {

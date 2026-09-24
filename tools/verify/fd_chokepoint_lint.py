@@ -4,7 +4,7 @@ chokepoint (item 7, first increment).
 
 The stale-cache-vs-kernel bug class (10 in the appendix) is fed by the
 registration-mutating syscall being scattered: a path mutates the kernel epoll
-without updating runloom's fd_armed cache (or vice versa), and a parker hangs or
+without updating stackweave's fd_armed cache (or vice versa), and a parker hangs or
 a reused fd wakes on a stale arm.  The structural fix is ONE writer -- a single
 TU allowed to call epoll_ctl -- so cache+kernel are mutated under one lock in one
 place.

@@ -1,13 +1,13 @@
-"""Smoke test for runloom_c.stats() -- production introspection."""
+"""Smoke test for stackweave_c.stats() -- production introspection."""
 import unittest
 
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
 
 class TestStats(unittest.TestCase):
     def test_keys_and_types(self):
-        s = runloom_c.stats()
+        s = stackweave_c.stats()
         self.assertIsInstance(s, dict)
         for k in ("ready", "sleeping", "netpoll_parked", "completed",
                   "running", "stack_size_default", "ready_capacity",
@@ -25,11 +25,11 @@ class TestStats(unittest.TestCase):
         self.assertTrue(s["netpoll"])
 
     def test_completed_increments(self):
-        before = runloom_c.stats()["completed"]
-        runloom_c.fiber(lambda: None)
-        runloom_c.fiber(lambda: None)
-        runloom_c.run()
-        after = runloom_c.stats()["completed"]
+        before = stackweave_c.stats()["completed"]
+        stackweave_c.fiber(lambda: None)
+        stackweave_c.fiber(lambda: None)
+        stackweave_c.run()
+        after = stackweave_c.stats()["completed"]
         self.assertGreaterEqual(after - before, 2)
 
 

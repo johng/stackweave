@@ -1,13 +1,13 @@
-"""Tests for runloom.sync -- the no-async-await facade.
+"""Tests for stackweave.sync -- the no-async-await facade.
 
 Demonstrates: TCP echo server + N concurrent clients, UDP send/recv,
 Lock/Event coordination, all written WITHOUT a single async def or
-await keyword.  Same scheduler as runloom.aio; same throughput.
+await keyword.  Same scheduler as stackweave.aio; same throughput.
 """
 import socket
 import unittest
 
-import runloom.sync as ps
+import stackweave.sync as ps
 
 
 class TestBasics(unittest.TestCase):

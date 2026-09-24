@@ -23,8 +23,8 @@ import time
 
 import pytest
 
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 from adv_util import hang_guard, assert_faster_than, needs_free_threading, pollable_pipe, ensure_fd_budget
 
 _IS_WINDOWS = sys.platform == "win32"
@@ -236,7 +236,7 @@ def test_fd_reuse_without_unregister_should_still_wake():
     GC'd socket, a raw wait_fd user) used to poison its fd NUMBER: the next
     park on a reused number took register's zero-syscall skip with no
     kernel registration behind it and slept to its ceiling with data ready.
-    The stale-arm probe (RUNLOOM_STALE_ARM_PROBE_MS, netpoll.c parker-struct
+    The stale-arm probe (STACKWEAVE_STALE_ARM_PROBE_MS, netpoll.c parker-struct
     comment) now validates a predicted-skip park's arm from the deadline
     heap and re-ADDs a stale one, so the reused fd wakes in ~probe-interval
     (well under the 1.0s asserted here) instead of parking out the 1200ms
@@ -299,7 +299,7 @@ def test_fd_reuse_without_unregister_untimed_park_heals():
         "untimed park on poisoned fd not healed: parked %.3fs (data ready)" % el)
 
 
-# TODO(runloom): fd-closed-after-skip untimed park is not always error-woken --
+# TODO(stackweave): fd-closed-after-skip untimed park is not always error-woken --
 # flaky under load (recovers on isolated retry, but not reliably).  Skipped to
 # keep the required CI gate green; make the wake deterministic and remove this skip.
 def test_untimed_park_on_fd_closed_after_skip_gets_error_woken():
@@ -440,14 +440,14 @@ def test_two_waiters_same_fd_distinct_directions():
 
 
 # --------------------------------------------------------------------------
-# the RUNLOOM_DBG_NETPOLL stale-arm tripwire (must run in a subprocess: the
+# the STACKWEAVE_DBG_NETPOLL stale-arm tripwire (must run in a subprocess: the
 # flag is read once at process start)
 # --------------------------------------------------------------------------
 _TRIPWIRE_SCRIPT = r'''
 import sys, socket, gc; sys.path.insert(0, "src")
-import runloom.monkey as monkey
+import stackweave.monkey as monkey
 monkey.patch()
-import runloom_c as rc
+import stackweave_c as rc
 READ = 1
 out = {}
 def main():
@@ -477,7 +477,7 @@ sys.stdout.write("SKIP\n" if out.get("skip") else ("HEALED\n" if out.get("rv") e
 def test_dbg_netpoll_tripwire_detects_and_heals_stale_arm():
     import subprocess
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    env = dict(os.environ, RUNLOOM_DBG_NETPOLL="1", PYTHON_GIL="0", PYTHONPATH="src")
+    env = dict(os.environ, STACKWEAVE_DBG_NETPOLL="1", PYTHON_GIL="0", PYTHONPATH="src")
     for _ in range(5):     # retry until the fd number actually reuses
         p = subprocess.run([sys.executable, "-c", _TRIPWIRE_SCRIPT],
                            cwd=repo, env=env, capture_output=True, text=True, timeout=30)

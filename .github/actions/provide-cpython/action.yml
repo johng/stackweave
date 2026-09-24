@@ -1,5 +1,5 @@
 # provide-cpython -- make a patched, free-threaded CPython available to the
-# runloom steps, sourced EITHER by restoring a cached build, OR by building it
+# stackweave steps, sourced EITHER by restoring a cached build, OR by building it
 # (and running the CPython stdlib suite), OR by downloading the last matching
 # release.  This is the single composable "provide the interpreter" step; the
 # caller only decides the source.

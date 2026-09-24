@@ -15,7 +15,7 @@ sys.modules and the deprecation `warnings` machinery -- all read-only after firs
 call.  So for a FIXED input the output is a pure function of that input: the same
 bytes, every time, on every hub, forever.
 
-WHERE M:N COULD BREAK IT (the gap this program probes).  runloom multiplexes tens
+WHERE M:N COULD BREAK IT (the gap this program probes).  stackweave multiplexes tens
 of thousands of goroutines over a handful of OS threads with the GIL OFF.  A pure
 string function is the cleanest possible isolation oracle: its ONLY inputs are the
 argument string (a single-owner fiber-local object) and read-only module state.
@@ -41,7 +41,7 @@ WHY THE ORACLE IS LOAD-BEARING (verified serially + against plain threads):
   the corpus + reference tables are read-only (never mutated), and every result
   string is a single-owner fiber-local.  A standalone plain-threads control (8 OS
   threads hammering the same corpus, GIL on and off) reproduces the reference 100%
-  of the time -- so under a correct runloom it must too.
+  of the time -- so under a correct stackweave it must too.
 
 ORACLES:
   * LOAD-BEARING A -- REFERENCE MATCH (worker, HARD, fail-fast).  Fiber picks a
@@ -82,7 +82,7 @@ isolation, inverse-function round-trip law, no torn/leaked intermediate strings.
 import warnings
 
 import harness
-import runloom
+import stackweave
 
 # Silence the 3.19-removal DeprecationWarning at import; the module is stdlib and
 # the deprecation is orthogonal to the concurrency law under test.
@@ -163,9 +163,9 @@ def ref_check(H, wid, idx, state):
     # YIELD: a sibling on another hub may be mid-call in the same C quote/unquote
     # machinery; if the runtime tears this fiber's result or corrupts the shared
     # read-only module state, the post-yield recompute diverges.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
 
     got_p_after = nturl2path.pathname2url(p)
     got_u_after = nturl2path.url2pathname(u)
@@ -208,7 +208,7 @@ def roundtrip_check(H, wid, idx, state):
     p = paths[pi]
 
     url = nturl2path.pathname2url(p)
-    runloom.yield_now()
+    stackweave.yield_now()
     recovered = nturl2path.url2pathname(url)
 
     if recovered != p:
@@ -227,7 +227,7 @@ def local_check(H, wid, idx, state):
     p = build_local_path(wid, idx)
 
     got_before = nturl2path.pathname2url(p)
-    runloom.yield_now()
+    stackweave.yield_now()
     got_after = nturl2path.pathname2url(p)
 
     if got_before != got_after:

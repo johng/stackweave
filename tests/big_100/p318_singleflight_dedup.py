@@ -1,6 +1,6 @@
 """big_100 / 318 -- singleflight (sync.Group) dedup conservation across hubs.
 
-`runloom.sync.Group` is Go's singleflight: `do(key, fn)` runs `fn` ONCE for an
+`stackweave.sync.Group` is Go's singleflight: `do(key, fn)` runs `fn` ONCE for an
 in-flight key and every concurrent caller of the SAME key shares that one
 result, returning `(value, shared: bool)` -- the caller that actually ran `fn`
 gets `shared==False` (the LEADER of that in-flight call), every caller that
@@ -68,8 +68,8 @@ or the Future state is often the first signal, before the conservation oracle
 fires.
 """
 import harness
-import runloom
-import runloom.sync as rsync
+import stackweave
+import stackweave.sync as rsync
 
 # Cooperative sleep inside the deduped fn: widens the in-flight window so that
 # concurrent same-key callers reliably pile onto an in-flight leader as
@@ -88,7 +88,7 @@ def slow_fn(exec_counts, slot, nonce_box):
     WaitGroup-fenced, so no two leaders for this key ever run slow_fn
     concurrently -> exec_counts[slot] and nonce_box are each touched by one
     writer at a time."""
-    runloom.sleep(FN_SLEEP_S)
+    stackweave.sleep(FN_SLEEP_S)
     exec_counts[slot] += 1
     nonce = (slot << 24) | (nonce_box[0] & 0xFFFFFF)
     nonce_box[0] = nonce_box[0] + 1
@@ -131,7 +131,7 @@ def coordinator(H, wid, rng, state):
             break
         # Fresh per-wave state.  results[i] is single-writer (caller i only).
         results = [None] * callers_per_key
-        wg = runloom.WaitGroup()
+        wg = stackweave.WaitGroup()
         wg.add(callers_per_key)
         for i in range(callers_per_key):
             H.fiber(caller, g, key, results, i,

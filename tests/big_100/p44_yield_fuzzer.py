@@ -9,7 +9,7 @@ balances and asserts the total is unchanged.
 Stresses: race windows around shared state, lock correctness across yields.
 """
 import harness
-import runloom
+import stackweave
 
 NACCOUNTS = 256
 START = 1000
@@ -17,12 +17,12 @@ TOTAL = NACCOUNTS * START
 
 
 def setup(H):
-    H.state = {"acct": [START] * NACCOUNTS, "lock": runloom.sync.Lock()}
+    H.state = {"acct": [START] * NACCOUNTS, "lock": stackweave.sync.Lock()}
 
 
 def maybe_yield(rng):
     if rng.random() < 0.5:
-        runloom.yield_now()
+        stackweave.yield_now()
 
 
 def worker(H, wid, rng, state):

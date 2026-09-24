@@ -21,7 +21,7 @@ decrement, or a `_NodeInfo` spliced from a sibling sorter), cause a node to be
 emitted TWICE, ZERO times, or BEFORE one of its predecessors has been marked done.
 Any of those breaks the two closed-world laws below.
 
-WHERE M:N BREAKS IT (the gap this program probes).  runloom gives each fiber its
+WHERE M:N BREAKS IT (the gap this program probes).  stackweave gives each fiber its
 own Python frame stack, but a TopologicalSorter is a MUTABLE object carrying live
 protocol state across the get_ready()->done() boundary.  Because the yield sits
 squarely inside that boundary, a sibling fiber driving its OWN sorter interleaves
@@ -87,7 +87,7 @@ violation is a runtime desync, not shared-object semantics.
 import graphlib
 
 import harness
-import runloom
+import stackweave
 
 # Each fiber's nodes live in a private numeric band so a sibling's node is
 # provably out-of-universe: node id = wid * NODE_SCALE + local_index.
@@ -193,9 +193,9 @@ def dag_check(H, wid, idx, state):
         # HAZARD BOUNDARY: park BETWEEN get_ready() and done().  A sibling driving
         # its own sorter interleaves here; a torn ready-set / migrated countdown
         # state would surface as a wrong node on resume.
-        runloom.yield_now()
+        stackweave.yield_now()
         if idx & 1:
-            runloom.sleep(0.0002)
+            stackweave.sleep(0.0002)
 
         for node in ready:
             # Out-of-universe: a node id outside THIS fiber's band means a sibling's
@@ -272,7 +272,7 @@ def cycle_check(H, wid, idx, state):
     ts.add(a, c)
     ts.add(b, a)
     ts.add(c, b)
-    runloom.yield_now()
+    stackweave.yield_now()
     try:
         ts.prepare()
     except graphlib.CycleError:

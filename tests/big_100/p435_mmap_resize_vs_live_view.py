@@ -123,7 +123,7 @@ if sys.platform != "linux":
     sys.exit(0)
 
 import harness
-import runloom
+import stackweave
 
 # Page / allocation granularity on this box.  Every resize is granularity-multiple so
 # mremap operates on whole pages (the kernel may relocate the whole range).  4096 on
@@ -300,19 +300,19 @@ def run_round_impl(H, wid, rnd, rng, case, slot, state):
 
         # gate: the holder trips it the instant before it parks (mid-verify) so the
         # sibling's resize-while-live attempt provably lands inside the park window.
-        gate = runloom.WaitGroup()
+        gate = stackweave.WaitGroup()
         gate.add(1)
         # done_live: the SIBLING trips this once its live-resize attempt has fully
         # returned.  The holder WAITS on it before releasing the view, so the live
         # attempt provably observed self->exports > 0 (no benign release-before-check
         # reorder can masquerade as a gate refusal).
-        done_live = runloom.WaitGroup()
+        done_live = stackweave.WaitGroup()
         done_live.add(1)
         # cont: the holder trips this AFTER releasing the view so the sibling does
         # its post-release resize at a defined point (not before release).
-        cont = runloom.WaitGroup()
+        cont = stackweave.WaitGroup()
         cont.add(1)
-        wg = runloom.WaitGroup()
+        wg = stackweave.WaitGroup()
         wg.add(1)
 
         # Sibling result: live-refusal (must be a BufferError refusal -> False) and
@@ -348,7 +348,7 @@ def run_round_impl(H, wid, rnd, rng, case, slot, state):
             mv.release()
             return
         gate.done()                       # sibling may now attempt the live resize
-        runloom.yield_now()               # park with the view LIVE -- resize lands here
+        stackweave.yield_now()               # park with the view LIVE -- resize lands here
         # Re-verify after the park: if the live resize had wrongly succeeded (gate
         # torn open), mremap moved the mapping and these reads are a UAF.
         if not check_view_stamp(H, mv, wid, "post-park, view live"):

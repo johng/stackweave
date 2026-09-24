@@ -7,9 +7,9 @@ is not assertable (send may succeed into buffer then drain), but we assert:
    or a receiver.  After close+drain, received == sent_ok exactly.
 """
 import sys
-import runloom
-import runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave
+import stackweave_c as rc
+from stackweave.sync import WaitGroup
 
 HUBS = int(sys.argv[1]) if len(sys.argv) > 1 else 8
 ROUNDS = int(sys.argv[2]) if len(sys.argv) > 2 else 30
@@ -52,7 +52,7 @@ for rnd in range(ROUNDS):
                 wg.done()
 
         def closer():
-            runloom.sleep(0.001)
+            stackweave.sleep(0.001)
             try:
                 ch.close()
             except ValueError:
@@ -65,7 +65,7 @@ for rnd in range(ROUNDS):
         rc.mn_fiber(closer)
         wg.wait()
 
-    runloom.run(HUBS, main)
+    stackweave.run(HUBS, main)
 
     s = [v for x in sent_ok for v in x]
     g = [v for x in got for v in x]

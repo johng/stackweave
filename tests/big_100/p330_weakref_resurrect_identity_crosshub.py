@@ -40,7 +40,7 @@ modes.  For a NEVER-resurrected object, its weakref MUST eventually read None
 is a missed clear / dangling weakref, the dual fault.
 
 We FORCE the last decref onto a FOREIGN hub (mirror p141/p211): the worker takes
-weakrefs, drops every strong ref across a runloom.yield_now() so the object is
+weakrefs, drops every strong ref across a stackweave.yield_now() so the object is
 unreferenced when it resumes on (likely) a different hub, and a REAL OS thread
 runs a gc.collect() storm so the actual dealloc + weakref-clear + __del__ run on
 the collector thread, not the creator.
@@ -72,7 +72,7 @@ import _thread as _real_thread
 import time as _time
 
 import harness
-import runloom
+import stackweave
 
 # Real-thread entry points captured BEFORE monkey.patch() makes them cooperative
 # -- the gc-storm must be a genuine OS thread so the last decref / dealloc /
@@ -162,7 +162,7 @@ def identity_arm(slot, rng):
       1. create N objects, record each id() BEFORE any death;
       2. take a weakref.ref(obj, cb) on each (the PRE-death ref, which CPython
          clears before __del__);
-      3. drop ALL strong refs across a runloom.yield_now() so the last decref
+      3. drop ALL strong refs across a stackweave.yield_now() so the last decref
          lands on a (likely) foreign hub and the gc-storm thread can collect;
       4. settle: gc.collect() locally + let the storm run;
       5. ASSERT per object (BOTH arms exercised -- ~1/3 resurrect, ~2/3 die):
@@ -189,11 +189,11 @@ def identity_arm(slot, rng):
     # hub) the objects are unreferenced and the last decref / dealloc / __del__
     # run off this hub.  The real gc-storm thread races the collection too.
     del objs
-    runloom.yield_now()
+    stackweave.yield_now()
     # Force the deaths to actually happen now (and the resurrect __del__s to
     # publish): collect locally, yield to let the storm thread interleave.
     gc.collect()
-    runloom.yield_now()
+    stackweave.yield_now()
     gc.collect()
 
     for oid, pre_ref in zip(pre_ids, refs):
@@ -256,7 +256,7 @@ def settle_dead(rng, attempts=12):
     arm is checked there once settled)."""
     for _ in range(attempts):
         gc.collect()
-        runloom.yield_now()
+        stackweave.yield_now()
 
 
 def worker(H, wid, rng, state):
@@ -278,11 +278,11 @@ def worker(H, wid, rng, state):
                 return
             # ok == "retry": resurrect not yet visible; settle and try again.
             gc.collect()
-            runloom.yield_now()
+            stackweave.yield_now()
         H.op(wid)
         H.task_done(wid)
         if rng.random() < 0.1:
-            runloom.yield_now()
+            stackweave.yield_now()
 
 
 def setup(H):
@@ -297,7 +297,7 @@ def setup(H):
 
     # DIFFERENTIAL run(1) ARM -- establish the identity invariant holds on a
     # single hub (GIL-like) BEFORE the M:N run, so a green M:N result is meaningful
-    # relative to a known-green baseline.  runloom.run executes one fiber to
+    # relative to a known-green baseline.  stackweave.run executes one fiber to
     # completion on a single hub; the same identity_arm must pass there.
     import random as _random
     base_rng = _random.Random(0xC0FFEE)
@@ -311,7 +311,7 @@ def setup(H):
                 return
             # "retry" or True both acceptable at run(1) (single hub settles fast).
     try:
-        runloom.run(1, _run1)
+        stackweave.run(1, _run1)
     except Exception as exc:                  # noqa: BLE001
         baseline_fail[0] = "run(1) arm crashed: {0}: {1}".format(
             type(exc).__name__, exc)

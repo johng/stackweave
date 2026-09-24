@@ -19,7 +19,7 @@ def control_no_chan():
     return w() is None
 
 def through_chan():
-    import runloom_c as rc
+    import stackweave_c as rc
     ch = rc.Chan(1)
     r = Req()
     r.reply = ch          # r -> ch

@@ -67,7 +67,7 @@ Record + replay with **zero divergence** on:
 
 - single-threaded programs
 - multi-threaded with contended locks
-- a runloom goroutine workload on the epoll backend
+- a stackweave goroutine workload on the epoll backend
 
 ## Building it
 

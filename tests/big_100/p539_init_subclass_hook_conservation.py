@@ -22,7 +22,7 @@ WHERE M:N COULD BREAK IT (the hazard this program probes)
 ``type.__new__`` is a long C routine.  If a hub-migration / preemption point
 lands inside two fibers' concurrent ``type_new`` runs, the hook-dispatch machinery
 (the MRO walk that locates ``__init_subclass__``, and the class-keyword-args dict
-that is threaded through to it) could -- IF runloom desynchronised the fibers'
+that is threaded through to it) could -- IF stackweave desynchronised the fibers'
 type-construction state -- cause the hook to:
 
   * fire the WRONG NUMBER of times for a given base (a lost fire => a subclass
@@ -77,12 +77,12 @@ Stresses: ``type.__new__`` -> ``type_new_init_subclass`` hook dispatch, the MRO
 walk locating ``__init_subclass__``, class-keyword-argument threading into the
 hook, and per-fiber type-construction isolation across hub migration + yields.
 A single-owner conservation miscount, or a foreign ``tag`` in a fiber's private
-value band, is the runloom hook-dispatch bug.
+value band, is the stackweave hook-dispatch bug.
 """
 import types
 
 import harness
-import runloom
+import stackweave
 
 # Per-fiber class-keyword values live in a private band [wid*TAG_SCALE,
 # wid*TAG_SCALE + K).  A foreign tag observed in a fiber's own log is a
@@ -134,9 +134,9 @@ def run_round(H, wid, idx, state):
         expected.append((name, kw))
         # YIELD at the hazard boundary: a sibling fiber's own type.__new__ /
         # __init_subclass__ dispatch reliably interleaves here on another hub.
-        runloom.yield_now()
+        stackweave.yield_now()
         if i & 1:
-            runloom.sleep(0.0001)
+            stackweave.sleep(0.0001)
 
     # ---- closed-world conservation law (single-owner log) --------------------
     # 1) exact fire count: the hook fired once per subclass -- no lost fire, no

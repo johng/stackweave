@@ -6,7 +6,7 @@ Also checks the claimed semantic misreport: a RUNNING m:n fiber reported
 import threading
 import time
 import sys
-import runloom_c as rc
+import stackweave_c as rc
 
 handles = []          # G handles published by fibers (read by foreign threads)
 handles_lock = threading.Lock()
@@ -17,7 +17,7 @@ run_marker = {}            # id -> True while fiber body is actively executing
 
 
 def monitor():
-    # foreign OS thread, never runs runloom; polls g.stack() in a tight loop
+    # foreign OS thread, never runs stackweave; polls g.stack() in a tight loop
     while not stop.is_set():
         with handles_lock:
             hs = list(handles)

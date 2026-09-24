@@ -10,7 +10,7 @@ Stresses: exception state across goroutines, traceback/payload integrity,
 aggregation.
 """
 import harness
-import runloom
+import stackweave
 
 KIDS = 16
 
@@ -40,7 +40,7 @@ def child(idx, rng_seed, out):
 
 def worker(H, wid, rng, state):
     while H.running():
-        out = runloom.Chan(KIDS)
+        out = stackweave.Chan(KIDS)
         base = rng.getrandbits(48)
         expected_err = 0
         import random

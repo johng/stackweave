@@ -57,7 +57,7 @@ static RUNLOOM_THREAD_RET runloom_sysmon_main(void *arg)
                 long pend = __atomic_load_n(&h->pending, __ATOMIC_RELAXED);
                 if (!runloom_sysmon_quiet)
                     fprintf(stderr,
-                        "[RUNLOOM_SYSMON] hub %d RECOVERED after ~%.1f ms "
+                        "[STACKWEAVE_SYSMON] hub %d RECOVERED after ~%.1f ms "
                         "(pending=%ld)\n",
                         i, (double)(now - w_start[i]) / 1e6, pend);
                 w_seq[i] = 0;
@@ -81,7 +81,7 @@ static RUNLOOM_THREAD_RET runloom_sysmon_main(void *arg)
                                                "?";
                 if (!runloom_sysmon_quiet)
                     fprintf(stderr,
-                        "[RUNLOOM_SYSMON] hub %d WEDGED %.1f ms in g=%p tstate=%s -- "
+                        "[STACKWEAVE_SYSMON] hub %d WEDGED %.1f ms in g=%p tstate=%s -- "
                         "%ld g(s) stranded on this hub\n",
                         i, (double)(now - start) / 1e6,
                         (void *)__atomic_load_n((void **)&h->resume_g, __ATOMIC_RELAXED), cls,
@@ -185,8 +185,8 @@ static int runloom_flag_default_on(const char *v)
  * via RUNLOOM_SYSMON=1 (or RUNLOOM_SYSMON_QUIET=0). */
 static void runloom_sysmon_config(void)
 {
-    const char *e = getenv("RUNLOOM_SYSMON");
-    const char *q = getenv("RUNLOOM_SYSMON_QUIET");
+    const char *e = getenv("STACKWEAVE_SYSMON");
+    const char *q = getenv("STACKWEAVE_SYSMON_QUIET");
     const char *ms;
     /* Explicit opt-in signal: the user set RUNLOOM_SYSMON to a truthy value to
      * WATCH sysmon.  Preemption (below) may also force the sysmon thread on, but
@@ -203,7 +203,7 @@ static void runloom_sysmon_config(void)
      * states to classify the wedge).  It forces the sysmon instrumentation +
      * watchdog on (that is what detects the wedge and arms preempt_requested).
      * The eval-frame wrapper is installed in mn_init. */
-    runloom_preempt_enabled = runloom_flag_default_on(getenv("RUNLOOM_PREEMPT"));  /* default ON */
+    runloom_preempt_enabled = runloom_flag_default_on(getenv("STACKWEAVE_PREEMPT"));  /* default ON */
 #if PY_VERSION_HEX < 0x030D0000
     runloom_preempt_enabled = 0;
 #endif
@@ -213,7 +213,7 @@ static void runloom_sysmon_config(void)
     if (runloom_get_per_g_tstate_mode()) runloom_preempt_enabled = 0;
     if (runloom_preempt_enabled) runloom_sysmon_enabled = 1;
     if (!runloom_sysmon_enabled) return;
-    ms = getenv("RUNLOOM_SYSMON_MS");
+    ms = getenv("STACKWEAVE_SYSMON_MS");
     if (ms != NULL) {
         long long v = atoll(ms);
         if (v > 0) runloom_sysmon_wedge_ns = v * 1000000LL;
@@ -222,7 +222,7 @@ static void runloom_sysmon_config(void)
      * tunes the CPU time-slice independently of the detection budget. */
     runloom_sysmon_preempt_ns = runloom_sysmon_wedge_ns;
     {
-        const char *pm = getenv("RUNLOOM_PREEMPT_MS");
+        const char *pm = getenv("STACKWEAVE_PREEMPT_MS");
         if (pm != NULL) {
             long long v = atoll(pm);
             if (v > 0) runloom_sysmon_preempt_ns = v * 1000000LL;
@@ -245,7 +245,7 @@ static void runloom_sysmon_spawn(void)
     if (runloom_thread_create(&runloom_sysmon_thread, runloom_sysmon_main, NULL) == 0) {
         runloom_sysmon_running = 1;
     } else {
-        fprintf(stderr, "[RUNLOOM_SYSMON] watchdog thread spawn failed; "
+        fprintf(stderr, "[STACKWEAVE_SYSMON] watchdog thread spawn failed; "
                         "stall detection disabled\n");
     }
 }

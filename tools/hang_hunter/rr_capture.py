@@ -1,4 +1,4 @@
-"""Determinism tooling #5: capture a runloom repro under rr (record-and-replay).
+"""Determinism tooling #5: capture a stackweave repro under rr (record-and-replay).
 
 rr (https://rr-project.org) records a multi-threaded execution and replays it
 DETERMINISTICALLY, bit-for-bit -- the gold standard for turning a rare crash
@@ -9,7 +9,7 @@ under `rr record` so the resulting trace can be `rr replay`ed and stepped
 TWO HARD CONSTRAINTS, both honored here:
 
   1. rr does NOT support io_uring.  We force the epoll netpoll backend
-     (RUNLOOM_NETPOLL=epoll) for rr runs.
+     (STACKWEAVE_NETPOLL=epoll) for rr runs.
 
   2. rr needs a hardware performance counter (the retired-conditional-branch
      counter).  Many VMs -- including this VMware box -- do not expose a usable
@@ -84,7 +84,7 @@ def capture(workload, env_overlay, out_dir, py=None, timeout=180):
     trace = os.path.join(out_dir, "trace_%d_%d" % (os.getpid(), int(time.time())))
     env = dict(os.environ)
     env.update(env_overlay)
-    env["RUNLOOM_NETPOLL"] = "epoll"             # rr can't record io_uring
+    env["STACKWEAVE_NETPOLL"] = "epoll"             # rr can't record io_uring
     env["PYTHON_GIL"] = "0"
     argv = ["rr", "record", "-o", trace, py, workload]
     try:

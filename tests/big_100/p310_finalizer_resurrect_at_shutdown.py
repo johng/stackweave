@@ -63,7 +63,7 @@ import weakref
 import _thread
 
 import harness
-import runloom
+import stackweave
 
 # One genuine OS lock guards ALL fd bookkeeping.  It is a real lock (never made
 # cooperative by monkey.patch), so a release that fires from a foreign hub on a
@@ -244,7 +244,7 @@ def worker(H, wid, rng, state):
         H.op(wid)
         H.task_done(wid)
         if rng.random() < 0.1:
-            runloom.yield_now()
+            stackweave.yield_now()
 
 
 def setup(H):

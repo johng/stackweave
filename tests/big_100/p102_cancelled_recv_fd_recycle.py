@@ -22,8 +22,8 @@ import struct
 
 import harness
 import netutil
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
 WAIT_CEILING_MS = 2000          # bound so a lost cancel-wakeup backstops, no hang
 
@@ -41,7 +41,7 @@ def parked_reader(sock, ready, done):
         done.send(True)
         return
     if fd >= 0:
-        runloom_c.wait_fd(fd, 1, WAIT_CEILING_MS)   # parks; close cancels it
+        stackweave_c.wait_fd(fd, 1, WAIT_CEILING_MS)   # parks; close cancels it
     try:
         done.send(True)            # report we woke (1:1 with the worker loop)
     except Exception:
@@ -56,8 +56,8 @@ def worker(H, wid, rng):
         a1, b1 = socket.socketpair()
         a1.setblocking(True)
         b1.setblocking(True)
-        ready = runloom.Chan(1)
-        done = runloom.Chan(1)
+        ready = stackweave.Chan(1)
+        done = stackweave.Chan(1)
         H.fiber(parked_reader, a1, ready, done)
         ready.recv()               # reader is about to recv
         H.sleep(0.003)             # let it actually reach the recv park

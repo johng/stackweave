@@ -1,10 +1,10 @@
 """Time-sliced preemption (preempt_init) -- liveness AND in-dealloc safety,
 ISOLATED from the sysmon eval-wrapper.
 
-runloom has TWO preemption mechanisms:
-  * the sysmon eval-frame wrapper (RUNLOOM_PREEMPT, default ON) -- covered by
+stackweave has TWO preemption mechanisms:
+  * the sysmon eval-frame wrapper (STACKWEAVE_PREEMPT, default ON) -- covered by
     test_sched_fairness.test_preemption_busy_loop_yields_to_sibling (which is
-    SKIPPED when RUNLOOM_PREEMPT=0);
+    SKIPPED when STACKWEAVE_PREEMPT=0);
   * the explicit time-slicer: preempt_init(quantum_us) starts an OS timer thread
     that posts Py_AddPendingCall(runloom_preempt_yield_cb) every quantum
     (runloom_sched_preempt.c.inc).
@@ -12,7 +12,7 @@ runloom has TWO preemption mechanisms:
 The time-slicer had only the cov95 "posts and yields" tests, whose hogs are
 TIME-BOUNDED (`while monotonic() < t0 + 0.3`) -- they finish whether or not a
 preemption ever fired, so they don't assert the slicer actually preempts.  These
-run with RUNLOOM_PREEMPT=0 so the ONLY preemption source is the time-slicer, and
+run with STACKWEAVE_PREEMPT=0 so the ONLY preemption source is the time-slicer, and
 assert it positively:
 
   1. LIVENESS (single-thread + M:N): a hog with NO cooperative yield spins until a
@@ -45,10 +45,10 @@ pytestmark = pytest.mark.skipif(
 
 def _run(code, timeout=30):
     """Run a snippet in a fresh subprocess with the sysmon eval-wrapper DISABLED
-    (RUNLOOM_PREEMPT=0), so the time-slicer is the only preemption source."""
-    preamble = "import sys; sys.path.insert(0, %r)\nimport runloom_c as rc\n" % (
+    (STACKWEAVE_PREEMPT=0), so the time-slicer is the only preemption source."""
+    preamble = "import sys; sys.path.insert(0, %r)\nimport stackweave_c as rc\n" % (
         os.path.join(REPO, "src"))
-    env = dict(os.environ, PYTHON_GIL="0", RUNLOOM_PREEMPT="0")
+    env = dict(os.environ, PYTHON_GIL="0", STACKWEAVE_PREEMPT="0")
     try:
         p = subprocess.run([sys.executable, "-c", preamble + code],
                            cwd=REPO, env=env, timeout=timeout,

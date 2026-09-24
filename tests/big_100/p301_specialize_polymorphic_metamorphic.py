@@ -6,7 +6,7 @@ cache that, after a warm-up counter crosses ~256, specializes to a fast variant
 keyed on the operand's exact type / the type's `tp_version_tag`.  A type-miss
 forces a de-opt back to the generic form.  Free-threading guards those caches
 with a code-object-level mechanism that assumes a bounded set of executing OS
-threads -- but under runloom M:N the SAME code object is run concurrently by
+threads -- but under stackweave M:N the SAME code object is run concurrently by
 goroutines that MIGRATE across hubs (and across OS threads) between calls.  So
 the specialize/de-specialize transition races: a goroutine can read through a
 HALF-WRITTEN inline cache (specialized opcode but stale operand / version tag)
@@ -66,7 +66,7 @@ import random
 from fractions import Fraction
 
 import harness
-import runloom
+import stackweave
 
 WARMUP = 600              # > 256 so each call site in hot_eval specializes
 OPS_PER_ROUND = 800       # checksum-folding hot-loop iterations per round
@@ -185,7 +185,7 @@ def reader(H, wid, rng, state):
             v = hot_eval(operand, kind, tup)
             acc = (acc * 1000003 + quant(v) + kind) & MASK64
             if (i % YIELD_EVERY) == 0:
-                runloom.yield_now()    # force a hub handoff mid-warm/deopt
+                stackweave.yield_now()    # force a hub handoff mid-warm/deopt
             H.op(wid)
         if acc != expected:
             H.fail("worker {0} round {1}: M:N checksum {2:#x} != closed-form "

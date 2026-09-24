@@ -3,12 +3,12 @@
 
 Mutation sweep over a schemata-built TU (see build_target.sh).  For each mutant
 id: enable it via DREDD_ENABLED_MUTATION and run the test subset; a mutant is
-KILLED if any test fails (assertion) or HANGS (timeout -- the runloom bug class),
+KILLED if any test fails (assertion) or HANGS (timeout -- the stackweave bug class),
 SURVIVED if the whole subset stays green.  Survivors name a line whose behaviour
 NO test in the subset constrains -- the true "untested logic" list, mapped back
 to the real .inc file:line via the flatten provenance map.
 
-Runs in the isolated mutant worktree (RUNLOOM_MUT_WORKTREE).  Resumable: each
+Runs in the isolated mutant worktree (STACKWEAVE_MUT_WORKTREE).  Resumable: each
 verdict is checkpointed to <TU>.sweep.jsonl; re-running skips done ids.
 Parallel across mutants (--jobs); each job runs the subset serially.
 
@@ -26,9 +26,9 @@ import subprocess
 import sys
 import concurrent.futures as cf
 
-WT = os.environ.get("RUNLOOM_MUT_WORKTREE",
+WT = os.environ.get("STACKWEAVE_MUT_WORKTREE",
                     os.path.expanduser("~/projects/pygo-mutants"))
-PY = os.environ.get("RUNLOOM_PYTHON",
+PY = os.environ.get("STACKWEAVE_PYTHON",
                     os.path.expanduser("~/.pyenv/versions/3.14.4t/bin/python3"))
 
 # name-affinity test subsets: tests most likely to EXECUTE a TU's lines.  A real

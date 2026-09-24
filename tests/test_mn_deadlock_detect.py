@@ -6,7 +6,7 @@ hub idle, no runnable/stealable work, no sleeper/timer, nothing in flight on
 netpoll/blockpool/io_uring/a foreign park -- the remaining fibers are blocked on
 a channel/lock/await that nothing can ever wake.  Without the census mn_run
 spins its 1 ms poll forever: a silent hang.  With it, mn_run surfaces a
-diagnostic (warn, the default) or raises (RUNLOOM_DEADLOCK=raise /
+diagnostic (warn, the default) or raises (STACKWEAVE_DEADLOCK=raise /
 set_deadlock_mode(2)).
 
 Just as important: it must NOT false-fire while a legitimate wake source exists
@@ -18,20 +18,20 @@ import os
 # Short quiescent budget so the positive cases resolve in tens of ms rather than
 # the 200 ms default.  Read once by the C census on the first mn_run, so it must
 # be set before any run().
-os.environ.setdefault("RUNLOOM_DEADLOCK_MS", "40")
+os.environ.setdefault("STACKWEAVE_DEADLOCK_MS", "40")
 
 import pytest
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
 
 def _with_mode(mode, fn):
-    old = runloom_c.get_deadlock_mode()
-    runloom_c.set_deadlock_mode(mode)
+    old = stackweave_c.get_deadlock_mode()
+    stackweave_c.set_deadlock_mode(mode)
     try:
         return fn()
     finally:
-        runloom_c.set_deadlock_mode(old)
+        stackweave_c.set_deadlock_mode(old)
 
 
 # ---- positive: real deadlocks are detected (raise instead of hang) ----
@@ -39,9 +39,9 @@ def _with_mode(mode, fn):
 def test_recv_with_no_sender_is_detected():
     def body():
         def main():
-            runloom_c.Chan(0).recv()          # unbuffered, nobody will ever send
+            stackweave_c.Chan(0).recv()          # unbuffered, nobody will ever send
         with pytest.raises(RuntimeError):
-            runloom.run(2, main)
+            stackweave.run(2, main)
     _with_mode(2, body)
 
 
@@ -50,8 +50,8 @@ def test_cyclic_two_fiber_deadlock_is_detected():
     # being unblocked first -> a cycle with no entry point.
     def body():
         def main():
-            chA = runloom_c.Chan(0)
-            chB = runloom_c.Chan(0)
+            chA = stackweave_c.Chan(0)
+            chB = stackweave_c.Chan(0)
 
             def fiber_a():
                 chA.recv()
@@ -61,10 +61,10 @@ def test_cyclic_two_fiber_deadlock_is_detected():
                 chB.recv()
                 chA.send(1)
 
-            runloom.fiber(fiber_a)
-            runloom.fiber(fiber_b)
+            stackweave.fiber(fiber_a)
+            stackweave.fiber(fiber_b)
         with pytest.raises(RuntimeError):
-            runloom.run(2, main)
+            stackweave.run(2, main)
     _with_mode(2, body)
 
 
@@ -77,10 +77,10 @@ def test_sleeper_is_not_a_false_deadlock():
         done = []
 
         def main():
-            runloom_c.sched_sleep(0.15)       # > RUNLOOM_DEADLOCK_MS
+            stackweave_c.sched_sleep(0.15)       # > STACKWEAVE_DEADLOCK_MS
             done.append(1)
 
-        runloom.run(2, main)                  # must NOT raise
+        stackweave.run(2, main)                  # must NOT raise
         assert done == [1]
     _with_mode(2, body)
 
@@ -92,19 +92,19 @@ def test_channel_handoff_is_not_a_false_deadlock():
         got = []
 
         def main():
-            ch = runloom_c.Chan(0)
+            ch = stackweave_c.Chan(0)
 
             def producer():
-                runloom_c.sched_sleep(0.12)
+                stackweave_c.sched_sleep(0.12)
                 ch.send(42)
 
             def consumer():
                 val = ch.recv()               # Go-style (value, ok) tuple
                 got.append(val[0] if isinstance(val, tuple) else val)
 
-            runloom.fiber(producer)
-            runloom.fiber(consumer)
-        runloom.run(2, main)                  # must NOT raise
+            stackweave.fiber(producer)
+            stackweave.fiber(consumer)
+        stackweave.run(2, main)                  # must NOT raise
         assert got == [42]
     _with_mode(2, body)
 
@@ -116,7 +116,7 @@ def test_busy_workload_no_false_fire():
         out = bytearray(64)
 
         def main():
-            from runloom.sync import WaitGroup
+            from stackweave.sync import WaitGroup
             wg = WaitGroup()
             wg.add(64)
 
@@ -128,10 +128,10 @@ def test_busy_workload_no_false_fire():
                 wg.done()
 
             for i in range(64):
-                runloom.fiber(work, i)
+                stackweave.fiber(work, i)
             wg.wait()
 
-        runloom.run(4, main)                  # must NOT raise
+        stackweave.run(4, main)                  # must NOT raise
     _with_mode(2, body)
 
 
@@ -139,15 +139,15 @@ def test_ping_pong_churn_no_false_fire():
     # Directly stresses the census's false-positive race: two fibers bounce a
     # token over unbuffered channels for many rounds, so at every instant one
     # fiber is running and the other is parked at a rendezvous -- the system is
-    # never quiescent.  The run lasts well past RUNLOOM_DEADLOCK_MS, so a census
+    # never quiescent.  The run lasts well past STACKWEAVE_DEADLOCK_MS, so a census
     # that mis-sampled a transient all-parked window would raise here.
     def body():
         N = 50000
         result = []
 
         def main():
-            up = runloom_c.Chan(0)
-            down = runloom_c.Chan(0)
+            up = stackweave_c.Chan(0)
+            down = stackweave_c.Chan(0)
 
             def pinger():
                 for _ in range(N):
@@ -160,9 +160,9 @@ def test_ping_pong_churn_no_false_fire():
                     up.recv()
                     down.send(1)
 
-            runloom.fiber(pinger)
-            runloom.fiber(ponger)
+            stackweave.fiber(pinger)
+            stackweave.fiber(ponger)
 
-        runloom.run(2, main)                  # must NOT raise across the churn
+        stackweave.run(2, main)                  # must NOT raise across the churn
         assert result == ["ping-done"]
     _with_mode(2, body)

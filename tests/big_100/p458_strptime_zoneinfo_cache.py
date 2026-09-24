@@ -4,7 +4,7 @@ ZoneInfo COLD-IMPORT false-`_DeadlockError` (FINDINGS #9) under M:N.
 This program has TWO independent load-bearing arms:
 
 ARM 1 -- strptime exact-field identity (CLEAN; always GREEN under a correct
-runloom and under plain-threads-GIL-on).  The subject is ``_strptime``'s
+stackweave and under plain-threads-GIL-on).  The subject is ``_strptime``'s
 process-global ``_regex_cache`` (a size-5 dict of format-string -> COMPILED
 regex behind one raw ``_thread.lock``).  Thousands of fibers each parse a
 DISTINCT (format, input) pair UNIQUE to that fiber (a per-wid literal token
@@ -13,7 +13,7 @@ essentially every call -- constant insert/clear/recompile churn).  The closed-
 world oracle: for every parse the result's (year, month, day, hour, minute,
 second [, %j]) fields EXACTLY equal the fields this fiber encoded into its OWN
 unique input.  A wrong field means a torn cache published a SIBLING's compiled
-regex against our input (or a runloom save/restore desync across a hub
+regex against our input (or a stackweave save/restore desync across a hub
 migration); a no-match means the cache handed back a regex that does not fit our
 format.  Because each (format, input) is single-owner and fully determines the
 correct answer, an exact-field mismatch is a genuine cache-tear, never
@@ -21,11 +21,11 @@ documented-unsafe usage -- so this arm is GREEN on plain-threads-GIL-on and a RE
 there would be mis-calibrated.
 
 ARM 2 -- ZoneInfo COLD-IMPORT false-`_DeadlockError` (FINDINGS #9; a REAL,
-unfixed runloom bug -- this arm is SUPPOSED to FAIL under M:N).  ``zoneinfo``
+unfixed stackweave bug -- this arm is SUPPOSED to FAIL under M:N).  ``zoneinfo``
 loads its zone data LAZILY: the first ``ZoneInfo(region)`` for an area COLD-
 imports that area's data-backend submodule (``tzdata.zoneinfo.<Area>``), taking
 CPython's per-module import lock during the import.  CPython keys that lock by
-``_thread.get_ident()`` -- the OS-thread id.  Under runloom's M:N runtime many
+``_thread.get_ident()`` -- the OS-thread id.  Under stackweave's M:N runtime many
 fibers share ONE hub OS-thread, so they share one ident; when fiber A triggers
 the COLD lazy import of an area backend, takes the module lock, and YIELDS while
 holding it (ZoneInfo construction cooperatively parks), a SIBLING fiber B on the
@@ -44,14 +44,14 @@ purge the area backend submodules from ``sys.modules`` and re-construct
 ``ZoneInfo(region)`` over a SPREAD of distinct areas, so the import lock is
 re-taken COLD while sibling fibers on the same hub yield -> the false
 ``_DeadlockError`` fires.  The arm catches it and ``H.fail``s with a #9
-diagnostic -- it is DETECTING the real runloom bug.
+diagnostic -- it is DETECTING the real stackweave bug.
 
 ATTRIBUTION (why this is runloom-specific, not a CPython-FT or import-pattern
 fault).  A standalone plain-OS-threads control doing the SAME cold area-backend
 imports raises ZERO ``_DeadlockError`` under BOTH ``PYTHON_GIL=1`` and
 ``PYTHON_GIL=0`` (each OS thread has a distinct ident, so the import-lock graph
 never forms a false self-cycle).  The spurious deadlock appears ONLY under M:N,
-where fibers share a hub ident -- so it is a runloom defect, not CPython's.  (The
+where fibers share a hub ident -- so it is a stackweave defect, not CPython's.  (The
 companion strptime arm is the control that the rest of the machinery is sound.)
 
 SELF-CONTAINED zone backend.  ZoneInfo's per-region COLD Python import only
@@ -78,7 +78,7 @@ import string
 import zoneinfo
 
 import harness
-import runloom
+import stackweave
 
 # importlib's spurious deadlock signal (FINDINGS #9).  It lives in
 # importlib._bootstrap; bind it once so the ZoneInfo arm can catch exactly it
@@ -222,7 +222,7 @@ def parse_and_check(H, wid, state):
 
     # Yield right before so a sibling's cache insert/clear is more likely to land
     # in our window during the strptime (the torn-store race).
-    runloom.yield_now()
+    stackweave.yield_now()
 
     try:
         st = time.strptime(s, fmt)
@@ -242,9 +242,9 @@ def parse_and_check(H, wid, state):
     # Park while holding the parsed result: a sibling hub is churning the cache
     # right now.  On resume, nothing about OUR already-parsed result may change,
     # but this exercises a migration across the strptime boundary.
-    runloom.yield_now()
+    stackweave.yield_now()
     if (wid & 7) == 0:
-        runloom.sleep(0.0003)
+        stackweave.sleep(0.0003)
 
     got = (st.tm_year, st.tm_mon, st.tm_mday, st.tm_hour, st.tm_min, st.tm_sec)
     if got != exp:
@@ -252,7 +252,7 @@ def parse_and_check(H, wid, state):
                "wid={0} layout={1} format={2!r} input={3!r} expected fields "
                "{4} but got {5} -- our input encodes our OWN wid, so wrong fields "
                "mean strptime matched a DIFFERENT format's compiled regex against "
-               "our input (a torn/published-wrong _regex_cache entry or a runloom "
+               "our input (a torn/published-wrong _regex_cache entry or a stackweave "
                "save/restore desync across the hub migration; this pair parses "
                "exactly under plain-threads-GIL-on)".format(
                    wid, layout, fmt, s, exp, got))
@@ -267,7 +267,7 @@ def parse_and_check(H, wid, state):
     # window -- forced overlap, instead of relying on incidental timing.  Under M:N
     # a sibling fiber on the same hub yielding inside its own cold area import
     # corrupts importlib's _blocking_on graph -> a spurious _DeadlockError, which
-    # we catch and FAIL on (the REAL, unfixed runloom bug).  A construct that
+    # we catch and FAIL on (the REAL, unfixed stackweave bug).  A construct that
     # SUCCEEDS still gets its key checked (ZoneInfo cache identity).
     slot = wid & (SLOTS - 1)
     region, area_sub = _ZONE_PAIRS[wid % len(_ZONE_PAIRS)]
@@ -280,7 +280,7 @@ def parse_and_check(H, wid, state):
         except KeyError:
             pass
         zoneinfo.ZoneInfo.clear_cache()
-        runloom.yield_now()
+        stackweave.yield_now()
         try:
             z = zoneinfo.ZoneInfo(region)
         except _DeadlockError as exc:
@@ -290,7 +290,7 @@ def parse_and_check(H, wid, state):
                    "constructing ZoneInfo({0!r}) cold-imported its area backend "
                    "{1!r} and importlib raised {2!r} for wid={3} -- a SPURIOUS "
                    "deadlock.  CPython's per-module import lock is keyed by "
-                   "_thread.get_ident() (the OS thread); under runloom M:N many "
+                   "_thread.get_ident() (the OS thread); under stackweave M:N many "
                    "fibers share ONE hub OS-thread, so a sibling fiber yielding "
                    "inside its own cold area import makes the deadlock detector "
                    "see thread-T waiting on a lock thread-T holds.  No real "
@@ -347,7 +347,7 @@ def control_resample(H, state):
     wid = 0
     while wid < n and H.running():
         fmt, s, exp, layout = make_pair(wid)
-        runloom.yield_now()
+        stackweave.yield_now()
         try:
             st = time.strptime(s, fmt)
         except ValueError as exc:
@@ -373,17 +373,17 @@ def control_resample(H, state):
 # The area-backend ``__init__.py`` cooperatively YIELDS during its import so the
 # per-module import lock is HELD ACROSS A PARK -- this widens the FINDINGS #9
 # detector window enormously (the spurious _DeadlockError becomes reliable in a
-# single round instead of rare).  ``runloom.yield_now()``/``sleep()`` are safe
+# single round instead of rare).  ``stackweave.yield_now()``/``sleep()`` are safe
 # no-ops outside the root, so the one-time setup validation construct is fine.
 # Crucially this does NOT manufacture the bug under plain OS threads: a control
 # whose area __init__ instead ``time.sleep``s (same hold-across-a-switch) raises
 # 0 _DeadlockError under GIL on AND off -- the false deadlock needs the SHARED
 # hub OS-thread ident, which only M:N produces.
 _AREA_INIT_SRC = (
-    "import runloom\n"
-    "runloom.yield_now()\n"
-    "runloom.sleep(0.0003)\n"
-    "runloom.yield_now()\n"
+    "import stackweave\n"
+    "stackweave.yield_now()\n"
+    "stackweave.sleep(0.0003)\n"
+    "stackweave.yield_now()\n"
 )
 
 
@@ -513,7 +513,7 @@ def setup(H):
         "zi_skip": [0] * SLOTS,            # ZoneInfo constructs that hit the benign
                                            #   purge-race (KeyError/NotFound), skipped
         "control_ok": [0],                 # control-arm successful re-parses
-        "control_wg": runloom.WaitGroup(),
+        "control_wg": stackweave.WaitGroup(),
     }
     # Stand up the real cold-import zone backend the #9 arm needs.  A setup
     # failure here is clearer than a per-fiber surprise (and means the ZoneInfo
@@ -592,7 +592,7 @@ if __name__ == "__main__":
                  "size-5 _regex_cache) and assert the parsed datetime fields "
                  "EXACTLY match their own encoded wid -- a wrong field means a "
                  "torn cache returned a SIBLING's compiled regex.  ARM 2 (catches "
-                 "the REAL, unfixed FINDINGS #9 runloom bug -> SUPPOSED to FAIL "
+                 "the REAL, unfixed FINDINGS #9 stackweave bug -> SUPPOSED to FAIL "
                  "under M:N): each round purge the tzdata.zoneinfo.<Area> backend "
                  "submodules and re-construct ZoneInfo(<region>) over a spread of "
                  "areas, so the OS-thread-keyed import lock is re-taken COLD while "

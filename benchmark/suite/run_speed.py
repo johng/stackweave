@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Speed benchmark orchestrator: spawn / context-switch / HTTP req-s / TCP RTT
-for [runloom, go, asyncio, greenlet, uvloop].
+for [stackweave, go, asyncio, greenlet, uvloop].
 
 spawn + ctxswitch are pure-scheduler (no network); the orchestrator runs an n=0
 startup baseline and subtracts it. rtt + http launch a Go target in the server
@@ -68,7 +68,7 @@ def argv_for(rt, metric, n, host=None, port=None, conns=64, ramp=1.0, measure_s=
         return [SPEED_GO, "-metric", "httpclient", "-addr", "%s:%d" % (host, port),
                 "-conns", str(conns), "-gomaxprocs", str(gomax or config.CLIENT_CORES),
                 "-ramp", str(ramp), "-measure", str(measure_s)]
-    if rt == "runloom":
+    if rt == "stackweave":
         base = [P, os.path.join(SP, "runloom_epoll_py_fiber.py"), "--metric", metric]
         if metric in ("spawn", "ctxswitch"):
             return base + ["--n", str(n), "--hubs", str(gomax or HUBS)]
@@ -77,12 +77,12 @@ def argv_for(rt, metric, n, host=None, port=None, conns=64, ramp=1.0, measure_s=
         return base + ["--host", host, "--port", str(port), "--conns", str(conns),
                        "--hubs", str(gomax or config.CLIENT_CORES),
                        "--ramp", str(ramp), "--measure", str(measure_s)]
-    if rt == "runloom_c":
+    if rt == "stackweave_c":
         base = [P, os.path.join(SP, "run_centry.py"), "--metric", metric]
         if metric in ("spawn", "ctxswitch"):
             return base + ["--n", str(n), "--hubs", str(gomax or HUBS)]
         # centry doesn't support network metrics yet
-        raise ValueError("runloom_c only supports spawn/ctxswitch metrics")
+        raise ValueError("stackweave_c only supports spawn/ctxswitch metrics")
     if rt in ("asyncio", "uvloop"):
         base = [G, os.path.join(SP, "speed_asyncio.py"), "--metric", metric, "--loop", rt]
         if metric in ("spawn", "ctxswitch"):
@@ -102,7 +102,7 @@ def argv_for(rt, metric, n, host=None, port=None, conns=64, ramp=1.0, measure_s=
     raise ValueError(rt)
 
 
-RUNTIMES = ["runloom", "runloom_c", "go", "asyncio", "greenlet", "uvloop"]
+RUNTIMES = ["stackweave", "stackweave_c", "go", "asyncio", "greenlet", "uvloop"]
 
 
 def cpus_for(rt, metric):
@@ -114,7 +114,7 @@ def cpus_for(rt, metric):
 
 
 def gil_off_for(rt):
-    return rt in ("runloom", "runloom_c", "go")  # go ignores it; GIL runtimes need GIL on
+    return rt in ("stackweave", "stackweave_c", "go")  # go ignores it; GIL runtimes need GIL on
 
 
 def cores_of(res, rt, metric):
@@ -163,13 +163,13 @@ def main():
     if "ctxswitch" in metrics:
         results["metrics"]["ctxswitch"] = {}
         for rt in [r for r in RUNTIMES if r in only]:
-            # runloom: this is a pure-CPU yield loop, which spuriously trips the
+            # stackweave: this is a pure-CPU yield loop, which spuriously trips the
             # ATTACHED/CPU-preempt watchdog (a feature for I/O workloads that park
             # back to hub_main, never this microbenchmark). Measure the
             # representative cooperative-yield cost with it OFF -- consistent with
             # the c_entry capstone, which is also preempt-off. Other runtimes
             # ignore these vars.
-            cx_env = {"RUNLOOM_PREEMPT": "0", "RUNLOOM_SYSMON": "0"} if rt == "runloom" else None
+            cx_env = {"STACKWEAVE_PREEMPT": "0", "STACKWEAVE_SYSMON": "0"} if rt == "stackweave" else None
             try:
                 base = run_local(argv_for(rt, "ctxswitch", 0), cpus_for(rt, "ctxswitch"),
                                  gil_off_for(rt), extra_env=cx_env, raise_fd=True)
@@ -227,7 +227,7 @@ def main():
                     for rt in [r for r in RUNTIMES if r in only]:
                         try:
                             res = _netns_client(rt, "http", 0, config.SRV_IP, port,
-                                                config.CLIENT_CPU_SPEC if rt in ("runloom", "go")
+                                                config.CLIENT_CPU_SPEC if rt in ("stackweave", "go")
                                                 else ONE_C, conns=conns, ramp=ramp, measure_s=meas)
                             results["metrics"]["http"][rt] = res
                             print("http    %-9s %.0f rps  (%d cores)" % (rt, res["rps"], res.get("cores", 1)), flush=True)

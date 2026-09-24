@@ -2,7 +2,7 @@
 list of futures completing out-of-order across M:N hubs.
 
 The subject is the STOCK ``concurrent.futures.Executor.map`` (the base-class
-method; only ThreadPoolExecutor is fiber-backed by runloom.monkey, so map()
+method; only ThreadPoolExecutor is fiber-backed by stackweave.monkey, so map()
 itself is the unmodified CPython 3.14 code).  Its mechanism, verbatim:
 
     fs = [self.submit(fn, *args) for args in zipped_iterables]   # SUBMIT ORDER
@@ -20,7 +20,7 @@ itself is the unmodified CPython 3.14 code).  Its mechanism, verbatim:
 That is the exact internal state we attack: a single Python ``list`` object
 ``fs`` whose ``ob_item`` backing array is mutated by ``list.pop()`` (it
 decrements ob_size and reads the last slot) ONCE PER YIELD, interleaved with
-``future.result()`` -- which under runloom.monkey parks the generator fiber on
+``future.result()`` -- which under stackweave.monkey parks the generator fiber on
 that future's (cooperative) Condition.  Meanwhile every OTHER future in ``fs``
 is being completed by its OWN task fiber on a DIFFERENT hub: each completing
 fiber does ``fut.set_result(value)`` (store ``_result`` slot + flip ``_state``
@@ -81,7 +81,7 @@ encode() raises ValueError for it.  list(map(...)) MUST raise that ValueError
 position must still be correct & in order.  Any OTHER exception type, an
 out-of-universe value, a wrong position, or a missing raise is the bug.
 
-Synchronization into the park window: encode() does a runloom.yield_now()
+Synchronization into the park window: encode() does a stackweave.yield_now()
 (case-gated), so while the generator parks on future[i].result() the later
 futures i+1..N are actively completing on other hubs -- the cross-hub
 out-of-order set_result lands DURING the generator's park, which is the window
@@ -103,7 +103,7 @@ a TSan report on the list ob_item or the Future._result store localizes a
 reordered/torn result before the order-conservation assert even fires.
 """
 import harness
-import runloom
+import stackweave
 
 # Finite sentinel UNIVERSE of INPUTS.  encode() is a bijection over it, so every
 # legitimate map output decodes back to exactly one universe input; an output
@@ -157,7 +157,7 @@ def encode(x, do_yield=False):
     if x == POISON_INPUT:
         raise ValueError("poison input -- the one legal map() task failure")
     if do_yield:
-        runloom.yield_now()
+        stackweave.yield_now()
     return (x ^ ENC_MASK) + ENC_OFFSET
 
 

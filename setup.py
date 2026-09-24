@@ -1,4 +1,4 @@
-"""runloom build script.
+"""stackweave build script.
 
 Goals:
   - One `pip install .` works across Linux, macOS, FreeBSD/OpenBSD/NetBSD/
@@ -10,11 +10,11 @@ Goals:
       * other POSIX archs        -> ucontext fallback
       * Windows                  -> Fibers (no .S)
   - Honour user overrides:
-      RUNLOOM_BACKEND=ucontext   force ucontext on POSIX even if asm is available
-      RUNLOOM_NO_ASM=1           same as above
-      RUNLOOM_DEBUG=1            -O0 -g
-      RUNLOOM_EXTRA_CFLAGS=...   appended to compile args
-      RUNLOOM_EXTRA_LDFLAGS=...  appended to link args
+      STACKWEAVE_BACKEND=ucontext   force ucontext on POSIX even if asm is available
+      STACKWEAVE_NO_ASM=1           same as above
+      STACKWEAVE_DEBUG=1            -O0 -g
+      STACKWEAVE_EXTRA_CFLAGS=...   appended to compile args
+      STACKWEAVE_EXTRA_LDFLAGS=...  appended to link args
       CC, CXX                 picked up by setuptools as usual
 
 Toolchains regularly built against:
@@ -85,47 +85,47 @@ IS_AARCH64 = MACHINE in ("aarch64", "arm64")
 IS_RISCV   = MACHINE.startswith("riscv")
 IS_PPC     = MACHINE.startswith(("ppc", "powerpc"))
 
-RUNLOOM_DEBUG     = os.environ.get("RUNLOOM_DEBUG", "").strip() not in ("", "0", "no", "false")
-RUNLOOM_NO_ASM    = os.environ.get("RUNLOOM_NO_ASM", "").strip() not in ("", "0", "no", "false")
-RUNLOOM_BACKEND   = os.environ.get("RUNLOOM_BACKEND", "").strip().lower()
-RUNLOOM_NO_IOCP   = os.environ.get("RUNLOOM_NO_IOCP", "").strip() not in ("", "0", "no", "false")
-# RUNLOOM_CTXCHECK=1 arms the debug lock-order rank checker AND the park/yield
+STACKWEAVE_DEBUG     = os.environ.get("STACKWEAVE_DEBUG", "").strip() not in ("", "0", "no", "false")
+STACKWEAVE_NO_ASM    = os.environ.get("STACKWEAVE_NO_ASM", "").strip() not in ("", "0", "no", "false")
+STACKWEAVE_BACKEND   = os.environ.get("STACKWEAVE_BACKEND", "").strip().lower()
+STACKWEAVE_NO_IOCP   = os.environ.get("STACKWEAVE_NO_IOCP", "").strip() not in ("", "0", "no", "false")
+# STACKWEAVE_CTXCHECK=1 arms the debug lock-order rank checker AND the park/yield
 # safety assert (item 10): a fiber that yields while holding a ranked lock or
-# inside a no-yield region reports (or aborts with RUNLOOM_CTXCHECK_ABORT=1).
+# inside a no-yield region reports (or aborts with STACKWEAVE_CTXCHECK_ABORT=1).
 # Debug lane only -- zero cost in a normal build.
-RUNLOOM_CTXCHECK  = os.environ.get("RUNLOOM_CTXCHECK", "").strip() not in ("", "0", "no", "false")
-RUNLOOM_CTXCHECK_ABORT = os.environ.get("RUNLOOM_CTXCHECK_ABORT", "").strip() not in ("", "0", "no", "false")
-# RUNLOOM_KCSAN=1 arms the KCSAN-style delay-and-recheck exclusive-access
+STACKWEAVE_CTXCHECK  = os.environ.get("STACKWEAVE_CTXCHECK", "").strip() not in ("", "0", "no", "false")
+STACKWEAVE_CTXCHECK_ABORT = os.environ.get("STACKWEAVE_CTXCHECK_ABORT", "").strip() not in ("", "0", "no", "false")
+# STACKWEAVE_KCSAN=1 arms the KCSAN-style delay-and-recheck exclusive-access
 # watchpoints (item #8): a cheap sampling data-race detector for soak scale where
 # TSan is too slow.  Debug lane only -- zero cost in a normal build.
-RUNLOOM_KCSAN = os.environ.get("RUNLOOM_KCSAN", "").strip() not in ("", "0", "no", "false")
-# RUNLOOM_NETPOLL=select forces the select() fallback at build time on POSIX
+STACKWEAVE_KCSAN = os.environ.get("STACKWEAVE_KCSAN", "").strip() not in ("", "0", "no", "false")
+# STACKWEAVE_NETPOLL=select forces the select() fallback at build time on POSIX
 # (suppresses epoll/kqueue/event_ports in plat.h so netpoll.c uses its
 # select path).  On Windows the same env var is honoured at *runtime* by
 # netpoll.c, so the build define is a no-op there.
-RUNLOOM_FORCE_SELECT = os.environ.get("RUNLOOM_NETPOLL", "").strip().lower() == "select"
-# RUNLOOM_SHRINK=1 compiles the lock-free structures (Chase-Lev deque, g-slab,
+RUNLOOM_FORCE_SELECT = os.environ.get("STACKWEAVE_NETPOLL", "").strip().lower() == "select"
+# STACKWEAVE_SHRINK=1 compiles the lock-free structures (Chase-Lev deque, g-slab,
 # handle segments, ready ring, QSBR grace ring) with TINY capacities so
 # wraparound / steal-collision / block-exhaustion / segment-growth / epoch-flip
 # happen every few ops instead of once in millions -- letting ASan/TSan and the
 # fuzzers reach those boundary transitions cheaply.  Test/verify lane only.
-RUNLOOM_SHRINK = os.environ.get("RUNLOOM_SHRINK", "").strip() not in ("", "0", "no", "false")
-# RUNLOOM_COVER=1 compiles the named reachability ("Sometimes()") counters
+STACKWEAVE_SHRINK = os.environ.get("STACKWEAVE_SHRINK", "").strip() not in ("", "0", "no", "false")
+# STACKWEAVE_COVER=1 compiles the named reachability ("Sometimes()") counters
 # (runloom_cover.h): a fuzz/soak session asserts every interesting concurrent
 # state was reached at least once, so a green run can't be vacuous.  Test lane
 # only -- a handful of relaxed atomic adds on rare scheduler decision points.
-RUNLOOM_COVER = os.environ.get("RUNLOOM_COVER", "").strip() not in ("", "0", "no", "false")
+STACKWEAVE_COVER = os.environ.get("STACKWEAVE_COVER", "").strip() not in ("", "0", "no", "false")
 # Force-the-rare-path build flavors (PostgreSQL CLOBBER / Go maymorestack): take
 # a dangerous transition on EVERY opportunity so scale/timing Heisenbugs become
-# deterministic first-run failures.  RUNLOOM_FORCE_STACKGROW copy-grows the coro
+# deterministic first-run failures.  STACKWEAVE_FORCE_STACKGROW copy-grows the coro
 # stack a page every resume (exercises the pointer-rewrite path every time).
-RUNLOOM_FORCE_STACKGROW = os.environ.get("RUNLOOM_FORCE_STACKGROW", "").strip() not in ("", "0", "no", "false")
-RUNLOOM_EXTRA_CFLAGS  = os.environ.get("RUNLOOM_EXTRA_CFLAGS", "").split()
-RUNLOOM_EXTRA_LDFLAGS = os.environ.get("RUNLOOM_EXTRA_LDFLAGS", "").split()
+STACKWEAVE_FORCE_STACKGROW = os.environ.get("STACKWEAVE_FORCE_STACKGROW", "").strip() not in ("", "0", "no", "false")
+STACKWEAVE_EXTRA_CFLAGS  = os.environ.get("STACKWEAVE_EXTRA_CFLAGS", "").split()
+STACKWEAVE_EXTRA_LDFLAGS = os.environ.get("STACKWEAVE_EXTRA_LDFLAGS", "").split()
 
 USE_UCONTEXT = (
-    RUNLOOM_BACKEND == "ucontext"
-    or RUNLOOM_NO_ASM
+    STACKWEAVE_BACKEND == "ucontext"
+    or STACKWEAVE_NO_ASM
     or (IS_POSIX and not (IS_X86_64 or IS_AARCH64))
 )
 
@@ -171,7 +171,7 @@ def _probe_compiler():
             cc = "msvc"
         else:
             cc = sysconfig.get_config_var("CC") or "(default)"
-    print("runloom build: platform=%s machine=%s python=%d.%d cc=%s backend=%s"
+    print("stackweave build: platform=%s machine=%s python=%d.%d cc=%s backend=%s"
           % (PLAT, MACHINE, sys.version_info[0], sys.version_info[1],
              cc, "ucontext" if USE_UCONTEXT else "asm/fibers"))
 
@@ -229,8 +229,8 @@ def detect_compile_args():
             "/D_WIN32_WINNT=0x0600",   # Vista+: enables WSAPoll prototype
             "/DFD_SETSIZE=1024",
         ]
-        args.append("/Od" if RUNLOOM_DEBUG else "/O2")
-        if RUNLOOM_DEBUG:
+        args.append("/Od" if STACKWEAVE_DEBUG else "/O2")
+        if STACKWEAVE_DEBUG:
             args.append("/Zi")
     else:
         # GCC / Clang / MinGW / ICC.
@@ -247,13 +247,13 @@ def detect_compile_args():
             "-fstack-protector-strong",
             "-Wformat-security",
         ]
-        args.append("-O0" if RUNLOOM_DEBUG else "-O2")
-        if not RUNLOOM_DEBUG:
+        args.append("-O0" if STACKWEAVE_DEBUG else "-O2")
+        if not STACKWEAVE_DEBUG:
             # _FORTIFY_SOURCE bounds-checks libc calls (memcpy/strcpy/sprintf/
             # ...) at runtime; it needs optimization (-O1+) so it is a no-op /
-            # warning under RUNLOOM_DEBUG's -O0.  =2 is the widely-portable level.
+            # warning under STACKWEAVE_DEBUG's -O0.  =2 is the widely-portable level.
             args.append("-D_FORTIFY_SOURCE=2")
-        if RUNLOOM_DEBUG:
+        if STACKWEAVE_DEBUG:
             args.append("-g")
         if USE_UCONTEXT:
             args.append("-DRUNLOOM_FORCE_UCONTEXT=1")
@@ -277,7 +277,7 @@ def detect_compile_args():
                 "-D_WIN32_WINNT=0x0600",
                 "-DFD_SETSIZE=1024",
             ]
-    if RUNLOOM_NO_IOCP and IS_WINDOWS:
+    if STACKWEAVE_NO_IOCP and IS_WINDOWS:
         args.append("-DRUNLOOM_NO_IOCP=1" if not _using_mingw() else "-DRUNLOOM_NO_IOCP=1")
     if RUNLOOM_FORCE_SELECT:
         # MSVC uses /D; everything else (GCC/Clang/MinGW) uses -D.  Same
@@ -286,20 +286,20 @@ def detect_compile_args():
             args.append("/DRUNLOOM_FORCE_SELECT=1")
         else:
             args.append("-DRUNLOOM_FORCE_SELECT=1")
-    if RUNLOOM_CTXCHECK:
+    if STACKWEAVE_CTXCHECK:
         # CTXCHECK implies LOCKRANK (the park assert reads the held-rank stack).
         args += ["-DRUNLOOM_LOCKRANK=1", "-DRUNLOOM_CTXCHECK=1"]
-        if RUNLOOM_CTXCHECK_ABORT:
+        if STACKWEAVE_CTXCHECK_ABORT:
             args += ["-DRUNLOOM_LOCKRANK_ABORT=1", "-DRUNLOOM_CTXCHECK_ABORT=1"]
-    if RUNLOOM_KCSAN:
+    if STACKWEAVE_KCSAN:
         args.append("-DRUNLOOM_KCSAN=1")
-    if RUNLOOM_SHRINK:
+    if STACKWEAVE_SHRINK:
         args.append("-DRUNLOOM_SHRINK=1")
-    if RUNLOOM_COVER:
+    if STACKWEAVE_COVER:
         args.append("-DRUNLOOM_COVER=1")
-    if RUNLOOM_FORCE_STACKGROW:
+    if STACKWEAVE_FORCE_STACKGROW:
         args.append("-DRUNLOOM_FORCE_STACKGROW=1")
-    args += RUNLOOM_EXTRA_CFLAGS
+    args += STACKWEAVE_EXTRA_CFLAGS
     return args
 
 
@@ -339,7 +339,7 @@ def detect_link_flags():
             "-static-libgcc",
             "-Wl,-Bstatic", "-lwinpthread",
         ]
-    flags += RUNLOOM_EXTRA_LDFLAGS
+    flags += STACKWEAVE_EXTRA_LDFLAGS
     return flags
 
 
@@ -363,7 +363,7 @@ class runloom_build_ext(_build_ext):
             if USE_UCONTEXT:
                 raise
             # Already failed once with asm; switch to ucontext and retry.
-            print("runloom build: asm path failed (%s); retrying with ucontext"
+            print("stackweave build: asm path failed (%s); retrying with ucontext"
                   % e.__class__.__name__)
             USE_UCONTEXT = True
             for e_obj in self.extensions:
@@ -387,7 +387,7 @@ _ext_depends = sorted(
 )
 
 ext = Extension(
-    name="runloom_c",
+    name="stackweave_c",
     sources=detect_sources(),
     include_dirs=[SRC_C],
     depends=_ext_depends,
@@ -399,10 +399,10 @@ ext = Extension(
 
 setup(
     package_dir={"": "src"},
-    packages=["runloom", "runloom.monkey", "runloom.aio"],
+    packages=["stackweave", "stackweave.monkey", "stackweave.aio"],
     # Ship the PEP 561 typing marker + stubs inside the wheel so type
-    # checkers see runloom as typed once it's installed.
-    package_data={"runloom": ["py.typed", "*.pyi"]},
+    # checkers see stackweave as typed once it's installed.
+    package_data={"stackweave": ["py.typed", "*.pyi"]},
     ext_modules=[ext],
     cmdclass={"build_ext": runloom_build_ext},
 )

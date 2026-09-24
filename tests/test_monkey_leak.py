@@ -2,7 +2,7 @@
 
 Wraps tools/leak_check.check_leak as pytest tests: each cooperative-stdlib
 workload, run many times, must return to its post-warmup object- and fd-count
-baseline.  Targets runloom's leak history (FD leaks, task<->driver cycles) now
+baseline.  Targets stackweave's leak history (FD leaks, task<->driver cycles) now
 extended to the monkey layer's new allocation surface (thread-pool offload,
 DNS cache, subprocess pipes, cooperative wrappers).
 """
@@ -14,9 +14,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
 
-import runloom.monkey
+import stackweave.monkey
 
-runloom.monkey.patch()
+stackweave.monkey.patch()
 
 from tools.leak_check import (check_leak, _wl_socketpair, _wl_simplequeue,
                               _wl_file_offload, _wl_subprocess)
@@ -34,8 +34,8 @@ def test_no_leak_file_offload():
     check_leak(_wl_file_offload, iters=50, name="file_offload")
 
 
-# TODO(runloom): the monkey-patched subprocess path leaks fds.  Pre-existing
-# runloom bug -- reproduces on STOCK CPython, not a patched-interpreter
+# TODO(stackweave): the monkey-patched subprocess path leaks fds.  Pre-existing
+# stackweave bug -- reproduces on STOCK CPython, not a patched-interpreter
 # regression.  Skipped to keep the required CI gate green;
 # fix and remove this skip.
 def test_no_leak_subprocess():

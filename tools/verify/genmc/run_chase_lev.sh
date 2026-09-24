@@ -47,7 +47,7 @@ want_bug   chase_lev_resize.c "data race on new buffer" "-DBUG_RLX_ARR"
 # genmc/ is 3 levels under the repo root (tools/verify/genmc); ../.. only reached
 # tools/, so the real-code check SILENTLY SKIPPED (SRC=tools/src/runloom_c).
 ROOT="$(cd "$HERE/../../.." && pwd)"
-SRC="${RUNLOOM_SRC:-$ROOT/src/runloom_c}"
+SRC="${STACKWEAVE_SRC:-$ROOT/src/runloom_c}"
 if [ -f "$SRC/cldeque.c" ]; then
   ok "chase_lev_real.c (REAL cldeque.c, 2elt pop+2steal)"
   if "$G" -- -I"$SRC" chase_lev_real.c 2>&1 | grep -q "No errors were detected"; then

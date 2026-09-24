@@ -1,8 +1,8 @@
-"""Chaos tests for runloom.
+"""Chaos tests for stackweave.
 
 Randomized interleavings + hostile inputs that traditional unit tests
 don't reach.  We seed with a fixed value by default so failures are
-reproducible; set RUNLOOM_CHAOS_SEED=<n> to vary.
+reproducible; set STACKWEAVE_CHAOS_SEED=<n> to vary.
 
 Each test runs many iterations of a small scenario with randomized
 choice of yield points, sleep durations, and operation ordering.  If
@@ -15,12 +15,12 @@ import os
 import random
 import unittest
 
-import runloom_c
-import runloom.aio as paio
-import runloom.sync as ps
+import stackweave_c
+import stackweave.aio as paio
+import stackweave.sync as ps
 
 
-_SEED = int(os.environ.get("RUNLOOM_CHAOS_SEED", "12345"))
+_SEED = int(os.environ.get("STACKWEAVE_CHAOS_SEED", "12345"))
 
 
 class _Seeded(unittest.TestCase):
@@ -57,7 +57,7 @@ class TestRandomYield(_Seeded):
                 # Read-modify-write with optional yield in the middle.
                 v = counter[0]
                 if rng.random() < 0.5:
-                    runloom_c.sched_yield_classic()
+                    stackweave_c.sched_yield_classic()
                 counter[0] = v + 1
 
         # Single-thread cooperative: yields are at our chosen points.
@@ -67,8 +67,8 @@ class TestRandomYield(_Seeded):
         for _ in range(20):
             counter[0] = 0
             for _ in range(N):
-                runloom_c.fiber(lambda r=random.Random(self.rng.random()): w(r))
-            runloom_c.run()
+                stackweave_c.fiber(lambda r=random.Random(self.rng.random()): w(r))
+            stackweave_c.run()
             # With random yields between read and write, we DO lose
             # updates -- that's the design (cooperative != locked).
             # The check is: the count is in [0, N*K], non-zero.
@@ -90,14 +90,14 @@ class TestChannelChaos(_Seeded):
             BUFFER  = self.rng.choice([0, 1, 4, 16])
             PER     = self.rng.randint(10, 100)
 
-            ch = runloom_c.Chan(BUFFER)
+            ch = stackweave_c.Chan(BUFFER)
             sent_total  = N_PRODS * PER
             recv_count  = [0]
 
             def producer(pid):
                 for i in range(PER):
                     if self.rng.random() < 0.2:
-                        runloom_c.sched_yield_classic()
+                        stackweave_c.sched_yield_classic()
                     ch.send((pid, i))
 
             done = [False]
@@ -106,7 +106,7 @@ class TestChannelChaos(_Seeded):
                 # have a join primitive here -- approximate by sleeping
                 # a tiny bit then closing.  If consumers haven't drained,
                 # they will (loop on recv).
-                runloom_c.sched_sleep(0.01)
+                stackweave_c.sched_sleep(0.01)
                 ch.close()
                 done[0] = True
 
@@ -115,11 +115,11 @@ class TestChannelChaos(_Seeded):
                     recv_count[0] += 1
 
             for pid in range(N_PRODS):
-                runloom_c.fiber(lambda pid=pid: producer(pid))
+                stackweave_c.fiber(lambda pid=pid: producer(pid))
             for _ in range(N_CONS):
-                runloom_c.fiber(consumer)
-            runloom_c.fiber(closer)
-            runloom_c.run()
+                stackweave_c.fiber(consumer)
+            stackweave_c.fiber(closer)
+            stackweave_c.run()
 
             self.assertEqual(
                 recv_count[0], sent_total,
@@ -132,7 +132,7 @@ class TestChannelChaos(_Seeded):
         receivers see ok=False."""
         for trial in range(30):
             BUFFER = self.rng.choice([0, 1, 4])
-            ch = runloom_c.Chan(BUFFER)
+            ch = stackweave_c.Chan(BUFFER)
             raised_send = [0]
             recv_after_close = [0]
 
@@ -149,13 +149,13 @@ class TestChannelChaos(_Seeded):
                 recv_after_close[0] = 1
 
             def closer():
-                runloom_c.sched_sleep(self.rng.uniform(0.0001, 0.005))
+                stackweave_c.sched_sleep(self.rng.uniform(0.0001, 0.005))
                 ch.close()
 
-            runloom_c.fiber(sender)
-            runloom_c.fiber(receiver)
-            runloom_c.fiber(closer)
-            runloom_c.run()
+            stackweave_c.fiber(sender)
+            stackweave_c.fiber(receiver)
+            stackweave_c.fiber(closer)
+            stackweave_c.run()
 
             # After close, sender raised (sent < 100) OR sent all 100.
             # Receiver exits normally after seeing all queued + close.

@@ -1,13 +1,13 @@
 import threading, faulthandler
-import runloom
+import stackweave
 faulthandler.dump_traceback_later(20, exit=True)
 barrier = threading.Barrier(2)
 def t(i):
     def work():
-        for _ in range(50): runloom.yield_now()
+        for _ in range(50): stackweave.yield_now()
     barrier.wait()
     try:
-        runloom.run(2, work)
+        stackweave.run(2, work)
     except Exception as e:
         print('thread', i, 'raised', type(e).__name__)
 ths = [threading.Thread(target=t, args=(i,)) for i in range(2)]

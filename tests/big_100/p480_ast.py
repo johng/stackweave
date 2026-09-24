@@ -5,7 +5,7 @@ nodes have been visited to detect and prevent infinite recursion on circular AST
 structures.  Each visitor instance has a __visited set, keyed by node id (the
 Python object identity).
 
-WHERE M:N BREAKS IT (the gap this program probes).  Under runloom's M:N scheduler,
+WHERE M:N BREAKS IT (the gap this program probes).  Under stackweave's M:N scheduler,
 many fibers run on the same hub OS-thread.  If two fibers each parse a DISTINCT
 Python code snippet and walk it via their OWN NodeVisitor instances, they should
 never interfere -- each visitor's __visited set is instance-private and isolated.
@@ -20,14 +20,14 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain threads):
   single-owner (no sharing between fibers).  A correct traversal of a non-circular
   AST visits each node exactly once, records the visit in __visited, and returns
   the correct result (a custom aggregate computed during traversal).  We verified
-  with a standalone plain-threads control (64 threads, same hazard, NO runloom)
+  with a standalone plain-threads control (64 threads, same hazard, NO stackweave)
   that this holds with PYTHON_GIL=1 AND PYTHON_GIL=0: the visited set size matches
   the expected node count, and the traversal result is always correct.  Under a
-  CORRECT runloom it must ALSO hold (each fiber has its own private AST + visitor).
-  If runloom's per-fiber isolation leaks between fibers mid-traversal -- two
+  CORRECT stackweave it must ALSO hold (each fiber has its own private AST + visitor).
+  If stackweave's per-fiber isolation leaks between fibers mid-traversal -- two
   fibers' visitors see each other's __visited entries, causing one to skip nodes
   thinking they were already visited, or the traversal result is wrong -- that is
-  the runloom M:N isolation bug.  The oracle PASSES on a correct runtime (program
+  the stackweave M:N isolation bug.  The oracle PASSES on a correct runtime (program
   exits 0 when there is no bug).
 
 ORACLES:
@@ -36,7 +36,7 @@ ORACLES:
       - A DISTINCT AST (parsed once per fiber from a unique code snippet).
       - A DISTINCT NodeVisitor instance with its own __visited set.
     The fiber walks the AST mid-yield (via a custom visitor that injects
-    runloom.yield_now() inside a visit method to force rescheduling).  After
+    stackweave.yield_now() inside a visit method to force rescheduling).  After
     traversal completes, the oracle checks:
       - visited_count == expected_count: the __visited set size is what it should
         be (all nodes visited, no duplicates, no leaks from siblings).
@@ -45,7 +45,7 @@ ORACLES:
         (verified once, single-owner, for this specific AST).  A cross-fiber leak
         of visitor state (siblings' __visited entries visible, causing skipped
         visits or wrong visits) breaks this.
-    A mismatch is a runloom per-fiber visitor-isolation desync (the ast M:N bug).
+    A mismatch is a stackweave per-fiber visitor-isolation desync (the ast M:N bug).
 
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber that vanished mid-
     traversal (stranded inside a visit method while yielding) never returns; the
@@ -75,7 +75,7 @@ import ast
 import sys
 
 import harness
-import runloom
+import stackweave
 
 
 # Code snippets to parse.  Each is a small valid Python snippet; parse() turns it
@@ -131,9 +131,9 @@ class CountingVisitor(ast.NodeVisitor):
         # node as visited by entering visit(), before processing children).
         if self._rng is not None and self._rng.random() < self.yield_prob:
             if self._rng.random() < 0.5:
-                runloom.yield_now()
+                stackweave.yield_now()
             else:
-                runloom.sleep(0.0001)
+                stackweave.sleep(0.0001)
 
         # Call the parent visitor to continue traversal (visits children).
         return super().visit(node)
@@ -238,7 +238,7 @@ def worker(H, wid, rng, state):
             state["visit_count_mismatches"][wid & 1023] += 1
             H.fail("p480_ast worker {0}: visit_count MISMATCH on snippet {1}: got "
                    "{2} expected {3} -- a sibling's visitor state or AST corruption "
-                   "caused nodes to be skipped/revisited (runloom visitor-isolation "
+                   "caused nodes to be skipped/revisited (stackweave visitor-isolation "
                    "bug)".format(wid, snippet_idx, visitor.visit_count, expected_count))
             return
 
@@ -247,7 +247,7 @@ def worker(H, wid, rng, state):
             state["checksum_mismatches"][wid & 1023] += 1
             H.fail("p480_ast worker {0}: checksum MISMATCH on snippet {1}: got "
                    "{2} expected {3} -- a sibling's visitor state corrupted the "
-                   "traversal result (runloom visitor-isolation bug)".format(
+                   "traversal result (stackweave visitor-isolation bug)".format(
                        wid, snippet_idx, visitor.checksum, expected_checksum))
             return
 
@@ -276,7 +276,7 @@ def post(H):
     if visit_mismatches or checksum_mismatches:
         H.log("note: visitor-state corruption detected -- ast.NodeVisitor's "
               "__visited set or traversal result was corrupted across a yield in "
-              "a visit method.  This indicates a runloom M:N visitor-isolation "
+              "a visit method.  This indicates a stackweave M:N visitor-isolation "
               "bug: sibling fibers' visitor states leaked into each other.")
 
     # NON-VACUITY: the load-bearing visitor-traversal hazard was actually exercised.
@@ -299,7 +299,7 @@ if __name__ == "__main__":
                  "with yields injected inside visit methods, the visitor's "
                  "visit_count and checksum must match the precomputed expected "
                  "values (verified once in isolation for each AST).  A mismatch "
-                 "indicates cross-fiber visitor-state corruption (the runloom M:N "
+                 "indicates cross-fiber visitor-state corruption (the stackweave M:N "
                  "visitor-isolation bug; 0 under plain threads GIL on AND off).  "
                  "Yields force rescheduling while __visited is in transition, "
                  "stressing per-fiber context isolation.")

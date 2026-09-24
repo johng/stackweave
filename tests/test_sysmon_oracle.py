@@ -2,7 +2,7 @@
 cooperative property end-to-end.
 
 The M:N scheduler ships a sysmon watchdog (default-on on free-threaded 3.13t)
-that logs `[RUNLOOM_SYSMON] hub N WEDGED ...` when a fiber pins a hub past the
+that logs `[STACKWEAVE_SYSMON] hub N WEDGED ...` when a fiber pins a hub past the
 budget without yielding.  We use that as a test oracle:
 
   * a workload that does NOT cooperate (unwrapped CPU-heavy hashing inline)
@@ -15,7 +15,7 @@ budget without yielding.  We use that as a test oracle:
   * a purely cooperative workload (cooperative sleeps) never wedges (no false
     positives).
 
-Each case runs in its own subprocess (needs mn_init + a low RUNLOOM_SYSMON_MS, and
+Each case runs in its own subprocess (needs mn_init + a low STACKWEAVE_SYSMON_MS, and
 the WEDGED line is a C fprintf to stderr).
 """
 import os
@@ -31,11 +31,11 @@ _IS_POSIX = os.name == "posix"
 def _run(snippet, sysmon_ms=20, timeout=90):
     env = dict(os.environ)
     env["PYTHONPATH"] = "src"
-    env["RUNLOOM_SYSMON_MS"] = str(sysmon_ms)
+    env["STACKWEAVE_SYSMON_MS"] = str(sysmon_ms)
     # WEDGED/RECOVERED stderr lines are the oracle here, and since b9221d8e
     # sysmon logs them only on explicit opt-in (quiet when it runs solely to
     # service preemption) -- so opt in.
-    env["RUNLOOM_SYSMON"] = "1"
+    env["STACKWEAVE_SYSMON"] = "1"
     env.setdefault("PYTHON_GIL", "0")
     p = subprocess.run([sys.executable, "-c", snippet],
                        capture_output=True, text=True, timeout=timeout, env=env)
@@ -51,16 +51,16 @@ def _run(snippet, sysmon_ms=20, timeout=90):
 
 
 _HASH_WORKLOAD = textwrap.dedent("""
-    import sys, hashlib, runloom, runloom.monkey, runloom_c
-    runloom.monkey.patch(heavy=({heavy}))
+    import sys, hashlib, stackweave, stackweave.monkey, stackweave_c
+    stackweave.monkey.patch(heavy=({heavy}))
     BUF = b"x" * (8 * 1024 * 1024)
     def g():
         for _ in range(25):
             hashlib.sha256(BUF).digest()
-    runloom_c.mn_init(4)
+    stackweave_c.mn_init(4)
     for _ in range(4):
-        runloom_c.mn_fiber(g)
-    runloom_c.mn_run()
+        stackweave_c.mn_fiber(g)
+    stackweave_c.mn_run()
 """)
 
 
@@ -97,15 +97,15 @@ class TestSysmonOracle(unittest.TestCase):
         eval-frame hook can't break it.  The detector must flag it AND classify
         it ATTACHED; this is the case offload() exists for."""
         snippet = textwrap.dedent("""
-            import runloom_c
+            import stackweave_c
             def hog():
                 i = 0
                 while i < 80_000_000:
                     i += 1
-            runloom_c.mn_init(4)
+            stackweave_c.mn_init(4)
             for _ in range(4):
-                runloom_c.mn_fiber(hog)
-            runloom_c.mn_run()
+                stackweave_c.mn_fiber(hog)
+            stackweave_c.mn_run()
         """)
         out = _run(snippet)
         self.assertIn("WEDGED", out)
@@ -117,7 +117,7 @@ class TestSysmonOracle(unittest.TestCase):
         HASH.
 
         Asserted as "no DETACHED wedge", not "no WEDGED line at all".  sysmon's
-        budget is 20ms of WALL CLOCK (RUNLOOM_SYSMON_MS above), and wall clock
+        budget is 20ms of WALL CLOCK (STACKWEAVE_SYSMON_MS above), and wall clock
         cannot tell "a fiber is pinning this hub" apart from "the OS did not
         schedule this hub thread for 20ms".  This workload asks for 4 hubs plus
         blockpool workers each hashing 8 MiB, which oversubscribes a 3-core CI
@@ -144,15 +144,15 @@ class TestSysmonOracle(unittest.TestCase):
     def test_cooperative_workload_never_wedges(self):
         """No false positives: cooperative sleeps park every few ms."""
         snippet = textwrap.dedent("""
-            import runloom, runloom.monkey, runloom_c
-            runloom.monkey.patch()
+            import stackweave, stackweave.monkey, stackweave_c
+            stackweave.monkey.patch()
             def g():
                 for _ in range(60):
-                    runloom.sleep(0.005)
-            runloom_c.mn_init(4)
+                    stackweave.sleep(0.005)
+            stackweave_c.mn_init(4)
             for _ in range(8):
-                runloom_c.mn_fiber(g)
-            runloom_c.mn_run()
+                stackweave_c.mn_fiber(g)
+            stackweave_c.mn_run()
         """)
         out = _run(snippet)
         self.assertNotIn("WEDGED", out, out)

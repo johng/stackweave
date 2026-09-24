@@ -1,12 +1,12 @@
 """Cooperative multiprocessing: Connection (Pipe) recv / send / poll.
 
-Nothing in runloom.monkey reimplements multiprocessing -- it cooperates because
+Nothing in stackweave.monkey reimplements multiprocessing -- it cooperates because
 the primitives it is built on are cooperative.  On POSIX
 multiprocessing.connection.Connection reads its pipe with os.read and waits
 with select/poll, all patched, so Connection.recv parks on wait_fd and
 Process.join / Queue.get / Pool (built on Connection) come along.
 
-The one thing runloom.monkey *does* patch: Connection._recv/_send/_close capture
+The one thing stackweave.monkey *does* patch: Connection._recv/_send/_close capture
 os.read/os.write/os.close as DEFAULT ARGUMENTS at import time
 
     _read = os.read
@@ -20,16 +20,16 @@ them to the cooperative versions.  This file imports multiprocessing at the top
 fix.
 
 Coverage is intentionally IN-PROCESS -- a Pipe's two ends used by two
-fibers -- because that isolates exactly what runloom is responsible for (a
+fibers -- because that isolates exactly what stackweave is responsible for (a
 blocked recv parks on the cooperative os.read and yields), with no fork.
 
 CAVEAT (not tested here): cross-process multiprocessing works, but only with
 the "forkserver" or "spawn" start methods.  The "fork" start method inherits
-runloom's background threads, and a fork of a multi-threaded process can deadlock
+stackweave's background threads, and a fork of a multi-threaded process can deadlock
 the child (Python warns: "use of fork() may lead to deadlocks in the child").
-Single short-lived forks usually survive, but a long-lived runloom process doing
+Single short-lived forks usually survive, but a long-lived stackweave process doing
 several fork-based multiprocessing operations reliably wedges.  Use forkserver
-or spawn under runloom.
+or spawn under stackweave.
 
 Adapted from CPython Lib/test/_test_multiprocessing (_TestConnection) and the
 pipe round-trip patterns in libuv test/test-pipe-*.c.
@@ -40,9 +40,9 @@ import os
 import platform
 import unittest
 
-import runloom
-import runloom.monkey
-import runloom_c
+import stackweave
+import stackweave.monkey
+import stackweave_c
 
 _IS_WINDOWS = platform.system() == "Windows"
 _Connection = multiprocessing.connection.Connection
@@ -57,19 +57,19 @@ def _drive(fn):
         except BaseException as e:   # noqa: BLE001
             box[1] = e
 
-    runloom_c.fiber(runner)
-    runloom_c.run()
+    stackweave_c.fiber(runner)
+    stackweave_c.run()
     if box[1] is not None:
         raise box[1]
     return box[0]
 
 
 def setUpModule():
-    runloom.monkey.patch()
+    stackweave.monkey.patch()
 
 
 def tearDownModule():
-    runloom.monkey.unpatch()
+    stackweave.monkey.unpatch()
 
 
 @unittest.skipIf(_IS_WINDOWS, "POSIX Connection (os.read) path")
@@ -119,15 +119,15 @@ class TestConnectionInProcess(unittest.TestCase):
             def ticker():
                 while not stop["v"]:
                     ticks.append(1)
-                    runloom.sleep(0.003)
+                    stackweave.sleep(0.003)
 
             def sender():
                 for _ in range(8):
-                    runloom.sleep(0.004)       # ~32 ms before the message lands
+                    stackweave.sleep(0.004)       # ~32 ms before the message lands
                 b.send(("payload", 99))
 
-            runloom_c.fiber(ticker)
-            runloom_c.fiber(sender)
+            stackweave_c.fiber(ticker)
+            stackweave_c.fiber(sender)
             got = a.recv()                  # blocks until the sender sends
             stop["v"] = True
             a.close(); b.close()
@@ -171,20 +171,20 @@ class TestConnectionInProcess(unittest.TestCase):
             def ticker():
                 while not stop["v"]:
                     ticks.append(1)
-                    runloom.sleep(0.003)
+                    stackweave.sleep(0.003)
 
             def reader(out):
                 out.append(b.recv_bytes())
 
             out = []
-            runloom_c.fiber(ticker)
-            runloom_c.fiber(lambda: reader(out))
+            stackweave_c.fiber(ticker)
+            stackweave_c.fiber(lambda: reader(out))
             a.send_bytes(payload)
             # let the reader drain
             import time
             t0 = time.monotonic()
             while not out and time.monotonic() - t0 < 5:
-                runloom.sleep(0.003)
+                stackweave.sleep(0.003)
             stop["v"] = True
             a.close(); b.close()
             return (out[0] if out else None), len(ticks)
@@ -214,12 +214,12 @@ class TestSyncPrimitives(unittest.TestCase):
                 lock.acquire()
                 order.append("A-lock")
                 for _ in range(6):
-                    runloom.sleep(0.004)
+                    stackweave.sleep(0.004)
                 order.append("A-unlock")
                 lock.release()
 
             def waiter():
-                runloom.sleep(0.002)
+                stackweave.sleep(0.002)
                 lock.acquire()            # blocks until holder releases
                 order.append("B-lock")
                 lock.release()
@@ -227,15 +227,15 @@ class TestSyncPrimitives(unittest.TestCase):
             def ticker():
                 while "B-lock" not in order:
                     ticks.append(1)
-                    runloom.sleep(0.003)
+                    stackweave.sleep(0.003)
 
-            runloom_c.fiber(holder)
-            runloom_c.fiber(waiter)
-            runloom_c.fiber(ticker)
+            stackweave_c.fiber(holder)
+            stackweave_c.fiber(waiter)
+            stackweave_c.fiber(ticker)
             import time
             t0 = time.monotonic()
             while "B-lock" not in order and time.monotonic() - t0 < 5:
-                runloom.sleep(0.005)
+                stackweave.sleep(0.005)
             return order, len(ticks)
         order, ticks = _drive(body)
         self.assertIn("B-lock", order)

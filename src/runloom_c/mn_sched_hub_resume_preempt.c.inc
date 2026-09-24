@@ -232,8 +232,8 @@ static uint64_t runloom_mn_pct_rand(void)
  * stays off and the baton's uniform-random choose is used (still a valid run). */
 static void runloom_mn_pct_init(uint64_t seed, int n)
 {
-    const char *pct = getenv("RUNLOOM_MN_PCT");
-    const char *kss = getenv("RUNLOOM_MN_PCT_STEPS");
+    const char *pct = getenv("STACKWEAVE_MN_PCT");
+    const char *kss = getenv("STACKWEAVE_MN_PCT_STEPS");
     int d, i, ncp;
     runloom_mn_ctrl.pct_enabled = 0;
     runloom_mn_ctrl.pct_prio = NULL;
@@ -571,9 +571,9 @@ static void runloom_mn_ctrl_try_grant(void)
 
 static void runloom_mn_ctrl_init(int n)
 {
-    const char *seed = getenv("RUNLOOM_MN_SEED");
-    const char *bar  = getenv("RUNLOOM_MN_BARRIER");
-    const char *trc  = getenv("RUNLOOM_MN_TRACE");
+    const char *seed = getenv("STACKWEAVE_MN_SEED");
+    const char *bar  = getenv("STACKWEAVE_MN_BARRIER");
+    const char *trc  = getenv("STACKWEAVE_MN_TRACE");
     runloom_mn_ctrl.enabled = 0;
     runloom_mn_ctrl.tracebuf = NULL;
     runloom_mn_ctrl.tracelen = 0;
@@ -608,7 +608,7 @@ static void runloom_mn_ctrl_init(int n)
      * fewer than 4096 frame entries, so it never trips; the value only sets how
      * promptly a CPU-bound fiber yields the baton. */
     if (runloom_mn_ctrl.barrier) {
-        const char *pf = getenv("RUNLOOM_MN_PREEMPT_FRAMES");
+        const char *pf = getenv("STACKWEAVE_MN_PREEMPT_FRAMES");
         runloom_mn_ctrl.preempt_frames = (pf != NULL) ? atoi(pf) : 4096;
         if (runloom_mn_ctrl.preempt_frames < 0) runloom_mn_ctrl.preempt_frames = 0;
     } else {
@@ -638,8 +638,8 @@ static void runloom_mn_ctrl_init(int n)
     runloom_mn_ctrl.last_granted = -1;
     runloom_mn_ctrl.fanout_fp = NULL;
     {
-        const char *sch = getenv("RUNLOOM_MN_SCHEDULE");
-        const char *fop = getenv("RUNLOOM_MN_FANOUT");
+        const char *sch = getenv("STACKWEAVE_MN_SCHEDULE");
+        const char *fop = getenv("STACKWEAVE_MN_FANOUT");
         if (sch != NULL) {                       /* sch=="" still engages (0-length) */
             size_t cap = 1, m = 0; const char *p; int *a;
             for (p = sch; *p; p++) if (*p == ',') cap++;
@@ -662,7 +662,7 @@ static void runloom_mn_ctrl_init(int n)
     runloom_mn_ctrl.seg_obj = 0;
     runloom_mn_seg_track = (runloom_mn_ctrl.ext_sched != NULL);  /* DPOR tracking on iff driving */
     {
-        const char *ld = getenv("RUNLOOM_LDFI_DROP");  /* LDFI: comma-set of wakes to drop */
+        const char *ld = getenv("STACKWEAVE_LDFI_DROP");  /* LDFI: comma-set of wakes to drop */
         runloom_ldfi_dropn = 0;
         runloom_ldfi_count = 0;
         if (ld != NULL && ld[0] != '\0') {
@@ -727,7 +727,7 @@ static void runloom_mn_ctrl_fini(void)
     runloom_mn_seg_track = 0;
     runloom_mn_ctrl.seg_obj = 0;
     {
-        const char *lc = getenv("RUNLOOM_LDFI_COUNT");     /* publish the wake count */
+        const char *lc = getenv("STACKWEAVE_LDFI_COUNT");     /* publish the wake count */
         if (lc != NULL && lc[0] != '\0') {
             FILE *f = fopen(lc, "w");
             if (f != NULL) { fprintf(f, "%d\n", runloom_ldfi_count); fclose(f); }

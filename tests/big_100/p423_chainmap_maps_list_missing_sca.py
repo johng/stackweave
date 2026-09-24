@@ -126,7 +126,7 @@ import collections
 import random
 
 import harness
-import runloom
+import stackweave
 
 # Finite sentinel UNIVERSE: a fixed, recognizable set of keys.  A key a scanner
 # ever yields that is NOT in this set is a torn list element / freed dict slot --
@@ -311,7 +311,7 @@ def scanner(H, cm, control_box, gate, rng, slot, tally, wid):
                     if not tripped and idx >= 2:
                         tripped = True
                         gate["scan_in"] = True   # tell mutator a scan is mid-flight
-                        runloom.yield_now()       # park with the scan's index live
+                        stackweave.yield_now()       # park with the scan's index live
                 tally[slot] += 1
             elif case == CASE_CONTAINS:
                 sample = [keys[rng.randrange(UNIVERSE_SIZE)] for _ in range(8)]
@@ -325,7 +325,7 @@ def scanner(H, cm, control_box, gate, rng, slot, tally, wid):
                     if not tripped and idx >= 2:
                         tripped = True
                         gate["scan_in"] = True
-                        runloom.yield_now()
+                        stackweave.yield_now()
                 tally[slot] += 1
             else:  # CASE_LISTCM
                 # list(cm) builds a merged dict over reversed(self.maps); a
@@ -340,7 +340,7 @@ def scanner(H, cm, control_box, gate, rng, slot, tally, wid):
                                "maps-list / merge under concurrent realloc".format(
                                    k))
                         return
-                runloom.yield_now()
+                stackweave.yield_now()
                 tally[slot] += 1
         except RuntimeError:
             # "dictionary changed size during iteration" / list mutated during the
@@ -366,7 +366,7 @@ def mutator(H, cm, control_box, lock, gate, rng, slot, mtally):
         # the upcoming realloc lands in its park window; don't block forever.
         spins = 0
         while not gate["scan_in"] and spins < 4 and H.running():
-            runloom.yield_now()
+            stackweave.yield_now()
             spins += 1
         gate["scan_in"] = False
         k = UNIVERSE[rng.randrange(UNIVERSE_SIZE)]
@@ -376,7 +376,7 @@ def mutator(H, cm, control_box, lock, gate, rng, slot, mtally):
             # Hazard B: front-dict PyDict_SetItem (may cross a rehash boundary).
             cm[k] = v                          # == cm.maps[0][k] = v
             control_box["front"][k] = v        # private single-owner mirror
-            runloom.yield_now()                # scan's maps[0] lookup races here
+            stackweave.yield_now()                # scan's maps[0] lookup races here
             writes += 1
             # Periodically perform Hazard A: prepend a fresh layer (the maps-list
             # ob_item realloc that new_child performs), so the scanners' linear
@@ -403,7 +403,7 @@ def mutator(H, cm, control_box, lock, gate, rng, slot, mtally):
                     fk = UNIVERSE[rng.randrange(UNIVERSE_SIZE)]
                     fresh[fk] = f(new_ident, fk)
                 cm.maps.insert(0, fresh)       # <-- ob_item grow + memmove
-                runloom.yield_now()            # realloc lands during a parked scan
+                stackweave.yield_now()            # realloc lands during a parked scan
                 # Demote the old front to the extra-fronts stack (front-first), and
                 # adopt the fresh dict as the new single-writer front.
                 control_box["extra_fronts"].insert(
@@ -419,7 +419,7 @@ def run_round_impl(H, wid, rng, slot, state):
     """One closed-world round: build a shared ChainMap from control layers, run
     SCANNERS scanning it while one MUTATOR realloc's its maps list + inserts into
     maps[0], join everyone, then reconcile dict(cm) against the private control."""
-    lock = runloom.sync.Lock()                 # per-round, per-ChainMap write lock
+    lock = stackweave.sync.Lock()                 # per-round, per-ChainMap write lock
     front_ident = 0                            # the front layer's stable identity
     front, base, next_ident = build_layers(rng, front_ident)
 
@@ -453,9 +453,9 @@ def run_round_impl(H, wid, rng, slot, state):
     }
     gate = {"scan_in": False}
 
-    sc_wg = runloom.WaitGroup()
+    sc_wg = stackweave.WaitGroup()
     sc_wg.add(SCANNERS)
-    mut_wg = runloom.WaitGroup()
+    mut_wg = stackweave.WaitGroup()
     mut_wg.add(1)
 
     sc_tally = state["scan_ops"]

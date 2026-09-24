@@ -1,17 +1,17 @@
 """big_100 / 226 -- per-fiber C-stack grow-on-demand + autosize calibration.
 
 Every other big_100 program PINS a fixed C stack (the harness sets --stack-kb,
-default 512KB, via runloom_c.set_stack_size before the run).  That leaves the
+default 512KB, via stackweave_c.set_stack_size before the run).  That leaves the
 grow-on-demand machinery -- a fiber whose live frames creep toward its guard
 page is doubled, page-rounded, up to an 8MB ceiling (runloom_coro_maybe_grow,
-RUNLOOM_STACK_GROW=1) -- and the stack-autosize / advice profiler entirely
+STACKWEAVE_STACK_GROW=1) -- and the stack-autosize / advice profiler entirely
 UNEXERCISED.  Yet that grow path is exactly what the aio bridge leans on for
 deep C recursion inside protocol callbacks (asyncssh kex, chacha20/OpenSSL); a
 regression in grow-mid-run would SEGV under load and this campaign would never
 catch it.
 
 We start each worker fiber on a SMALL initial stack (set_stack_size(64KB),
-RUNLOOM_STACK_AUTOSIZE_START small) with RUNLOOM_STACK_GROW=1, then recurse
+STACKWEAVE_STACK_AUTOSIZE_START small) with STACKWEAVE_STACK_GROW=1, then recurse
 DEEP into a C extension -- json.dumps/loads over a deeply-nested structure, one
 C frame per nesting level -- so the live C frames push past the small stack and
 the runtime grows it (the measured HWM lands well above 64KB).  yield_now() is
@@ -29,17 +29,17 @@ Stresses: per-fiber C-stack grow-on-demand crossing the guard-headroom threshold
 """
 import os
 
-# RUNLOOM_STACK_GROW defaults ON; make it explicit and pick a SMALL autosize
+# STACKWEAVE_STACK_GROW defaults ON; make it explicit and pick a SMALL autosize
 # start so the autosize path also begins below the depth we recurse to.  Both
-# are read by the C extension, so set them BEFORE importing runloom_c.
-os.environ.setdefault("RUNLOOM_STACK_GROW", "1")
-os.environ.setdefault("RUNLOOM_STACK_AUTOSIZE_START", str(64 * 1024))
+# are read by the C extension, so set them BEFORE importing stackweave_c.
+os.environ.setdefault("STACKWEAVE_STACK_GROW", "1")
+os.environ.setdefault("STACKWEAVE_STACK_AUTOSIZE_START", str(64 * 1024))
 
 import json
 
 import harness
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
 # Small initial per-fiber stack.  A 64KB stack holds only a couple hundred deep
 # C-recursion frames; the json burst below pushes the live frames past it so the
@@ -96,7 +96,7 @@ def check_sum(n, acc):
     which only comes out right if every frame's locals survive the yield."""
     if n == 0:
         return acc
-    runloom.yield_now()
+    stackweave.yield_now()
     down = check_sum(n - 1, acc + n)
     return down + n
 
@@ -129,9 +129,9 @@ def grow_via_json(H, wid, state):
             break
         node = make_nested(depth, wid)
         try:
-            runloom.yield_now()              # resume boundary -> maybe_grow fires
+            stackweave.yield_now()              # resume boundary -> maybe_grow fires
             text = json.dumps(node)          # deep C encode on the growing stack
-            runloom.yield_now()              # likely resume on another hub
+            stackweave.yield_now()              # likely resume on another hub
             back = json.loads(text)          # deep C decode after the migration
         except RecursionError:
             break                            # budget hit: expected, clean stop
@@ -146,7 +146,7 @@ def grow_via_json(H, wid, state):
         deepest = depth
         if deepest > deepest_box[0]:
             deepest_box[0] = deepest         # max-only: racing writers just re-max
-        hwm = runloom_c.current_g_hwm()
+        hwm = stackweave_c.current_g_hwm()
         if hwm > hwm_box[0]:
             hwm_box[0] = hwm
     return True, deepest
@@ -218,7 +218,7 @@ def setup(H):
     # copy-grow; Windows Fibers cannot introspect/grow (current_g_hwm -> 0).  No
     # hard-unavailable case on the Linux box, but skip cleanly if a no-grow
     # backend ever reports here.
-    backend = runloom_c.backend()
+    backend = stackweave_c.backend()
     if "fiber" in backend.lower():
         H.state["available"] = False
         H.log("SKIP: backend {0!r} has no grow-on-demand "
@@ -234,12 +234,12 @@ def body(H):
     # harness --stack-kb pin (set at init); set it here, inside the run, right
     # before spawning the pool.
     try:
-        runloom_c.set_stack_size(SMALL_STACK)
+        stackweave_c.set_stack_size(SMALL_STACK)
     except Exception as exc:        # noqa: BLE001
         H.log("set_stack_size({0}) failed: {1} -- continuing".format(
             SMALL_STACK, exc))
     try:
-        start = runloom_c.get_stack_size()
+        start = stackweave_c.get_stack_size()
         H.state["start_size"] = start
     except Exception:
         start = SMALL_STACK
@@ -254,20 +254,20 @@ def body(H):
     # / ~170KB regardless of round mode.  Both paths are wrapped so an
     # absent/changed API logs-and-continues rather than failing the run.
     try:
-        runloom_c.reset_stack_advice()
-        runloom_c.enable_stack_autosize(True)
-        if runloom_c.stack_autosize_enabled():
+        stackweave_c.reset_stack_advice()
+        stackweave_c.enable_stack_autosize(True)
+        if stackweave_c.stack_autosize_enabled():
             H.log("autosize enable path exercised (start={0}KB)".format(
                 start // 1024))
-        runloom_c.enable_stack_autosize(False)   # back off the reclaim
+        stackweave_c.enable_stack_autosize(False)   # back off the reclaim
     except Exception as exc:        # noqa: BLE001
         H.log("enable_stack_autosize unavailable: {0} -- log-and-continue".format(
             exc))
     try:
-        runloom_c.reset_stack_advice()
-        runloom_c.enable_stack_advice(True)      # paint ON, no reclaim
+        stackweave_c.reset_stack_advice()
+        stackweave_c.enable_stack_advice(True)      # paint ON, no reclaim
         H.log("advice profiler enabled (start={0}KB grow=on backend={1})".format(
-            start // 1024, runloom_c.backend()))
+            start // 1024, stackweave_c.backend()))
     except Exception as exc:        # noqa: BLE001
         # The grow path is still under test via the json/checksum oracle even
         # without the advisor (current_g_hwm just returns 0 / paint off).
@@ -292,7 +292,7 @@ def post(H):
     # max_hwm above the small start where painting/reclaim let it stick.
     advice = []
     try:
-        advice = runloom_c.stack_advice()
+        advice = stackweave_c.stack_advice()
     except Exception as exc:        # noqa: BLE001
         H.log("stack_advice() unavailable: {0}".format(exc))
     advice_hwm = 0

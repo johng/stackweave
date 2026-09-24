@@ -3,13 +3,13 @@ re-entrancy guard is a plain int check-then-set (no atomics, no lock), so on
 free-threaded 3.13t both threads can pass the check and swapcontext into the
 same coroutine context concurrently -> stack corruption / SIGSEGV."""
 import threading
-import runloom_c
+import stackweave_c
 
 def body():
     for _ in range(100000):
-        runloom_c.yield_()
+        stackweave_c.yield_()
 
-c = runloom_c.Coro(body)
+c = stackweave_c.Coro(body)
 
 errors = []
 def spin():

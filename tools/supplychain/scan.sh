@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scan.sh -- supply-chain / backdoor scan of the runloom source tree.
+# scan.sh -- supply-chain / backdoor scan of the stackweave source tree.
 #
 # Complements the existing `security` phase (which fuzzes the RUNTIME): this looks
 # for a BACKDOOR planted in the tree or a compromised dependency.  Four OSS tools,
@@ -14,7 +14,7 @@
 #   bandit       Python security AST patterns in src/, NEW vs bandit_baseline.json
 #                (the current legit exec/subprocess uses are baselined). OFFLINE.
 #   osv-scanner  known-vulnerable / malicious dependencies vs the OSV DB, on the
-#                resolved dev/test env. NETWORK -- opt-in via RUNLOOM_SC_DEPS=1.
+#                resolved dev/test env. NETWORK -- opt-in via STACKWEAVE_SC_DEPS=1.
 #
 # NOT a guarantee: pattern scanners catch KNOWN-SHAPED backdoors (exec/exfil/
 # obfuscation/planted-creds/known-bad-deps).  A subtle LOGIC backdoor (a weakened
@@ -22,9 +22,9 @@
 # testing the rest of check_all already does.
 #
 # Env:
-#   RUNLOOM_SC_FAST=1   offline subset only (semgrep+gitleaks+bandit); no dep audit.
-#   RUNLOOM_SC_DEPS=1   also run osv-scanner (needs network).
-#   RUNLOOM_PYTHON=...  interpreter whose env's deps to audit (default 3.14.4t).
+#   STACKWEAVE_SC_FAST=1   offline subset only (semgrep+gitleaks+bandit); no dep audit.
+#   STACKWEAVE_SC_DEPS=1   also run osv-scanner (needs network).
+#   STACKWEAVE_PYTHON=...  interpreter whose env's deps to audit (default 3.14.4t).
 #
 # Updating a baseline after a legitimately-new finding:
 #   bandit:   bandit -r src/ -q -ll -f json -o tools/supplychain/bandit_baseline.json
@@ -37,9 +37,9 @@ cd "$ROOT" || exit 9
 # Make user-installed (pip --user) and go-installed scanners findable.
 export PATH="$HOME/.local/bin:$(go env GOPATH 2>/dev/null)/bin:$PATH"
 
-PY="${RUNLOOM_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
-FAST="${RUNLOOM_SC_FAST:-0}"
-DEPS="${RUNLOOM_SC_DEPS:-0}"
+PY="${STACKWEAVE_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
+FAST="${STACKWEAVE_SC_FAST:-0}"
+DEPS="${STACKWEAVE_SC_DEPS:-0}"
 [ "$FAST" = 1 ] && DEPS=0
 
 rc=0; ran=0; skipped=0
@@ -102,7 +102,7 @@ if [ "$DEPS" = 1 ]; then
   if command -v osv-scanner >/dev/null 2>&1; then
     ran=$((ran + 1))
     REQ="$(mktemp)"
-    "$PY" -m pip freeze 2>/dev/null | grep -viE "^-e |^runloom" > "$REQ"
+    "$PY" -m pip freeze 2>/dev/null | grep -viE "^-e |^stackweave" > "$REQ"
     ndeps="$(wc -l < "$REQ")"
     out="$(osv-scanner scan --lockfile="requirements.txt:$REQ" 2>&1)"; osvrc=$?
     if [ "$osvrc" = 0 ]; then
@@ -120,7 +120,7 @@ if [ "$DEPS" = 1 ]; then
     skip_tool osv-scanner "go install github.com/google/osv-scanner/cmd/osv-scanner@latest"
   fi
 else
-  note "(dep audit off -- set RUNLOOM_SC_DEPS=1 for the osv-scanner network audit)"
+  note "(dep audit off -- set STACKWEAVE_SC_DEPS=1 for the osv-scanner network audit)"
 fi
 
 hr "supply-chain scan: $ran tool(s) ran, $skipped skipped, rc=$rc"

@@ -58,7 +58,7 @@ often the first signal, before the BufferError oracle even fires.
 import random
 
 import harness
-import runloom
+import stackweave
 
 # Each holder/mutator pair contends over ONE bytearray with a SINGLE export
 # count, so the BufferError invariant is exact: exactly one live view pins it,
@@ -129,8 +129,8 @@ def holder(H, wid, ba, off, ready_evt, done_evt, state, slot):
         # other hub now attempts its resize WHILE this view is outstanding.
         ready_evt.set()
         # PARK while the view is live -- this is the export-across-a-park window.
-        runloom.sleep(PARK_SLEEP)
-        runloom.yield_now()
+        stackweave.sleep(PARK_SLEEP)
+        stackweave.yield_now()
         # Wait until the mutator has finished its (must-fail) resize attempt so
         # the overlap is provable, not merely likely.
         done_evt.wait()
@@ -180,9 +180,9 @@ def worker(H, wid, rng, state):
         # Fresh bytearray every round: exactly ONE export (the holder's view)
         # pins it, so the BufferError-while-live invariant is exact.
         ba = bytearray(BA_LEN)
-        ready_evt = runloom.sync.Event()
-        done_evt = runloom.sync.Event()
-        wg = runloom.WaitGroup()
+        ready_evt = stackweave.sync.Event()
+        done_evt = stackweave.sync.Event()
+        wg = stackweave.WaitGroup()
         wg.add(2)
 
         def run_holder(ba=ba, off=off, ready_evt=ready_evt, done_evt=done_evt):

@@ -76,7 +76,7 @@ as acquired != released (a body that ran its pre-yield once but its finally twic
 (a torn frame handed back a value from a freed/garbage slot).
 
   CORRECT-USAGE ARM (fresh cm per with, case 0): each ``with cm(slot):`` parks
-  mid-body via runloom.yield_now() while siblings on other hubs do the same on
+  mid-body via stackweave.yield_now() while siblings on other hubs do the same on
   their OWN fresh cms.  Invariant: acquired == released == bodies-entered, every
   token in UNIVERSE.  (A fresh-cm body that ran its acquire exactly once must run
   its finally exactly once -- no leaked acquire, no doubled release.)
@@ -105,10 +105,10 @@ as acquired != released (a body that ran its pre-yield once but its finally twic
   shared generator object (bypassing __enter__'s del-guard) so two fibers
   concurrently RESUME ONE suspended generator frame SIGSEGVs free-threaded CPython
   3.14.6t inside _PyEval_EvalFrameDefault -- and it reproduces IDENTICALLY with
-  plain threading.Thread + PYTHON_GIL=0 and NO runloom (10/10), while PYTHON_GIL=1
+  plain threading.Thread + PYTHON_GIL=0 and NO stackweave (10/10), while PYTHON_GIL=1
   is clean (0/20000).  That is a stock free-threaded-CPython data race on the
   generator's gi_frame_state (a non-atomic FRAME_EXECUTING check-then-set in
-  gen_send_ex2), NOT a runloom defect, and concurrently resuming one generator is
+  gen_send_ex2), NOT a stackweave defect, and concurrently resuming one generator is
   a documented programming error.  So this probe races the LEGAL __enter__ reuse
   guard rather than committing the illegal concurrent raw resume, which would
   crash the process on an upstream bug regardless of the runtime under test.
@@ -137,7 +137,7 @@ conservation sum even closes.
 import contextlib
 
 import harness
-import runloom
+import stackweave
 
 # Finite sentinel UNIVERSE of tokens the managed generator yields.  A token the
 # body ever sees that is NOT in this set means the generator frame handed back a
@@ -235,7 +235,7 @@ def run_fresh(H, wid, rng, state, slot):
         # the migration/park window the hazard needs.  A sibling on another hub
         # must NOT be able to perturb THIS frame (it is a fresh, private cm), so a
         # conservation break here is the machinery itself, not contention.
-        runloom.yield_now()
+        stackweave.yield_now()
     # __exit__ has now driven next(self.gen) past the yield -> the finally ran.
     return True
 
@@ -266,10 +266,10 @@ def run_shared(H, wid, rng, state, slot):
     the shared generator object (bypassing the __enter__ del-guard) so two fibers
     concurrently resume ONE suspended generator frame SIGSEGVs free-threaded
     CPython 3.14.6t in _PyEval_EvalFrameDefault -- and it does so identically with
-    plain threading.Thread + PYTHON_GIL=0 and NO runloom (10/10 reproductions),
+    plain threading.Thread + PYTHON_GIL=0 and NO stackweave (10/10 reproductions),
     while PYTHON_GIL=1 is clean (0/20000).  That is a stock free-threaded-CPython
     data race on gi_frame_state (a non-atomic FRAME_EXECUTING check-then-set), NOT
-    a runloom defect, and concurrently resuming one generator is a documented
+    a stackweave defect, and concurrently resuming one generator is a documented
     programming error; so this program races the LEGAL reuse guard (above) rather
     than committing that illegal concurrent raw resume, which would crash the
     process on an upstream bug regardless of the runtime under test."""
@@ -279,9 +279,9 @@ def run_shared(H, wid, rng, state, slot):
     cm = make_managed(acquired, released, slot, owntally=owntally)
     shared_cm = cm()                  # ONE _GeneratorContextManager instance
 
-    gate = runloom.WaitGroup()        # A trips it just before it parks holding open
+    gate = stackweave.WaitGroup()        # A trips it just before it parks holding open
     gate.add(1)
-    wg = runloom.WaitGroup()          # both fibers join here
+    wg = stackweave.WaitGroup()          # both fibers join here
     wg.add(2)
     # Per-fiber result holders (single-writer each -> race-free).
     res = {"a_tok": None, "a_ok": True, "b_outcome": None}
@@ -297,8 +297,8 @@ def run_shared(H, wid, rng, state, slot):
             # Release B INTO this park: B's second __enter__ on the SAME instance
             # now races A's still-open body / its reuse-del guard across hubs.
             gate.done()
-            runloom.yield_now()       # park here, frame FRAME_SUSPENDED
-            runloom.yield_now()       # give B real time on another hub
+            stackweave.yield_now()       # park here, frame FRAME_SUSPENDED
+            stackweave.yield_now()       # give B real time on another hub
             # A now closes the body normally.  __exit__(None,None,None) resumes
             # the frame past the yield; the finally runs the release exactly once.
             try:

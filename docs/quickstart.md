@@ -6,13 +6,13 @@ core primitives: channels, sleep, fan-out, and a tiny TCP echo server.
 ## Your first fiber
 
 ```python
-import runloom
+import stackweave
 
 def hello():
     print("hello from a fiber!")
 
-runloom.fiber(hello)        # spawn -- doesn't run yet
-runloom.run(1)            # drive the scheduler until everyone finishes
+stackweave.fiber(hello)        # spawn -- doesn't run yet
+stackweave.run(1)            # drive the scheduler until everyone finishes
 ```
 
 Output:
@@ -21,21 +21,21 @@ Output:
 hello from a fiber!
 ```
 
-`go(fn)` queues `fn` for execution on the runloom scheduler.  Nothing
-runs until you call `runloom.run(1)` -- that's the scheduler's main
+`go(fn)` queues `fn` for execution on the stackweave scheduler.  Nothing
+runs until you call `stackweave.run(1)` -- that's the scheduler's main
 loop, equivalent of Go's program-startup runtime.
 
 ## Many fibers
 
 ```python
-import runloom
+import stackweave
 
 def worker(i):
     print("worker", i)
 
 for i in range(10):
-    runloom.fiber(lambda i=i: worker(i))   # bind i per-spawn
-runloom.run(1)
+    stackweave.fiber(lambda i=i: worker(i))   # bind i per-spawn
+stackweave.run(1)
 ```
 
 Output (order is scheduler-dependent):
@@ -53,22 +53,22 @@ closures over a loop variable.  Each fiber captures its own `i`.
 
 ## Cooperative sleep
 
-`runloom.sched_sleep(seconds)` suspends the current fiber for at
+`stackweave.sched_sleep(seconds)` suspends the current fiber for at
 least `seconds`, letting other fibers run in the meantime.  This is
 not `time.sleep` -- `time.sleep` would block the whole OS thread.
 
 ```python
-import time, runloom
+import time, stackweave
 
 def slow():
     print("start", time.time())
-    runloom.sched_sleep(0.5)
+    stackweave.sched_sleep(0.5)
     print("end  ", time.time())
 
 # Spawn three sleeps concurrently; they all wake at ~the same time.
 for _ in range(3):
-    runloom.fiber(slow)
-runloom.run(1)
+    stackweave.fiber(slow)
+stackweave.run(1)
 ```
 
 Output:
@@ -93,9 +93,9 @@ unbuffered channels rendezvous (the sender blocks until a receiver is
 ready, and vice-versa).
 
 ```python
-import runloom
+import stackweave
 
-ch = runloom.Chan(10)            # buffered, capacity 10
+ch = stackweave.Chan(10)            # buffered, capacity 10
 
 def producer():
     for i in range(5):
@@ -106,9 +106,9 @@ def consumer():
     for v in ch:                   # iterates until ch closes
         print("got", v)
 
-runloom.fiber(producer)
-runloom.fiber(consumer)
-runloom.run(1)
+stackweave.fiber(producer)
+stackweave.fiber(consumer)
+stackweave.run(1)
 ```
 
 Output:
@@ -131,9 +131,9 @@ clients send.
 
 ```python
 import socket
-import runloom
+import stackweave
 
-runloom.monkey.patch()                 # makes socket cooperative
+stackweave.monkey.patch()                 # makes socket cooperative
 
 def handle(conn):
     try:
@@ -152,10 +152,10 @@ def accept_loop():
     srv.listen(128)
     while True:
         conn, _ = srv.accept()
-        runloom.fiber(lambda c=conn: handle(c))
+        stackweave.fiber(lambda c=conn: handle(c))
 
-runloom.fiber(accept_loop)
-runloom.run(1)
+stackweave.fiber(accept_loop)
+stackweave.run(1)
 ```
 
 Test it:
@@ -164,17 +164,17 @@ Test it:
 echo "hi" | nc 127.0.0.1 9000
 ```
 
-The `runloom.monkey.patch()` call swaps `socket.socket`'s methods for
+The `stackweave.monkey.patch()` call swaps `socket.socket`'s methods for
 cooperative versions that park on `wait_fd` instead of blocking the OS
 thread.  See [Monkey-patching](monkey-patching.md) for the full list.
 
 ## Already have `async def` code?
 
-Run it on the runloom scheduler with `runloom.aio`:
+Run it on the stackweave scheduler with `stackweave.aio`:
 
 ```python
 import asyncio
-import runloom
+import stackweave
 
 async def handler(reader, writer):
     line = await reader.readline()
@@ -183,15 +183,15 @@ async def handler(reader, writer):
     writer.close()
 
 async def main():
-    server = await runloom.aio.start_server(handler, "127.0.0.1", 9000)
+    server = await stackweave.aio.start_server(handler, "127.0.0.1", 9000)
     async with server:
         await server.serve_forever()
 
-runloom.aio.run(main())
+stackweave.aio.run(main())
 ```
 
-`runloom.aio.run(coro)` is the equivalent of `asyncio.run(coro)`.  It
-installs the runloom event-loop policy, creates a `RunloomEventLoop`, and
+`stackweave.aio.run(coro)` is the equivalent of `asyncio.run(coro)`.  It
+installs the stackweave event-loop policy, creates a `StackweaveEventLoop`, and
 drives your top-level coroutine.  See [Asyncio bridge](asyncio.md) for
 when this wins vs. losing against vanilla asyncio.
 

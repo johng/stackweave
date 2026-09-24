@@ -57,14 +57,14 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified empirically, not assumed):
       foreign data, no corruption)
 
   We verified with a standalone plain-threads control (same multi-member,
-  shared-archive hazard, 16 threads, NO runloom) that this NEVER fails under
+  shared-archive hazard, 16 threads, NO stackweave) that this NEVER fails under
   PYTHON_GIL=1 AND PYTHON_GIL=0.  Each OS thread's ZipFile instance is
-  independent and properly isolated.  Under a CORRECT runloom each fiber MUST
-  also get its archive's data every time.  If runloom does NOT properly isolate
+  independent and properly isolated.  Under a CORRECT stackweave each fiber MUST
+  also get its archive's data every time.  If stackweave does NOT properly isolate
   per-fiber ZipFile instances -- the _NameToInfo dict is corrupted / shared, the
   file pointer is torn, or extraction reads from the wrong offset -- the read
   returns WRONG DATA (foreign bytes, truncated data, or a missing member).  That
-  is the runloom M:N isolation bug, and the program EXITS 0 only when there is
+  is the stackweave M:N isolation bug, and the program EXITS 0 only when there is
   NO bug (all data matches).
 
 ORACLES:
@@ -77,7 +77,7 @@ ORACLES:
           truncation, no foreign data, no corruption).
     A mismatch indicates a fiber's ZipFile instance state is corrupted or shared
     with a sibling.  The program NEVER fires on plain threads (GIL on AND off --
-    verified), so it is a true runloom isolation signal.
+    verified), so it is a true stackweave isolation signal.
   * NON-VACUITY (post, HARD): the member-data isolation hazard was actually
     exercised (read_count > 0).
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber that vanished mid-
@@ -103,7 +103,7 @@ import tempfile
 import zipfile
 
 import harness
-import runloom
+import stackweave
 
 # Modest population.  Past a few hundred concurrent fibers, the .zip-open
 # overhead dominates; the cache hazard is fully exercised well below that.
@@ -312,9 +312,9 @@ def worker(H, wid, rng, state):
 
             # Yield between reads to encourage concurrent fiber scheduling on
             # the hub.
-            runloom.yield_now()
+            stackweave.yield_now()
             if idx & 1:
-                runloom.sleep(0.0002)
+                stackweave.sleep(0.0002)
 
             H.op(wid)
             idx += 1
@@ -355,11 +355,11 @@ def post(H):
             "instances over a bounded pool of archives (wid % npool); if hub "
             "fibers are not properly isolated, a sibling's concurrent ZipFile "
             "operations can corrupt this fiber's reads (wrong data, wrong "
-            "members, truncated extracts).  This is a runloom M:N fiber "
+            "members, truncated extracts).  This is a stackweave M:N fiber "
             "isolation bug (0 mismatches under plain threads GIL on AND off -- "
             "each OS thread's ZipFile is independent).  The fix is to ensure "
             "fiber-local isolation of per-instance ZipFile state or serialize "
-            "access in runloom.".format(data_mm, list_mm, size_mm, reads)
+            "access in stackweave.".format(data_mm, list_mm, size_mm, reads)
         )
 
     if errors:
@@ -405,6 +405,6 @@ if __name__ == "__main__":
                  "members and read(member) extracts exactly the marker bytes "
                  "that archive holds.  A mismatch indicates ZipFile instance "
                  "state is corrupted or leaked across fibers (0 under plain "
-                 "threads GIL on AND off; runloom M:N fiber-isolation bug).  "
+                 "threads GIL on AND off; stackweave M:N fiber-isolation bug).  "
                  "MEASURED: member count & error counts (report-only)"
     )

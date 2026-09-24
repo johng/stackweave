@@ -1,7 +1,7 @@
-# tests_stdlib — CPython stdlib suite under runloom's M:N scheduler
+# tests_stdlib — CPython stdlib suite under stackweave's M:N scheduler
 
 A bug-hunting harness that runs the CPython 3.13t standard-library test corpus
-inside runloom goroutines on the M:N scheduler, to shake out scheduler /
+inside stackweave goroutines on the M:N scheduler, to shake out scheduler /
 stackful-coroutine bugs against real, diverse Python workloads. The corpus
 itself is **not committed** (it's ~80 MB of verbatim upstream `Lib/test`) — run
 the `rsync` under "Vendor the corpus" once before the first sweep.

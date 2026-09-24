@@ -21,9 +21,9 @@ every same-fd waiter on a dead fd becomes runnable and its next syscall observes
 the error.
 
 These tests assert that BEHAVIOUR through real sockets (socketpair / loopback
-connect) + runloom_c.wait_fd -- never a backend internal -- and compare to a
-plain blocking socket where it clarifies intent.  Single-thread (runloom_c.fiber/
-run) AND a couple under M:N (runloom.run(4, ...), per-hub kqueue delivers EOF).
+connect) + stackweave_c.wait_fd -- never a backend internal -- and compare to a
+plain blocking socket where it clarifies intent.  Single-thread (stackweave_c.fiber/
+run) AND a couple under M:N (stackweave.run(4, ...), per-hub kqueue delivers EOF).
 
 kqueue only; run from the repo root.
 """
@@ -39,8 +39,8 @@ pytestmark = pytest.mark.skipif(
 
 sys.path.insert(0, "src")
 
-import runloom_c                       # noqa: E402
-import runloom                         # noqa: E402
+import stackweave_c                       # noqa: E402
+import stackweave                         # noqa: E402
 
 READ = 1
 WRITE = 2
@@ -67,8 +67,8 @@ def _drive(*fibers):
         return runner
 
     for g in fibers:
-        runloom_c.fiber(wrap(g))
-    runloom_c.run()
+        stackweave_c.fiber(wrap(g))
+    stackweave_c.run()
     if box:
         raise box[0]
 
@@ -87,7 +87,7 @@ def _reset_registration():
     netpoll_register.c.inc:123)."""
     for fd in range(3, 1024):
         try:
-            runloom_c.netpoll_unregister(fd)
+            stackweave_c.netpoll_unregister(fd)
         except Exception:                   # noqa: BLE001
             pass
 
@@ -102,7 +102,7 @@ def _registration_reset():
 def test_backend_is_kqueue():
     # Guard: every test below asserts the *kqueue* fold path.  If some other
     # backend were selected the assertions would be vacuous.
-    assert runloom_c.netpoll_backend() == "kqueue"
+    assert stackweave_c.netpoll_backend() == "kqueue"
 
 
 # --------------------------------------------------------------------------
@@ -148,10 +148,10 @@ def test_read_parker_wakes_on_peer_close_eof(payload):
     out = []
 
     def reader():
-        out.append(runloom_c.wait_fd(a.fileno(), READ, 2000))
+        out.append(stackweave_c.wait_fd(a.fileno(), READ, 2000))
 
     def closer():
-        runloom_c.sched_yield()             # let the reader park first
+        stackweave_c.sched_yield()             # let the reader park first
         if payload:
             b.sendall(payload)              # data is still delivered before EOF
         b.close()                           # full close -> EV_EOF on READ
@@ -177,10 +177,10 @@ def test_read_parker_eof_matches_blocking_socket():
     out = []
 
     def reader():
-        out.append(runloom_c.wait_fd(a.fileno(), READ, 2000))
+        out.append(stackweave_c.wait_fd(a.fileno(), READ, 2000))
 
     def closer():
-        runloom_c.sched_yield()
+        stackweave_c.sched_yield()
         b.close()
 
     _drive(reader, closer)
@@ -208,10 +208,10 @@ def test_write_parker_wakes_on_peer_close_eof_fold(hint):
         # deadline so a *timeout* can't masquerade as the fold-wake: if the
         # fold is broken this hangs ~3 s then returns 0, which the assert below
         # rejects (and the value would be 0, not a WRITE-bearing mask).
-        out.append(runloom_c.wait_fd(a.fileno(), hint, 3000))
+        out.append(stackweave_c.wait_fd(a.fileno(), hint, 3000))
 
     def closer():
-        runloom_c.sched_yield()             # let the writer commit its park
+        stackweave_c.sched_yield()             # let the writer commit its park
         b.close()                           # EV_EOF -> fold into READ|WRITE
 
     _drive(writer, closer)
@@ -236,10 +236,10 @@ def test_half_close_shut_wr_wakes_read_parker():
     out = []
 
     def reader():
-        out.append(runloom_c.wait_fd(a.fileno(), READ, 2000))
+        out.append(stackweave_c.wait_fd(a.fileno(), READ, 2000))
 
     def half_closer():
-        runloom_c.sched_yield()
+        stackweave_c.sched_yield()
         b.shutdown(socket.SHUT_WR)          # our read side -> EOF; write open
 
     _drive(reader, half_closer)
@@ -248,7 +248,7 @@ def test_half_close_shut_wr_wakes_read_parker():
     # Write side is still open: a fresh WRITE wait_fd must report WRITE-ready,
     # not block (the half-close only killed the read direction).
     out2 = []
-    _drive(lambda: out2.append(runloom_c.wait_fd(a.fileno(), WRITE, 1000)))
+    _drive(lambda: out2.append(stackweave_c.wait_fd(a.fileno(), WRITE, 1000)))
     assert out2 == [WRITE], "write side wrongly reported dead after SHUT_WR"
     a.close(); b.close()
 
@@ -282,7 +282,7 @@ def test_connect_refused_wakes_write_waiter_with_error():
         try:
             ec = s.connect_ex(addr)         # EINPROGRESS (async connect)
             assert ec in (0, _errno.EINPROGRESS, _errno.EWOULDBLOCK), ec
-            r = runloom_c.wait_fd(s.fileno(), WRITE, 3000)
+            r = stackweave_c.wait_fd(s.fileno(), WRITE, 3000)
             out.append(r)
             so_err = s.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
             res.append(so_err)
@@ -324,10 +324,10 @@ def test_write_parker_wakes_on_peer_rst_error_fold():
     out = []
 
     def writer():
-        out.append(runloom_c.wait_fd(a.fileno(), WRITE, 3000))
+        out.append(stackweave_c.wait_fd(a.fileno(), WRITE, 3000))
 
     def resetter():
-        runloom_c.sched_yield()
+        stackweave_c.sched_yield()
         _rst_close(b)                       # EV_EOF|EV_ERROR -> fold
 
     _drive(writer, resetter)
@@ -360,14 +360,14 @@ def test_both_direction_waiters_wake_on_close():
     woke = {}
 
     def reader():
-        woke["read"] = runloom_c.wait_fd(a.fileno(), READ, 3000)
+        woke["read"] = stackweave_c.wait_fd(a.fileno(), READ, 3000)
 
     def writer():
-        woke["write"] = runloom_c.wait_fd(a.fileno(), WRITE, 3000)
+        woke["write"] = stackweave_c.wait_fd(a.fileno(), WRITE, 3000)
 
     def closer():
-        runloom_c.sched_yield()
-        runloom_c.sched_yield()             # let BOTH park
+        stackweave_c.sched_yield()
+        stackweave_c.sched_yield()             # let BOTH park
         b.close()
 
     _drive(reader, writer, closer)
@@ -382,7 +382,7 @@ def test_both_direction_waiters_wake_on_close():
 # ==========================================================================
 # M:N coverage -- per-hub kqueue delivers EOF/error.  Run the two highest-value
 # scenarios (READ-EOF and the WRITE-only cross-direction fold) under
-# runloom.run(n, main) so the fold is exercised on the live hub kqueues, not
+# stackweave.run(n, main) so the fold is exercised on the live hub kqueues, not
 # just the single-thread default pool.  Results land in single-writer dict
 # slots (no shared counter RMW -- mandatory with the GIL off).
 # Targets the SAME netpoll_pump.c.inc:202-215 fold reached from a hub pump.
@@ -393,17 +393,17 @@ def _run_mn_eof_read(hubs):
     def reader(slot):
         a, b = socket.socketpair()
         a.setblocking(False); b.setblocking(False)
-        runloom.fiber(_peer_closer, b)         # spawn the closer fiber
-        r = runloom_c.wait_fd(a.fileno(), READ, 4000)
+        stackweave.fiber(_peer_closer, b)         # spawn the closer fiber
+        r = stackweave_c.wait_fd(a.fileno(), READ, 4000)
         box[slot] = (r, a.recv(16))
         a.close()
 
     def main():
-        runloom.fiber(reader, "r")
-        # No sleep: runloom.run() waits for ALL fibers, so the reader's
+        stackweave.fiber(reader, "r")
+        # No sleep: stackweave.run() waits for ALL fibers, so the reader's
         # full round-trip (park -> EOF fold -> recv) completes before run()
         # returns -- deterministic regardless of load.
-    runloom.run(hubs, main)
+    stackweave.run(hubs, main)
     return box
 
 
@@ -418,8 +418,8 @@ def _peer_closer(b):
     # netpoll_parked stat (module_run.c.inc:214, summed across hubs) until the one
     # socket parker in this run() is committed; the cap only bounds a true hang.
     i = 0
-    while runloom_c.stats()["netpoll_parked"] < 1 and i < 1000000:
-        runloom_c.sched_yield()
+    while stackweave_c.stats()["netpoll_parked"] < 1 and i < 1000000:
+        stackweave_c.sched_yield()
         i += 1
     b.close()
 
@@ -438,15 +438,15 @@ def _run_mn_write_fold(hubs):
 
     def writer(slot):
         a, b, _ = _make_write_blocked_pair()
-        runloom.fiber(_peer_closer, b)
-        r = runloom_c.wait_fd(a.fileno(), WRITE, 4000)
+        stackweave.fiber(_peer_closer, b)
+        r = stackweave_c.wait_fd(a.fileno(), WRITE, 4000)
         box[slot] = r
         a.close()
 
     def main():
-        runloom.fiber(writer, "w")
+        stackweave.fiber(writer, "w")
         # No sleep: run() waits for the writer fiber's full round-trip.
-    runloom.run(hubs, main)
+    stackweave.run(hubs, main)
     return box
 
 

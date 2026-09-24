@@ -62,7 +62,7 @@ migration under M:N; purity of a pure stdlib path routine under preemption.
 import genericpath
 
 import harness
-import runloom
+import stackweave
 
 # Fiber-local input alphabet for the constructed common prefix and the random
 # tails.  Deliberately EXCLUDES the two divergence markers ('!' and '~') so the
@@ -172,9 +172,9 @@ def purity_check(H, wid, idx, state):
 
     # YIELD: let siblings run their own commonprefix churn, possibly on another
     # hub, while this fiber is parked holding r1/m/expected.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0003)
+        stackweave.sleep(0.0003)
 
     # (2) purity across the park: recompute and assert nothing changed.
     r2 = genericpath.commonprefix(m)

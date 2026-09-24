@@ -20,12 +20,12 @@
 # path) and forces the drain to block in the pump, exercising the 2 ms backstop.
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
-PY="${RUNLOOM_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
+PY="${STACKWEAVE_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
 TR="$(mktemp /tmp/wake.XXXX.ndjson)"
 
 WL='import sys, time
 sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 def offloader():
     # each blocking() parks the fiber foreign-wakeable; a blockpool worker runs
     # the sleep off-hub and wakes it via the durable wake_list + pump poke --
@@ -37,7 +37,7 @@ rc.run()                     # single-thread drain (NOT M:N hubs) -- the modeled
 
 echo "== trace conformance: RunloomWake.tla vs the real netpoll-drain wake path =="
 echo "-- capture a real wake event trace (single-thread offload) --"
-RUNLOOM_WAKE_TRACE="$TR" PYTHON_GIL=0 PYTHONPATH=src "$PY" -c "$WL" >/dev/null 2>&1
+STACKWEAVE_WAKE_TRACE="$TR" PYTHON_GIL=0 PYTHONPATH=src "$PY" -c "$WL" >/dev/null 2>&1
 
 rc=0
 echo "-- TLC: real trace (expect CONFORMS) --"

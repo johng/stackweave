@@ -15,8 +15,8 @@ import struct
 
 import harness
 import netutil
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
 ACCEPT_CEILING_MS = 2000        # bound the parked accept so a lost close-wake of
                                 # a parked accept (FINDINGS #5) backstops, no hang
@@ -39,7 +39,7 @@ def accept_one(H, srv, slot, exited, done):
                 break                   # the doomed listener was closed -> exit
         except (OSError, ValueError):
             break
-        runloom.sleep(0.001)
+        stackweave.sleep(0.001)
     exited[slot] = 1
     try:
         done.send(slot)
@@ -56,11 +56,11 @@ def listener_reuse_unit(H, wid, rng):
     doomed = netutil.listen_tcp(host=host, backlog=8)
     n_waiters = 2
     exited = [0] * n_waiters
-    done = runloom.Chan(n_waiters)
+    done = stackweave.Chan(n_waiters)
     for i in range(n_waiters):
         H.fiber(accept_one, H, doomed, i, exited, done)
     # let the waiters reach the accept park
-    runloom.yield_now()
+    stackweave.yield_now()
     H.sleep(0.001)
     # 2) cancel every parked accept by closing the listen fd cross-goroutine.
     netutil.close_quiet(doomed)
@@ -74,7 +74,7 @@ def listener_reuse_unit(H, wid, rng):
         # one-shot: accept exactly the connection we make below.  We park in a
         # real cooperative accept; the connect() below wakes it.  A guard wait_fd
         # bounds the park so a lost connect (shutdown) can't hang teardown.
-        if not (runloom_c.wait_fd(fresh.fileno(), 1, 2000) & 1):
+        if not (stackweave_c.wait_fd(fresh.fileno(), 1, 2000) & 1):
             return
         try:
             conn, _addr = fresh.accept()
@@ -90,7 +90,7 @@ def listener_reuse_unit(H, wid, rng):
             netutil.close_quiet(conn)
 
     H.fiber(fresh_acceptor)
-    runloom.yield_now()
+    stackweave.yield_now()
 
     # 4) connect to the fresh listener and round-trip a tagged frame.
     tag = struct.pack("<III", 0x5A5A5A5A, wid & 0xFFFFFFFF, rng.getrandbits(32))

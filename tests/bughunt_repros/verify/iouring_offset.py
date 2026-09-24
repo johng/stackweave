@@ -1,4 +1,4 @@
-import os, tempfile, runloom_c as rc
+import os, tempfile, stackweave_c as rc
 print("iouring_available:", rc.iouring_available())
 fd,_ = tempfile.mkstemp(); os.write(fd,b'hello world!'); os.lseek(fd,0,0)
 buf=bytearray(6)

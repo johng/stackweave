@@ -15,14 +15,14 @@
 #   <TU>.flat.map.json -- flat line -> real .inc file:line (from flatten.py)
 # which tools/mutate/schemata/sweep.py consumes.
 #
-# Env:  RUNLOOM_MUT_WORKTREE (default ~/projects/pygo-mutants)
+# Env:  STACKWEAVE_MUT_WORKTREE (default ~/projects/pygo-mutants)
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 MAIN="$(cd "$HERE/../../.." && pwd)"
 TU="${1:?usage: build_target.sh <TU_basename e.g. netpoll>}"
-PY="${RUNLOOM_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
+PY="${STACKWEAVE_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
 PYINC="$("$PY" -c 'import sysconfig; print(sysconfig.get_path("include"))')"
-WT="${RUNLOOM_MUT_WORKTREE:-$HOME/projects/pygo-mutants}"
+WT="${STACKWEAVE_MUT_WORKTREE:-$HOME/projects/pygo-mutants}"
 DREDD="$HERE/dredd/dredd/bin/dredd"
 RESDIR="$(clang-18 -print-resource-dir)"
 RM="$(command -v safe-rm || echo rm)"
@@ -55,10 +55,10 @@ sed -i 's/static thread_local/static/g' "$FLAT"
 cp "$FLAT" "$SRC"                       # the flat file IS self-contained now
 
 echo "=== [4/4] build the whole extension ONCE ($NMUT mutants embedded) ==="
-$RM -f src/runloom_c*.so 2>/dev/null
+$RM -f src/stackweave_c*.so 2>/dev/null
 PYTHON_GIL=0 "$PY" setup.py build_ext --inplace > "$WT/mutant_build.log" 2>&1 \
   || { echo "BUILD FAILED -- see $WT/mutant_build.log"; tail -20 "$WT/mutant_build.log"; exit 1; }
-PYTHON_GIL=0 PYTHONPATH=src "$PY" -c "import runloom_c" \
+PYTHON_GIL=0 PYTHONPATH=src "$PY" -c "import stackweave_c" \
   || { echo "IMPORT FAILED"; exit 1; }
 echo "OK: mutated $TU built + imports.  $NMUT mutants."
 echo "  mutants json: $MUTJSON"

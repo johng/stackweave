@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Run every synthetic toy program in an isolated subprocess and classify.
 
-Each program prints "PASS" and exits 0 when runloom is healthy.  A runloom bug
+Each program prints "PASS" and exits 0 when stackweave is healthy.  A stackweave bug
 surfaces as:
     FAIL   -- exit 1 / "FAIL:" (wrong outcome -- logic/semantic bug)
     CRASH  -- negative or abnormal exit (segfault/abort -- memory/scheduler bug)

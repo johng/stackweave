@@ -23,11 +23,11 @@ falsifiable oracle on: the returned globals dictionary.
 
 WHERE M:N COULD BREAK IT (the gap this program probes).  Every fiber's run_path
 runs the SAME script file but with a DIFFERENT seed, and the script YIELDS
-(runloom.yield_now, injected via init_globals) IN THE MIDDLE of exec -- i.e.
+(stackweave.yield_now, injected via init_globals) IN THE MIDDLE of exec -- i.e.
 while this fiber is parked INSIDE the _TempModule/_ModifiedArgv0 window, siblings
 on other hubs are concurrently entering/leaving their OWN _TempModule blocks,
 mutating the shared sys.modules dict and re-exec'ing their own scripts into their
-own namespaces.  If runloom's M:N scheduling let a sibling's exec write into THIS
+own namespaces.  If stackweave's M:N scheduling let a sibling's exec write into THIS
 fiber's run_globals (a cross-fiber namespace leak), or lost the wakeup that
 resumes this fiber after the injected yield, or corrupted the returned dict, the
 value this fiber reads back would not match its own closed-form.  Under a correct
@@ -44,7 +44,7 @@ mismatch is a genuine isolation/lost-wakeup fault.
 ORACLES:
   * LOAD-BEARING -- RETURNED-NAMESPACE PURITY (worker, HARD, fail-fast).  Each
     fiber picks a fiber-local seed, calls run_path on the shared pure script with
-    init_globals={"pygo_seed": seed, "pygo_yield": runloom.yield_now} and a UNIQUE
+    init_globals={"pygo_seed": seed, "pygo_yield": stackweave.yield_now} and a UNIQUE
     run_name.  The script yields mid-exec, then computes out = closed_form(seed).
     The fiber asserts, on the SINGLE-OWNER returned dict:
       - ns["pygo_out"] == closed_form(seed)      (the value the code computed is
@@ -54,7 +54,7 @@ ORACLES:
       - ns["__name__"] == run_name                (runpy stamped THIS call's
         run_name into the namespace -- a sibling's _TempModule did not bleed in);
       - ns is a fresh dict object (id changes call to call; single-owner copy).
-    A mismatch is a runloom runpy-namespace isolation / lost-wakeup desync.
+    A mismatch is a stackweave runpy-namespace isolation / lost-wakeup desync.
 
   * NON-VACUITY (post, HARD): the load-bearing arm actually ran (runs > 0).
 
@@ -79,7 +79,7 @@ the forever loop's --funcs.
 import os
 
 import harness
-import runloom
+import stackweave
 import runpy
 
 # The pure kernel the injected script computes.  A fiber-local seed drives a
@@ -136,7 +136,7 @@ def run_once(H, wid, idx, state):
     The returned dict is a fresh per-call copy owned solely by this fiber."""
     seed = fiber_seed(wid, idx)
     run_name = "big100_runpy_w{0}_r{1}".format(wid, idx)
-    init_globals = {"pygo_seed": seed, "pygo_yield": runloom.yield_now}
+    init_globals = {"pygo_seed": seed, "pygo_yield": stackweave.yield_now}
 
     ns = runpy.run_path(state["script_path"],
                         init_globals=init_globals,
@@ -254,5 +254,5 @@ if __name__ == "__main__":
                  "same hooks on other hubs.  The single-owner returned dict MUST "
                  "carry exactly this fiber's closed-form value + its own run_name "
                  "(not a sibling's leaked namespace, not torn), stable across the "
-                 "yield.  A wrong value / __name__ / a lost wakeup is the runloom "
+                 "yield.  A wrong value / __name__ / a lost wakeup is the stackweave "
                  "bug")

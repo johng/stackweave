@@ -1,6 +1,6 @@
 """big_100 / 319 -- sync.Watch versioned broadcast: no torn pair, no lost wake.
 
-`runloom.sync.Watch` is a tokio::sync::watch -- a single latest-value cell that
+`stackweave.sync.Watch` is a tokio::sync::watch -- a single latest-value cell that
 many observers watch for CHANGES.  `set(v)` updates the value, bumps a version
 counter UNDER the guard, snapshots-and-clears the waiter list, and broadcasts a
 wake to every current observer; `wait_changed(seen, timeout=None)` parks until
@@ -54,8 +54,8 @@ up before the value oracle even fires.
 import random
 
 import harness
-import runloom
-import runloom.sync as rsync
+import stackweave
+import stackweave.sync as rsync
 
 # encode(version): invertible map so a torn (value, version) pair -- a value from
 # one publish glued to a version from another -- fails value == encode(version).
@@ -82,9 +82,9 @@ def publisher(w, k, pause_seed):
     for version in range(1, k + 1):
         w.set(encode(version))
         if (version & 3) == 0:
-            runloom.sleep(prng.uniform(0.0, 0.0006))
+            stackweave.sleep(prng.uniform(0.0, 0.0006))
         else:
-            runloom.yield_now()
+            stackweave.yield_now()
 
 
 def watcher(H, w, k, results, j, wid):
@@ -128,7 +128,7 @@ def worker(H, wid, rng, state):
         w = rsync.Watch(encode(0))
         pause_seed = rng.getrandbits(48)
         results = [0] * nwatch             # worker-local; one writer per index
-        wg = runloom.WaitGroup()
+        wg = stackweave.WaitGroup()
         wg.add(nwatch + 1)
 
         def run_publisher(w=w, npub=npub, pause_seed=pause_seed):

@@ -1,11 +1,11 @@
-"""Socketpair-backed sim connections (Slice 3, RUNLOOM_SIM) -- the byte/readiness
+"""Socketpair-backed sim connections (Slice 3, STACKWEAVE_SIM) -- the byte/readiness
 plane over REAL fds.
 
 Slice 0/1 (simnet.py) modelled protocol logic over Chans -- it never touched
-fds/netpoll.  This runs a REAL socket workload under RUNLOOM_SIM: real send()/recv()
+fds/netpoll.  This runs a REAL socket workload under STACKWEAVE_SIM: real send()/recv()
 on real socketpairs (so EAGAIN / short-read / byte semantics are the kernel's, and
 the full real park/commit/deadline/wake path is exercised), while the WAKE is
-model-driven via the per-scheduler ready ledger -- runloom_c.sim_deliver_ready,
+model-driven via the per-scheduler ready ledger -- stackweave_c.sim_deliver_ready,
 dispatched by the sim pump in a seed-stable (deliver_at, conn_id, dir) order.
 
 Two topologies:
@@ -35,15 +35,15 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 os.environ.setdefault("PYTHON_GIL", "0")
-os.environ.setdefault("RUNLOOM_SIM", "1")               # this IS a sim module
-os.environ.setdefault("RUNLOOM_LOGICAL_CLOCK", "1")     # sim shares one clock
-import runloom_c
+os.environ.setdefault("STACKWEAVE_SIM", "1")               # this IS a sim module
+os.environ.setdefault("STACKWEAVE_LOGICAL_CLOCK", "1")     # sim shares one clock
+import stackweave_c
 
 # Fiber-spawn indirection (MN_SIM_DST_PLAN.md I6): conn constructors spawn
 # their MITM shuttler fibers through this hook so the SAME conn classes serve
-# both planes -- the frozen H=1 programs leave it at runloom_c.fiber; the mn
-# programs point it at runloom_c.mn_fiber for the duration of their setup.
-fiber_spawn = runloom_c.fiber
+# both planes -- the frozen H=1 programs leave it at stackweave_c.fiber; the mn
+# programs point it at stackweave_c.mn_fiber for the duration of their setup.
+fiber_spawn = stackweave_c.fiber
 
 READ = 0x1
 WRITE = 0x2
@@ -67,7 +67,7 @@ def sim_resolve(host, port=0):
     derived (FNV-1a) purely from the name -- so resolution is a pure function of the
     name, replayable and host-independent.  Returns (addr, port).
 
-    Scope: real getaddrinfo / non-numeric addresses under RUNLOOM_SIM are out of
+    Scope: real getaddrinfo / non-numeric addresses under STACKWEAVE_SIM are out of
     scope; a sim workload that models DNS calls this instead.  The socketpair byte
     plane itself is fd-based and needs no resolution; this is the primitive for a
     future name/address-routed sim layer."""
@@ -117,7 +117,7 @@ class SimFdEndpoint(object):
         if self._conn.reset_flag:                            # RST-discard: raise before touching the fd
             raise SimError("ECONNRESET on send")
         try:
-            n = runloom_c.tcp_send_once(self._fd, data)
+            n = stackweave_c.tcp_send_once(self._fd, data)
         except OSError:
             if self._conn.reset_flag:                        # cancel_fd woke us out of a WRITE park
                 raise SimError("ECONNRESET on send")
@@ -128,7 +128,7 @@ class SimFdEndpoint(object):
             # cancel_fd could touch it), so re-check on the success path too.
             raise SimError("ECONNRESET on send")
         if n > 0:
-            runloom_c.sim_deliver_ready(self._conn.conn_id, self._wake_fd, READ)
+            stackweave_c.sim_deliver_ready(self._conn.conn_id, self._wake_fd, READ)
         return n
 
     def sendall(self, data):
@@ -136,7 +136,7 @@ class SimFdEndpoint(object):
         while mv:
             sent = self.send(mv)
             if sent <= 0:
-                runloom_c.sched_yield()
+                stackweave_c.sched_yield()
                 continue
             mv = mv[sent:]
 
@@ -144,7 +144,7 @@ class SimFdEndpoint(object):
         if self._conn.reset_flag:                            # RST-discard: raise even if buffered data exists
             raise SimError("ECONNRESET on recv")
         try:
-            chunk = runloom_c.tcp_recv_alloc(self._fd, n)    # real recv; READ-park on EAGAIN, ledger wakes
+            chunk = stackweave_c.tcp_recv_alloc(self._fd, n)    # real recv; READ-park on EAGAIN, ledger wakes
         except OSError:
             if self._conn.reset_flag:                        # cancel_fd woke us out of a READ park
                 raise SimError("ECONNRESET on recv")
@@ -156,7 +156,7 @@ class SimFdEndpoint(object):
             raise SimError("ECONNRESET on recv")
         if chunk:
             # drained my end -> freed the peer sender's buffer -> wake a WRITE-parked peer
-            runloom_c.sim_deliver_ready(self._conn.conn_id, self._wake_fd, WRITE)
+            stackweave_c.sim_deliver_ready(self._conn.conn_id, self._wake_fd, WRITE)
         return chunk
 
     def recv_exact(self, n):
@@ -198,7 +198,7 @@ class SimFdConn(object):
             _setup(a_app)
             _setup(b_app)
             self._socks = [a_app, b_app]
-            self.conn_id = runloom_c.sim_conn_register(a_app.fileno(), b_app.fileno())
+            self.conn_id = stackweave_c.sim_conn_register(a_app.fileno(), b_app.fileno())
             # DIRECT: a send wakes the PEER app reader.
             self.a = SimFdEndpoint(self, a_app.fileno(), b_app.fileno())
             self.b = SimFdEndpoint(self, b_app.fileno(), a_app.fileno())
@@ -208,14 +208,14 @@ class SimFdConn(object):
             for s in (a_app, a_mid, b_app, b_mid):
                 _setup(s)
             self._socks = [a_app, a_mid, b_app, b_mid]
-            self.conn_id = runloom_c.sim_conn_register(a_app.fileno(), b_app.fileno())
+            self.conn_id = stackweave_c.sim_conn_register(a_app.fileno(), b_app.fileno())
             # Register the MID pair too (same conn; the returned id is unused --
             # ledger ordering keys on self.conn_id).  The mn-sim wait_fd gate
             # requires EVERY parked-on fd to be registry-known: the shuttlers
             # park on the mid fds, which the H=1 plane (no gate) never surfaced
             # (found by the I6 mn port -- the gate rejected the parks and the
             # shuttlers died at startup, deterministically).
-            runloom_c.sim_conn_register(a_mid.fileno(), b_mid.fileno())
+            stackweave_c.sim_conn_register(a_mid.fileno(), b_mid.fileno())
             # MITM: a send wakes the MODEL on its OWN mid fd.
             self.a = SimFdEndpoint(self, a_app.fileno(), a_mid.fileno())
             self.b = SimFdEndpoint(self, b_app.fileno(), b_mid.fileno())
@@ -251,13 +251,13 @@ class SimFdConn(object):
                 if conn.reset_flag:
                     break
                 try:
-                    chunk = runloom_c.tcp_recv_alloc(read_fd, _CHUNK)
+                    chunk = stackweave_c.tcp_recv_alloc(read_fd, _CHUNK)
                 except OSError:
                     break
                 if not chunk:
                     break
                 # drained read_fd -> freed the sender's app<->mid buffer
-                runloom_c.sim_deliver_ready(conn_id, sender_fd, WRITE)
+                stackweave_c.sim_deliver_ready(conn_id, sender_fd, WRITE)
                 if loss_fn is not None and loss_fn():
                     continue                         # DROP: the chunk never arrives
                 d = delay_fn()
@@ -268,19 +268,19 @@ class SimFdConn(object):
                     # compresses to the heal instant.  Chunks recv'd during the
                     # partition all deliver at/after partition_until, in order (one
                     # serialized shuttler per direction).
-                    now = runloom_c._logical_ns() / 1e9
+                    now = stackweave_c._logical_ns() / 1e9
                     gap = conn.partition_until - now
                     if gap > d:
                         d = gap
                 if d and d > 0:
-                    runloom_c.sched_sleep(d)          # logical-clock delay (a sleeper)
+                    stackweave_c.sched_sleep(d)          # logical-clock delay (a sleeper)
                     if conn.reset_flag:              # woke into a reset -> do not touch fds
                         break
                 mv = memoryview(chunk)
                 broke = False
                 while mv:
                     try:
-                        n = runloom_c.tcp_send_once(write_fd, mv)   # WRITE-park on full pipe
+                        n = stackweave_c.tcp_send_once(write_fd, mv)   # WRITE-park on full pipe
                     except OSError:
                         broke = True
                         break
@@ -288,9 +288,9 @@ class SimFdConn(object):
                         broke = True
                         break
                     if n <= 0:
-                        runloom_c.sched_yield()
+                        stackweave_c.sched_yield()
                         continue
-                    runloom_c.sim_deliver_ready(conn_id, wake_fd, READ)
+                    stackweave_c.sim_deliver_ready(conn_id, wake_fd, READ)
                     mv = mv[n:]
                 if broke:
                     break
@@ -316,7 +316,7 @@ class SimFdConn(object):
         self.reset_flag = True
         for s in self._socks:
             try:
-                runloom_c.netpoll_cancel_fd(s.fileno())
+                stackweave_c.netpoll_cancel_fd(s.fileno())
             except Exception:
                 pass
 
@@ -338,12 +338,12 @@ class SimFdConn(object):
 
     def logical_now(self):
         """Current logical time in seconds (for computing a partition heal time)."""
-        return runloom_c._logical_ns() / 1e9
+        return stackweave_c._logical_ns() / 1e9
 
     def close(self):
         for s in self._socks:
             try:
-                runloom_c.netpoll_release_if_idle(s.fileno())
+                stackweave_c.netpoll_release_if_idle(s.fileno())
             except Exception:
                 pass
             try:
@@ -381,9 +381,9 @@ class SimFdDgramConn(object):
         for s in (a_app, a_mid, b_app, b_mid):
             _setup(s)
         self._socks = [a_app, a_mid, b_app, b_mid]
-        self.conn_id = runloom_c.sim_conn_register(a_app.fileno(), b_app.fileno())
+        self.conn_id = stackweave_c.sim_conn_register(a_app.fileno(), b_app.fileno())
         # Mid pair registered too (mn-sim wait_fd gate; see SimFdConn note).
-        runloom_c.sim_conn_register(a_mid.fileno(), b_mid.fileno())
+        stackweave_c.sim_conn_register(a_mid.fileno(), b_mid.fileno())
         self.a = SimFdEndpoint(self, a_app.fileno(), a_mid.fileno())
         self.b = SimFdEndpoint(self, b_app.fileno(), b_mid.fileno())
         self._spawn_dgram_shuttle(a_mid, b_mid.fileno(), b_app.fileno(), a_app.fileno())
@@ -400,12 +400,12 @@ class SimFdDgramConn(object):
                 if conn.reset_flag:
                     break
                 try:
-                    first = runloom_c.tcp_recv_alloc(read_fd, _DGRAM_MAX)   # blocking, one datagram
+                    first = stackweave_c.tcp_recv_alloc(read_fd, _DGRAM_MAX)   # blocking, one datagram
                 except OSError:
                     break
                 if not first:
                     break
-                runloom_c.sim_deliver_ready(conn_id, sender_fd, WRITE)
+                stackweave_c.sim_deliver_ready(conn_id, sender_fd, WRITE)
                 batch = [first]
                 # non-blocking drain of the datagrams ALREADY in flight (this burst)
                 while len(batch) < _REORDER_WINDOW:
@@ -417,21 +417,21 @@ class SimFdDgramConn(object):
                         break
                     if not more:
                         break
-                    runloom_c.sim_deliver_ready(conn_id, sender_fd, WRITE)
+                    stackweave_c.sim_deliver_ready(conn_id, sender_fd, WRITE)
                     batch.append(more)
                 if shuffle_fn is not None and len(batch) > 1:
                     shuffle_fn(batch)             # seed-drawn permutation of the burst
                 broke = False
                 for dg in batch:
                     try:
-                        runloom_c.tcp_send_once(write_fd, dg)   # one datagram (atomic)
+                        stackweave_c.tcp_send_once(write_fd, dg)   # one datagram (atomic)
                     except OSError:
                         broke = True
                         break
                     if conn.reset_flag:
                         broke = True
                         break
-                    runloom_c.sim_deliver_ready(conn_id, wake_fd, READ)
+                    stackweave_c.sim_deliver_ready(conn_id, wake_fd, READ)
                 if broke:
                     break
 
@@ -442,14 +442,14 @@ class SimFdDgramConn(object):
         self.reset_flag = True
         for s in self._socks:
             try:
-                runloom_c.netpoll_cancel_fd(s.fileno())
+                stackweave_c.netpoll_cancel_fd(s.fileno())
             except Exception:
                 pass
 
     def close(self):
         for s in self._socks:
             try:
-                runloom_c.netpoll_release_if_idle(s.fileno())
+                stackweave_c.netpoll_release_if_idle(s.fileno())
             except Exception:
                 pass
             try:
@@ -464,7 +464,7 @@ def simfd_dgram_program(seed, timeout=20.0):
     Oracle: per-client MULTISET conservation (order-independent, since reorder is on)
     + the settle-reap tally (2 shuttlers/conn) + _self_check.  Returns (ok, reason)."""
     import random
-    runloom_c.sim_reset()
+    stackweave_c.sim_reset()
     rng = random.Random(seed)
     k = rng.randint(1, 4)
     m = rng.randint(1, 6)
@@ -499,13 +499,13 @@ def simfd_dgram_program(seed, timeout=20.0):
         except OSError:
             pass
 
-    runloom_c.set_deadlock_mode(1)
+    stackweave_c.set_deadlock_mode(1)
     for cid in range(k):
-        runloom_c.fiber(lambda cid=cid: server(cid))
+        stackweave_c.fiber(lambda cid=cid: server(cid))
     for cid in range(k):
-        runloom_c.fiber(lambda cid=cid: client(cid))
-    runloom_c.run()
-    reaps = runloom_c.sim_reap_count()
+        stackweave_c.fiber(lambda cid=cid: client(cid))
+    stackweave_c.run()
+    reaps = stackweave_c.sim_reap_count()
     for conn in conns:
         conn.close()
 
@@ -516,7 +516,7 @@ def simfd_dgram_program(seed, timeout=20.0):
         if results.get(cid) != want:
             return False, ("CONSERVATION client={0} got={1} want={2} seed={3}"
                            .format(cid, results.get(cid), want, seed))
-    if runloom_c._self_check(0) != 0:
+    if stackweave_c._self_check(0) != 0:
         return False, "SELF_CHECK seed={0}".format(seed)
     return True, "ok"
 
@@ -527,7 +527,7 @@ def simfd_dgram_program(seed, timeout=20.0):
 def simfd_mn_program(seed, hubs=2, timeout=20.0):
     """The simfd_program workload NATIVE on the M:N scheduler (MN_SIM_DST_PLAN
     I6): K MITM client/server pairs with seed-drawn logical delay, running as
-    mn fibers under the seeded census (RUNLOOM_SIM_MN + RUNLOOM_MN_SEED must be
+    mn fibers under the seeded census (STACKWEAVE_SIM_MN + STACKWEAVE_MN_SEED must be
     set by the caller/env -- mn_init raises loudly otherwise).  Same
     conservation + settle-reap oracles as the H=1 twin, plus the foreign-wake
     tripwire count; on success the reason carries the order DIGEST (md5 of the
@@ -536,7 +536,7 @@ def simfd_mn_program(seed, hubs=2, timeout=20.0):
     import hashlib
     import random
     global fiber_spawn
-    runloom_c.sim_reset()
+    stackweave_c.sim_reset()
     rng = random.Random(seed)
     k = rng.randint(1, 4)
     m = rng.randint(1, 6)
@@ -544,9 +544,9 @@ def simfd_mn_program(seed, hubs=2, timeout=20.0):
     results = {}
     order = []
 
-    runloom_c.set_deadlock_mode(1)
-    runloom_c.mn_init(hubs)
-    fiber_spawn = runloom_c.mn_fiber
+    stackweave_c.set_deadlock_mode(1)
+    stackweave_c.mn_init(hubs)
+    fiber_spawn = stackweave_c.mn_fiber
     try:
         conns = [SimFdConn(delay_fn=lambda: rng.random() * delay_max)
                  for _ in range(k)]
@@ -570,17 +570,17 @@ def simfd_mn_program(seed, hubs=2, timeout=20.0):
                 order.append(("cli-err", cid))
 
         for cid in range(k):
-            runloom_c.mn_fiber(lambda cid=cid: server(cid))
+            stackweave_c.mn_fiber(lambda cid=cid: server(cid))
         for cid in range(k):
-            runloom_c.mn_fiber(lambda cid=cid: client(cid))
-        runloom_c.mn_run()
+            stackweave_c.mn_fiber(lambda cid=cid: client(cid))
+        stackweave_c.mn_run()
     finally:
-        fiber_spawn = runloom_c.fiber
-    reaps = runloom_c.sim_reap_count()
-    foreign = runloom_c.sim_foreign_wake_count()
+        fiber_spawn = stackweave_c.fiber
+    reaps = stackweave_c.sim_reap_count()
+    foreign = stackweave_c.sim_foreign_wake_count()
     for conn in conns:
         conn.close()
-    runloom_c.mn_fini()
+    stackweave_c.mn_fini()
 
     if foreign != 0:
         return False, "FOREIGN_WAKES n={0} seed={1}".format(foreign, seed)
@@ -593,7 +593,7 @@ def simfd_mn_program(seed, hubs=2, timeout=20.0):
         if results.get(cid) != want:
             return False, ("CONSERVATION client={0} got={1} want={2} seed={3}"
                            .format(cid, results.get(cid), want, seed))
-    if runloom_c._self_check(0) != 0:
+    if stackweave_c._self_check(0) != 0:
         return False, "SELF_CHECK seed={0}".format(seed)
     trace = hashlib.md5(repr(order).encode("utf-8")).hexdigest()
     return True, "ok trace={0}".format(trace)
@@ -606,16 +606,16 @@ def simfd_dgram_mn_program(seed, hubs=2, timeout=20.0):
     import hashlib
     import random
     global fiber_spawn
-    runloom_c.sim_reset()
+    stackweave_c.sim_reset()
     rng = random.Random(seed)
     k = rng.randint(1, 4)
     m = rng.randint(1, 6)
     results = {}
     order = []
 
-    runloom_c.set_deadlock_mode(1)
-    runloom_c.mn_init(hubs)
-    fiber_spawn = runloom_c.mn_fiber
+    stackweave_c.set_deadlock_mode(1)
+    stackweave_c.mn_init(hubs)
+    fiber_spawn = stackweave_c.mn_fiber
     try:
         conns = [SimFdDgramConn(shuffle_fn=rng.shuffle) for _ in range(k)]
 
@@ -650,17 +650,17 @@ def simfd_dgram_mn_program(seed, hubs=2, timeout=20.0):
                 order.append(("cli-err", cid))
 
         for cid in range(k):
-            runloom_c.mn_fiber(lambda cid=cid: server(cid))
+            stackweave_c.mn_fiber(lambda cid=cid: server(cid))
         for cid in range(k):
-            runloom_c.mn_fiber(lambda cid=cid: client(cid))
-        runloom_c.mn_run()
+            stackweave_c.mn_fiber(lambda cid=cid: client(cid))
+        stackweave_c.mn_run()
     finally:
-        fiber_spawn = runloom_c.fiber
-    reaps = runloom_c.sim_reap_count()
-    foreign = runloom_c.sim_foreign_wake_count()
+        fiber_spawn = stackweave_c.fiber
+    reaps = stackweave_c.sim_reap_count()
+    foreign = stackweave_c.sim_foreign_wake_count()
     for conn in conns:
         conn.close()
-    runloom_c.mn_fini()
+    stackweave_c.mn_fini()
 
     if foreign != 0:
         return False, "FOREIGN_WAKES n={0} seed={1}".format(foreign, seed)
@@ -671,7 +671,7 @@ def simfd_dgram_mn_program(seed, hubs=2, timeout=20.0):
         if results.get(cid) != want:
             return False, ("CONSERVATION client={0} got={1} want={2} seed={3}"
                            .format(cid, results.get(cid), want, seed))
-    if runloom_c._self_check(0) != 0:
+    if stackweave_c._self_check(0) != 0:
         return False, "SELF_CHECK seed={0}".format(seed)
     trace = hashlib.md5(repr(order).encode("utf-8")).hexdigest()
     return True, "ok trace={0}".format(trace)
@@ -691,7 +691,7 @@ def simfd_program(seed, timeout=20.0):
     surfaces as a CONSERVATION miss here until the PARKED_NETPOLL census lands.)
     Returns (ok, reason)."""
     import random
-    runloom_c.sim_reset()                                # fresh clock/ledger/registry
+    stackweave_c.sim_reset()                                # fresh clock/ledger/registry
     rng = random.Random(seed)
     k = rng.randint(1, 4)
     m = rng.randint(1, 6)
@@ -715,13 +715,13 @@ def simfd_program(seed, timeout=20.0):
         except OSError:
             pass
 
-    runloom_c.set_deadlock_mode(1)
+    stackweave_c.set_deadlock_mode(1)
     for cid in range(k):
-        runloom_c.fiber(lambda cid=cid: server(cid))
+        stackweave_c.fiber(lambda cid=cid: server(cid))
     for cid in range(k):
-        runloom_c.fiber(lambda cid=cid: client(cid))
-    runloom_c.run()
-    reaps = runloom_c.sim_reap_count()
+        stackweave_c.fiber(lambda cid=cid: client(cid))
+    stackweave_c.run()
+    reaps = stackweave_c.sim_reap_count()
     for conn in conns:
         conn.close()
 
@@ -738,7 +738,7 @@ def simfd_program(seed, timeout=20.0):
         if results.get(cid) != want:
             return False, ("CONSERVATION client={0} got={1} want={2} seed={3}"
                            .format(cid, results.get(cid), want, seed))
-    if runloom_c._self_check(0) != 0:
+    if stackweave_c._self_check(0) != 0:
         return False, "SELF_CHECK seed={0}".format(seed)
     return True, "ok"
 

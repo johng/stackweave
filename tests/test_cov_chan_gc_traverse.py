@@ -1,6 +1,6 @@
 """Chan tp_traverse / tp_clear GC-integration audit (QA-steal-V2 #5).
 
-Chan is the ONLY GC-tracked runloom C type (Py_TPFLAGS_HAVE_GC).  Its tp_traverse
+Chan is the ONLY GC-tracked stackweave C type (Py_TPFLAGS_HAVE_GC).  Its tp_traverse
 (RunloomChan_traverse -> runloom_chan_gc_traverse) exposes the strong refs its C
 ring buffer holds, so the free-threaded cyclic collector can see a cycle that
 reaches back through a buffered value; tp_clear drops them to break it.  A
@@ -17,7 +17,7 @@ import unittest
 import weakref
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
-import runloom_c
+import stackweave_c
 
 
 class Node(object):
@@ -29,7 +29,7 @@ class TestChanGCTraverse(unittest.TestCase):
     def test_get_referents_reflects_buffer(self):
         # tp_traverse completeness: gc.get_referents(chan) walks tp_traverse and
         # must expose EXACTLY the buffered strong refs.
-        ch = runloom_c.Chan(4)
+        ch = stackweave_c.Chan(4)
         vals = [Node() for _ in range(3)]
         for v in vals:
             self.assertTrue(ch.try_send(v))
@@ -50,7 +50,7 @@ class TestChanGCTraverse(unittest.TestCase):
         # obj.  Drop all external refs; only a weakref remains.  The cyclic
         # collector must break it via Chan.tp_traverse (see the buffered obj) +
         # tp_clear (drop it).  A traverse-completeness regression leaks it.
-        ch = runloom_c.Chan(2)
+        ch = stackweave_c.Chan(2)
         obj = Node()
         obj.ref = ch                          # obj -> ch
         self.assertTrue(ch.try_send(obj))     # ch buffer -> obj  (cycle closed)
@@ -74,7 +74,7 @@ class TestChanGCTraverse(unittest.TestCase):
     def test_dealloc_drops_buffered_refs(self):
         # tp_dealloc path (not just the cyclic collector): dropping the only ref
         # to a buffered Chan must free its buffered values.
-        ch = runloom_c.Chan(2)
+        ch = stackweave_c.Chan(2)
         v = Node()
         self.assertTrue(ch.try_send(v))
         wr = weakref.ref(v)

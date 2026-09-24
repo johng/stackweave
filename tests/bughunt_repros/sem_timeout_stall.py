@@ -3,8 +3,8 @@ behind it are never re-scanned for grants -> a fitting waiter stalls forever
 even though permits are free.  (Go's x/sync semaphore notifies other waiters
 when a front waiter's ctx is cancelled.)"""
 import sys
-import runloom
-from runloom.sync import Semaphore
+import stackweave
+from stackweave.sync import Semaphore
 
 state = {"b_acquired": False, "a_timed_out": False}
 
@@ -22,17 +22,17 @@ def main():
         sem.acquire(1)
         state["b_acquired"] = True
 
-    runloom.fiber(a)
-    runloom.sleep(0.05)     # let A queue first
-    runloom.fiber(b)
-    runloom.sleep(1.0)      # A times out at t=0.3; B should be granted then
+    stackweave.fiber(a)
+    stackweave.sleep(0.05)     # let A queue first
+    stackweave.fiber(b)
+    stackweave.sleep(1.0)      # A times out at t=0.3; B should be granted then
     print("a_timed_out =", state["a_timed_out"])
     print("b_acquired  =", state["b_acquired"], "(expected True)")
     if not state["b_acquired"]:
         print("BUG: B stalled even though a permit is free")
         # unblock so run() can exit
         sem.release(1)
-        runloom.sleep(0.1)
+        stackweave.sleep(0.1)
         sys.exit(1)
 
-runloom.run(1, main)
+stackweave.run(1, main)

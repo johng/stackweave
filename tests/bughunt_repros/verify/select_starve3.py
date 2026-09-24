@@ -1,4 +1,4 @@
-import runloom_c as rc
+import stackweave_c as rc
 
 out = rc.Chan(0)      # unbuffered, consumer blocks in recv -> waiting receiver
 cancel = rc.Chan(1)

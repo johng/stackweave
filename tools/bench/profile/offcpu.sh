@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# offcpu.sh -- off-CPU / scheduler-latency profiling of a runloom workload.
+# offcpu.sh -- off-CPU / scheduler-latency profiling of a stackweave workload.
 #
 # For a scheduler, where goroutines *block* and how long they wait to be
 # rescheduled matters more than where CPU burns.  On-CPU profilers miss this
@@ -10,8 +10,8 @@
 #   2. bpftrace    -- off-CPU time histogram (sched_switch): how long threads
 #                     stay blocked.  (Brendan Gregg's off-CPU analysis.)
 #
-# Goroutine-level park->wake latency (below the OS thread) lives in runloom's own
-# event ring -- run the workload with RUNLOOM_DEBUG=ring,gstate and read
+# Goroutine-level park->wake latency (below the OS thread) lives in stackweave's own
+# event ring -- run the workload with STACKWEAVE_DEBUG=ring,gstate and read
 # _diag_dump; this script measures the OS-thread layer underneath it.
 #
 # perf needs kernel.perf_event_paranoid <= 1; bpftrace needs root.  Both are

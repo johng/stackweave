@@ -18,7 +18,7 @@ match's named groups and feeds time.mktime.  None of that is per-call state a
 sibling should be able to perturb: the inputs are fiber-LOCAL bytes and the
 outputs are fresh tuples / struct_time owned by one fiber.
 
-WHERE M:N COULD BREAK IT (the gap this program probes).  runloom multiplexes tens
+WHERE M:N COULD BREAK IT (the gap this program probes).  stackweave multiplexes tens
 of thousands of goroutines across >1 hub with the GIL off.  A fiber builds
 fiber-local inputs with KNOWN embedded values, parses them, records the results,
 YIELDS (so a sibling on another hub interleaves and parses its OWN different
@@ -45,7 +45,7 @@ WHY THIS IS A LEGITIMATE SINGLE-OWNER ORACLE (per the HARD RULES):
   * Verified against a standalone control: 200k random epochs round-trip through
     Time2Internaldate -> Internaldate2tuple -> time.mktime with ZERO mismatch, and
     50k random flag-sets round-trip through ParseFlags with ZERO mismatch (the
-    closed forms hold exactly).  A correct runloom must match, so the oracle PASSES
+    closed forms hold exactly).  A correct stackweave must match, so the oracle PASSES
     (exit 0) with no bug.
 
 ORACLES:
@@ -87,7 +87,7 @@ import time
 import imaplib
 
 import harness
-import runloom
+import stackweave
 
 # Flag token alphabet for the ParseFlags arm.  IMAP system flags plus a few
 # keyword-style tokens.  No token contains whitespace or ')' -- ParseFlags matches
@@ -150,9 +150,9 @@ def parse_batch(H, wid, rng):
     # YIELD: a sibling on another hub parses its OWN different inputs here.  If any
     # parser leaks state across fibers (torn module-global regex, shared Match /
     # split buffer), the re-parse below diverges.
-    runloom.yield_now()
+    stackweave.yield_now()
     if wid & 1:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
 
     # ---- parse AFTER the yield --------------------------------------------
     flags2 = imaplib.ParseFlags(fresp)

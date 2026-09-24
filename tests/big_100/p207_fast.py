@@ -13,14 +13,14 @@ probe, and the bound method (created once, owned by the running hub) is local so
 its refcount stays on the biased fast path.  Identical workload + identical
 correctness check to p207; only the lookup site moves out of the loop.
 
-RUNLOOM_IMMORTALIZE_SHARED=1 (default here) immortalizes H + channels in setup.
+STACKWEAVE_IMMORTALIZE_SHARED=1 (default here) immortalizes H + channels in setup.
 """
 import os
 import struct
 
 import harness
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
 import p207_park_wake_pingpong as p207
 
@@ -86,11 +86,11 @@ def worker(H, wid, rng, pairs):
 
 def setup(H):
     p207.setup(H)
-    if os.environ.get("RUNLOOM_IMMORTALIZE_SHARED", "1") == "1":
-        runloom_c.immortalize(H)
+    if os.environ.get("STACKWEAVE_IMMORTALIZE_SHARED", "1") == "1":
+        stackweave_c.immortalize(H)
         for a, b in H.state:
-            runloom_c.immortalize(a)
-            runloom_c.immortalize(b)
+            stackweave_c.immortalize(a)
+            stackweave_c.immortalize(b)
 
 
 def body(H):

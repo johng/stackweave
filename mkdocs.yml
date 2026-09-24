@@ -1,8 +1,8 @@
-site_name: runloom
+site_name: stackweave
 site_description: Go-style stackful coroutines for Python
-site_url: https://runloom.readthedocs.io/
-repo_url: https://github.com/robertsdotpm/runloom
-repo_name: robertsdotpm/runloom
+site_url: https://github.com/johng/stackweave/tree/main/docs
+repo_url: https://github.com/johng/stackweave
+repo_name: johng/stackweave
 edit_uri: edit/main/docs/
 
 theme:

@@ -1,4 +1,4 @@
-"""Run ONE runloom workload as a clean process for an external profiler to
+"""Run ONE stackweave workload as a clean process for an external profiler to
 observe (perf / bpftrace / strace / valgrind / cProfile-via-driver).
 
 This deliberately does no timing or statistics -- the attached tool is the
@@ -26,7 +26,7 @@ from bench.gil import ensure_nogil
 
 def build(workload, args):
     """Return a zero-arg callable performing one unit of the workload."""
-    import runloom_c
+    import stackweave_c
 
     if workload == "mn":
         from bench.mn import make_mn, N as MN_N

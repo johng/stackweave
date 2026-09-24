@@ -1,7 +1,7 @@
 """TCP echo churn under M:N: many concurrent connections, checksummed data."""
 import sys, hashlib
-import runloom
-runloom.monkey.patch()
+import stackweave
+stackweave.monkey.patch()
 import socket
 
 HUBS = int(sys.argv[1]) if len(sys.argv) > 1 else 8
@@ -14,7 +14,7 @@ def main():
     srv.bind(("127.0.0.1", 0))
     srv.listen(128)
     port = srv.getsockname()[1]
-    done = runloom.Chan(16)
+    done = stackweave.Chan(16)
 
     def handler(c):
         try:
@@ -29,7 +29,7 @@ def main():
     def acceptor():
         for _ in range(NCONN):
             c, _ = srv.accept()
-            runloom.fiber(handler, c)
+            stackweave.fiber(handler, c)
         srv.close()
 
     def client(i):
@@ -51,9 +51,9 @@ def main():
         s.close()
         done.send(1 if ok else 0)
 
-    runloom.fiber(acceptor)
+    stackweave.fiber(acceptor)
     for i in range(NCONN):
-        runloom.fiber(client, i)
+        stackweave.fiber(client, i)
 
     def collect():
         good = 0
@@ -62,9 +62,9 @@ def main():
             good += v
         assert good == NCONN, "only %d/%d clients verified" % (good, NCONN)
         print("tcp churn hubs=%d conns=%d rounds=%d OK" % (HUBS, NCONN, ROUNDS))
-    runloom.fiber(collect)
+    stackweave.fiber(collect)
 
-runloom.run(HUBS, main)
+stackweave.run(HUBS, main)
 
 # fast spawn entries
 def main2():
@@ -72,10 +72,10 @@ def main2():
     def w(i):
         ran[i] = 1
     for i in range(1000):
-        runloom.fiber_fast(lambda i=i: w(i))
+        stackweave.fiber_fast(lambda i=i: w(i))
     def check():
-        runloom.sleep(0.3)
+        stackweave.sleep(0.3)
         assert sum(ran) == 1000, sum(ran)
         print("fiber_fast OK")
-    runloom.fiber(check)
-runloom.run(HUBS, main2)
+    stackweave.fiber(check)
+stackweave.run(HUBS, main2)

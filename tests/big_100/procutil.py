@@ -7,7 +7,7 @@ with pipes *from inside a goroutine* makes `Popen.__init__` call
 offload-result wait (a cooperative Condition) intermittently loses its wakeup
 and the goroutine hangs forever in `Popen.__init__`.
 
-Constructing the Popen off-goroutine via `runloom.blocking` runs that fstat on
+Constructing the Popen off-goroutine via `stackweave.blocking` runs that fstat on
 a pool thread (where `_in_goroutine()` is False, so no nested offload) and
 sidesteps the deadlock.  The returned Popen's `communicate()` / `wait()` are
 still used cooperatively from the goroutine.
@@ -16,7 +16,7 @@ SPAWN RATE LIMIT: glibc posix_spawn with a very large FD table (100k
 goroutines each holding pipe FDs) crashes with many simultaneous callers on
 3.13t.  The semaphore keeps concurrent Popen() calls to at most MAX_CONCURRENT
 at any time.  threading.Semaphore is monkey-patched to a cooperative goroutine
-semaphore when running inside runloom, so goroutines park rather than OS-block.
+semaphore when running inside stackweave, so goroutines park rather than OS-block.
 
 SHUTDOWN-AWARE SEMAPHORE: pass running=H.running so that goroutines queued
 behind the semaphore abort immediately when the harness stops instead of each
@@ -209,13 +209,13 @@ else:
 
 
 def popen(*args, running=None, **kwargs):
-    """Construct a Popen off-goroutine (via runloom.blocking) to avoid nested
+    """Construct a Popen off-goroutine (via stackweave.blocking) to avoid nested
     offload deadlocks.  Pass running=H.running for fast shutdown: a single
     cancel-watcher goroutine polls running() every 50ms and calls
     sem.cancel_all() when it goes False, waking all waiting goroutines which
     then raise OSError("cancelled") instead of spawning another subprocess.
     """
-    import runloom
+    import stackweave
     global _spawn_sem, _cancel_started
     sem = _spawn_sem
     if sem is None:
@@ -240,11 +240,11 @@ def popen(*args, running=None, **kwargs):
         # goroutines parked in the canonical _spawn_sem permanently stuck.
         def _cancel_watcher(r=running):
             while r():
-                runloom.sleep(0.05)
+                stackweave.sleep(0.05)
             s = _spawn_sem  # read the canonical global at cancel time
             if s is not None:
                 s.cancel_all()
-        runloom.fiber(_cancel_watcher)
+        stackweave.fiber(_cancel_watcher)
     if running is not None:
         # Infinite park — cancel_all() wakes us if running() goes False.
         if not sem.acquire():
@@ -252,7 +252,7 @@ def popen(*args, running=None, **kwargs):
     else:
         sem.acquire()
     try:
-        proc = runloom.blocking(subprocess.Popen, *args, **kwargs)
+        proc = stackweave.blocking(subprocess.Popen, *args, **kwargs)
         _assign_to_job(proc)   # Windows: child dies with us; no-op on Unix
         return proc
     finally:

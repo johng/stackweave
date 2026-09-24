@@ -1,6 +1,6 @@
 """Soak workload shapes (docs/dev/RELIABILITY_PROGRAM.md R1).
 
-Each workload runs the runloom scheduler continuously until the shared Ctx
+Each workload runs the stackweave scheduler continuously until the shared Ctx
 deadline passes, bumping ctx.progress once per unit of work so the sampler can
 prove the scheduler is still making progress (a frozen counter = a wedge).
 
@@ -22,9 +22,9 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
-import runloom
-import runloom.monkey
-import runloom_c
+import stackweave
+import stackweave.monkey
+import stackweave_c
 
 
 # ---------------------------------------------------------------------------
@@ -39,12 +39,12 @@ def _spin(ctx, unit, concurrency=1):
             unit()
             ctx.bump()
             if not ctx.compress:
-                runloom_c.sched_yield()
+                stackweave_c.sched_yield()
     def root():
         for _ in range(concurrency):
-            runloom_c.fiber(worker)
-    runloom_c.fiber(root)
-    runloom_c.run()
+            stackweave_c.fiber(worker)
+    stackweave_c.fiber(root)
+    stackweave_c.run()
 
 
 # ---------------------------------------------------------------------------
@@ -57,9 +57,9 @@ def _wl_spawn_churn(ctx):
         def child():
             done[0] += 1
         for _ in range(16):
-            runloom_c.fiber(child)
+            stackweave_c.fiber(child)
         for _ in range(3):
-            runloom_c.sched_yield()
+            stackweave_c.sched_yield()
     _spin(ctx, unit, concurrency=4)
 
 
@@ -67,8 +67,8 @@ def _wl_chan_select(ctx):
     # Producer -> consumer over a chan, joined through a done chan (fully
     # drains).  Ages chan waiter park/unpark + select case order.
     def unit():
-        ch = runloom_c.Chan()
-        done = runloom_c.Chan()
+        ch = stackweave_c.Chan()
+        done = stackweave_c.Chan()
         def consumer():
             n = 0
             while True:
@@ -77,7 +77,7 @@ def _wl_chan_select(ctx):
                     break
                 n += 1
             done.send(n)
-        runloom_c.fiber(consumer)
+        stackweave_c.fiber(consumer)
         for i in range(24):
             ch.send(i)
         ch.close()
@@ -89,10 +89,10 @@ def _wl_timer(ctx):
     # Timer storm -- ages the sleep heap + timed parkers.
     def unit():
         def sleeper():
-            runloom_c.sched_sleep(0.001)
+            stackweave_c.sched_sleep(0.001)
         for _ in range(8):
-            runloom_c.fiber(sleeper)
-        runloom_c.sched_sleep(0.005)
+            stackweave_c.fiber(sleeper)
+        stackweave_c.sched_sleep(0.005)
     _spin(ctx, unit, concurrency=2)
 
 
@@ -122,15 +122,15 @@ def _wl_tcp_churn(ctx):
                 result[0] = c.recv(64)
             finally:
                 c.close()
-        gs = runloom.fiber(server)
-        gc_ = runloom.fiber(client)
+        gs = stackweave.fiber(server)
+        gc_ = stackweave.fiber(client)
         # both spawned; the outer unit fiber yields until they finish
         for _ in range(200):
             if result[0] is not None:
                 break
-            runloom_c.sched_yield()
+            stackweave_c.sched_yield()
         srv.close()
-    # tcp_churn uses monkey sockets, so drive it through runloom.run via _spin
+    # tcp_churn uses monkey sockets, so drive it through stackweave.run via _spin
     _spin(ctx, unit, concurrency=4)
 
 
@@ -161,8 +161,8 @@ def _wl_keepalive(ctx):
         def acceptor():
             for _ in range(NCONN):
                 conn, _ = srv.accept()
-                runloom.fiber(lambda c=conn: echo(c))
-        runloom.fiber(acceptor)
+                stackweave.fiber(lambda c=conn: echo(c))
+        stackweave.fiber(acceptor)
         for _ in range(NCONN):
             c = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             c.connect(("127.0.0.1", port))
@@ -174,12 +174,12 @@ def _wl_keepalive(ctx):
                 c.recv(1)
                 ctx.bump()
             if not ctx.compress:
-                runloom_c.sched_sleep(0.05)
+                stackweave_c.sched_sleep(0.05)
         for c in conns:
             c.close()
         srv.close()
-    runloom.fiber(body)
-    runloom_c.run()
+    stackweave.fiber(body)
+    stackweave_c.run()
 
 
 def _wl_offload(ctx):
@@ -187,7 +187,7 @@ def _wl_offload(ctx):
     def unit():
         def blocking():
             return sum(range(256))
-        runloom.blocking(blocking)
+        stackweave.blocking(blocking)
     _spin(ctx, unit, concurrency=4)
 
 
@@ -199,43 +199,43 @@ def _wl_mixed(ctx):
         # spawn
         done = [0]
         for _ in range(8):
-            runloom_c.fiber(lambda: done.__setitem__(0, done[0] + 1))
+            stackweave_c.fiber(lambda: done.__setitem__(0, done[0] + 1))
         # chan
-        ch = runloom_c.Chan()
-        dch = runloom_c.Chan()
+        ch = stackweave_c.Chan()
+        dch = stackweave_c.Chan()
         def cons():
             while True:
                 _, ok = ch.recv()
                 if not ok:
                     break
             dch.send(1)
-        runloom_c.fiber(cons)
+        stackweave_c.fiber(cons)
         for i in range(12):
             ch.send(i)
         ch.close()
         dch.recv()
         # timer
-        runloom_c.sched_sleep(0.001)
+        stackweave_c.sched_sleep(0.001)
         # offload
-        runloom.blocking(lambda: sum(range(128)))
+        stackweave.blocking(lambda: sum(range(128)))
     _spin(ctx, unit, concurrency=3)
 
 
 def _wl_cserve_echo(ctx):
     # The production server shape, verbatim from the benchmark suite's fastest
     # regular-fiber tier (benchmark/suite/servers/runloom_epoll_py_tcpcon.py,
-    # "runloom_c": 624K rps peak, above Go): runloom_c.serve's C scaffold
+    # "stackweave_c": 624K rps peak, above Go): stackweave_c.serve's C scaffold
     # (SO_REUSEPORT listeners + C accept loops) spawning a plain-Python handler
     # fiber per connection that echoes via the C-level TCPConn recv_into/
     # send_all -- on the DEFAULT epoll backend (no io_uring env), under
-    # runloom.run(hubs) M:N.  In-process client fibers provide the load:
+    # stackweave.run(hubs) M:N.  In-process client fibers provide the load:
     # connect, a burst of echo round-trips, close, reconnect -- so both the
     # steady path (recv/send parkers) and the lifecycle path (accept/spawn/
     # close) accrue cycles.  Everything is joined: clients via a Chan, handler
     # fibers end when their conn closes, acceptors end when the listeners are
     # closed -- run() then drains (no stranded fiber, per the module contract).
-    hubs = int(os.environ.get("RUNLOOM_SOAK_HUBS", "4"))
-    conc = int(os.environ.get("RUNLOOM_SOAK_CONC", "8"))
+    hubs = int(os.environ.get("STACKWEAVE_SOAK_HUBS", "4"))
+    conc = int(os.environ.get("STACKWEAVE_SOAK_CONC", "8"))
     RTRIPS = 64          # echo round-trips per connection before reconnecting
     CHUNK = 65536
 
@@ -257,7 +257,7 @@ def _wl_cserve_echo(ctx):
         try:
             while not ctx.expired():
                 try:
-                    c = runloom_c.TCPConn.connect("127.0.0.1", port)
+                    c = stackweave_c.TCPConn.connect("127.0.0.1", port)
                 except OSError:
                     continue
                 try:
@@ -277,50 +277,50 @@ def _wl_cserve_echo(ctx):
                 finally:
                     c.close()
                 if not ctx.compress:
-                    runloom_c.sched_yield()
+                    stackweave_c.sched_yield()
         finally:
             done.send(1)
 
     def root():
-        # RUNLOOM_SOAK_CECHO_ALLC=1 -> handler=None runs each connection ENTIRELY
+        # STACKWEAVE_SOAK_CECHO_ALLC=1 -> handler=None runs each connection ENTIRELY
         # in C (runloom_mn_fiber_c: no Python tstate, no PyObjects in the recv/send
         # loop) -- soaks the pure C serve primitive.  Default keeps the Python echo
         # handler (C accept scaffold + a Python handler fiber per conn).
-        srv_handler = None if os.environ.get("RUNLOOM_SOAK_CECHO_ALLC") == "1" else handle
-        port, listeners = runloom_c.serve(
+        srv_handler = None if os.environ.get("STACKWEAVE_SOAK_CECHO_ALLC") == "1" else handle
+        port, listeners = stackweave_c.serve(
             "127.0.0.1", 0, srv_handler, acceptors=hubs, backlog=1024)
-        done = runloom_c.Chan(conc)
+        done = stackweave_c.Chan(conc)
         for _ in range(conc):
-            runloom.fiber(lambda: client(port, done))
+            stackweave.fiber(lambda: client(port, done))
         for _ in range(conc):
             done.recv()                  # join every client
         for l in listeners:
             l.close()                    # stops the C accept loops (serve doc)
 
-    runloom.run(hubs, main_fn=root)
+    stackweave.run(hubs, main_fn=root)
 
 
 def _wl_iouring_churn(ctx):
-    # R7 item 1 aging: connect / echo / close churn on runloom_c.TCPConn under
+    # R7 item 1 aging: connect / echo / close churn on stackweave_c.TCPConn under
     # M:N with the io_uring backend, so the soak ages the per-hub cancel-by-fd /
     # dup-fd close path just landed (docs/dev/DESIGN_mn_iouring_cancel_fd.md).
     # Every 3rd unit closes a connection WHILE a recv is parked on the hub ring
     # -- the exact cancel-by-fd path -- so the dup-fd lifecycle is exercised, not
     # only happy-path echo.  Watches fds / iouring_inflight / netpoll_fd_armed for
-    # a leak over hours.  REQUIRES --env RUNLOOM_TCPCONN_IOURING=1 to hit the
+    # a leak over hours.  REQUIRES --env STACKWEAVE_TCPCONN_IOURING=1 to hit the
     # io_uring path (else it ages the epoll TCPConn path, still useful).  Each
     # worker owns ONE listener reused across units (no ephemeral-port churn) and
     # every unit fully joins its server+client fibers via a Chan (race-free under
     # M:N) -- no stranded fiber, per the module contract.
-    hubs = int(os.environ.get("RUNLOOM_SOAK_HUBS", "2"))
-    conc = int(os.environ.get("RUNLOOM_SOAK_CONC", "4"))
+    hubs = int(os.environ.get("STACKWEAVE_SOAK_HUBS", "2"))
+    conc = int(os.environ.get("STACKWEAVE_SOAK_CONC", "4"))
 
     def bound_port(l):
         fd = l.fileno(); sk = socket.socket(fileno=socket.dup(fd))
         p = sk.getsockname()[1]; sk.close(); return p
 
     def unit(L, port, cancel_variant):
-        join = runloom_c.Chan(2)   # server + client each send one token on exit
+        join = stackweave_c.Chan(2)   # server + client each send one token on exit
         def server():
             try:
                 conn = L.accept()
@@ -336,7 +336,7 @@ def _wl_iouring_churn(ctx):
                 join.send(1)
         def client():
             try:
-                c = runloom_c.TCPConn.connect("127.0.0.1", port)
+                c = stackweave_c.TCPConn.connect("127.0.0.1", port)
                 if cancel_variant:
                     # Park a recv on the hub ring, then close it -> the cancel-by-
                     # fd broadcast wakes it -ECANCELED (server sees EOF + closes).
@@ -345,7 +345,7 @@ def _wl_iouring_churn(ctx):
                     # it runs on under M:N, a livelock (not a leak) that wedges the
                     # soak.  A short bounded yield first lets rd actually park on the
                     # recv, so close() exercises the cancel-a-parked-recv path.
-                    rddone = runloom_c.Chan(1)
+                    rddone = stackweave_c.Chan(1)
                     def rd(cc=c, ch=rddone):
                         try:
                             cc.recv(64, socket.MSG_WAITALL)
@@ -353,9 +353,9 @@ def _wl_iouring_churn(ctx):
                             pass
                         finally:
                             ch.send(1)
-                    runloom_c.mn_fiber(rd)
+                    stackweave_c.mn_fiber(rd)
                     for _ in range(10):
-                        runloom_c.sched_yield()
+                        stackweave_c.sched_yield()
                     c.close()                # cancels the parked recv
                     rddone.recv()            # cooperative join -- no spin/starve
                 else:
@@ -366,12 +366,12 @@ def _wl_iouring_churn(ctx):
                 pass
             finally:
                 join.send(1)
-        runloom_c.mn_fiber(server)
-        runloom_c.mn_fiber(client)
+        stackweave_c.mn_fiber(server)
+        stackweave_c.mn_fiber(client)
         join.recv(); join.recv()             # join BOTH -- no abandoned fiber
 
     def worker(w, wdone):
-        L = runloom_c.TCPConn.listen("127.0.0.1", 0)
+        L = stackweave_c.TCPConn.listen("127.0.0.1", 0)
         port = bound_port(L)
         i = 0
         try:
@@ -380,22 +380,22 @@ def _wl_iouring_churn(ctx):
                 i += 1
                 ctx.bump()
                 if not ctx.compress:
-                    runloom_c.sched_yield()
+                    stackweave_c.sched_yield()
         finally:
             L.close()
             wdone.send(1)
 
     def body():
-        wdone = runloom_c.Chan(conc)
+        wdone = stackweave_c.Chan(conc)
         for w in range(conc):
-            runloom_c.mn_fiber(lambda w=w: worker(w, wdone))
+            stackweave_c.mn_fiber(lambda w=w: worker(w, wdone))
         for _ in range(conc):
             wdone.recv()                     # join every worker before teardown
 
-    runloom_c.mn_init(hubs)
-    runloom_c.mn_fiber(body)
-    runloom_c.mn_run()
-    runloom_c.mn_fini()
+    stackweave_c.mn_init(hubs)
+    stackweave_c.mn_fiber(body)
+    stackweave_c.mn_run()
+    stackweave_c.mn_fini()
 
 
 # ---------------------------------------------------------------------------

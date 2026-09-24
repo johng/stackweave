@@ -1,7 +1,7 @@
 """Historical bug: concurrent aio.run() across OS threads crashing.
 Stress: 16 threads x 20 sequential runs each, with sleeps, tasks, sockets."""
 import sys, threading, asyncio
-import runloom.aio as aio
+import stackweave.aio as aio
 
 errors = []
 

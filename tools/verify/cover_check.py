@@ -4,29 +4,29 @@
 pygo has deep recovery code (work-stealing, deque-overflow fallback, cross-hub
 g-slab balance, cold coro allocation) but a green fuzz/soak run gives no proof
 the chaos actually DROVE execution into those paths -- it may be vacuous.  The
-named counters (src/runloom_c/runloom_cover.h, exposed as runloom_c._cover_*)
+named counters (src/runloom_c/runloom_cover.h, exposed as stackweave_c._cover_*)
 make each interesting state an atom; this harness runs workloads shaped to reach
 them, then FAILS if any REQUIRED state has zero hits.  The runtime analog of
 pygo's model-mutation "teeth".
 
-Build the ext with RUNLOOM_COVER=1 (add RUNLOOM_SHRINK=1 so the cap-based states
+Build the ext with STACKWEAVE_COVER=1 (add STACKWEAVE_SHRINK=1 so the cap-based states
 fire with far less work):
-    RUNLOOM_COVER=1 RUNLOOM_SHRINK=1 python setup.py build_ext --inplace --force
+    STACKWEAVE_COVER=1 STACKWEAVE_SHRINK=1 python setup.py build_ext --inplace --force
     PYTHONPATH=src python tools/verify/cover_check.py
 
-Wire runloom_c._cover_report() into lifefuzz / hang_hunter / soak the same way to
+Wire stackweave_c._cover_report() into lifefuzz / hang_hunter / soak the same way to
 fail a session that never reached one of these rescue paths.
 """
 import os
 import sys
 
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 
 # Reached by the workloads below in any real multi-hub run.
 REQUIRED = ["steal_hit", "deque_full_fallback", "g_slab_spill",
             "g_slab_refill", "coro_pool_miss"]
-# Config-gated: only fires under RUNLOOM_STEAL_WOKEN / RUNLOOM_PER_G_TSTATE.
+# Config-gated: only fires under STACKWEAVE_STEAL_WOKEN / STACKWEAVE_PER_G_TSTATE.
 OPTIONAL = ["global_runq_pull"]
 
 
@@ -41,21 +41,21 @@ def phase_regular(n):
     """Non-bulk spawns exercise the coro pool-miss cold path."""
     def main():
         for i in range(n):
-            rc.mn_fiber(lambda i=i: _work(i))   # M:N spawn runs under runloom.run
-    runloom.run(4, main)
+            rc.mn_fiber(lambda i=i: _work(i))   # M:N spawn runs under stackweave.run
+    stackweave.run(4, main)
 
 
 def phase_bulk(n):
     """A big imbalanced bulk pile makes idle hubs steal + slabs spill/refill."""
     def main():
         rc.fiber_n(lambda: _work(1), n)
-    runloom.run(4, main)
+    stackweave.run(4, main)
 
 
 def main():
     if not rc._cover_enabled():
-        print("cover_check: ext NOT built with RUNLOOM_COVER=1 -- SKIP "
-              "(rebuild: RUNLOOM_COVER=1 RUNLOOM_SHRINK=1 python setup.py build_ext --inplace --force)")
+        print("cover_check: ext NOT built with STACKWEAVE_COVER=1 -- SKIP "
+              "(rebuild: STACKWEAVE_COVER=1 STACKWEAVE_SHRINK=1 python setup.py build_ext --inplace --force)")
         return 0
     reg = int(os.environ.get("COVER_REG", "5000"))
     bulk = int(os.environ.get("COVER_BULK", "40000"))

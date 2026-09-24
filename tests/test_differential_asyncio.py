@@ -1,4 +1,4 @@
-"""Differential conformance: runloom's asyncio bridge vs STOCK CPython asyncio.
+"""Differential conformance: stackweave's asyncio bridge vs STOCK CPython asyncio.
 
 Item 8 of the systematic-improvement program (docs/dev/SYSTEMATIC_IMPROVEMENTS.md).
 
@@ -6,7 +6,7 @@ The oracle here is not a model and not a hand-written expectation -- it is stock
 CPython itself.  Each scenario is an ordinary async program that records an
 observable trace (callback fire order, awaited results, exception types, timeout
 outcomes).  We run the IDENTICAL program twice -- once under `asyncio.run`, once
-under `runloom.aio.run` -- and assert the traces match.  A divergence is a
+under `stackweave.aio.run` -- and assert the traces match.  A divergence is a
 conformance bug in the bridge, surfaced deterministically instead of via some
 downstream library (the historical path: aiocsv/falcon/websockets deadlocks and
 BlockingIOErrors that took days to trace back to send()/call_soon/done-callback
@@ -23,7 +23,7 @@ import sys
 
 sys.path.insert(0, "src")
 
-import runloom.aio as paio
+import stackweave.aio as paio
 
 
 # --------------------------------------------------------------------------
@@ -215,19 +215,19 @@ def observe(runner, factory):
 def run_scenario(name):
     factory = SCENARIOS[name]
     stock = observe(asyncio.run, factory)
-    runloom = observe(paio.run, factory)
-    return stock, runloom
+    stackweave = observe(paio.run, factory)
+    return stock, stackweave
 
 
 def main():
     failures = []
     for name in SCENARIOS:
-        stock, runloom = run_scenario(name)
-        ok = stock == runloom
+        stock, stackweave = run_scenario(name)
+        ok = stock == stackweave
         print("  %-32s %s" % (name, "OK" if ok else "DIVERGES"))
         if not ok:
             print("      stock  : %r" % (stock,))
-            print("      runloom: %r" % (runloom,))
+            print("      stackweave: %r" % (stackweave,))
             failures.append(name)
     if failures:
         print("DIFFERENTIAL FAIL: %d/%d scenarios diverge from stock asyncio: %s"
@@ -240,10 +240,10 @@ def main():
 # pytest entry points ------------------------------------------------------
 def _mk(name):
     def test(_name=name):
-        stock, runloom = run_scenario(_name)
-        assert stock == runloom, (
-            "scenario %r diverges from stock asyncio:\n  stock  : %r\n  runloom: %r"
-            % (_name, stock, runloom))
+        stock, stackweave = run_scenario(_name)
+        assert stock == stackweave, (
+            "scenario %r diverges from stock asyncio:\n  stock  : %r\n  stackweave: %r"
+            % (_name, stock, stackweave))
     test.__name__ = "test_diff_" + name
     return test
 

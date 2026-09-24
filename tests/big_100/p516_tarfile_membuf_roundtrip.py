@@ -19,7 +19,7 @@ addfile()/extractfile() call:
 Under M:N many fibers run on a handful of hub OS-threads with the GIL OFF.  A
 fiber that is PARKED (yield/sleep) in the middle of writing a member -- after the
 header block but before the padded data block, or mid-copyfileobj() -- lets a
-sibling fiber on the same hub run.  The hazard this program probes: if runloom
+sibling fiber on the same hub run.  The hazard this program probes: if stackweave
 did NOT properly isolate each fiber's TarFile instance (a torn self.offset, a
 block written to the wrong stream cursor, a members[] append lost, or the
 copyfileobj scratch buffer shared across fibers), the archive a fiber produces
@@ -60,9 +60,9 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (a closed-world round-trip, single-owner):
   threads control (16 OS threads, each building + extracting its own in-memory
   tar with wid-tagged members, GIL ON and OFF): 100% of round-trips reproduce the
   exact bytes -- 0 mismatches.  Each thread's TarFile instance is independent and
-  properly isolated.  Under a CORRECT runloom each fiber's round-trip MUST also be
+  properly isolated.  Under a CORRECT stackweave each fiber's round-trip MUST also be
   byte-exact.  If a fiber's extracted bytes differ from what it wrote, a member
-  count is wrong, or a sibling's name/bytes appear, that is a runloom M:N
+  count is wrong, or a sibling's name/bytes appear, that is a stackweave M:N
   fiber-isolation bug (a torn self.offset, a mis-cursored block write, a lost
   members[] append, or a shared copyfileobj scratch), and the load-bearing
   single-owner oracle FAILS -- otherwise it PASSES (exit 0).
@@ -71,7 +71,7 @@ ORACLES:
   * LOAD-BEARING -- TAR ROUND-TRIP INTEGRITY (worker, HARD, fail-fast).  The
     closed-world (a)-(e) checks above on a fiber's OWN in-memory archive.  Single-
     owner: the BytesIO, the write TarFile, the read TarFile, and the expected-
-    payload dict are all fiber-local, never shared.  A failure is a runloom
+    payload dict are all fiber-local, never shared.  A failure is a stackweave
     isolation desync, never documented Python semantics (an unsynchronized SHARED
     TarFile would tear exactly like a shared file across OS threads -- documented
     behavior -- so we never share one).
@@ -101,7 +101,7 @@ import io
 import tarfile
 
 import harness
-import runloom
+import stackweave
 
 # Members per fiber-owned archive.  Small enough that build+extract is cheap under
 # tens of thousands of fibers, large enough that self.members grows across several
@@ -146,7 +146,7 @@ def round_trip(H, wid, idx, rng, state):
     Builds a fiber-local in-memory archive of K wid-tagged members (yielding
     between writes so a sibling interleaves on a torn-offset archive), then
     re-opens the archive read-only and asserts the closed-world round-trip law.
-    Every object here is fiber-local -- a mismatch is a runloom isolation bug."""
+    Every object here is fiber-local -- a mismatch is a stackweave isolation bug."""
     # ---- KNOWN multiset of members this fiber will write (the closed world) ----
     expected = {}
     order = []
@@ -172,9 +172,9 @@ def round_trip(H, wid, idx, rng, state):
             # TarFile sits at a partially-written offset.  If self.offset / the
             # BytesIO cursor / self.members are not fiber-isolated, the sibling's
             # writes bleed into this archive.
-            runloom.yield_now()
+            stackweave.yield_now()
             if pos == 0:
-                runloom.sleep(0.0002)
+                stackweave.sleep(0.0002)
     finally:
         wtar.close()          # flushes the two 512-byte end-of-archive blocks
 
@@ -314,5 +314,5 @@ if __name__ == "__main__":
                  "asserts the closed-world round-trip law -- member count==K, no "
                  "sibling name, exact sizes, extracted bytes==the known payload. "
                  "A mismatch (torn offset, mis-cursored block, lost members[] "
-                 "append, sibling bytes) is a runloom M:N isolation bug (0 under "
+                 "append, sibling bytes) is a stackweave M:N isolation bug (0 under "
                  "plain threads GIL on AND off)")

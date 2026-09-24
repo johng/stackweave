@@ -19,11 +19,11 @@ amount of per-INSTANCE state through every __setitem__/__getitem__:
 
 WHY dbm.dumb AND NOT the default backend.  On this box dbm.open()'s default backend
 is dbm.sqlite3, whose _Database wraps sqlite3.connect(...) at the DEFAULT
-check_same_thread=True.  Under runloom M:N a fiber has NO hub-thread affinity -- a
+check_same_thread=True.  Under stackweave M:N a fiber has NO hub-thread affinity -- a
 yield OR a preemption can resume it on a different hub OS-thread -- so the very next
 sqlite3 call would raise sqlite3.ProgrammingError ("SQLite objects created in a
 thread can only be used in that same thread").  That is DOCUMENTED sqlite3 behavior
-(p21/p174 pass check_same_thread=False for exactly this reason), NOT a runloom bug,
+(p21/p174 pass check_same_thread=False for exactly this reason), NOT a stackweave bug,
 so a sqlite3-backed dbm across a yield would be a FALSE POSITIVE.  dbm.dumb is pure
 Python over ordinary file objects and plain dicts -- no thread affinity -- so it is
 the legitimate single-owner oracle here.  We therefore build the load-bearing arm
@@ -33,7 +33,7 @@ WHERE M:N BREAKS IT (the gap this program probes).  Under M:N many fibers run in
 parallel across a handful of hub OS-threads with the GIL OFF.  A fiber PARKED
 (yield/sleep) in the middle of populating its dumb db -- after _addval wrote the
 value block but before _addkey committed the index entry, or between two stores --
-lets a sibling fiber on the same hub run.  If runloom did NOT properly isolate each
+lets a sibling fiber on the same hub run.  If stackweave did NOT properly isolate each
 fiber's dumb-db instance (a torn self._index entry, an _addval that seeked to the
 wrong .dat end, a lost _addkey append, or a value block written under a sibling's
 file cursor), the db a fiber builds would read back the WRONG bytes -- a key
@@ -65,10 +65,10 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (a closed-world round-trip, single-owner):
 
   The analogous single-owner round-trip reproduces exactly under plain OS threads
   (each thread building + reading its own dumb db, GIL on AND off): 0 mismatches --
-  each dumb instance is independent and self-isolated.  Under a CORRECT runloom each
+  each dumb instance is independent and self-isolated.  Under a CORRECT stackweave each
   fiber's round-trip MUST also be byte-exact.  If a fiber's read-back bytes differ
   from what it wrote, a key count is wrong, or a sibling's key/bytes appear, that is
-  a runloom M:N fiber-isolation bug (a torn self._index, a mis-seeked _addval, a
+  a stackweave M:N fiber-isolation bug (a torn self._index, a mis-seeked _addval, a
   lost _addkey append, or a value written under a sibling's cursor), and the
   load-bearing single-owner oracle FAILS -- otherwise it PASSES (exit 0).
 
@@ -76,7 +76,7 @@ ORACLES:
   * LOAD-BEARING -- DBM ROUND-TRIP INTEGRITY (worker, HARD, fail-fast).  The
     closed-world (a)-(d) checks above on a fiber's OWN dumb db.  Single-owner: the
     db path, the write instance, the read instance, and the expected dict are all
-    fiber-local, never shared.  A failure is a runloom isolation desync, never
+    fiber-local, never shared.  A failure is a stackweave isolation desync, never
     documented Python semantics (an unsynchronized SHARED dbm would tear exactly
     like a shared file/dict across OS threads -- documented -- so we never share
     one, and we deliberately avoid the sqlite3 backend's thread-affinity trap).
@@ -108,7 +108,7 @@ import dbm            # the module under test (dbm package)
 import dbm.dumb       # the pure-Python, thread-affinity-free backend we build on
 
 import harness
-import runloom
+import stackweave
 
 # Key/value pairs per fiber-owned db.  Small enough that build+read is cheap under
 # hundreds of file-backed fibers, large enough that self._index grows across
@@ -151,7 +151,7 @@ def round_trip(H, wid, idx, rng, path, state):
     Builds a fiber-local dumb db of K wid-tagged pairs (yielding between stores so a
     sibling interleaves on a half-written index/data file), then re-opens the SAME
     path read-only and asserts the closed-world round-trip law.  Every object here
-    is fiber-local -- a mismatch is a runloom isolation bug."""
+    is fiber-local -- a mismatch is a stackweave isolation bug."""
     # ---- KNOWN multiset of pairs this fiber will store (the closed world) ------
     expected = {}
     order = []
@@ -172,9 +172,9 @@ def round_trip(H, wid, idx, rng, path, state):
             # db sits with a partially-written index/data file.  If self._index /
             # the .dat cursor / the .dir append are not fiber-isolated, the sibling's
             # stores bleed into this db.
-            runloom.yield_now()
+            stackweave.yield_now()
             if pos == 0:
-                runloom.sleep(0.0002)
+                stackweave.sleep(0.0002)
     finally:
         wdb.close()          # _commit(): rewrite .dir from self._index
 
@@ -184,7 +184,7 @@ def round_trip(H, wid, idx, rng, path, state):
     # ---- READ-BACK: re-open the SAME path read-only over the committed files ----
     rdb = dbm.dumb.open(path, "r")
     try:
-        runloom.yield_now()          # a sibling runs while this fiber holds an open db
+        stackweave.yield_now()          # a sibling runs while this fiber holds an open db
 
         keys = rdb.keys()
 
@@ -307,5 +307,5 @@ if __name__ == "__main__":
                  "then re-opens it read-only and asserts the closed-world round-trip "
                  "law -- len==K, no sibling key, read-back bytes==the known value. "
                  "A mismatch (torn _index, mis-seeked .dat block, lost _addkey "
-                 "append, sibling bytes) is a runloom M:N isolation bug (0 under "
+                 "append, sibling bytes) is a stackweave M:N isolation bug (0 under "
                  "plain threads GIL on AND off)")

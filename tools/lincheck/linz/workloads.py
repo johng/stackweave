@@ -15,8 +15,8 @@ Values are globally unique small ints so a recv can be matched to its send.
 """
 import random
 
-from runloom import sync as rsync
-import runloom_c
+from stackweave import sync as rsync
+import stackweave_c
 
 
 def rng_for(seed, gid):
@@ -44,8 +44,8 @@ def build_chan(seed, hubs, procs, ops, cap, rec):
     nprod = procs or 3
     nper = ops or 6
     cap = 2 if cap is None else cap
-    ch = runloom_c.Chan(cap)
-    done = runloom_c.Chan(nprod)          # buffered barrier; producers never block on it
+    ch = stackweave_c.Chan(cap)
+    done = stackweave_c.Chan(nprod)          # buffered barrier; producers never block on it
     nconsumers = nprod
     ngor = nprod + nconsumers + 1
     for g in range(ngor):
@@ -92,7 +92,7 @@ def build_mutex(seed, hubs, procs, ops, cap, rec):
     def worker(gid):
         for _ in range(m):
             rec.timed(gid, "lock", [], lambda: lock.acquire(), cls_void)
-            runloom_c.sched_yield_classic()   # hold across a safe point -> real contention
+            stackweave_c.sched_yield_classic()   # hold across a safe point -> real contention
             rec.timed(gid, "unlock", [], lambda: lock.release(), cls_void)
 
     thunks = [(g, (lambda gg: (lambda: worker(gg)))(g)) for g in range(k)]
@@ -113,11 +113,11 @@ def build_rwmutex(seed, hubs, procs, ops, cap, rec):
         for _ in range(m):
             if rng.random() < 0.6:
                 rec.timed(gid, "rlock", [], lambda: rw.rlock(), cls_void)
-                runloom_c.sched_yield_classic()
+                stackweave_c.sched_yield_classic()
                 rec.timed(gid, "runlock", [], lambda: rw.runlock(), cls_void)
             else:
                 rec.timed(gid, "wlock", [], lambda: rw.lock(), cls_void)
-                runloom_c.sched_yield_classic()
+                stackweave_c.sched_yield_classic()
                 rec.timed(gid, "wunlock", [], lambda: rw.unlock(), cls_void)
 
     thunks = [(g, (lambda gg: (lambda: worker(gg)))(g)) for g in range(k)]
@@ -139,7 +139,7 @@ def build_semaphore(seed, hubs, procs, ops, cap, rec):
         for _ in range(m):
             n = rng.randint(1, max(1, capacity))
             rec.timed(gid, "acquire", [n], lambda nn=n: sem.acquire(nn), cls_void)
-            runloom_c.sched_yield_classic()   # hold permits across a safe point -> contention
+            stackweave_c.sched_yield_classic()   # hold permits across a safe point -> contention
             rec.timed(gid, "release", [n], lambda nn=n: sem.release(nn), cls_void)
 
     thunks = [(g, (lambda gg: (lambda: worker(gg)))(g)) for g in range(k)]
@@ -156,8 +156,8 @@ def build_waitgroup(seed, hubs, procs, ops, cap, rec):
     ngor = 1 + kw + nwait
     for g in range(ngor):
         rec.register(g)
-    gate = runloom_c.Chan(kw)             # workers wait for the add to be visible
-    wgate = runloom_c.Chan(nwait)         # waiters start ONLY after add -> count>0
+    gate = stackweave_c.Chan(kw)             # workers wait for the add to be visible
+    wgate = stackweave_c.Chan(nwait)         # waiters start ONLY after add -> count>0
 
     def controller(gid):
         rec.timed(gid, "add", [kw], lambda: wg.add(kw), cls_void)
@@ -168,7 +168,7 @@ def build_waitgroup(seed, hubs, procs, ops, cap, rec):
 
     def worker(gid):
         gate.recv()
-        runloom_c.sched_yield_classic()   # let the waiters park on wait() first
+        stackweave_c.sched_yield_classic()   # let the waiters park on wait() first
         rec.timed(gid, "add", [-1], lambda: wg.done(), cls_void)
 
     def waiter(gid):
@@ -198,7 +198,7 @@ def build_event(seed, hubs, procs, ops, cap, rec):
     def setter(gid):
         # yield a few times so waiters genuinely park first, then set.
         for _ in range(3):
-            runloom_c.sched_yield_classic()
+            stackweave_c.sched_yield_classic()
         rec.timed(gid, "set", [], lambda: ev.set(), cls_void)
 
     def waiter(gid):
@@ -208,7 +208,7 @@ def build_event(seed, hubs, procs, ops, cap, rec):
         rng = rng_for(seed, gid)
         for _ in range(rng.randint(1, 3)):
             rec.timed(gid, "is_set", [], lambda: ev.is_set(), cls_bool_isset)
-            runloom_c.sched_yield_classic()
+            stackweave_c.sched_yield_classic()
 
     thunks = [(0, (lambda: setter(0)))]
     for w in range(nwait):

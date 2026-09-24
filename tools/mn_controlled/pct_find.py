@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """pct_find.py -- PCT (Probabilistic Concurrency Testing) on the controlled M:N
 scheduler: a bug-DEPTH-guaranteed seeded search, the principled upgrade of the
-baton's uniform-random grant order (RUNLOOM_MN_PCT=<depth d>).
+baton's uniform-random grant order (STACKWEAVE_MN_PCT=<depth d>).
 
 PCT (Burckhardt et al., ASPLOS 2010) assigns every hub a distinct random base
 priority, always grants the baton to the highest-priority WAITING hub, and plants
@@ -40,33 +40,33 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), 
 N, TARGET, K = 12, 10, 14
 
 WORKLOAD = (
-    "import sys; sys.path.insert(0, 'src'); import runloom_c\n"
+    "import sys; sys.path.insert(0, 'src'); import stackweave_c\n"
     "N = {}; TARGET = {}\n".format(N, TARGET) +
-    "runloom_c.mn_init(2)\n"
+    "stackweave_c.mn_init(2)\n"
     "st = {'x': 0, 'seen': None}\n"
     "def A():\n"
     "    for i in range(N):\n"
     "        st['x'] += 1\n"
-    "        runloom_c.sched_sleep(0)\n"
+    "        stackweave_c.sched_sleep(0)\n"
     "def B():\n"
     "    st['seen'] = st['x']\n"           # one read = one segment, PCT places it
-    "runloom_c.mn_fiber(A)\n"
-    "runloom_c.mn_fiber(B)\n"
-    "runloom_c.mn_run(); runloom_c.mn_fini()\n"
+    "stackweave_c.mn_fiber(A)\n"
+    "stackweave_c.mn_fiber(B)\n"
+    "stackweave_c.mn_run(); stackweave_c.mn_fini()\n"
     "print('BUG' if st['seen'] == TARGET else 'ok', st['seen'])\n"
 )
 
 
 def run_once(seed, depth=None):
-    """One subprocess run. depth=None -> uniform (no PCT); else RUNLOOM_MN_PCT=depth.
+    """One subprocess run. depth=None -> uniform (no PCT); else STACKWEAVE_MN_PCT=depth.
     Returns True if the narrow bug fired."""
     env = dict(os.environ)
     env["PYTHON_GIL"] = "0"
     env["PYTHONPATH"] = os.path.join(ROOT, "src")
-    env["RUNLOOM_MN_SEED"] = str(seed)
+    env["STACKWEAVE_MN_SEED"] = str(seed)
     if depth is not None:
-        env["RUNLOOM_MN_PCT"] = str(depth)
-        env["RUNLOOM_MN_PCT_STEPS"] = str(K)
+        env["STACKWEAVE_MN_PCT"] = str(depth)
+        env["STACKWEAVE_MN_PCT_STEPS"] = str(K)
     try:
         out = subprocess.run([sys.executable, "-c", WORKLOAD], env=env, cwd=ROOT,
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)

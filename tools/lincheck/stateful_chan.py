@@ -1,4 +1,4 @@
-"""Stateful (model-based) Hypothesis testing of runloom channel semantics.
+"""Stateful (model-based) Hypothesis testing of stackweave channel semantics.
 
 The existing tests/test_chan_properties.py uses only @given (stateless).  This
 is a RuleBasedStateMachine: Hypothesis generates random *sequences* over the op
@@ -31,7 +31,7 @@ import pytest
 # does `pip install -q hypothesis 2>/dev/null` and carries on when that fails.
 # A hard top-level import here turned that tolerated absence into a collection
 # ERROR -- which is how the first scheduled CI run went red on ubuntu/3.13.13
-# with `ModuleNotFoundError: No module named 'hypothesis'` while every runloom
+# with `ModuleNotFoundError: No module named 'hypothesis'` while every stackweave
 # test passed.  Skip the module instead, so "not installed" means "not run"
 # rather than "failed".
 pytest.importorskip("hypothesis", reason="hypothesis is optional (best-effort install)")
@@ -40,26 +40,26 @@ from hypothesis import HealthCheck, settings
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, invariant, precondition, rule
 
-import runloom_c
+import stackweave_c
 
 
 def go1(fn):
     """Run one short, non-blocking goroutine to completion."""
-    runloom_c.fiber(fn)
-    runloom_c.run()
+    stackweave_c.fiber(fn)
+    stackweave_c.run()
 
 
 class ChannelStateMachine(RuleBasedStateMachine):
     def __init__(self):
         super(ChannelStateMachine, self).__init__()
         self.cap = 8
-        self.ch = runloom_c.Chan(self.cap)
+        self.ch = stackweave_c.Chan(self.cap)
         self.ref = deque()       # reference FIFO model of the buffer
         self.closed = False
         # Second channel, used only to give select() a genuine multi-case
         # choice.  Kept open for the whole run (never closed) to bound the
         # state space; ch is the one that exercises the close paths.
-        self.ch2 = runloom_c.Chan(self.cap)
+        self.ch2 = stackweave_c.Chan(self.cap)
         self.ref2 = deque()
 
     @rule(v=st.integers(min_value=0, max_value=10 ** 6))
@@ -89,7 +89,7 @@ class ChannelStateMachine(RuleBasedStateMachine):
         # transition breaks Hypothesis's stateful replay (FlakyStrategyDefinition).
         # We apply the matching pop for whichever case the runtime returns.
         box = []
-        go1(lambda: box.append(runloom_c.select([("recv", self.ch), ("recv", self.ch2)])))
+        go1(lambda: box.append(stackweave_c.select([("recv", self.ch), ("recv", self.ch2)])))
         idx, res = box[0]
         v, ok = res
         assert idx in (0, 1), "select returned bad index {0}".format(idx)
@@ -175,19 +175,19 @@ class ChannelStateMachine(RuleBasedStateMachine):
         # randomizes its winner -> non-deterministic transitions Hypothesis's
         # stateful model can't replay; that ready-case coverage is select_recv's).
         box = []
-        go1(lambda: box.append(runloom_c.select(
+        go1(lambda: box.append(stackweave_c.select(
             [("recv", self.ch), ("recv", self.ch2)], default=True)))
         assert box[0] == -1, "select(default) with nothing ready must be -1, got {0}".format(box[0])
 
     @invariant()
     def runtime_consistent(self):
-        assert runloom_c._self_check(0) == 0, "self_check failed"
+        assert stackweave_c._self_check(0) == 0, "self_check failed"
 
 
 ChannelStateMachine.TestCase.settings = settings(
     max_examples=200,
     stateful_step_count=50,
-    # Each step spawns a real goroutine + runloom_c.run(); up to 200*50 = 1e4
+    # Each step spawns a real goroutine + stackweave_c.run(); up to 200*50 = 1e4
     # of them.  Under a loaded gate that trips Hypothesis's per-example deadline
     # and the too_slow HealthCheck -- pure wall-clock flake, not a channel bug.
     # Disable both so only a genuine linearizability counterexample reds step 4.

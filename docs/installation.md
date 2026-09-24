@@ -1,14 +1,14 @@
 # Installation
 
-runloom is a C extension that needs a compiler at build time.  Once
+stackweave is a C extension that needs a compiler at build time.  Once
 prebuilt wheels are uploaded (see roadmap), the simplest install path
-will be plain `pip install runloom`; until then build from source.
+will be plain `pip install stackweave`; until then build from source.
 
 ## Requirements
 
 - **Python 3.11 or newer.**  The per-fiber `PyThreadState`
   snapshot uses 3.11+ tstate fields (`cframe`, `datastack_chunk`,
-  `exc_state`).  Pre-3.11 used a different frame model that runloom
+  `exc_state`).  Pre-3.11 used a different frame model that stackweave
   doesn't cover.
 - A C compiler.  Anything reasonably modern works: GCC 4.7+, Clang
   3.5+, MSVC 19.20+ (VS 2019 16.0+), MinGW-w64.
@@ -18,8 +18,8 @@ will be plain `pip install runloom`; until then build from source.
 ## Editable install
 
 ```bash
-git clone https://github.com/robertsdotpm/runloom
-cd runloom
+git clone https://github.com/johng/stackweave
+cd stackweave
 pip install -e .
 ```
 
@@ -59,24 +59,24 @@ MinGW-w64 (via the WinLibs zip).
 
 | Variable | Effect |
 | --- | --- |
-| `RUNLOOM_BACKEND=ucontext` | Force the ucontext stack-swap backend even on x86_64/aarch64. |
-| `RUNLOOM_NO_ASM=1` | Drop the `.S` source from the build (same effect as above). |
-| `RUNLOOM_NO_IOCP=1` | Omit the Windows IOCP-AFD backend (falls back to WSAPoll/select). |
-| `RUNLOOM_DEBUG=1` | `-O0 -g` (POSIX) or `/Od /Zi` (MSVC). |
-| `RUNLOOM_EXTRA_CFLAGS` | Appended to the compile command line. |
-| `RUNLOOM_EXTRA_LDFLAGS` | Appended to the link command line. |
+| `STACKWEAVE_BACKEND=ucontext` | Force the ucontext stack-swap backend even on x86_64/aarch64. |
+| `STACKWEAVE_NO_ASM=1` | Drop the `.S` source from the build (same effect as above). |
+| `STACKWEAVE_NO_IOCP=1` | Omit the Windows IOCP-AFD backend (falls back to WSAPoll/select). |
+| `STACKWEAVE_DEBUG=1` | `-O0 -g` (POSIX) or `/Od /Zi` (MSVC). |
+| `STACKWEAVE_EXTRA_CFLAGS` | Appended to the compile command line. |
+| `STACKWEAVE_EXTRA_LDFLAGS` | Appended to the link command line. |
 | `CC` | Usual setuptools override; controls compiler selection on Windows too. |
 
 ## Interpreter build: the tier-2 JIT is off, TLBC is on
 
 Two pieces of CPython's optimising machinery interact with the fiber
-scheduler, and runloom's position on them is different for each. The
+scheduler, and stackweave's position on them is different for each. The
 difference is worth stating plainly, because one is a decision and the
 other is only a default.
 
 ### The tier-2 JIT: off, and never yet evaluated
 
-Every interpreter runloom is developed, tested and deployed against has
+Every interpreter stackweave is developed, tested and deployed against has
 the tier-2 JIT **off**:
 
 | build | configure | JIT |
@@ -88,11 +88,11 @@ the tier-2 JIT **off**:
 It is off because CPython's JIT is opt-in at build time
 (`--enable-experimental-jit`) and **nobody has ever turned it on** — not
 because it was evaluated and rejected. There is no code in this tree that
-tests for it, gates on it, or works around it. Treat "runloom with the JIT"
+tests for it, gates on it, or works around it. Treat "stackweave with the JIT"
 as an untried configuration rather than a supported-but-disabled one.
 
 What actually depends on this today: `PyThreadState.current_executor`
-(added in 3.14) is always `NULL` in a non-JIT build, so runloom never
+(added in 3.14) is always `NULL` in a non-JIT build, so stackweave never
 observes it and `tools/verify/tstate_manifest.json` classifies it
 `OWNER_ONLY` — correct by inspection, but **unverified against a build
 where the field is ever non-NULL**.
@@ -117,26 +117,26 @@ reproducible SIGSEGV (`src/runloom_c/module_gcframes.c.inc`, the big_100
 p565/p524 crash).
 
 The resolution is an interlock rather than a blanket disable, in
-`runloom/runtime.py` (`_tlbc_reexec_if_needed`): the GC-frames anchor makes
+`stackweave/runtime.py` (`_tlbc_reexec_if_needed`): the GC-frames anchor makes
 parked fiber frames visible to the collector, and TLBC stays **on** whenever
 that anchor is active — the default on FT 3.14+. Only when the anchor is
-unavailable (e.g. 3.13t) does runloom re-exec with `PYTHON_TLBC=0`, which
+unavailable (e.g. 3.13t) does stackweave re-exec with `PYTHON_TLBC=0`, which
 keeps the crashy combination unreachable. Opt out entirely with
-`PYTHON_TLBC=0` / `-X tlbc=0`; force it on regardless with `RUNLOOM_TLBC=1`
+`PYTHON_TLBC=0` / `-X tlbc=0`; force it on regardless with `STACKWEAVE_TLBC=1`
 (dev/debug only).
 
 ## Verifying the install
 
 ```python
-import runloom
-print("backend:", runloom.backend())            # e.g. fcontext-asm
-print("netpoll:", runloom.netpoll_backend())    # e.g. epoll
-print("stack default:", runloom.get_stack_size(), "bytes")
+import stackweave
+print("backend:", stackweave.backend())            # e.g. fcontext-asm
+print("netpoll:", stackweave.netpoll_backend())    # e.g. epoll
+print("stack default:", stackweave.get_stack_size(), "bytes")
 
 def hello():
     print("hello from a fiber!")
-runloom.fiber(hello)
-runloom.run(1)
+stackweave.fiber(hello)
+stackweave.run(1)
 ```
 
 If `backend()` returns `"fcontext-asm"`, you're on the fast path (~80

@@ -19,9 +19,9 @@ import threading
 import time
 import unittest
 
-import runloom
-import runloom.monkey
-import runloom_c
+import stackweave
+import stackweave.monkey
+import stackweave_c
 
 
 def _drive(fn):
@@ -33,19 +33,19 @@ def _drive(fn):
         except BaseException as e:   # noqa: BLE001
             box[1] = e
 
-    runloom_c.fiber(runner)
-    runloom_c.run()
+    stackweave_c.fiber(runner)
+    stackweave_c.run()
     if box[1] is not None:
         raise box[1]
     return box[0]
 
 
 def setUpModule():
-    runloom.monkey.patch()
+    stackweave.monkey.patch()
 
 
 def tearDownModule():
-    runloom.monkey.unpatch()
+    stackweave.monkey.unpatch()
 
 
 class TestSimpleQueueContract(unittest.TestCase):
@@ -95,7 +95,7 @@ class TestSimpleQueueContract(unittest.TestCase):
                 order.append("put")
                 q.put("item")
 
-            runloom_c.fiber(producer)
+            stackweave_c.fiber(producer)
             val = q.get()              # parks until producer runs
             order.append("got")
             self.assertEqual(val, "item")
@@ -118,7 +118,7 @@ class TestSimpleQueueConservation(unittest.TestCase):
                 for i in range(M):
                     q.put(base + i)
                     if i % 7 == 0:
-                        runloom.yield_()
+                        stackweave.yield_()
 
             def consumer():
                 while True:
@@ -131,14 +131,14 @@ class TestSimpleQueueConservation(unittest.TestCase):
                             return
 
             for p in range(N_PROD):
-                runloom_c.fiber(lambda base=p * 1000: producer(base))
+                stackweave_c.fiber(lambda base=p * 1000: producer(base))
             for _ in range(N_CONS):
-                runloom_c.fiber(consumer)
+                stackweave_c.fiber(consumer)
 
             # Wait for all items, cooperatively.
             t0 = time.monotonic()
             while len(received) < total and time.monotonic() - t0 < 5:
-                runloom.sleep(0.005)
+                stackweave.sleep(0.005)
             return sorted(received)
 
         got = _drive(body)
@@ -200,7 +200,7 @@ class TestQueueBlockingHandoff(unittest.TestCase):
                 time.sleep(0.02)
                 order.append("get:" + q.get())
 
-            runloom_c.fiber(consumer)
+            stackweave_c.fiber(consumer)
             order.append("put-start")
             q.put("second")            # blocks until consumer takes "first"
             order.append("put-done")
@@ -224,7 +224,7 @@ class TestQueueBlockingHandoff(unittest.TestCase):
                     drained.append(item)
                     q.task_done()
 
-            runloom_c.fiber(worker)
+            stackweave_c.fiber(worker)
             q.join()                   # parks until task_done called 5x
             return sorted(drained)
         self.assertEqual(_drive(body), [0, 1, 2, 3, 4])

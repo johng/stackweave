@@ -8,7 +8,7 @@ CPU hogs are trying to monopolise the hubs.
 Stresses: preemption / fairness between non-yielding CPU work and I/O.
 """
 import harness
-import runloom
+import stackweave
 
 
 def cpu_hog(H, wid, rng, state):
@@ -25,7 +25,7 @@ def cpu_hog(H, wid, rng, state):
 
 def io_worker(H, wid, rng, state):
     while H.running():
-        runloom.sleep(0.005)
+        stackweave.sleep(0.005)
         state["io_ticks"][wid & 1023] += 1
         H.op(wid)
         H.task_done(wid)

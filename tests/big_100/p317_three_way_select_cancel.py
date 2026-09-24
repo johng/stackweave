@@ -60,9 +60,9 @@ oracle even fires.
 import random
 
 import harness
-import runloom
-import runloom.sync as sync
-import runloom.time as rtime
+import stackweave
+import stackweave.sync as sync
+import stackweave.time as rtime
 
 ITEMS_PER_GROUP = 96          # unique data items the producer sends per round
 SELECTORS = 6                 # selector fibers parked in the 3-way select
@@ -81,7 +81,7 @@ def producer(data, n, base, jitter_seed):
         for i in range(n):
             data.send(base + i)
             if (i & 15) == 0:
-                runloom.sleep(prng.uniform(0.0, 0.0006))
+                stackweave.sleep(prng.uniform(0.0, 0.0006))
     finally:
         data.close()
 
@@ -98,7 +98,7 @@ def selector(data, cancel, to_seed):
         # A fresh per-iteration timeout (the After fiber self-terminates after
         # firing, so each is a one-shot that does not accumulate).
         cases[1] = ("recv", rtime.After(prng.uniform(0.0008, 0.003)))
-        idx, payload = runloom.select(cases)
+        idx, payload = stackweave.select(cases)
         if idx == 0:                       # data
             _v, ok = payload
             if not ok:
@@ -119,7 +119,7 @@ def coordinator(cancel, delay_seed):
     """Broadcast cancel mid-flight by CLOSING the cap-0 cancel channel: every
     parked selector's cancel recv wakes with ok=False at once."""
     prng = random.Random(delay_seed)
-    runloom.sleep(prng.uniform(0.0005, 0.004))
+    stackweave.sleep(prng.uniform(0.0005, 0.004))
     cancel.close()
 
 
@@ -132,8 +132,8 @@ def worker(H, wid, rng, state):
         base = (wid << 24) | 0x1
         # cap == n: the producer can deposit every item without parking, so no
         # send is ever "in flight" against a selector the cancel could revoke.
-        data = runloom.Chan(n)
-        cancel = runloom.Chan(0)
+        data = stackweave.Chan(n)
+        cancel = stackweave.Chan(0)
 
         js = sync.JoinSet()
 

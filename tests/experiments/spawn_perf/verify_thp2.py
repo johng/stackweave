@@ -1,11 +1,11 @@
 import os, sys, time
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "src"))
-import runloom
+import stackweave
 def noop(): pass
 def root():
     for _ in range(80000):
-        runloom.fiber(noop)
-runloom.run(8, root)
+        stackweave.fiber(noop)
+stackweave.run(8, root)
 # how many large VMAs carry the 'hg' (MADV_HUGEPAGE) VmFlag?
 hg = big = 0
 cur_sz = 0

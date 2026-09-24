@@ -9,9 +9,9 @@ Targets the never-executed lines of:
   - netpoll_parker_link.c.inc  (L31-38 ghost self-reference detach -- best-effort)
 
 Each test names the uncovered region it drives and HOW.  Env-gated / first-touch
-paths (small RUNLOOM_NETPOLL_MAXFD, malformed RUNLOOM_FAULT_FD_READ, the
+paths (small STACKWEAVE_NETPOLL_MAXFD, malformed STACKWEAVE_FAULT_FD_READ, the
 first-ever default-pool park) are reached in SUBPROCESSES that exit cleanly with a
-stdout marker, because the parent pytest process imports runloom_c once and those
+stdout marker, because the parent pytest process imports stackweave_c once and those
 values are read+cached at first use.  In-process tests cover the
 pump-claim/drain/io_uring paths that need no special env.
 
@@ -29,8 +29,8 @@ import time
 
 import pytest
 
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 from adv_util import hang_guard, needs_free_threading
 
 FT = needs_free_threading()
@@ -39,7 +39,7 @@ PY = sys.executable
 
 
 def _run_py(src, env_extra=None, timeout=60):
-    """Run a python snippet in a clean subprocess with the runloom env set.
+    """Run a python snippet in a clean subprocess with the stackweave env set.
 
     Returns the CompletedProcess.  The snippet must print its own success
     marker and exit 0 -- a crash/_exit does NOT flush gcov, so we always
@@ -58,7 +58,7 @@ def _run_py(src, env_extra=None, timeout=60):
 # register ENOMEM branch (RUNLOOM_RUNLOCK; errno=ENOMEM; return -1).
 #
 # armed_set fails iff fd >= runloom_fd_pending_wake_cap.  That cap is sized once
-# (runloom_fd_arrays_init) from RUNLOOM_NETPOLL_MAXFD (clamped to >=1024).  In a
+# (runloom_fd_arrays_init) from STACKWEAVE_NETPOLL_MAXFD (clamped to >=1024).  In a
 # subprocess we pin the cap to 1024, then wait_fd() on a real fd whose NUMBER is
 # >= 1024 (dup2 to 2000, still < the rlimit hard ceiling so wait_fd's own
 # max-fd guard passes).  register's armed_get returns 0 (out of range) so cur==0,
@@ -68,7 +68,7 @@ def _run_py(src, env_extra=None, timeout=60):
 def test_register_armed_set_enomem_high_fd():
     p = _run_py(r"""
         import os, errno, socket, sys
-        import runloom_c as rc
+        import stackweave_c as rc
         s = socket.socketpair()[0]
         HI = 2000                       # > MAXFD(1024), < rlimit hard
         os.dup2(s.fileno(), HI)
@@ -80,7 +80,7 @@ def test_register_armed_set_enomem_high_fd():
                              else "OTHER:%d\n" % e.errno)
         finally:
             os.close(HI)
-    """, env_extra={"RUNLOOM_NETPOLL_MAXFD": "1024"})
+    """, env_extra={"STACKWEAVE_NETPOLL_MAXFD": "1024"})
     assert p.returncode == 0, p.stderr[-1500:]
     assert "ENOMEM" in p.stdout, (p.stdout, p.stderr[-800:])
     # And it must NOT have silently swallowed the error.
@@ -99,7 +99,7 @@ def test_register_armed_set_enomem_high_fd():
 def test_fault_inject_malformed_spec_is_noop():
     p = _run_py(r"""
         import os, sys
-        import runloom_c as rc
+        import stackweave_c as rc
         r, w = os.pipe()
         os.write(w, b"realbytes")        # ready immediately, no park needed
         buf = bytearray(9)
@@ -108,7 +108,7 @@ def test_fault_inject_malformed_spec_is_noop():
         sys.stdout.write("READ:%d:%s\n" % (n, bytes(buf[:n]).decode()))
         # prove the fault site was actually consulted but injected nothing.
         sys.stdout.write("FIRED:%d\n" % rc._fault_count("FD_READ"))
-    """, env_extra={"RUNLOOM_FAULT_FD_READ": "garbage"})
+    """, env_extra={"STACKWEAVE_FAULT_FD_READ": "garbage"})
     assert p.returncode == 0, p.stderr[-1500:]
     assert "READ:9:realbytes" in p.stdout, (p.stdout, p.stderr[-800:])
     # Malformed spec -> never counted as fired.
@@ -126,7 +126,7 @@ def test_fault_inject_wellformed_spec_does_inject_contrast():
     # netpoll FSM classifies it as WOULDBLOCK/park on every platform.
     p = _run_py(r"""
         import os, sys
-        import runloom, runloom_c as rc
+        import stackweave, stackweave_c as rc
         def main():
             r, w = os.pipe()
             os.write(w, b"abcd")
@@ -136,8 +136,8 @@ def test_fault_inject_wellformed_spec_does_inject_contrast():
             sys.stdout.write("READ:%d:%s\n" % (n, bytes(buf[:n]).decode()))
             sys.stdout.write("FIRED:%d\n" % rc._fault_count("FD_READ"))
         def driver(): rc.mn_fiber(main)
-        runloom.run(2, driver)
-    """, env_extra={"RUNLOOM_FAULT_FD_READ": "once:%d" % errno.EAGAIN})
+        stackweave.run(2, driver)
+    """, env_extra={"STACKWEAVE_FAULT_FD_READ": "once:%d" % errno.EAGAIN})
     assert p.returncode == 0, p.stderr[-1500:]
     assert "READ:4:abcd" in p.stdout, (p.stdout, p.stderr[-800:])
     assert "FIRED:1" in p.stdout, p.stdout   # the well-formed once: path DID fire
@@ -160,7 +160,7 @@ def test_lock_init_loser_spin_race():
     p = _run_py(r"""
         import os, socket, sys, threading
         sys.path.insert(0, "src")
-        import runloom_c as rc
+        import stackweave_c as rc
         N = 96
         ready = threading.Barrier(N)
         errs = []
@@ -203,7 +203,7 @@ def test_lock_init_loser_spin_race():
 def test_reset_after_fork_memsets():
     p = _run_py(r"""
         import os, socket, sys
-        import runloom, runloom_c as rc
+        import stackweave, stackweave_c as rc
 
         def park_once(tag):
             a, b = socket.socketpair()
@@ -219,13 +219,13 @@ def test_reset_after_fork_memsets():
             rc.netpoll_unregister(b.fileno()); b.close()
 
         def driver(): rc.mn_fiber(lambda: park_once(b"P"))
-        runloom.run(2, driver)            # parent: by_fd[] + registered_bm now non-NULL
+        stackweave.run(2, driver)            # parent: by_fd[] + registered_bm now non-NULL
 
         pid = os.fork()
         if pid == 0:
             try:
                 def cd(): rc.mn_fiber(lambda: park_once(b"C"))   # reset ran at fork; re-park
-                runloom.run(2, cd)
+                stackweave.run(2, cd)
                 os._exit(0)
             except BaseException as e:
                 sys.stderr.write("child: %r\n" % e); os._exit(7)
@@ -262,7 +262,7 @@ def test_pump_claim_via_epoll_data_event():
         rc.netpoll_unregister(b.fileno()); b.close()
     def driver(): rc.mn_fiber(main)
     with hang_guard(30, "pump_claim epoll"):
-        runloom.run(2, driver)
+        stackweave.run(2, driver)
     assert res["r"] == 1, res          # READ readiness delivered by the pump claim
     assert res["data"] == b"X"
 
@@ -300,7 +300,7 @@ def test_pump_claim_on_peer_reset():
         rc.netpoll_unregister(conn.fileno()); conn.close(); srv.close()
     def driver(): rc.mn_fiber(main)
     with hang_guard(30, "pump_claim RST"):
-        runloom.run(2, driver)
+        stackweave.run(2, driver)
     # A reset must wake the reader (READ bit set by the error fold), never hang.
     assert res["r"] != 0, res
 
@@ -324,7 +324,7 @@ def test_drain_expired_timeout_claim():
         rc.netpoll_unregister(a.fileno()); a.close(); b.close()
     def driver(): rc.mn_fiber(main)
     with hang_guard(30, "drain_expired"):
-        runloom.run(2, driver)
+        stackweave.run(2, driver)
     assert res["r"] == 0, res                  # 0 == timeout (drain_expired set ready=0)
     assert 0.02 <= res["dt"] < 2.0, res        # waited ~40ms, not instant and not hung
 
@@ -347,8 +347,8 @@ def test_drain_expired_timeout_claim():
 def test_pump_iouring_ring_eventfd_match():
     p = _run_py(r"""
         import sys
-        import runloom, runloom_c as rc
-        from runloom.sync import WaitGroup
+        import stackweave, stackweave_c as rc
+        from stackweave.sync import WaitGroup
         assert rc.iouring_available()
         def main():
             def handler(conn):
@@ -371,7 +371,7 @@ def test_pump_iouring_ring_eventfd_match():
                         assert got == msg, (got, msg)
                         # idle gap: lets the server hub fall into the epoll pump
                         # so the NEXT recv CQE eventfd fires while it's parked.
-                        runloom.sleep(0.003)
+                        stackweave.sleep(0.003)
                     c.close()
                     res[cid] = 1
                 finally:
@@ -381,7 +381,7 @@ def test_pump_iouring_ring_eventfd_match():
             wg.wait()
             for L in listeners: L.close()
             assert sum(res.values()) == N, res
-        runloom.run(4, main)
+        stackweave.run(4, main)
         sys.stdout.write("IOURING_ECHO_OK\n")
     """, timeout=60)
     assert p.returncode == 0, p.stderr[-1500:]
@@ -432,7 +432,7 @@ def test_parker_link_ghost_churn_beststeffort():
         res["ok"] = 1
     def driver(): rc.mn_fiber(main)
     with hang_guard(60, "parker ghost churn"):
-        runloom.run(4, driver)
+        stackweave.run(4, driver)
     assert res["ok"] == 1
     # The detach's whole purpose is to keep the lists acyclic; assert it.
     assert rc._self_check(0) == 0

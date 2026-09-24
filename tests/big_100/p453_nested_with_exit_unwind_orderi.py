@@ -109,7 +109,7 @@ identity assert even fires (RNG is per-worker for replay).
 import sys
 
 import harness
-import runloom
+import stackweave
 
 # Finite sentinel UNIVERSE of block ids.  Every BlockExc carries a tag drawn from
 # this set; a tag a later __exit__ ever observes that is NOT in this set is a
@@ -176,7 +176,7 @@ def make_manager(name, tag, observed, do_yield_top, do_yield_inside, H):
             # Park mid-unwind BETWEEN cleanup calls: a sibling on this hub lands
             # here, raising/handling its own exception on the shared tstate.
             if do_yield_top:
-                runloom.yield_now()
+                stackweave.yield_now()
 
             self.exit_runs += 1
             self.exit_ord = observed["next"][0]
@@ -194,7 +194,7 @@ def make_manager(name, tag, observed, do_yield_top, do_yield_inside, H):
                 # Park INSIDE the __exit__ AFTER reading, then re-read: the pushed
                 # _PyErr_StackItem must survive the park even while a sibling
                 # pushes/pops its own exc_info on the shared hub tstate.
-                runloom.yield_now()
+                stackweave.yield_now()
                 ei2 = sys.exc_info()[1]
                 ei2_same = ei2 is exc_value
                 recv_tag2 = getattr(sys.exc_info()[1], "tag", None)
@@ -326,7 +326,7 @@ def sibling_raiser(H, tag_base, cycles):
         try:
             raise e
         except BlockExc:
-            runloom.yield_now()            # park while OUR exc_info is live
+            stackweave.yield_now()            # park while OUR exc_info is live
             seen = sys.exc_info()[1]
             if seen is not e or getattr(seen, "tag", None) != tag:
                 H.fail("sibling-raiser exc_info torn: handling tag {0:#x} but "
@@ -367,7 +367,7 @@ def worker(H, wid, rng, state):
                                 do_yield_inside=True)
         else:  # CASE_SIBLING_RAISER -- spawn a co-running raiser, unwind in parallel
             sib_base = TAG_BASE + ((tag + 1) % (UNIVERSE_SIZE - 0x40))
-            wg = runloom.WaitGroup()
+            wg = stackweave.WaitGroup()
             wg.add(1)
 
             def run_sib(sib_base=sib_base, wg=wg):
@@ -396,7 +396,7 @@ def worker(H, wid, rng, state):
 
 
 def setup(H):
-    # Built INSIDE the root (monkey.patch() already ran), so runloom primitives
+    # Built INSIDE the root (monkey.patch() already ran), so stackweave primitives
     # are the cooperative M:N-safe ones.  Per-slot tallies are single-writer.
     H.state = {
         "blocks": [0] * SLOTS,     # nested-with blocks fully verified (per slot)

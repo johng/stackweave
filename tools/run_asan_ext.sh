@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# run_asan_ext.sh -- the whole runloom_c ext under AddressSanitizer, on a stock
+# run_asan_ext.sh -- the whole stackweave_c ext under AddressSanitizer, on a stock
 # free-threaded CPython (force-load libasan).  The ASan complement to
 # run_sanitizers_ext.sh (TSan): TSan finds RACES, ASan finds HEAP MEMORY ERRORS
-# (use-after-free / overflow / double-free) in runloom's own C -- the g-slab,
+# (use-after-free / overflow / double-free) in stackweave's own C -- the g-slab,
 # parkers, hub buffers, the deque, datastack chunks -- under real M:N workloads.
 #
 # With PYTHONMALLOC=malloc, ASan also redzones Python OBJECTS (not just the ext's
@@ -17,13 +17,13 @@
 # Exit: 0 = no ASan error; 1 = ASan caught a memory error; 2 = setup.
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
-PY="${RUNLOOM_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
+PY="${STACKWEAVE_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
 LIBASAN="$(gcc -print-file-name=libasan.so 2>/dev/null)"
 [ -f "$LIBASAN" ] || { echo "run_asan_ext: libasan.so not found (need gcc with ASan). SKIP."; exit 0; }
 [ -x "$PY" ] || { echo "run_asan_ext: no interpreter at $PY. SKIP."; exit 0; }
 command -v setarch >/dev/null 2>&1 && SA="setarch $(uname -m) -R" || SA=""
 
-echo "== runloom_c under AddressSanitizer (preload) =="
+echo "== stackweave_c under AddressSanitizer (preload) =="
 echo "-- building the ext with -fsanitize=address (slow) --"
 CFLAGS="-fsanitize=address -O1 -g -fno-omit-frame-pointer" \
 LDFLAGS="-fsanitize=address" \
@@ -49,7 +49,7 @@ export ASAN_OPTIONS="detect_leaks=0:verify_asan_link_order=0:halt_on_error=1:abo
 export LD_PRELOAD="$LIBASAN"
 export PYTHON_GIL=0 PYTHONPATH="$ROOT/src"
 # (this FT build rejects PYTHONMALLOC=malloc, so Python objects live in mimalloc
-# arenas ASan can't redzone; ASan here covers runloom's OWN C heap -- g-slab,
+# arenas ASan can't redzone; ASan here covers stackweave's OWN C heap -- g-slab,
 # parkers, hub buffers, deque, datastack -- where the UAF/overflow class lives.)
 
 rc=0
@@ -75,7 +75,7 @@ run_one "mn_stress" tools/mn_stress.py --iters 60
 # the offload/blockpool submit->park->drain->wake geometry: the blockpool job
 # structs, per-hub shards, and the parker C heap under cross-thread wakes.
 run_one "offloadfuzz" tools/offloadfuzz/offloadfuzz.py run 3 --timeout 180
-# the runloom<->CPython seam moves (cross-hub dealloc / STW / foreign-thread):
+# the stackweave<->CPython seam moves (cross-hub dealloc / STW / foreign-thread):
 # the channel ring, g-slab, and datastack C heap under the seam handoffs.
 run_one "seamfuzz" tools/seamfuzz/seamfuzz.py run 5 --timeout 180
 

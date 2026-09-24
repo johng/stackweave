@@ -11,7 +11,7 @@ oracle -- not a wall-clock timeout; (d) a clean run never trips that oracle.
 
 Honest scope (documented in simnet.py): this models protocol LOGIC, not kernel/wire
 quirks (Nagle, TIME_WAIT, NAT, CGNAT, simul-open RST) -- it will not catch the
-NAT-traversal bug class; it is a determinism amplifier for runloom's internal
+NAT-traversal bug class; it is a determinism amplifier for stackweave's internal
 scheduler-to-I/O plumbing (lost wakes, park/commit races, deadlocks).
 """
 import os
@@ -20,7 +20,7 @@ import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "tools", "dst"))
-import dst  # noqa: E402  (sets RUNLOOM_LOGICAL_CLOCK, imports runloom_c + simnet)
+import dst  # noqa: E402  (sets STACKWEAVE_LOGICAL_CLOCK, imports stackweave_c + simnet)
 import simnet  # noqa: E402
 
 

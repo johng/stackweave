@@ -14,10 +14,10 @@ to race.
 WHERE M:N COULD BREAK IT (the gap this program probes).  finish_response()
 iterates the app's returned iterable and calls handler.write(chunk) per chunk,
 buffering headers until the first write then flushing them into stdout.  We make
-the app a GENERATOR that runloom.yield_now()s BETWEEN body chunks, so the
+the app a GENERATOR that stackweave.yield_now()s BETWEEN body chunks, so the
 handler is suspended mid-response -- headers already flushed, some body chunks
 written, more pending -- exactly while sibling fibers on other hubs are running
-their OWN handlers writing THEIR own bodies into THEIR own BytesIO.  If runloom
+their OWN handlers writing THEIR own bodies into THEIR own BytesIO.  If stackweave
 ever leaked one fiber's write target, header buffer, or partially-built response
 into another's (a cross-fiber leak of single-owner handler/stream state, a torn
 BytesIO buffer, a lost/duplicated chunk), the captured response would contain a
@@ -68,9 +68,9 @@ import io
 from wsgiref.handlers import SimpleHandler
 
 import harness
-import runloom
+import stackweave
 
-# Number of body chunks the generator app hands back, with a runloom yield
+# Number of body chunks the generator app hands back, with a stackweave yield
 # between each.  >1 so the handler's write loop is genuinely suspended
 # mid-response (headers flushed, some chunks written, more pending) while
 # siblings run their own handlers.
@@ -106,7 +106,7 @@ def build_expected(wid, idx, token):
 
 def make_app(status_str, header_token, chunks, body):
     """Build a fiber-local WSGI app.  It returns a GENERATOR that yields the body
-    chunks one at a time, doing runloom.yield_now() between them so the handler's
+    chunks one at a time, doing stackweave.yield_now() between them so the handler's
     write loop is suspended mid-response and a sibling reliably interleaves."""
     def app(environ, start_response):
         start_response(status_str, [
@@ -121,7 +121,7 @@ def make_app(status_str, header_token, chunks, body):
                 # Suspend the handler mid-response: headers are flushed and
                 # chunk c is written; siblings run their own handlers now.
                 if c + 1 < len(chunks):
-                    runloom.yield_now()
+                    stackweave.yield_now()
         return emit()
     return app
 
@@ -182,7 +182,7 @@ def roundtrip_check(H, wid, idx, state):
     handler.http_version = "1.0"
 
     # Yield BEFORE running so a sibling is mid-response while we start ours.
-    runloom.yield_now()
+    stackweave.yield_now()
 
     handler.run(app)                            # writes full response into stdout
 
@@ -304,5 +304,5 @@ if __name__ == "__main__":
                  "status line, X-Fiber-Token header, Content-Length, and body MUST "
                  "be bit-identical to this fiber's closed form.  A sibling's "
                  "status/header/body leaking in, a wrong Content-Length, or a "
-                 "lost/doubled/torn body chunk is the runloom single-owner-"
+                 "lost/doubled/torn body chunk is the stackweave single-owner-"
                  "handler-state corruption bug")

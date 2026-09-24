@@ -7,9 +7,9 @@ hang_hunter-format finding files under --report-dir/findings/ for exit 1/2; this
 runner synthesizes one for exit 3 / signal deaths (the watchdog os._exit's
 before it can write).  run_all itself exits 0 iff every program was PASS or SKIP.
 
-Opt-in: does nothing unless RUNLOOM_NET_TESTS=1 (each child re-checks the gate).
+Opt-in: does nothing unless STACKWEAVE_NET_TESTS=1 (each child re-checks the gate).
 
-  RUNLOOM_NET_TESTS=1 PYTHONPATH=src python3 tests/net/run_all_net.py \\
+  STACKWEAVE_NET_TESTS=1 PYTHONPATH=src python3 tests/net/run_all_net.py \\
       --hubs 8 --top 32 --timeout 3 --report-dir docs/dev/soak/inbox_artifacts/net
 """
 import argparse
@@ -39,7 +39,7 @@ def main():
     args = ap.parse_args()
 
     if not netlist.enabled():
-        print("SKIP all: RUNLOOM_NET_TESTS!=1 (opt-in gate)")
+        print("SKIP all: STACKWEAVE_NET_TESTS!=1 (opt-in gate)")
         return 0
 
     os.makedirs(os.path.join(args.report_dir, "findings"), exist_ok=True)
@@ -50,8 +50,8 @@ def main():
 
     env = dict(os.environ)
     env.setdefault("PYTHON_GIL", "0")
-    env["RUNLOOM_NET_TESTS"] = "1"
-    # keep PYTHONPATH=src so the child can import runloom
+    env["STACKWEAVE_NET_TESTS"] = "1"
+    # keep PYTHONPATH=src so the child can import stackweave
     src = os.path.join(os.path.dirname(os.path.dirname(HERE)), "src")
     env["PYTHONPATH"] = src + os.pathsep + env.get("PYTHONPATH", "")
 

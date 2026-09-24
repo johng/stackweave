@@ -33,15 +33,15 @@
 #   * builds clean with the flag ON; 593 stdlib tests pass (test_dict/list/gc/
 #     weakref/threading) -- field present, home=NULL=self, zero regression.
 #   * the redirect accessor honours _alloc_home (a core-ext unit check).
-#   * END-TO-END with runloom: wiring _PyThreadState_SetAllocHome(g->tstate,
-#     hub_ts) at the per-g-tstate attach point fixes the RUNLOOM_PER_G_TSTATE
+#   * END-TO-END with stackweave: wiring _PyThreadState_SetAllocHome(g->tstate,
+#     hub_ts) at the per-g-tstate attach point fixes the STACKWEAVE_PER_G_TSTATE
 #     channel-churn crash -- 24/24 PASS with the borrow vs 8/8 abort without
 #     (the pre-patch _mi_page_retire / qsbr teardown failure). Default mode
 #     unaffected.
 #
 # ENABLE: build CPython 3.13t with -DPy_TSTATE_ALLOC_HOME
 # USE:    _PyThreadState_SetAllocHome(fiber_tstate, current_hub_tstate) on resume
-#         (runloom: runloom_iframe_borrow_alloc_home, wired in mn_sched_hub_main.c.inc)
+#         (stackweave: runloom_iframe_borrow_alloc_home, wired in mn_sched_hub_main.c.inc)
 # APPLY:  from the CPython source root:  patch -p1 -F0 < this-file
 # SCOPE:  Include/internal/{pycore_tstate.h,pycore_object_alloc.h}, Objects/obmalloc.c
 #

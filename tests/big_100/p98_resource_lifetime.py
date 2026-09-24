@@ -14,7 +14,7 @@ import os
 import socket
 
 import harness
-import runloom
+import stackweave
 
 
 class Res(object):

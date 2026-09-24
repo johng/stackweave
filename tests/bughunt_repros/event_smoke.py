@@ -1,5 +1,5 @@
 import threading, time, sys
-import runloom
+import stackweave
 def main():
     def f():
         ev = threading.Event()
@@ -14,5 +14,5 @@ def main():
         r = ev2.wait(5)
         print("foreign-set wait ->", r, "after %.2fs" % (time.monotonic()-t0), flush=True)
         th.join()
-    runloom.fiber(f)
-runloom.monkey.patch(); runloom.run(2, main); print("OK", flush=True)
+    stackweave.fiber(f)
+stackweave.monkey.patch(); stackweave.run(2, main); print("OK", flush=True)

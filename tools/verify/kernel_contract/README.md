@@ -1,6 +1,6 @@
 # The kernel-interface trust surface
 
-`syscall_returns.json` is every syscall/libc call runloom depends on, with its
+`syscall_returns.json` is every syscall/libc call stackweave depends on, with its
 **documented return set** (Linux man pages).  It exists because of one idea: you
 can't prove software that talks to a kernel you can't audit -- but you *can*
 shrink what you trust about the kernel from "it behaves correctly" (unbounded,
@@ -9,7 +9,7 @@ un-modelable) to "its returns are a subset of this finite list" (auditable).
 Two things consume it, and both become *kernel-independent* once they do:
 
 1. **Demonic-oracle proofs** (`../cbmc/*_demonic_cbmc.c`).  Model each syscall as
-   a demon that returns *anything in its set* and prove the runloom invariant
+   a demon that returns *anything in its set* and prove the stackweave invariant
    (no lost wake / no leak / no UB) holds for ALL of them.  Correct under a demon
    ⇒ correct under any real kernel whose returns are a subset.  The first one,
    `netpoll_arm_demonic_cbmc.c`, proves the arm/re-arm path is lost-wake-free for

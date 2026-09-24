@@ -5,7 +5,7 @@ guard, sharded counters).  This suite is POLITE and small -- a few dozen probe
 goroutines total against real public servers -- so it reuses only the two cheap,
 load-bearing pieces: a REAL-OS-thread watchdog (a lost wake on a live remote
 socket must still fail the process, not hang forever) and cooperative,
-timeout-bounded socket I/O built on runloom_c.wait_fd + REAL (pre-monkey) socket
+timeout-bounded socket I/O built on stackweave_c.wait_fd + REAL (pre-monkey) socket
 ops -- the exact pattern netutil.udp_recvfrom_timeout uses to dodge the
 patched-recv spurious-wake wedge.
 
@@ -52,14 +52,14 @@ class Finding(Exception):
 
 # ------------------------------------------------------------- cooperative I/O
 class IO(object):
-    """Timeout-bounded socket helpers, cooperative under runloom.run via wait_fd.
+    """Timeout-bounded socket helpers, cooperative under stackweave.run via wait_fd.
 
-    Uses REAL non-blocking sockets + runloom_c.wait_fd so each op parks the
+    Uses REAL non-blocking sockets + stackweave_c.wait_fd so each op parks the
     goroutine with a hard timeout and never loops on a spurious wake."""
 
     def __init__(self):
-        import runloom_c
-        self._rc = runloom_c
+        import stackweave_c
+        self._rc = stackweave_c
 
     def _resolve(self, host, port, family, socktype):
         try:
@@ -200,7 +200,7 @@ def _watchdog(st, hang_timeout, name):
 def main(name, tasks, argv=None):
     """Entry point for an n0* program.  Returns an exit code (call sys.exit)."""
     if not netlist.enabled():
-        sys.stderr.write("[%s] SKIP: RUNLOOM_NET_TESTS!=1 (opt-in gate)\n" % name)
+        sys.stderr.write("[%s] SKIP: STACKWEAVE_NET_TESTS!=1 (opt-in gate)\n" % name)
         return netlist.SKIP
     args = _parse_argv(sys.argv[1:] if argv is None else argv)
     timeout_ms = int(args.timeout * 1000)
@@ -208,8 +208,8 @@ def main(name, tasks, argv=None):
     report_dir = args.report_dir or os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "_findings", name)
 
-    import runloom
-    import runloom.monkey
+    import stackweave
+    import stackweave.monkey
 
     st = _State()
     data = netlist.load(timeout=args.timeout,
@@ -258,7 +258,7 @@ def main(name, tasks, argv=None):
                                % (env_reasons, detail)))
 
     def root():
-        wg = runloom.WaitGroup()
+        wg = stackweave.WaitGroup()
         wg.add(len(tasks))
 
         def one(t):
@@ -268,13 +268,13 @@ def main(name, tasks, argv=None):
                 wg.done()
 
         for t in tasks:
-            runloom.fiber(one, t)
+            stackweave.fiber(one, t)
         wg.wait()
 
     _real_thread.start_new_thread(_watchdog, (st, hang_timeout, name))
-    runloom.monkey.patch()
+    stackweave.monkey.patch()
     try:
-        runloom.run(args.hubs, root)
+        stackweave.run(args.hubs, root)
     except SystemExit:
         raise
     except BaseException as exc:                  # noqa: BLE001 -> CRASH

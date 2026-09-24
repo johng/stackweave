@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""bench_throughput_py.py -- STEADY-STATE goroutine echo throughput (runloom).
+"""bench_throughput_py.py -- STEADY-STATE goroutine echo throughput (stackweave).
 
 The older bench_server_py.py measures connection *setup*: one accept loop,
 a synchronized connect storm, and a single round-trip per connection -- so
@@ -31,9 +31,9 @@ import sys
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-import runloom
-import runloom.monkey
-import runloom_c
+import stackweave
+import stackweave.monkey
+import stackweave_c
 
 REAL_MONO = time.monotonic
 PAYLOAD = b"hellopyg"
@@ -82,7 +82,7 @@ def main(argv):
         "rss_kib": -1,
     }
 
-    runloom.monkey.patch()
+    stackweave.monkey.patch()
 
     # Canonical max-concurrency listener set: ACCEPTORS separate listener
     # sockets on ONE port via SO_REUSEPORT, each with its own accept goroutine,
@@ -128,7 +128,7 @@ def main(argv):
             except OSError:
                 break
             accepted[0] += 1
-            runloom.fiber(echo_handler, conn)
+            stackweave.fiber(echo_handler, conn)
 
     def client(idx):
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -169,16 +169,16 @@ def main(argv):
         # warmup + measure window, snapshotting the RT counters at the edges.
         t_ramp0 = REAL_MONO()
         while sum(connected_flags) < N:
-            runloom.sleep(0.01)
+            stackweave.sleep(0.01)
             if REAL_MONO() - t_ramp0 > 120:    # ramp safety valve
                 break
         ramp_s = REAL_MONO() - t_ramp0
         established = sum(connected_flags)
-        runloom.sleep(WARMUP_S)                 # warmup: not counted
+        stackweave.sleep(WARMUP_S)                 # warmup: not counted
         start = sum(rts)
         state["rss_kib"] = cur_rss_kib()        # RSS with all N live
         t0 = REAL_MONO()
-        runloom.sleep(MEASURE_S)
+        stackweave.sleep(MEASURE_S)
         win = REAL_MONO() - t0
         end = sum(rts)
         state["win_rts"] = end - start
@@ -197,15 +197,15 @@ def main(argv):
 
     def root():
         for ls in listeners:
-            runloom.fiber(acceptor, ls)
+            stackweave.fiber(acceptor, ls)
         for i in range(N):
-            runloom.fiber(client, i)
-        runloom.fiber(controller)
+            stackweave.fiber(client, i)
+        stackweave.fiber(controller)
         # Root waits until the controller stops the run.
         while not state["stop"]:
-            runloom.sleep(0.05)
+            stackweave.sleep(0.05)
 
-    runloom.run(H, root)
+    stackweave.run(H, root)
     return 0
 
 

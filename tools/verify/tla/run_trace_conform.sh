@@ -10,15 +10,15 @@
 #
 # Conformed models (each demo runs the positive=CONFORMS check AND a negative
 # control that MUST be flagged NON-CONFORMING -- so a passing demo proves teeth):
-#   - RunloomGilstate (M4 / contract C6)   via RUNLOOM_GILSTATE_TRACE
-#   - RunloomMNControl (controlled baton)  via RUNLOOM_MN_EVENTS
-#   - RunloomWake (foreign-wake backstop)  via RUNLOOM_WAKE_TRACE
-#   - RunloomMNWake (M:N hub-submit wake)  via RUNLOOM_MNWAKE_TRACE
-#   - RunloomIouringWake (io_uring CQE wake / CQ-overflow heal) via RUNLOOM_IOUWAKE_TRACE
+#   - RunloomGilstate (M4 / contract C6)   via STACKWEAVE_GILSTATE_TRACE
+#   - RunloomMNControl (controlled baton)  via STACKWEAVE_MN_EVENTS
+#   - RunloomWake (foreign-wake backstop)  via STACKWEAVE_WAKE_TRACE
+#   - RunloomMNWake (M:N hub-submit wake)  via STACKWEAVE_MNWAKE_TRACE
+#   - RunloomIouringWake (io_uring CQE wake / CQ-overflow heal) via STACKWEAVE_IOUWAKE_TRACE
 #
 # SKIPS CLEANLY (prints a skip line, "0 passed, 0 failed", exits 0 -> contributes
 # nothing) when a prerequisite is absent: java, the TLA jar, a free-threaded
-# 3.13t python, or a built runloom_c -- exactly like the other verify engines
+# 3.13t python, or a built stackweave_c -- exactly like the other verify engines
 # skip an absent tool.  Prints "N passed, M failed" for run_verify.sh's
 # eng_finish() to fold into the suite tally.
 set -u
@@ -27,7 +27,7 @@ ROOT="$(cd "$HERE/../../.." && pwd)"         # tools/verify/tla -> repo root is 
 JAR="${TLA_JAR:-$HERE/tla2tools.jar}"
 URL="https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar"
 JAR_SHA256="936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"   # keep in step with run_tla.sh
-PY="${RUNLOOM_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
+PY="${STACKWEAVE_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
 RM="$(command -v safe-rm || echo rm)"
 
 skip() { echo "-- trace conformance (model vs the REAL extension) --"; \
@@ -35,9 +35,9 @@ skip() { echo "-- trace conformance (model vs the REAL extension) --"; \
 
 command -v java >/dev/null 2>&1 || skip "java not found (TLC needs it)"
 { [ -x "$PY" ] || command -v "$PY" >/dev/null 2>&1; } \
-    || skip "free-threaded 3.13t python not found ($PY) -- set RUNLOOM_PYTHON"
-ls "$ROOT"/src/runloom_c*.so >/dev/null 2>&1 \
-    || skip "runloom_c not built (python setup.py build_ext --inplace)"
+    || skip "free-threaded 3.13t python not found ($PY) -- set STACKWEAVE_PYTHON"
+ls "$ROOT"/src/stackweave_c*.so >/dev/null 2>&1 \
+    || skip "stackweave_c not built (python setup.py build_ext --inplace)"
 # Ensure the TLA jar (same source as run_tla.sh).  Download to a unique temp then
 # atomic rename, so a concurrent run_tla.sh fetch can't corrupt it.
 . "$ROOT/tools/fetch_pinned.sh"
@@ -54,7 +54,7 @@ run_demo() {  # human-label  demo-script-relpath
     local label="$1" script="$2" out
     out="$(mktemp /tmp/traceconf.XXXX)"
     printf '  [conform] %-26s ' "$label"
-    if RUNLOOM_PYTHON="$PY" bash "$ROOT/$script" >"$out" 2>&1; then
+    if STACKWEAVE_PYTHON="$PY" bash "$ROOT/$script" >"$out" 2>&1; then
         echo "PASS"; pass=$((pass + 1))
     else
         echo "FAIL"; fail=$((fail + 1)); tail -10 "$out" | sed 's/^/        /'

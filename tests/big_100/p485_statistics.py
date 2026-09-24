@@ -25,14 +25,14 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain threads):
   on its OWN unique dataset and MUST get the correct result for that dataset --
   recomputing it after a yield MUST give the identical value, no matter what
   siblings do on the same hub.  We verified this with a standalone plain-threads
-  control (8+ threads, same hazard, NO runloom) that this holds with
+  control (8+ threads, same hazard, NO stackweave) that this holds with
   PYTHON_GIL=1 AND PYTHON_GIL=0 on this very interpreter -- each fiber's
-  statistic is deterministic given its dataset.  Under a CORRECT runloom, a
+  statistic is deterministic given its dataset.  Under a CORRECT stackweave, a
   fiber's statistic MUST also be deterministic (each fiber has its own closure
-  / call stack, even though the cache is shared).  If runloom leaks a sibling's
+  / call stack, even though the cache is shared).  If stackweave leaks a sibling's
   cached statistic across the yield -- the fiber's recomputed statistic differs
   from the pre-yield value for the SAME dataset, or its mean/median/etc is the
-  WRONG value for its own dataset -- that is the runloom cache-isolation bug,
+  WRONG value for its own dataset -- that is the stackweave cache-isolation bug,
   and the load-bearing single-owner oracle PASSES on a correct runtime (program
   exits 0 when there is no bug).
 
@@ -40,7 +40,7 @@ ORACLES:
   * LOAD-BEARING -- STATISTICS CORRECTNESS-AND-STABILITY (worker, HARD,
     fail-fast).  Each fiber owns a unique dataset (deterministically derived
     from wid).  It computes the mean/median/stdev/variance/quantiles on that
-    dataset, YIELDS (runloom.sleep / yield_now), then recomputes the same
+    dataset, YIELDS (stackweave.sleep / yield_now), then recomputes the same
     statistics and asserts:
       - recomputed_stat == pre_yield_stat (the statistic stayed the same after
         the yield -- no sibling's cached value leaked in);
@@ -51,7 +51,7 @@ ORACLES:
       - for median: the value is EXACTLY as expected (a wrong digit count or
         value indicates a cache collision / leaked sibling result).
     Single-owner: nothing but THIS fiber should touch its dataset during the
-    computation.  A failure is a runloom per-fiber statistics-cache isolation
+    computation.  A failure is a stackweave per-fiber statistics-cache isolation
     desync.
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber that vanished mid-
     computation (stranded inside a statistics function on a corrupted cache
@@ -77,7 +77,7 @@ from decimal import Decimal
 from fractions import Fraction
 
 import harness
-import runloom
+import stackweave
 
 # Canonical, single-owner precompute of statistics for several unique datasets.
 # Computed ONCE in the root, before any worker runs, each in its OWN protected
@@ -194,11 +194,11 @@ def stats_check(H, wid, idx, state):
     # on a DIFFERENT dataset) while this fiber is PARKED.  The sleep-park -- not
     # a bare yield_now -- is what reliably deschedules this fiber long enough
     # that the scheduler runs a sibling on the same hub before we resume.  If
-    # runloom leaks a sibling's cached statistic or the cache has a false
+    # stackweave leaks a sibling's cached statistic or the cache has a false
     # collision, the sibling's result could contaminate our recompute.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
 
     # Recompute statistics AFTER the yield on the SAME dataset.
     try:
@@ -225,7 +225,7 @@ def stats_check(H, wid, idx, state):
         H.fail("statistics.mean NOT STABLE: fiber {0} got {1} before yield, "
                "{2} after yield (same dataset {3}) -- a sibling fiber's "
                "statistic leaked into this fiber's cache or a cache collision "
-               "returned the wrong value (runloom shared-hub-identity bug, "
+               "returned the wrong value (stackweave shared-hub-identity bug, "
                "0 under plain threads)".format(wid, mean_pre, mean_post, dataset_id))
         return
     if median_pre != median_post:
@@ -236,7 +236,7 @@ def stats_check(H, wid, idx, state):
         H.fail("statistics.median NOT STABLE: fiber {0} got {1} before yield, "
                "{2} after yield (same dataset {3}) -- a sibling's cached "
                "statistic or a cache collision corrupted this fiber's result "
-               "(runloom shared-hub-identity bug, 0 under plain threads)".format(
+               "(stackweave shared-hub-identity bug, 0 under plain threads)".format(
                    wid, median_pre, median_post, dataset_id))
         return
     if stdev_pre != stdev_post:
@@ -246,7 +246,7 @@ def stats_check(H, wid, idx, state):
                 wid, "stdev_unstable", dataset_id, stdev_pre, stdev_post)
         H.fail("statistics.stdev NOT STABLE: fiber {0} got {1} before yield, "
                "{2} after yield (same dataset {3}) -- cache collision or "
-               "sibling leak (runloom shared-hub-identity bug)".format(
+               "sibling leak (stackweave shared-hub-identity bug)".format(
                    wid, stdev_pre, stdev_post, dataset_id))
         return
     if variance_pre != variance_post:
@@ -256,7 +256,7 @@ def stats_check(H, wid, idx, state):
                 wid, "variance_unstable", dataset_id, variance_pre, variance_post)
         H.fail("statistics.variance NOT STABLE: fiber {0} got {1} before yield, "
                "{2} after yield (same dataset {3}) -- cache corruption "
-               "(runloom shared-hub-identity bug)".format(
+               "(stackweave shared-hub-identity bug)".format(
                    wid, variance_pre, variance_post, dataset_id))
         return
     if quantiles_pre != quantiles_post:
@@ -266,7 +266,7 @@ def stats_check(H, wid, idx, state):
                 wid, "quantiles_unstable", dataset_id, quantiles_pre, quantiles_post)
         H.fail("statistics.quantiles NOT STABLE: fiber {0} got {1} before yield, "
                "{2} after yield (same dataset {3}) -- sibling's cached quantiles "
-               "or false collision (runloom shared-hub-identity bug)".format(
+               "or false collision (stackweave shared-hub-identity bug)".format(
                    wid, quantiles_pre, quantiles_post, dataset_id))
         return
 
@@ -286,7 +286,7 @@ def stats_check(H, wid, idx, state):
                 wid, "mean_wrong", dataset_id, mean_post, canon_mean)
         H.fail("statistics.mean WRONG: fiber {0} computed {1} but canonical "
                "for dataset {2} is {3} -- the cache returned the wrong value "
-               "for this dataset (runloom cache collision / sibling leak)".format(
+               "for this dataset (stackweave cache collision / sibling leak)".format(
                    wid, mean_post, dataset_id, canon_mean))
         return
     if canon_median is not None and median_post != canon_median:
@@ -296,7 +296,7 @@ def stats_check(H, wid, idx, state):
                 wid, "median_wrong", dataset_id, median_post, canon_median)
         H.fail("statistics.median WRONG: fiber {0} computed {1} but canonical "
                "for dataset {2} is {3} -- a cache collision returned the wrong "
-               "median (runloom shared-hub-identity bug)".format(
+               "median (stackweave shared-hub-identity bug)".format(
                    wid, median_post, dataset_id, canon_median))
         return
     if canon_stdev is not None and stdev_post != canon_stdev:
@@ -305,7 +305,7 @@ def stats_check(H, wid, idx, state):
             state["sample_failure"][0] = (
                 wid, "stdev_wrong", dataset_id, stdev_post, canon_stdev)
         H.fail("statistics.stdev WRONG: fiber {0} computed {1} but canonical "
-               "is {2} -- cache corruption (runloom bug)".format(
+               "is {2} -- cache corruption (stackweave bug)".format(
                    wid, stdev_post, dataset_id, canon_stdev))
         return
     if canon_variance is not None and variance_post != canon_variance:
@@ -314,7 +314,7 @@ def stats_check(H, wid, idx, state):
             state["sample_failure"][0] = (
                 wid, "variance_wrong", dataset_id, variance_post, canon_variance)
         H.fail("statistics.variance WRONG: fiber {0} computed {1} but canonical "
-               "is {2} -- cache collision (runloom shared-hub-identity bug)".format(
+               "is {2} -- cache collision (stackweave shared-hub-identity bug)".format(
                    wid, variance_post, dataset_id, canon_variance))
         return
     if canon_quantiles is not None and quantiles_post != canon_quantiles:
@@ -324,7 +324,7 @@ def stats_check(H, wid, idx, state):
                 wid, "quantiles_wrong", dataset_id, quantiles_post, canon_quantiles)
         H.fail("statistics.quantiles WRONG: fiber {0} computed {1} but canonical "
                "for dataset {2} is {3} -- sibling's cached quantiles or false "
-               "collision (runloom shared-hub-identity bug)".format(
+               "collision (stackweave shared-hub-identity bug)".format(
                    wid, quantiles_post, dataset_id, canon_quantiles))
         return
 
@@ -364,7 +364,7 @@ def post(H):
         H.log("note: the statistics module cache is NOT isolated across hub "
               "fibers under M:N -- a sibling fiber's cached statistic or a "
               "cache collision returned the wrong value (0 under plain threads "
-              "GIL on AND off; the shared-module-state is the runloom cache-"
+              "GIL on AND off; the shared-module-state is the stackweave cache-"
               "isolation gap, similar to p66/p67/p468).  Each fiber's "
               "statistics.mean/median/stdev/variance/quantiles must be "
               "independent of siblings, even though they share the hub thread.")
@@ -390,6 +390,6 @@ if __name__ == "__main__":
                  "canonical precomputed for this dataset).  LOAD-BEARING: the "
                  "cache MUST NOT leak a sibling's result or collide falsely -- "
                  "0 failures under plain threads GIL on AND off (the shared-"
-                 "module-state cache is the runloom isolation gap, like p66/"
+                 "module-state cache is the stackweave isolation gap, like p66/"
                  "p67/p468).  Same class as decimal/warnings/reprlib: each "
                  "fiber needs its own view of the statistics computation")

@@ -6,7 +6,7 @@
 # model against the extension?": yes).
 #
 #   fixed code (hubs self-delete)            -> trace CONFORMS
-#   RUNLOOM_GILSTATE_DELETE_ON_MAIN=1 (the   -> trace NON-CONFORMING, the same
+#   STACKWEAVE_GILSTATE_DELETE_ON_MAIN=1 (the   -> trace NON-CONFORMING, the same
 #     pre-c28e5ca bug, on demand)               GilstateContract violation TLC
 #                                               finds from RunloomGilstate_bug.cfg
 #
@@ -15,20 +15,20 @@
 # fails even on a clean (release) build, no pydebug needed.
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
-PY="${RUNLOOM_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
+PY="${STACKWEAVE_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
 TR_OK="$(mktemp /tmp/gil_ok.XXXX.ndjson)"
 TR_BUG="$(mktemp /tmp/gil_bug.XXXX.ndjson)"
 
-WL='import sys; sys.path.insert(0,"src"); import runloom_c
-runloom_c.mn_init(3)
-for _ in range(6): runloom_c.mn_fiber(lambda: None)
-runloom_c.mn_run(); runloom_c.mn_fini()'
+WL='import sys; sys.path.insert(0,"src"); import stackweave_c
+stackweave_c.mn_init(3)
+for _ in range(6): stackweave_c.mn_fiber(lambda: None)
+stackweave_c.mn_run(); stackweave_c.mn_fini()'
 
 echo "== trace conformance: RunloomGilstate.tla vs the real extension =="
 echo "-- fixed code: capture trace --"
-RUNLOOM_GILSTATE_TRACE="$TR_OK" PYTHON_GIL=0 PYTHONPATH=src "$PY" -c "$WL" >/dev/null 2>&1
-echo "-- negative control (RUNLOOM_GILSTATE_DELETE_ON_MAIN=1): capture trace --"
-RUNLOOM_GILSTATE_DELETE_ON_MAIN=1 RUNLOOM_GILSTATE_TRACE="$TR_BUG" \
+STACKWEAVE_GILSTATE_TRACE="$TR_OK" PYTHON_GIL=0 PYTHONPATH=src "$PY" -c "$WL" >/dev/null 2>&1
+echo "-- negative control (STACKWEAVE_GILSTATE_DELETE_ON_MAIN=1): capture trace --"
+STACKWEAVE_GILSTATE_DELETE_ON_MAIN=1 STACKWEAVE_GILSTATE_TRACE="$TR_BUG" \
     PYTHON_GIL=0 PYTHONPATH=src "$PY" -c "$WL" >/dev/null 2>&1
 
 rc=0

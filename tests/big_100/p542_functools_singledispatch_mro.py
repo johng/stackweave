@@ -45,7 +45,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (single-owner, verified against threads):
           registered ancestor);
         * Virtual()  -> must fire the MyABC impl  (abc virtual-subclass path);
         * object()   -> must fire the default impl.
-    - YIELDS (runloom.yield_now / sleep) so siblings run -- crucially, siblings
+    - YIELDS (stackweave.yield_now / sleep) so siblings run -- crucially, siblings
       call abc.ABC.register(...) which BUMPS the global cache token, forcing
       cache-token mismatches that make this dispatcher clear + recompute.
     - Re-dispatches the SAME three subjects and asserts the IDENTICAL winner
@@ -62,14 +62,14 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (single-owner, verified against threads):
   off, each building its own singledispatch + hierarchy and hammering dispatch
   while all threads spam SomeABC.register()) that 100% of dispatches resolve to
   the thread-local winner with the thread-local wid -- 0 cross-thread leaks.
-  Under a correct runloom it must also hold.
+  Under a correct stackweave it must also hold.
 
 ORACLES:
   * LOAD-BEARING -- SINGLEDISPATCH MRO ISOLATION (worker, HARD, fail-fast).  Each
     fiber owns its generic function + hierarchy; dispatch before and after a yield
     (during which siblings bump the abc cache token) MUST return the same
     fiber-local MRO winner tagged with THIS fiber's wid.  A wrong wid, wrong
-    label, changed identity, or a raised dispatch is a runloom isolation desync.
+    label, changed identity, or a raised dispatch is a stackweave isolation desync.
 
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber stranded inside
     _find_impl / _compose_mro / a WeakKeyDictionary rehash never returns; the
@@ -99,7 +99,7 @@ import abc
 import functools
 
 import harness
-import runloom
+import stackweave
 
 # Labels the three impls tag their returns with, so an MRO-winner change or a
 # cross-fiber leak is visible in the returned tuple.
@@ -200,9 +200,9 @@ def dispatch_check(H, wid, idx, state):
     # YIELD: siblings run, each also bumping the global abc.get_cache_token()
     # via their own register() calls -- forcing this dispatcher to detect a
     # token mismatch and CLEAR + recompute its dispatch_cache on the next call.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0003)
+        stackweave.sleep(0.0003)
 
     # Re-resolve the SAME subjects; the winner MUST be identical and carry THIS
     # fiber's wid.  A cache that was cross-polluted, or a recompute that walked
@@ -314,4 +314,4 @@ if __name__ == "__main__":
                  "global cache token via register(), then re-resolves the SAME "
                  "subjects -- the MRO winner and its wid MUST be identical.  A "
                  "sibling's wid, a changed winner, or a raised dispatch is the "
-                 "runloom singledispatch-isolation bug")
+                 "stackweave singledispatch-isolation bug")

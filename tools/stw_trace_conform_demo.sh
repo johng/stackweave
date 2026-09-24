@@ -3,61 +3,61 @@
 # run the REAL extension under an instrumented --with-pydebug CPython, capture the
 # actual stop_the_world handshake, and have TLC validate it against the REAL
 # RunloomCPythonSTW.tla actions.  This is the "holy-shit" bridge -- conforming
-# runloom's interaction against the HOST's own internal STW protocol.
+# stackweave's interaction against the HOST's own internal STW protocol.
 #
 #   real run                 -> CONFORMS (STWExclusive holds at every stopped state)
 #   an in-window GCPark/Self  -> NON-CONFORMING (a hub left un-suspended while the
 #     Suspend dropped             world is stopped -- the gc-churn UAF class)
 #
 # Requires the instrumented pydebug interp (apply tools/verify/cpython_patches/
-# pystate_stw_trace.patch + rebuild) AND a runloom_c built against its ABI.  SKIPS
+# pystate_stw_trace.patch + rebuild) AND a stackweave_c built against its ABI.  SKIPS
 # CLEANLY (exit 0) when that is not set up -- e.g. a normal stock-ABI build -- so
 # it is safe to call from the gate; it only runs where the pydebug oracle lives.
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
-PY="${RUNLOOM_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
-PYD="${RUNLOOM_PYDEBUG_PYTHON:-/home/x/projects/cpython-pydebug/python}"
+PY="${STACKWEAVE_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
+PYD="${STACKWEAVE_PYDEBUG_PYTHON:-/home/x/projects/cpython-pydebug/python}"
 RM="$(command -v safe-rm || echo rm)"
 
 skip() { echo "== STW (M2) trace conformance =="; echo "  SKIP: $1"; exit 0; }
 
 command -v java >/dev/null 2>&1 || skip "java not found (TLC needs it)"
-[ -x "$PYD" ] || skip "no pydebug interp at $PYD (set RUNLOOM_PYDEBUG_PYTHON)"
+[ -x "$PYD" ] || skip "no pydebug interp at $PYD (set STACKWEAVE_PYDEBUG_PYTHON)"
 [ -f "$ROOT/tools/verify/tla/tla2tools.jar" ] || skip "tla2tools.jar not present (the verify phase fetches it; or run tools/verify/tla/run_tla.sh once)"
 
 TR="$(mktemp /tmp/stwconf.XXXX.ndjson)"
 WL='import gc, sys; sys.path.insert(0,"src")
 try:
-    import runloom_c
+    import stackweave_c
 except Exception:
     sys.exit(7)                       # ext not built against this (pydebug) ABI
 NW=8; NC=2
-done = runloom_c.Chan(NW+NC); stop=[False]
+done = stackweave_c.Chan(NW+NC); stop=[False]
 def worker():
     for _ in range(40):                   # long-lived: spans many STW cycles
         a={};b={};a["b"]=b;b["a"]=a;a["s"]=a; del a,b
-        runloom_c.sched_yield_classic()
+        stackweave_c.sched_yield_classic()
     done.send(1)
 def collector():
     while not stop[0]:
-        gc.collect(); runloom_c.sched_yield_classic()
+        gc.collect(); stackweave_c.sched_yield_classic()
     done.send(1)
 def stopper():
     for _ in range(NW): done.recv()
     stop[0]=True
     for _ in range(NC): done.recv()
-runloom_c.mn_init(3)
-for _ in range(NC): runloom_c.mn_fiber(collector)
-for _ in range(NW): runloom_c.mn_fiber(worker)
-runloom_c.mn_fiber(stopper); runloom_c.mn_run(); runloom_c.mn_fini()'
+stackweave_c.mn_init(3)
+for _ in range(NC): stackweave_c.mn_fiber(collector)
+for _ in range(NW): stackweave_c.mn_fiber(worker)
+stackweave_c.mn_fiber(stopper); stackweave_c.mn_run(); stackweave_c.mn_fini()'
 
 echo "== STW (M2) trace conformance: RunloomCPythonSTW.tla vs the real handshake =="
 echo "-- capture the real stop_the_world trace (instrumented pydebug interp) --"
-RUNLOOM_STW_TRACE="$TR" PYTHON_GIL=0 "$PYD" -c "$WL" >/dev/null 2>&1
+STACKWEAVE_STW_TRACE="$TR" PYTHON_GIL=0 "$PYD" -c "$WL" >/dev/null 2>&1
 rc=$?
 if [ "$rc" = 7 ] || ! grep -q '"a":"GCStopComplete"' "$TR" 2>/dev/null; then
     $RM -f "$TR"
-    skip "no STW trace captured -- the pydebug interp isn't instrumented OR runloom_c isn't built against its ABI (apply pystate_stw_trace.patch + rebuild; build the ext with RUNLOOM_PYDEBUG_PYTHON)"
+    skip "no STW trace captured -- the pydebug interp isn't instrumented OR stackweave_c isn't built against its ABI (apply pystate_stw_trace.patch + rebuild; build the ext with STACKWEAVE_PYDEBUG_PYTHON)"
 fi
 
 rc=0

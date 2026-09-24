@@ -16,7 +16,7 @@ Stresses: PyThreadState / TLS assumptions, OS-thread migration.
 import threading
 
 import harness
-import runloom
+import stackweave
 
 TLS = threading.local()
 
@@ -28,9 +28,9 @@ def setup(H):
 def worker(H, wid, rng, state):
     while H.running():
         TLS.value = wid
-        runloom.yield_now()
+        stackweave.yield_now()
         if rng.random() < 0.5:
-            runloom.sleep(0.0003)
+            stackweave.sleep(0.0003)
         try:
             got = TLS.value
         except AttributeError:

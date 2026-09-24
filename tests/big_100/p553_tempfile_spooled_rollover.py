@@ -10,7 +10,7 @@ True.  Every subsequent read/write/seek then goes to the fd.
 
 WHERE M:N COULD BREAK IT (the gap this program probes).  The rollover is a small
 multi-step state transition (open fd -> copy buffered prefix -> seek -> rebind
-self._file -> set _rolled).  runloom drives it on a stackful coroutine that can
+self._file -> set _rolled).  stackweave drives it on a stackful coroutine that can
 be PARKED at a cooperative yield in the middle of the surrounding write loop and
 resumed on a DIFFERENT hub.  If, across that park, the buffered in-memory prefix
 were lost (BytesIO contents dropped before the copy), double-written (copied
@@ -47,7 +47,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (single-owner rollover conservation):
   no different from touching it across function calls.  A mismatch means the
   rollover transition lost/doubled the buffered prefix, corrupted the fd
   position, or torn the _file/_rolled fields across a hub migration -- a real
-  runloom bug.  On a correct runtime this program exits 0.
+  stackweave bug.  On a correct runtime this program exits 0.
 
 ORACLES:
   * LOAD-BEARING -- ROLLOVER CONSERVATION (worker, HARD, fail-fast).  Single-owner
@@ -83,7 +83,7 @@ import io
 import tempfile
 
 import harness
-import runloom
+import stackweave
 
 # max_size is small so a modest stream always crosses it and rollover ALWAYS
 # fires.  Writing exactly max_size stays in memory; one more byte rolls it.
@@ -136,7 +136,7 @@ def rollover_check(H, wid, state, expected):
         spool.write(expected[:MAX_SIZE])
 
         # ---- 2. YIELD parked just BEFORE the rollover boundary ---------------
-        runloom.yield_now()
+        stackweave.yield_now()
 
         # ---- 3. the boundary must not have moved: exactly max_size is unrolled
         if spool._rolled:
@@ -150,7 +150,7 @@ def rollover_check(H, wid, state, expected):
         spool.write(expected[MAX_SIZE:MAX_SIZE + 1])
 
         # ---- 5. YIELD parked immediately AFTER the rollover transition -------
-        runloom.yield_now()
+        stackweave.yield_now()
 
         # ---- 6. the fd swap must have taken effect ---------------------------
         if not spool._rolled:
@@ -173,7 +173,7 @@ def rollover_check(H, wid, state, expected):
             end = pos + seg if s < TAIL_SEGMENTS - 1 else TOTAL
             spool.write(expected[pos:end])
             pos = end
-            runloom.yield_now()
+            stackweave.yield_now()
 
         # ---- 8. read the whole file back and assert EXACT equality -----------
         spool.seek(0)

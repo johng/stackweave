@@ -39,7 +39,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain threads):
   instance, writing unique per-thread values into every slot, yielding via
   time.sleep(0), reading back, GIL on AND off): 100% of slot reads return the
   exact written value, every undeclared-attribute set raises AttributeError, and
-  no instance ever grows a __dict__ -- 0 anomalies.  Under a CORRECT runloom it
+  no instance ever grows a __dict__ -- 0 anomalies.  Under a CORRECT stackweave it
   must also hold: the single-owner load-bearing oracle PASSES on a correct runtime
   (program exits 0 when there is no bug).
 
@@ -60,7 +60,7 @@ ORACLES:
       - asserts each slot's member_descriptor is still the module-level object
         (identity), i.e. the class __dict__ entry was not swapped.
     Single-owner: the instance is created in a fiber-local variable, never shared.
-    A failure is a runloom slot-offset / instance-layout isolation desync.
+    A failure is a stackweave slot-offset / instance-layout isolation desync.
 
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber stranded inside a slot
     __get__/__set__ (a wedged descriptor access) never returns; the watchdog +
@@ -102,7 +102,7 @@ only, so a data-race report on a slot cell -- or a replay reading a slot mid-wri
 by another fiber's instance -- is the cleanest signal before the value oracle fires.
 """
 import harness
-import runloom
+import stackweave
 
 # Per-fiber slot values are drawn from this band.  base = wid*VALUE_SCALE + local
 # so every fiber's writes are visibly distinct from siblings'.  VALUE_SCALE is far
@@ -147,12 +147,12 @@ def slot_check(H, wid, local, state):
         setattr(inst, name, val)
         expected[name] = val
         if i == NSLOTS // 2:
-            runloom.yield_now()            # sibling runs while our writes are half done
+            stackweave.yield_now()            # sibling runs while our writes are half done
 
     # YIELD: allow siblings on other hubs to run their own writes/reads.
-    runloom.yield_now()
+    stackweave.yield_now()
     if local & 1:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
 
     # Read every slot back through its member_descriptor.__get__ and verify EXACT
     # equality with what THIS fiber wrote (a wrong offset reads a neighbour cell).
@@ -215,7 +215,7 @@ def shared_slot_check(H, wid, local, state):
     val = (wid * VALUE_SCALE) + (local & 0xFFFF)
 
     setattr(inst, name, val)
-    runloom.yield_now()                    # sibling can overwrite the same slot here
+    stackweave.yield_now()                    # sibling can overwrite the same slot here
     got = getattr(inst, name)
 
     state["shared_checks"][wid & 1023] += 1
@@ -281,10 +281,10 @@ def post(H):
 
     if sdiffs:
         H.log("note: the shared Cell pool observed {0} cross-fiber slot-value "
-              "differences across {1} checks -- runloom hub fibers see each "
+              "differences across {1} checks -- stackweave hub fibers see each "
               "other's plain PyObject* slot stores on a SHARED instance (a shared "
               "mutable object, like a shared dict).  This is documented M:N "
-              "shared-object behavior, NOT a runloom bug, and never reaches the "
+              "shared-object behavior, NOT a stackweave bug, and never reaches the "
               "load-bearing single-owner oracle".format(sdiffs, schecks))
 
     # NON-VACUITY: the load-bearing single-owner hazard was actually exercised.
@@ -312,4 +312,4 @@ if __name__ == "__main__":
                  "shared-instance pool (expected to show cross-fiber value diffs, "
                  "like p490) proves the hazard window is real.  A slot reading a "
                  "wrong/torn value, a defeated __slots__ (phantom __dict__ / no "
-                 "AttributeError), or a descriptor identity swap is the runloom bug")
+                 "AttributeError), or a descriptor identity swap is the stackweave bug")

@@ -9,12 +9,12 @@ otherwise it heappops the event and calls its action.  After every action it
 calls delayfunc(0) "to let other threads run".
 
 WHERE M:N COULD BREAK IT (the gap this program probes).  In a big_100 run the
-scheduler's run() loop is being driven by a runloom GOROUTINE, and delayfunc
+scheduler's run() loop is being driven by a stackweave GOROUTINE, and delayfunc
 parks that goroutine (yield_now) -- once per pending event (the positive-delay
 branch) and once after every fired action (the delay-of-0 hack).  So the fiber
 is repeatedly PARKED and RESUMED while a partially-drained heap sits in q, the
 RLock is released/re-acquired around each park, and tens of thousands of sibling
-goroutines on hubs>1 are churning.  If runloom mis-resumes the fiber (a lost
+goroutines on hubs>1 are churning.  If stackweave mis-resumes the fiber (a lost
 wakeup that strands run() mid-drain, a duplicated wake that re-enters the loop,
 or a torn resume that corrupts the fiber's own C stack / the live q[0] tuple it
 just unpacked), the observable symptom is a scheduler that fires an event OUT OF
@@ -33,7 +33,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY.
   each event EXACTLY ONCE.  This is a documented, deterministic guarantee of
   sched + heapq on a correctly single-threaded driver; we verified the same law
   holds under plain OS threads (each thread its own scheduler, GIL on AND off):
-  0 mis-orders, 0 doubles, 0 drops.  Under a CORRECT runloom it must also hold,
+  0 mis-orders, 0 doubles, 0 drops.  Under a CORRECT stackweave it must also hold,
   so the single-owner oracle PASSES (program exits 0) when there is no bug.
 
   The events are given DISTINCT (time, priority) pairs, so the sorted order is a
@@ -52,7 +52,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY.
 
   A violation of ANY of the three, on a single-owner scheduler that no sibling
   touched, cannot be documented Python semantics (sched/heapq are correct on one
-  thread) -- it can only be a runloom park/resume defect (lost/dup/torn wake).
+  thread) -- it can only be a stackweave park/resume defect (lost/dup/torn wake).
 
 ORACLES:
   * LOAD-BEARING (worker, HARD, fail-fast): single-owner sched.scheduler drains
@@ -67,7 +67,7 @@ ORACLES:
 
 FAIL ON: a single-owner scheduler firing events out of (time, priority) order,
 firing an event more than once, dropping an event, or firing an unknown id -- a
-lost/duplicated/torn runloom wakeup around the delayfunc park points.  There is
+lost/duplicated/torn stackweave wakeup around the delayfunc park points.  There is
 NO shared-scheduler arm: a shared sched.scheduler mutated by several fibers
 races exactly like it does across OS threads (documented -- sched's lock only
 guards its own heap ops, not a cross-call ordering contract), so it would be a
@@ -82,7 +82,7 @@ sustained M:N churn on hubs>1.
 import sched
 
 import harness
-import runloom
+import stackweave
 
 # Events per single-owner scheduler per round.  Each event forces at least one
 # delayfunc park (its positive-delay peek) plus one delay-of-0 park after it
@@ -109,7 +109,7 @@ class FakeClock(object):
     PARKS the driving fiber (yield_now -- no real sleep, CPU-only).  Because the
     scheduler advances the clock only through delayfunc, the tick is monotone
     nondecreasing and every pending event eventually becomes due.  Each delayfunc
-    call is a park point where a runloom mis-resume would corrupt the drain."""
+    call is a park point where a stackweave mis-resume would corrupt the drain."""
 
     def __init__(self):
         self.tick = 0
@@ -122,7 +122,7 @@ class FakeClock(object):
         # sibling on another hub reliably interleaves before we resume the drain.
         if d > 0:
             self.tick += d
-        runloom.yield_now()
+        stackweave.yield_now()
 
 
 def build_events(rng):
@@ -219,7 +219,7 @@ def drain_one(H, wid, rng):
                    "id {2} key {3} fired AFTER id {4} key {5} but should sort "
                    "BEFORE it -- a single-owner sched.scheduler fired out of "
                    "(time, priority) heap order across a delayfunc park "
-                   "(lost/dup/torn runloom wakeup)".format(
+                   "(lost/dup/torn stackweave wakeup)".format(
                        wid, k, fire_log[k][2], cur, fire_log[k - 1][2], prev))
             return -1
 
@@ -292,5 +292,5 @@ if __name__ == "__main__":
                  "oracle: the fire-log must be in exact nondecreasing "
                  "(time, priority) order with each event fired exactly once -- an "
                  "out-of-order fire, a double, or a drop is a lost/dup/torn "
-                 "runloom wakeup around the delayfunc park points.  No shared-"
+                 "stackweave wakeup around the delayfunc park points.  No shared-"
                  "scheduler arm (that races like plain threads -- documented)")

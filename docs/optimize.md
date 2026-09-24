@@ -1,6 +1,6 @@
-# Tuning: `runloom.optimize()`
+# Tuning: `stackweave.optimize()`
 
-runloom is correct and fast **with zero configuration** — call nothing and the
+stackweave is correct and fast **with zero configuration** — call nothing and the
 runtime tunes itself (best netpoll backend, stall-recovery on free-threaded
 builds, calibrating stacks, an auto-sized stack pool, io_uring that engages as
 connections climb, …). You should never need to learn a tuning flag.
@@ -9,18 +9,18 @@ When you *do* want to lean one way, there is **one function**, and you ask for i
 by **the trade-off you're making** — not by memorizing knobs:
 
 ```python
-import runloom
+import stackweave
 
-runloom.optimize()                          # auto — the default; nothing to set
-runloom.optimize("throughput")              # max req/s
-runloom.optimize("memory")                  # tight RSS
-runloom.optimize("latency")                 # sharp tail
-runloom.optimize("secure")                  # hardened
-runloom.optimize("throughput", "latency")   # compose — pass the trades you want
-runloom.optimize("memory", max_fibers=200_000)
+stackweave.optimize()                          # auto — the default; nothing to set
+stackweave.optimize("throughput")              # max req/s
+stackweave.optimize("memory")                  # tight RSS
+stackweave.optimize("latency")                 # sharp tail
+stackweave.optimize("secure")                  # hardened
+stackweave.optimize("throughput", "latency")   # compose — pass the trades you want
+stackweave.optimize("memory", max_fibers=200_000)
 ```
 
-Call it **before `runloom.run()`** — the settings are read as the runtime starts.
+Call it **before `stackweave.run()`** — the settings are read as the runtime starts.
 
 ## The four trades
 
@@ -39,14 +39,14 @@ backpressure ceiling on concurrent fibers.
 
 These trades are deliberately **safe** — none flips an experimental lever or a
 setting that can OOM-kill a RAM-tight host. The sharpest expert tricks (e.g.
-`RUNLOOM_STACK_MADV=off` for zero reclaim syscalls *at the cost of no
+`STACKWEAVE_STACK_MADV=off` for zero reclaim syscalls *at the cost of no
 pressure-relief*) stay raw env vars with their own warnings; a friendly name
 should never hide a footgun.
 
 > **The stack pool sizes itself.** Out of the box (any preset, or none) the depot
 > auto-caps to ~1.5× your live-fiber high-water-mark — clamped by `vm.max_map_count`
 > *and* RAM so it can't ENOMEM or balloon — so completions pool instead of churning,
-> with no number to set. `RUNLOOM_STACK_DEPOT_CAP` still forces a static cap if you
+> with no number to set. `STACKWEAVE_STACK_DEPOT_CAP` still forces a static cap if you
 > insist. (See [resource-limits](resource-limits.md) for raising `vm.max_map_count`
 > past ~30K concurrent fibers on a stock host.)
 
@@ -66,9 +66,9 @@ explicit shell env var shows through, since it overrides optimize()).
 
 ## Power users
 
-The trades are just a friendly layer over the runtime's `RUNLOOM_*` env vars (see
+The trades are just a friendly layer over the runtime's `STACKWEAVE_*` env vars (see
 [Resource limits & internals](resource-limits.md)). An **explicit env var still
-wins** over `optimize()` — so if you export `RUNLOOM_STACK_MADV=free` yourself,
+wins** over `optimize()` — so if you export `STACKWEAVE_STACK_MADV=free` yourself,
 that sticks. You never *need* the raw vars; they're the escape hatch under the
 hood.
 
@@ -76,18 +76,18 @@ hood.
 
 ```python
 # RAM-constrained container: just make it lean.
-runloom.optimize("memory")
+stackweave.optimize("memory")
 
 # Latency-critical RPC tier on a dedicated host, multi-tenant secure.
-runloom.optimize("throughput", "latency", "secure")
+stackweave.optimize("throughput", "latency", "secure")
 
 # Hard fan-out ceiling on a shared box.
-runloom.optimize(max_fibers=200_000)
+stackweave.optimize(max_fibers=200_000)
 ```
 
 ## Hot handlers: scaling a shared handler across cores
 
-> Full reference: **[Hot handlers](hot-handlers.md)** (`@runloom.hot`, auto mode,
+> Full reference: **[Hot handlers](hot-handlers.md)** (`@stackweave.hot`, auto mode,
 > the rules, and why it works). Short version below.
 
 A plain module-level handler already scales across every core — there's nothing
@@ -110,12 +110,12 @@ server.serve(handle)       # the SAME closure runs on every core
 ```
 
 When many cores run that one closure flat out, they all hammer the same captured
-slots and start colliding, so adding cores stops helping. Mark it `@runloom.hot`
+slots and start colliding, so adding cores stops helping. Mark it `@stackweave.hot`
 and each core gets its own private copy of the captured slots (pointing at the
 same values), so they stop colliding:
 
 ```python
-@runloom.hot
+@stackweave.hot
 def handle(conn):
     serve(conn, config)
 ```
@@ -125,8 +125,8 @@ def handle(conn):
 - It costs one copy of the captured slots **per core**, not per fiber (a million
   fibers over one handler still cost one copy per core).
 - It stays correct: it only kicks in when the handler *reads* its captures. If it
-  *rebinds* one (`nonlocal x; x = ...`), runloom leaves it shared.
-- Stacking decorators? Put `@runloom.hot` closest to your `def`.
+  *rebinds* one (`nonlocal x; x = ...`), stackweave leaves it shared.
+- Stacking decorators? Put `@stackweave.hot` closest to your `def`.
 
 `optimize("throughput")` turns this on automatically for the busiest closures (no
 decorator, under a memory budget — it tells you if the budget is hit);
@@ -134,5 +134,5 @@ decorator, under a memory budget — it tells you if the budget is hit);
 
 **Fastest path first:** if a handler is hot enough to want this, *compiling* it
 (a Cython `cdef` handler) beats it outright — that removes the interpreter cost
-entirely, not just the cross-core contention. `@runloom.hot` is the zero-rewrite
+entirely, not just the cross-core contention. `@stackweave.hot` is the zero-rewrite
 option for when you won't compile.

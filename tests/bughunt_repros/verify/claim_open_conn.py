@@ -1,5 +1,5 @@
 import socket
-import runloom.aio as aio
+import stackweave.aio as aio
 real=socket.socket; calls=[]
 class FailFirst(socket.socket):
     def __init__(self, family=-1, type=-1, proto=-1, fileno=None):
@@ -9,7 +9,7 @@ class FailFirst(socket.socket):
 async def main():
     srv=real(); srv.bind(('127.0.0.1',0)); srv.listen(1)
     host,port=srv.getsockname()
-    import runloom.aio.streams_api as sa
+    import stackweave.aio.streams_api as sa
     orig=sa._resolve
     sa._resolve=lambda *a: list(orig(*a))*2
     socket.socket=FailFirst

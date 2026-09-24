@@ -1,23 +1,23 @@
-"""Tests for runloom_c.Chan -- Go-style channels."""
+"""Tests for stackweave_c.Chan -- Go-style channels."""
 import sys
 import time
 import unittest
 
 sys.path.insert(0, "src")
 
-import runloom_c
+import stackweave_c
 
 
 def _run_in_sched(*fibers):
     """Spawn each callable, run scheduler to completion."""
     for g in fibers:
-        runloom_c.fiber(g)
-    runloom_c.run()
+        stackweave_c.fiber(g)
+    stackweave_c.run()
 
 
 class TestUnbufferedBasic(unittest.TestCase):
     def test_send_then_recv(self):
-        ch = runloom_c.Chan()
+        ch = stackweave_c.Chan()
         out = []
 
         def producer():
@@ -31,7 +31,7 @@ class TestUnbufferedBasic(unittest.TestCase):
         self.assertEqual(out, [(7, True)])
 
     def test_recv_then_send_blocks_in_right_order(self):
-        ch = runloom_c.Chan()
+        ch = stackweave_c.Chan()
         log = []
 
         def consumer():
@@ -53,7 +53,7 @@ class TestUnbufferedBasic(unittest.TestCase):
 
 class TestBuffered(unittest.TestCase):
     def test_buffer_fills_drains(self):
-        ch = runloom_c.Chan(3)
+        ch = stackweave_c.Chan(3)
         out = []
 
         def writer():
@@ -69,7 +69,7 @@ class TestBuffered(unittest.TestCase):
         self.assertEqual(out, [0, 1, 2, 3, 4])
 
     def test_len_capacity(self):
-        ch = runloom_c.Chan(4)
+        ch = stackweave_c.Chan(4)
         out = []
         def runner():
             out.append(ch.capacity)
@@ -85,7 +85,7 @@ class TestBuffered(unittest.TestCase):
 
 class TestClose(unittest.TestCase):
     def test_recv_after_close_returns_ok_false(self):
-        ch = runloom_c.Chan()
+        ch = stackweave_c.Chan()
         out = []
         def runner():
             ch.close()
@@ -95,7 +95,7 @@ class TestClose(unittest.TestCase):
         self.assertEqual(out, [(None, False)])
 
     def test_buffered_drains_after_close(self):
-        ch = runloom_c.Chan(2)
+        ch = stackweave_c.Chan(2)
         out = []
         def runner():
             ch.send(10)
@@ -108,7 +108,7 @@ class TestClose(unittest.TestCase):
         self.assertEqual(out, [(10, True), (20, True), (None, False)])
 
     def test_send_on_closed_raises(self):
-        ch = runloom_c.Chan()
+        ch = stackweave_c.Chan()
         err = []
         def runner():
             ch.close()
@@ -120,7 +120,7 @@ class TestClose(unittest.TestCase):
         self.assertEqual(err, ["send on closed channel"])
 
     def test_double_close_raises(self):
-        ch = runloom_c.Chan()
+        ch = stackweave_c.Chan()
         err = []
         def runner():
             ch.close()
@@ -132,7 +132,7 @@ class TestClose(unittest.TestCase):
         self.assertEqual(err, ["close on closed channel"])
 
     def test_close_wakes_parked_senders(self):
-        ch = runloom_c.Chan()      # unbuffered
+        ch = stackweave_c.Chan()      # unbuffered
         log = []
 
         def sender():
@@ -144,20 +144,20 @@ class TestClose(unittest.TestCase):
 
         def closer():
             # Yield so sender gets to park first.
-            runloom_c.sched_yield()
+            stackweave_c.sched_yield()
             ch.close()
 
         _run_in_sched(sender, closer)
         self.assertEqual(log, ["closed"])
 
     def test_close_wakes_parked_receivers(self):
-        ch = runloom_c.Chan()
+        ch = stackweave_c.Chan()
         log = []
         def receiver():
             v, ok = ch.recv()
             log.append((v, ok))
         def closer():
-            runloom_c.sched_yield()
+            stackweave_c.sched_yield()
             ch.close()
         _run_in_sched(receiver, closer)
         self.assertEqual(log, [(None, False)])
@@ -165,7 +165,7 @@ class TestClose(unittest.TestCase):
 
 class TestNonBlocking(unittest.TestCase):
     def test_try_send_full_returns_false(self):
-        ch = runloom_c.Chan(1)
+        ch = stackweave_c.Chan(1)
         out = []
         def runner():
             out.append(ch.try_send(1))   # True (room)
@@ -174,7 +174,7 @@ class TestNonBlocking(unittest.TestCase):
         self.assertEqual(out, [True, False])
 
     def test_try_recv_empty_returns_none(self):
-        ch = runloom_c.Chan(1)
+        ch = stackweave_c.Chan(1)
         out = []
         def runner():
             out.append(ch.try_recv())    # None (empty, would-block)
@@ -191,8 +191,8 @@ class TestPingPong(unittest.TestCase):
     """End-to-end test of the actual concurrency: two fibers
     bouncing values through a channel."""
     def test_ping_pong(self):
-        a = runloom_c.Chan()
-        b = runloom_c.Chan()
+        a = stackweave_c.Chan()
+        b = stackweave_c.Chan()
         log = []
         N = 5
 
@@ -213,7 +213,7 @@ class TestPingPong(unittest.TestCase):
 
     def test_fan_in(self):
         """N producers, 1 consumer, buffered channel."""
-        ch = runloom_c.Chan(4)
+        ch = stackweave_c.Chan(4)
         out = []
         N = 4
 
@@ -240,7 +240,7 @@ class TestIteration(unittest.TestCase):
     `for v in ch:` -- iteration ends when the channel is closed."""
 
     def test_range_basic(self):
-        ch = runloom_c.Chan(8)
+        ch = stackweave_c.Chan(8)
         out = []
 
         def producer():
@@ -256,7 +256,7 @@ class TestIteration(unittest.TestCase):
         self.assertEqual(out, [0, 11, 22, 33, 44])
 
     def test_range_empty_after_close(self):
-        ch = runloom_c.Chan()
+        ch = stackweave_c.Chan()
         out = []
         def runner():
             ch.close()
@@ -269,11 +269,11 @@ class TestIteration(unittest.TestCase):
 
 class TestSelect(unittest.TestCase):
     def test_default_no_case_ready(self):
-        a = runloom_c.Chan()
-        b = runloom_c.Chan(1)
+        a = stackweave_c.Chan()
+        b = stackweave_c.Chan(1)
         out = []
         def runner():
-            r = runloom_c.select([
+            r = stackweave_c.select([
                 ("recv", a),
                 ("recv", b),
             ], default=True)
@@ -282,20 +282,20 @@ class TestSelect(unittest.TestCase):
         self.assertEqual(out, [-1])
 
     def test_immediate_recv(self):
-        ch = runloom_c.Chan(1)
+        ch = stackweave_c.Chan(1)
         out = []
         def runner():
             ch.send("ready")
-            i, payload = runloom_c.select([("recv", ch)])
+            i, payload = stackweave_c.select([("recv", ch)])
             out.append((i, payload))
         _run_in_sched(runner)
         self.assertEqual(out, [(0, ("ready", True))])
 
     def test_immediate_send_into_buffer(self):
-        ch = runloom_c.Chan(2)
+        ch = stackweave_c.Chan(2)
         out = []
         def runner():
-            i, _ = runloom_c.select([("send", ch, 99)])
+            i, _ = stackweave_c.select([("send", ch, 99)])
             out.append(i)
             v, ok = ch.recv()
             out.append((v, ok))
@@ -305,31 +305,31 @@ class TestSelect(unittest.TestCase):
     def test_blocking_two_chans(self):
         """One fiber selects on two channels; another writes to
         the second one.  The select should fire on case 1."""
-        a = runloom_c.Chan()
-        b = runloom_c.Chan()
+        a = stackweave_c.Chan()
+        b = stackweave_c.Chan()
         log = []
 
         def selector():
-            r = runloom_c.select([
+            r = stackweave_c.select([
                 ("recv", a),
                 ("recv", b),
             ])
             log.append(("fired", r[0], r[1]))
 
         def writer_b():
-            runloom_c.sched_yield()       # let selector park first
+            stackweave_c.sched_yield()       # let selector park first
             b.send("from-b")
 
         _run_in_sched(selector, writer_b)
         self.assertEqual(log, [("fired", 1, ("from-b", True))])
 
     def test_select_send_on_one_recv_on_other(self):
-        a = runloom_c.Chan()
-        b = runloom_c.Chan()
+        a = stackweave_c.Chan()
+        b = stackweave_c.Chan()
         log = []
 
         def selector():
-            r = runloom_c.select([
+            r = stackweave_c.select([
                 ("send", a, "to-a"),
                 ("recv", b),
             ])
@@ -354,16 +354,16 @@ class TestSelect(unittest.TestCase):
         finds it still full, re-parks, and loops to the 10M-retry RuntimeError
         instead of blocking cleanly.  Without the mutation this completes and the
         buffered value flows."""
-        ch = runloom_c.Chan(1)
+        ch = stackweave_c.Chan(1)
         log = []
 
         def sender():
             ch.send("fill")                              # buffer now full (len==cap==1)
-            i, _ = runloom_c.select([("send", ch, "second")])   # MUST park (full)
+            i, _ = stackweave_c.select([("send", ch, "second")])   # MUST park (full)
             log.append(("sent", i))
 
         def drainer():
-            runloom_c.sched_yield()                      # let sender fill + park
+            stackweave_c.sched_yield()                      # let sender fill + park
             v, ok = ch.recv()                            # frees the slot -> wakes select-send
             log.append(("drained", v, ok))
             v2, ok2 = ch.recv()                          # now drains "second"
@@ -387,13 +387,13 @@ class TestSelect(unittest.TestCase):
         log = []
 
         def runner():
-            ready = runloom_c.Chan(1)
+            ready = stackweave_c.Chan(1)
             for _ in range(200):
                 ready.send(1)                            # make the RECV case ready
                 # SEND case (unbuffered, no peer) loses to the ready RECV case;
                 # the select fires RECV and must drop the pinned SEND value.
-                idx, _ = runloom_c.select([
-                    ("send", runloom_c.Chan(), marker),
+                idx, _ = stackweave_c.select([
+                    ("send", stackweave_c.Chan(), marker),
                     ("recv", ready),
                 ])
                 log.append(idx)
@@ -413,23 +413,23 @@ class TestNoGoroutineGuard(unittest.TestCase):
     """A blocking channel op with NO fiber context (top-level call or a
     foreign OS thread) must raise RuntimeError, NOT busy-spin forever.  Audit
     hang: park_waiter with current_g==NULL spun (its coro_yield is a no-op and
-    wake_waiter can't wake a NULL g).  Matches runloom.sync's
+    wake_waiter can't wake a NULL g).  Matches stackweave.sync's
     current_g()-is-None guard.  Non-blocking ops + ops inside a fiber are
     unaffected (covered by the other tests in this module)."""
 
     def test_toplevel_blocking_recv_raises(self):
-        ch = runloom_c.Chan()
+        ch = stackweave_c.Chan()
         with self.assertRaises(RuntimeError):
             ch.recv()                      # empty + no fiber -> would block
 
     def test_toplevel_blocking_send_raises(self):
-        ch = runloom_c.Chan()              # unbuffered, no receiver
+        ch = stackweave_c.Chan()              # unbuffered, no receiver
         with self.assertRaises(RuntimeError):
             ch.send(1)                     # would block, no fiber
 
     def test_foreign_thread_blocking_recv_raises(self):
         import threading
-        ch = runloom_c.Chan()
+        ch = stackweave_c.Chan()
         out = {}
         def f():
             try:

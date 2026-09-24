@@ -1,33 +1,33 @@
 """Pillar E part 1 -- greenlet interop torture (generalizes big_100/p76_greenlet.py).
 
-Nest greenlet C-stack ``switch()`` chains INSIDE runloom goroutines: two stackful
-context switchers -- greenlet's and runloom's -- coexisting on the same OS thread.
+Nest greenlet C-stack ``switch()`` chains INSIDE stackweave goroutines: two stackful
+context switchers -- greenlet's and stackweave's -- coexisting on the same OS thread.
 
 p76's finding (FINDINGS BUG #8): interleaving the two switchers historically
-CRASHED -- either cooperatively (yielding to the runloom scheduler while control
+CRASHED -- either cooperatively (yielding to the stackweave scheduler while control
 sits on a greenlet's C-stack) or preemptively (a preemptive goroutine switch
 landing in the middle of a greenlet switch).  p76 therefore ran with preemption
-DISABLED (RUNLOOM_PREEMPT=0) AND drove each greenlet tree to completion
-ATOMICALLY (no runloom scheduling point between two greenlet switches).
+DISABLED (STACKWEAVE_PREEMPT=0) AND drove each greenlet tree to completion
+ATOMICALLY (no stackweave scheduling point between two greenlet switches).
 
-This session's measured result on CPython 3.14.4t + current runloom (the probes
+This session's measured result on CPython 3.14.4t + current stackweave (the probes
 that back these assertions, re-run below as tests): the coexistence is now
 ROBUST.  The atomic p76 pattern passes WITH preemption ON -- the improvement over
 p76 -- and even the historically-worst case, cooperatively yielding to the
-runloom scheduler from WITHIN a switched-in greenlet, now completes cleanly
+stackweave scheduler from WITHIN a switched-in greenlet, now completes cleanly
 (measured: 128 goroutines x 8 hubs x 20 iterations, preemption on AND off, 8 runs
 each, zero crashes).  We assert both the safe/atomic ordering and the now-passing
 interleaved ordering, and note the improvement rather than silently relying on
-RUNLOOM_PREEMPT=0.
+STACKWEAVE_PREEMPT=0.
 
 Isolation strategy:
   * SINGLE-THREAD (run(1)) greenlet nesting runs IN-PROCESS via the raw
-    runloom_c.fiber/run scheduler.  Raw rc.run() does NOT trigger runloom.run()'s
+    stackweave_c.fiber/run scheduler.  Raw rc.run() does NOT trigger stackweave.run()'s
     PYTHON_TLBC=0 self-re-exec, and the 3.14t TLBC SIGSEGV is a MANY-HUB defect,
     so single-thread in-process is safe and fast.
   * M:N (run(n>1)) greenlet torture runs in a PYTHON_TLBC=0 SUBPROCESS (this same
     file is the entry point -- see the ``__main__`` dispatch).  That is the
-    codebase idiom for launching M:N runloom (tools/lincheck, tools/soak all
+    codebase idiom for launching M:N stackweave (tools/lincheck, tools/soak all
     preset PYTHON_TLBC=0): it avoids run()'s self-re-exec mid-pytest AND isolates
     any greenlet/M:N crash as a captured non-zero child exit instead of a
     suite-killing SIGSEGV in the pytest process.
@@ -43,8 +43,8 @@ REPO_SRC = os.path.join(
 if REPO_SRC not in sys.path:
     sys.path.insert(0, REPO_SRC)
 
-import runloom            # noqa: E402
-import runloom_c as rc    # noqa: E402
+import stackweave            # noqa: E402
+import stackweave_c as rc    # noqa: E402
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from adv_util import hang_guard, needs_free_threading   # noqa: E402
@@ -110,7 +110,7 @@ def ping_pong(n):
 
 
 def run_single_thread(fn):
-    """Drive `fn` to completion on runloom's single-thread (run(1)) scheduler via
+    """Drive `fn` to completion on stackweave's single-thread (run(1)) scheduler via
     the raw C runner (no PYTHON_TLBC=0 re-exec)."""
     box = {}
 
@@ -126,7 +126,7 @@ def run_single_thread(fn):
 # IN-PROCESS single-thread tests: greenlet stacks nested inside a run(1) fiber.
 # ---------------------------------------------------------------------------
 def test_single_deep_switch_chain():
-    """A deep greenlet switch chain inside one runloom goroutine: correct entry
+    """A deep greenlet switch chain inside one stackweave goroutine: correct entry
     order and the correct value threaded back up, no crash."""
     depth = 80
 
@@ -172,20 +172,20 @@ def test_single_raise_across_switch():
 
 
 def test_single_interleave_greenlet_with_yield_and_chan():
-    """greenlet trees interleaved with runloom.yield_now() and channel ops at
+    """greenlet trees interleaved with stackweave.yield_now() and channel ops at
     goroutine-stack-safe points: run an atomic greenlet tree, then yield / send on
     a channel, alternating.  Two goroutines (producer + consumer) under run(1)."""
     ROUNDS, PER = 4, 5
 
     def body():
-        ch = runloom.Chan(0)
+        ch = stackweave.Chan(0)
         got = []
 
         def producer():
             for _ in range(ROUNDS):
                 produced, received = ping_pong(PER)   # atomic greenlet tree
                 assert produced == received == list(range(PER))
-                runloom.yield_now()                    # safe point: own stack
+                stackweave.yield_now()                    # safe point: own stack
                 for v in produced:
                     ch.send(v)                         # chan op, own stack
             ch.close()
@@ -207,7 +207,7 @@ def test_single_interleave_greenlet_with_yield_and_chan():
 
 
 # ---------------------------------------------------------------------------
-# M:N subprocess scenarios.  Each drives a greenlet torture under runloom.run(
+# M:N subprocess scenarios.  Each drives a greenlet torture under stackweave.run(
 # hubs, main) with the GIL off and prints a single ``RESULT <name> ok=<bool>``
 # line.  Launched by the pytest tests below in a PYTHON_TLBC=0 child.
 # ---------------------------------------------------------------------------
@@ -226,16 +226,16 @@ def scenario_mn_atomic_trees(hubs=4, nfibers=64, rounds=4):
                 produced, received = ping_pong(n)
                 if produced != list(range(n)) or received != list(range(n)):
                     raise AssertionError("wid=%d bad tree %r %r" % (wid, produced, received))
-                runloom.yield_now()
+                stackweave.yield_now()
             results[wid] = "done"
         except BaseException as e:                    # noqa: BLE001
             lock.lock(); errs.append(repr(e)); lock.unlock()
 
     def main():
         for wid in range(nfibers):
-            runloom.fiber(lambda wid=wid: worker(wid))
+            stackweave.fiber(lambda wid=wid: worker(wid))
 
-    runloom.run(hubs, main)
+    stackweave.run(hubs, main)
     done = sum(1 for r in results if r == "done")
     ok = (done == nfibers and not errs)
     print("RESULT mn_atomic_trees ok=%s done=%d/%d errs=%d %s"
@@ -247,7 +247,7 @@ def scenario_mn_chan_interleave(hubs=4, nproducers=16, rounds=3, per=5):
     """greenlet trees interleaved with channel send/recv across hubs: each
     producer drives an atomic greenlet tree then streams its values on a shared
     channel; one consumer drains the expected total."""
-    ch = runloom.Chan(0)
+    ch = stackweave.Chan(0)
     total = [0]
     errs = []
     lock = rc.Mutex()
@@ -274,11 +274,11 @@ def scenario_mn_chan_interleave(hubs=4, nproducers=16, rounds=3, per=5):
         lock.lock(); total[0] += got; lock.unlock()
 
     def main():
-        runloom.fiber(consumer)
+        stackweave.fiber(consumer)
         for wid in range(nproducers):
-            runloom.fiber(lambda wid=wid: producer(wid))
+            stackweave.fiber(lambda wid=wid: producer(wid))
 
-    runloom.run(hubs, main)
+    stackweave.run(hubs, main)
     ok = (total[0] == target and not errs)
     print("RESULT mn_chan_interleave ok=%s got=%d/%d errs=%d %s"
           % (ok, total[0], target, len(errs), errs[:3]))
@@ -306,9 +306,9 @@ def scenario_mn_raise(hubs=4, nfibers=48):
 
     def main():
         for wid in range(nfibers):
-            runloom.fiber(lambda wid=wid: worker(wid))
+            stackweave.fiber(lambda wid=wid: worker(wid))
 
-    runloom.run(hubs, main)
+    stackweave.run(hubs, main)
     ok = (caught[0] == nfibers and not errs)
     print("RESULT mn_raise ok=%s caught=%d/%d errs=%d %s"
           % (ok, caught[0], nfibers, len(errs), errs[:3]))
@@ -317,7 +317,7 @@ def scenario_mn_raise(hubs=4, nfibers=48):
 
 def scenario_mn_yield_inside(hubs=8, nfibers=128, iters=20):
     """The historically-worst case (FINDINGS BUG #8): cooperatively yield to the
-    runloom scheduler from WITHIN a switched-in greenlet -- control is on the
+    stackweave scheduler from WITHIN a switched-in greenlet -- control is on the
     greenlet's C-stack, not the goroutine's own stack -- interleaved with
     greenlet switches, across many hubs.  Asserts it now completes cleanly."""
     done = [0]
@@ -327,7 +327,7 @@ def scenario_mn_yield_inside(hubs=8, nfibers=128, iters=20):
     def worker(wid):
         def gbody(x):
             for i in range(iters):
-                runloom.yield_now()      # yield to the scheduler from inside the greenlet
+                stackweave.yield_now()      # yield to the scheduler from inside the greenlet
                 main.switch(i)
         main = greenlet.getcurrent()
         g = greenlet.greenlet(gbody)
@@ -342,9 +342,9 @@ def scenario_mn_yield_inside(hubs=8, nfibers=128, iters=20):
 
     def main():
         for wid in range(nfibers):
-            runloom.fiber(lambda wid=wid: worker(wid))
+            stackweave.fiber(lambda wid=wid: worker(wid))
 
-    runloom.run(hubs, main)
+    stackweave.run(hubs, main)
     ok = (done[0] == nfibers and not errs)
     print("RESULT mn_yield_inside ok=%s done=%d/%d errs=%d %s"
           % (ok, done[0], nfibers, len(errs), errs[:3]))
@@ -361,12 +361,12 @@ SCENARIOS = {
 
 def run_mn_scenario(name, preempt=True, timeout=90):
     """Launch a scenario in a PYTHON_TLBC=0 subprocess (this file as entry point).
-    Returns (returncode, stdout+stderr).  preempt=False sets RUNLOOM_PREEMPT=0."""
+    Returns (returncode, stdout+stderr).  preempt=False sets STACKWEAVE_PREEMPT=0."""
     env = dict(os.environ)
     env["PYTHON_GIL"] = "0"
-    env["PYTHON_TLBC"] = "0"          # preset -> no runloom self-re-exec
+    env["PYTHON_TLBC"] = "0"          # preset -> no stackweave self-re-exec
     env["PYTHONPATH"] = REPO_SRC + os.pathsep + env.get("PYTHONPATH", "")
-    env["RUNLOOM_PREEMPT"] = "1" if preempt else "0"
+    env["STACKWEAVE_PREEMPT"] = "1" if preempt else "0"
     proc = subprocess.run(
         [sys.executable, os.path.abspath(__file__), name],
         env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -389,13 +389,13 @@ def assert_scenario(name, preempt):
 def test_mn_independent_greenlet_trees_preempt_on():
     """Many goroutines each running independent greenlet trees, atomically -- WITH
     preemption ON.  This is the improvement over p76 (which required
-    RUNLOOM_PREEMPT=0): the atomic ordering is now robust under preemption."""
+    STACKWEAVE_PREEMPT=0): the atomic ordering is now robust under preemption."""
     assert_scenario("mn_atomic_trees", preempt=True)
 
 
 @pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_mn_independent_greenlet_trees_preempt_off():
-    """Same torture with the p76-safe RUNLOOM_PREEMPT=0 ordering -- the original
+    """Same torture with the p76-safe STACKWEAVE_PREEMPT=0 ordering -- the original
     guarantee still holds."""
     assert_scenario("mn_atomic_trees", preempt=False)
 
@@ -414,7 +414,7 @@ def test_mn_greenlet_raise_across_switch():
 
 @pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_mn_yield_from_inside_greenlet_preempt_on():
-    """FINDINGS BUG #8 case: cooperatively yielding to the runloom scheduler from
+    """FINDINGS BUG #8 case: cooperatively yielding to the stackweave scheduler from
     inside a switched-in greenlet, interleaved with greenlet switches, across many
     hubs, WITH preemption ON.  Historically crashed; asserted here to now complete
     cleanly (subprocess-isolated so any regression is a captured child crash)."""
@@ -423,7 +423,7 @@ def test_mn_yield_from_inside_greenlet_preempt_on():
 
 @pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_mn_yield_from_inside_greenlet_preempt_off():
-    """Same BUG #8 case with RUNLOOM_PREEMPT=0."""
+    """Same BUG #8 case with STACKWEAVE_PREEMPT=0."""
     assert_scenario("mn_yield_inside", preempt=False)
 
 

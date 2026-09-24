@@ -1,7 +1,7 @@
 """Regression: io_uring recv must not deadlock on a backpressured transfer.
 
 History: forcing recv through the opt-in io_uring backend
-(RUNLOOM_TCPCONN_IOURING=1) used to DEADLOCK a large loopback transfer -- under
+(STACKWEAVE_TCPCONN_IOURING=1) used to DEADLOCK a large loopback transfer -- under
 backpressure the kernel CQ ring overflows, excess completions go to the kernel's
 overflow backlog and do NOT re-signal the registered eventfd, so the scheduler
 slept forever in epoll_wait waiting for an edge that never came, stranding the
@@ -34,8 +34,8 @@ pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="io_uring is Lin
 def _iouring_available():
     try:
         out = subprocess.run(
-            [PY, "-c", "import sys;sys.path.insert(0,'src');import runloom_c;"
-                       "print(runloom_c.iouring_available())"],
+            [PY, "-c", "import sys;sys.path.insert(0,'src');import stackweave_c;"
+                       "print(stackweave_c.iouring_available())"],
             cwd=REPO, env=dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src"),
             capture_output=True, text=True, timeout=30)
         return "True" in out.stdout
@@ -50,7 +50,7 @@ requires_iouring = pytest.mark.skipif(
 _TRANSFER = r"""
 import socket, sys, zlib, faulthandler
 sys.path.insert(0, "src")
-import runloom_c
+import stackweave_c
 faulthandler.dump_traceback_later({wd}, exit=True)   # re-hang -> die, never wedge
 SIZE = 4 * 1024 * 1024
 def bound_port(l):
@@ -60,7 +60,7 @@ payload = (bytes(range(256)) * ((SIZE + 255)//256))[:SIZE]
 want = zlib.crc32(payload)
 ph = [None]; got = [None]
 def server():
-    l = runloom_c.TCPConn.listen("127.0.0.1", 0); ph[0] = bound_port(l)
+    l = stackweave_c.TCPConn.listen("127.0.0.1", 0); ph[0] = bound_port(l)
     c = l.accept(); crc = 0; tot = 0
     while True:
         ch = c.recv(65536)
@@ -68,16 +68,16 @@ def server():
         crc = zlib.crc32(ch, crc); tot += len(ch)
     got[0] = (tot, crc); c.close(); l.close()
 def client():
-    while ph[0] is None: runloom_c.sched_yield()
-    c = runloom_c.TCPConn.connect("127.0.0.1", ph[0]); c.send_all(payload); c.close()
+    while ph[0] is None: stackweave_c.sched_yield()
+    c = stackweave_c.TCPConn.connect("127.0.0.1", ph[0]); c.send_all(payload); c.close()
 {drive}
 assert got[0] == (SIZE, want), ("incomplete/corrupt transfer", got[0], (SIZE, want))
 print("TRANSFER_OK")
 """
 
-_DRIVE_ST = "runloom_c.fiber(server); runloom_c.fiber(client); runloom_c.run()"
-_DRIVE_MN = ("runloom_c.mn_init(2); runloom_c.mn_fiber(server); runloom_c.mn_fiber(client); "
-             "runloom_c.mn_run(); runloom_c.mn_fini()")
+_DRIVE_ST = "stackweave_c.fiber(server); stackweave_c.fiber(client); stackweave_c.run()"
+_DRIVE_MN = ("stackweave_c.mn_init(2); stackweave_c.mn_fiber(server); stackweave_c.mn_fiber(client); "
+             "stackweave_c.mn_run(); stackweave_c.mn_fini()")
 
 
 def _run(drive, wd=20):
@@ -86,7 +86,7 @@ def _run(drive, wd=20):
         p = subprocess.run(
             [PY, "-c", body], cwd=REPO,
             env=dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src",
-                     RUNLOOM_TCPCONN_IOURING="1"),
+                     STACKWEAVE_TCPCONN_IOURING="1"),
             capture_output=True, text=True, timeout=wd + 25)
     except subprocess.TimeoutExpired:
         pytest.fail("io_uring backpressure transfer HUNG (deadlock regression)")
@@ -115,11 +115,11 @@ def test_mn_io_uring_backpressure_transfer_completes():
 _CONCURRENT = r"""
 import socket, sys
 sys.path.insert(0, "src")
-import runloom_c
+import stackweave_c
 SIZE = 8 * 1024 * 1024; NCONN = 8
 # distinct per-connection payload (position-and-conn dependent)
 pl = [bytes(((k + c * 64) & 0xFF) for k in range(SIZE)) for c in range(NCONN)]
-L = runloom_c.TCPConn.listen("127.0.0.1", 0)
+L = stackweave_c.TCPConn.listen("127.0.0.1", 0)
 fd = L.fileno(); sk = socket.socket(fileno=socket.dup(fd))
 PORT = sk.getsockname()[1]; sk.close()
 res = [None] * NCONN
@@ -131,11 +131,11 @@ def drain(i):
         b += ch
     res[i] = bytes(b); c.close()
 def client(i):
-    c = runloom_c.TCPConn.connect("127.0.0.1", PORT); c.send_all(pl[i]); c.close()
-runloom_c.mn_init(4)
-for i in range(NCONN): runloom_c.mn_fiber(lambda i=i: drain(i))
-for i in range(NCONN): runloom_c.mn_fiber(lambda i=i: client(i))
-runloom_c.mn_run(); runloom_c.mn_fini(); L.close()
+    c = stackweave_c.TCPConn.connect("127.0.0.1", PORT); c.send_all(pl[i]); c.close()
+stackweave_c.mn_init(4)
+for i in range(NCONN): stackweave_c.mn_fiber(lambda i=i: drain(i))
+for i in range(NCONN): stackweave_c.mn_fiber(lambda i=i: client(i))
+stackweave_c.mn_run(); stackweave_c.mn_fini(); L.close()
 # every received stream must equal exactly one distinct payload, all distinct
 used = set()
 for got in res:
@@ -154,7 +154,7 @@ def test_mn_concurrent_connections_io_uring_recv_integrity():
         p = subprocess.run(
             [PY, "-c", _CONCURRENT], cwd=REPO,
             env=dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src",
-                     RUNLOOM_TCPCONN_IOURING="1"),
+                     STACKWEAVE_TCPCONN_IOURING="1"),
             capture_output=True, text=True, timeout=60)
     except subprocess.TimeoutExpired:
         pytest.fail("concurrent io_uring recv HUNG")

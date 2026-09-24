@@ -87,11 +87,11 @@ import shutil
 import sys
 
 import harness
-import runloom
+import stackweave
 
 # ---- availability guard ---------------------------------------------------
 # os.posix_spawn + POSIX_SPAWN_DUP2/CLOSE are POSIX-only; cat is the in-child
-# stdin->stdout copy.  runloom_c.wait_fd is the cooperative readiness park for the
+# stdin->stdout copy.  stackweave_c.wait_fd is the cooperative readiness park for the
 # child's stdout pipe (a raw os.read would OS-BLOCK the hub -- os.read on an
 # arbitrary pipe is NOT monkey-patched cooperative, only sockets are).
 _HAVE_SPAWN = (hasattr(os, "posix_spawn")
@@ -100,14 +100,14 @@ _HAVE_SPAWN = (hasattr(os, "posix_spawn")
 _CAT = shutil.which("cat")
 
 try:
-    import runloom_c
-    _HAVE_WAITFD = hasattr(runloom_c, "wait_fd")
+    import stackweave_c
+    _HAVE_WAITFD = hasattr(stackweave_c, "wait_fd")
 except Exception:                       # pragma: no cover - import guard
-    runloom_c = None
+    stackweave_c = None
     _HAVE_WAITFD = False
 
 READ = 1                                # wait_fd events bitmask: 1 = readable
-CANCELLED = getattr(runloom_c, "WAIT_FD_CANCELLED", -1) if runloom_c else -1
+CANCELLED = getattr(stackweave_c, "WAIT_FD_CANCELLED", -1) if stackweave_c else -1
 
 # Per-child tag length.  64 bytes is < PIPE_BUF (4096) so the parent's single
 # os.write into the input pipe is ATOMIC and never blocks the hub (no cooperative
@@ -174,7 +174,7 @@ def read_child_tag(H, out_r, want):
     waited = 0
     while len(buf) < want and H.running() and waited < READ_BUDGET_MS:
         try:
-            ready = runloom_c.wait_fd(out_r, READ, WAIT_MS)
+            ready = stackweave_c.wait_fd(out_r, READ, WAIT_MS)
         except OSError:
             break                       # fd closed at teardown
         if ready == CANCELLED:
@@ -312,7 +312,7 @@ def churner(H, wid, gate, state):
             # the parse/spawn provably overlaps, then close to recycle them.
             r, w = os.pipe()
             opened[shard] += 2
-            runloom.yield_now()          # land inside the parent's spawn parse
+            stackweave.yield_now()          # land inside the parent's spawn parse
             os.close(r)
             os.close(w)
             closed[shard] += 2
@@ -330,9 +330,9 @@ def run_contended(H, wid, rno, state):
     closed = state["closed"]
     tag = make_tag(wid, rno)
 
-    gate = runloom.WaitGroup()
+    gate = stackweave.WaitGroup()
     gate.add(1)
-    wg = runloom.WaitGroup()
+    wg = stackweave.WaitGroup()
     wg.add(1)
 
     def run_churn():
@@ -413,7 +413,7 @@ def setup(H):
         H.state = None
         return
     if not _HAVE_WAITFD:
-        H.note_scale_limit("runloom_c.wait_fd unavailable -- cannot cooperatively "
+        H.note_scale_limit("stackweave_c.wait_fd unavailable -- cannot cooperatively "
                            "read the child's stdout; skipping")
         H.state = None
         return

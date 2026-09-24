@@ -1,5 +1,5 @@
-# runloom-tests -- build the runloom C extension against the provided patched
-# interpreter and run runloom's own suite.  These are the two REQUIRED phases
+# runloom-tests -- build the stackweave C extension against the provided patched
+# interpreter and run stackweave's own suite.  These are the two REQUIRED phases
 # that run identically whether the interpreter was built here or downloaded, so
 # they live in one composable step consumed by every path.
 #
@@ -7,7 +7,7 @@
 # breadcrumb that provide-cpython wrote (test_patched_cpython.sh reads it), so no
 # path needs to be threaded in.
 name: runloom-tests
-description: Build the runloom extension and run the runloom suite against a provided CPython.
+description: Build the stackweave extension and run the stackweave suite against a provided CPython.
 inputs:
   version:
     description: CPython version, major.minor.patch (must match provide-cpython).
@@ -22,17 +22,17 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Build runloom extension (${{ inputs.version }})
+    - name: Build stackweave extension (${{ inputs.version }})
       shell: bash
       run: tools/ci/test_patched_cpython.sh "${{ inputs.version }}" --only=build-ext
 
-    - name: Run runloom tests (${{ inputs.version }})
+    - name: Run stackweave tests (${{ inputs.version }})
       shell: bash
       env:
         # Widen run_isolated deadlines on small shared runners so timing-sensitive
         # scheduler tests do not false-fail under load (kept modest -- a genuine
         # deadlock still fails in ~300s*mult per file, inside the job cap).
-        RUNLOOM_TIMEOUT_MULT: ${{ inputs.timeout-mult }}
+        STACKWEAVE_TIMEOUT_MULT: ${{ inputs.timeout-mult }}
         # NOTE: there is deliberately no RUNLOOM_CI here.  The suite used to
         # self-skip ~20 environment-sensitive tests when it was set; those skips
         # were removed so a hosted runner is a real datapoint rather than a

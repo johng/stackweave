@@ -16,7 +16,7 @@ Low funcs: the single-writer SQLite lock serialises writers.
 import sqlite3
 
 import harness
-import runloom
+import stackweave
 import cancelutil
 
 MAX_ACTIVE = 200
@@ -46,7 +46,7 @@ def worker(H, wid, rng, state):
         c.execute("PRAGMA busy_timeout=2000")
         return c
 
-    con = runloom.blocking(connect)
+    con = stackweave.blocking(connect)
     seq = 0
     try:
         for _ in H.round_range():
@@ -86,7 +86,7 @@ def worker(H, wid, rng, state):
                     ctx, cancel = cancelutil.WithTimeout(
                         cancelutil.Background(), timeout_s)
                     try:
-                        ok = runloom.blocking(txn)
+                        ok = stackweave.blocking(txn)
                     except sqlite3.OperationalError:
                         ok = False     # lock contention -> cancelled attempt
                     finally:
@@ -103,7 +103,7 @@ def worker(H, wid, rng, state):
                         continue
                 else:
                     try:
-                        ok = runloom.blocking(txn)
+                        ok = stackweave.blocking(txn)
                     except sqlite3.OperationalError:
                         # Even non-cancellable txns can hit a lock timeout; retry
                         # this seq next round (don't advance committed).
@@ -117,7 +117,7 @@ def worker(H, wid, rng, state):
                 H.sleep(0.005)
                 continue
     finally:
-        runloom.blocking(con.close)
+        stackweave.blocking(con.close)
 
 
 def body(H):

@@ -57,7 +57,7 @@ int runloom_iouring_loop_enabled(void)
     static int v = -1;
     int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
     if (cur < 0) {
-        const char *e = getenv("RUNLOOM_IOURING_LOOP");
+        const char *e = getenv("STACKWEAVE_IOURING_LOOP");
         cur = (e != NULL && *e != '0' && *e != '\0') ? 1 : 0;
         if (runloom_sim_enabled()) cur = 0;
         __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
@@ -75,7 +75,7 @@ int runloom_iouring_loop_pump_always(void)
     static int v = -1;
     int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
     if (cur < 0) {
-        const char *e = getenv("RUNLOOM_IOURING_LOOP_PUMP_ALWAYS");
+        const char *e = getenv("STACKWEAVE_IOURING_LOOP_PUMP_ALWAYS");
         cur = (e != NULL && *e != '0' && *e != '\0') ? 1 : 0;
         __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
     }
@@ -116,7 +116,7 @@ int runloom_iouring_loop_ms_enabled(void)
     static int v = -1;
     int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
     if (cur < 0) {
-        const char *e = getenv("RUNLOOM_IOURING_MS");
+        const char *e = getenv("STACKWEAVE_IOURING_MS");
         cur = (e != NULL && *e != '0' && *e != '\0') ? 1 : 0;
         __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
     }
@@ -134,7 +134,7 @@ int runloom_iouring_any_enabled(void)
     static int v = -1;
     int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
     if (cur < 0) {
-        const char *t = getenv("RUNLOOM_TCPCONN_IOURING");
+        const char *t = getenv("STACKWEAVE_TCPCONN_IOURING");
         int tcp = (t != NULL && (t[0] == '1' || strcmp(t, "auto") == 0)) ? 1 : 0;
         cur = (runloom_iouring_loop_enabled() || tcp) ? 1 : 0;
         if (runloom_sim_enabled()) cur = 0;   /* I3 gate [2]: no hub rings under sim */
@@ -150,7 +150,7 @@ static unsigned runloom_loop_ms_pbuf_count(void)
     static int v = -1;
     int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
     if (cur < 0) {
-        const char *e = getenv("RUNLOOM_IOURING_MS_BUFS");
+        const char *e = getenv("STACKWEAVE_IOURING_MS_BUFS");
         long n = (e != NULL) ? atol(e) : RUNLOOM_LOOP_MS_PBUF_COUNT_DEFAULT;
         unsigned p = 16;
         if (n < 16) n = 16;

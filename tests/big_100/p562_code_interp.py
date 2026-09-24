@@ -14,7 +14,7 @@ interpreter.  Two entry points matter for an M:N single-owner probe:
     code object (same co_code, co_consts, co_names) -- it depends on nothing but
     its arguments.
 
-WHERE M:N COULD BREAK IT (the gap this program probes).  runloom runs these
+WHERE M:N COULD BREAK IT (the gap this program probes).  stackweave runs these
 fibers in PARALLEL across hubs with the GIL off, migrating a fiber across hubs at
 every cooperative yield.  If the exec of a runsource() call, or the per-fiber
 namespace dict, or the compile pipeline's internal state, were NOT properly
@@ -33,7 +33,7 @@ single-owner: the namespace dict is created per fiber and never shared, and the
 source string is a fiber-local literal.  We verified with a plain-threads control
 (8 OS threads, GIL on AND off, each with its own InteractiveInterpreter + private
 dict feeding known deltas) that acc always equals the exact expected sum and
-compile_command is always bit-identical -- 0 leaks.  A CORRECT runloom must match.
+compile_command is always bit-identical -- 0 leaks.  A CORRECT stackweave must match.
 
 ORACLES:
   * LOAD-BEARING A -- SINGLE-OWNER EXEC CONSERVATION (worker, HARD, fail-fast).
@@ -43,7 +43,7 @@ ORACLES:
     yielding between feeds so a sibling reliably interleaves + the fiber migrates
     hubs.  After the feed, ns["acc"] MUST equal wid*BASE_SCALE + sum(deltas) EXACTLY
     -- the closed-world conservation law over a single-owner namespace.  A dropped
-    /doubled increment or a leaked base is a runloom exec-isolation bug.  Single-
+    /doubled increment or a leaked base is a stackweave exec-isolation bug.  Single-
     owner: ns is never shared, so a mismatch is NOT documented dict-race behavior.
 
   * LOAD-BEARING B -- compile_command PURITY (worker, HARD, fail-fast).  Each fiber
@@ -52,7 +52,7 @@ ORACLES:
     then recompiles the same source and asserts the snapshot is BIT-IDENTICAL.  It
     also checks a fiber-local INCOMPLETE source returns None on both sides.  A
     changed co_code/co_consts/co_names across the yield, or a leaked sibling
-    constant/name, is a torn/cross-fiber compilation -- a runloom bug.  Pure
+    constant/name, is a torn/cross-fiber compilation -- a stackweave bug.  Pure
     function of a fiber-local literal, so single-owner by construction.
 
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber stranded mid-exec or
@@ -83,7 +83,7 @@ codeop incomplete-vs-complete detection under M:N.
 import code
 
 import harness
-import runloom
+import stackweave
 
 # Fiber-unique base for the single-owner accumulator.  acc starts at
 # wid*BASE_SCALE so a leaked sibling value (a different wid's base) is visibly
@@ -111,7 +111,7 @@ def exec_conservation_check(H, wid, idx, state):
     """Feed a KNOWN list of deltas into a PRIVATE interpreter namespace via
     runsource("acc += d"), yielding between feeds, then assert the accumulator
     equals wid*BASE_SCALE + sum(deltas) EXACTLY.  Single-owner: the namespace dict
-    is created here and never shared, so any mismatch is a runloom exec-isolation
+    is created here and never shared, so any mismatch is a stackweave exec-isolation
     bug, not documented shared-dict racing."""
     base = wid * BASE_SCALE + (idx & 7)     # fiber+iter-unique starting value
     ns = {}
@@ -135,9 +135,9 @@ def exec_conservation_check(H, wid, idx, state):
     for j, d in enumerate(DELTAS):
         # YIELD at the hazard boundary so a sibling exec/compile interleaves and
         # this fiber may migrate hubs before the next in-place add lands.
-        runloom.yield_now()
+        stackweave.yield_now()
         if j & 1:
-            runloom.sleep(0.0002)
+            stackweave.sleep(0.0002)
         if interp.runsource("acc += {0}".format(d)) is not False:
             H.fail("runsource('acc += {0}') reported incomplete (wid {1}) -- "
                    "codeop misjudged a complete augmented-assignment under "
@@ -197,9 +197,9 @@ def compile_purity_check(H, wid, idx, state):
         return
 
     # YIELD: allow siblings to compile their own conflicting sources + migrate hub.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
 
     c2 = code.compile_command(complete_src)
     if c2 is None:
@@ -325,10 +325,10 @@ def post(H):
 
     if lost:
         H.log("note: the shared-interpreter pool lost {0} of {1} increments across "
-              "the shared exec namespace -- runloom hub fibers DO interleave on the "
+              "the shared exec namespace -- stackweave hub fibers DO interleave on the "
               "shared runsource()/exec path (a shared dict, like p67's threading."
               "local shared container).  Documented M:N shared-object behavior, NOT "
-              "a runloom bug, and it never reaches the single-owner oracles".format(
+              "a stackweave bug, and it never reaches the single-owner oracles".format(
                   lost, shared_fed))
 
     # NON-VACUITY: both load-bearing arms actually exercised their hazard.
@@ -358,4 +358,4 @@ if __name__ == "__main__":
                  "(co_code/co_consts/co_names must be bit-identical, carrying THIS "
                  "fiber's name).  MEASURED shared-namespace pool (expected to lose "
                  "increments, like p67) proves the hazard.  A leaked/dropped exec "
-                 "value or a torn compilation is the runloom bug")
+                 "value or a torn compilation is the stackweave bug")

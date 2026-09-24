@@ -5,13 +5,13 @@ The C `_csv` module keeps mutable PARSE STATE on each reader/writer OBJECT (the
 incremental field buffer, the current field, the parsed-so-far row, and the bound
 dialect), and it ALSO keeps a MODULE-GLOBAL dialect registry -- `csv._dialects`,
 a plain dict mutated by register_dialect() / unregister_dialect() and read by
-get_dialect() / the reader/writer dialect= lookup.  Under runloom M:N many fibers
+get_dialect() / the reader/writer dialect= lookup.  Under stackweave M:N many fibers
 share one hub OS-thread (and its PyThreadState), so:
 
   * a reader/writer OBJECT is per-fiber state IF each fiber builds its own -- the
     field buffer lives on the object, so a fiber's own reader/writer is private
     across yields and round-trips to that fiber's own values.  The hazard is a
-    runloom regression that lets a sibling's preempt-mid-parse corrupt THIS
+    stackweave regression that lets a sibling's preempt-mid-parse corrupt THIS
     fiber's object field buffer across a yield (a torn field, a row from the
     wrong fiber).
   * the dialect REGISTRY (`csv._dialects`) is a single PROCESS-GLOBAL dict shared
@@ -23,7 +23,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain threads):
 
   Two LOAD-BEARING invariants, each holding under stock CPython threads with the
   GIL ON *and* OFF (verified empirically with a standalone 64-thread control,
-  same hazard, NO runloom: 0 errors in 25600 round-trips + dialect checks each):
+  same hazard, NO stackweave: 0 errors in 25600 round-trips + dialect checks each):
 
   (1) OWN-OBJECT ROUND-TRIP IDENTITY.  A fiber builds a CSV row that ENCODES its
       own wid (and iteration), writes it through ITS OWN csv.writer over an
@@ -32,7 +32,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain threads):
       fiber owns its reader/writer object, so the per-object field buffer is
       private for any concurrency model -- a wrong field is a torn reader/writer
       parse buffer (a sibling's parse leaked into this object across a yield), a
-      true runloom object-state desync.
+      true stackweave object-state desync.
 
   (2) GLOBAL DIALECT-REGISTRY IDENTITY.  Each fiber register_dialect()s a
       GLOBALLY-UNIQUE per-wid name with a per-wid delimiter/quoting, parks/yields,
@@ -40,7 +40,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain threads):
       that a reader/writer built with dialect=its_name uses ITS delimiter.  Names
       never collide across fibers, so under stock threads (GIL on/off) the shared
       registry dict always returns each thread's own entry -- a wrong/missing
-      dialect is a torn `csv._dialects` dict mutation under M:N (a real runloom /
+      dialect is a torn `csv._dialects` dict mutation under M:N (a real stackweave /
       FT shared-dict corruption), NOT documented-unsafe usage.
 
   Both arms PASS on a correct runtime (the program EXITS 0 when there is no bug).
@@ -51,7 +51,7 @@ ORACLES:
   * LOAD-BEARING -- OWN-OBJECT ROUND-TRIP IDENTITY (worker, HARD, fail-fast):
     every field a fiber writes through its own writer and reads back through its
     own reader equals the value it encoded (which embeds its wid).  A torn field /
-    wrong-fiber row = a runloom object-parse-state desync.
+    wrong-fiber row = a stackweave object-parse-state desync.
   * LOAD-BEARING -- GLOBAL DIALECT-REGISTRY IDENTITY (worker, HARD, fail-fast):
     get_dialect(my_unique_name) returns my own delimiter/quotechar/quoting, and a
     reader/writer built on dialect=my_name uses my delimiter.  A wrong/missing
@@ -94,7 +94,7 @@ import csv
 import io
 
 import harness
-import runloom
+import stackweave
 
 # Modest, correctness-probe population (most workers run the load-bearing arms).
 MAX_WORKERS = 8000
@@ -151,7 +151,7 @@ def setup(H):
 # encoding its own wid, writes it through ITS OWN writer, yields/parks, parses it
 # back through ITS OWN reader, and asserts every field round-trips to ITS value.
 # Private per-object field buffer -> holds under plain threads (GIL on/off); a
-# torn field is a runloom object-parse-state desync.
+# torn field is a stackweave object-parse-state desync.
 # --------------------------------------------------------------------------
 def roundtrip_check(H, wid, idx, state):
     # Each field encodes wid+idx+col so a wrong-fiber row OR a torn buffer fails.
@@ -166,14 +166,14 @@ def roundtrip_check(H, wid, idx, state):
     writer = csv.writer(out)               # THIS fiber's own writer object
     # Park/migrate between building and writing so the object can be touched on a
     # different hub than it was created on (exercises migration around parse state).
-    runloom.yield_now()
+    stackweave.yield_now()
     writer.writerow(fields)
     text = out.getvalue()
 
     if idx & 1:
-        runloom.sleep(0.0002)              # sleep-park: a sibling parses meanwhile
+        stackweave.sleep(0.0002)              # sleep-park: a sibling parses meanwhile
     else:
-        runloom.yield_now()
+        stackweave.yield_now()
 
     reader = csv.reader(io.StringIO(text))  # THIS fiber's own reader object
     rows = list(reader)
@@ -191,7 +191,7 @@ def roundtrip_check(H, wid, idx, state):
         H.fail("csv round-trip FIELD CORRUPTION: parsed {0!r} != written {1!r} "
                "(wid {2}, idx {3}, first-bad-col {4}); a sibling fiber's parse "
                "leaked into THIS fiber's own reader/writer field buffer across a "
-               "yield (runloom object-parse-state desync)".format(
+               "yield (stackweave object-parse-state desync)".format(
                    got, fields, wid, idx, bad))
         return
     state["rt_checks"][wid & 1023] += 1
@@ -221,9 +221,9 @@ def dialect_check(H, wid, idx, state):
 
     # Park/migrate between register and get so the registry dict can be mutated by
     # siblings on this and other hubs while THIS fiber is descheduled.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
 
     try:
         d = csv.get_dialect(name)
@@ -317,7 +317,7 @@ def shared_object_op(H, wid, idx, state):
     mark = sb.tell()
     try:
         sw.writerow(row)
-        runloom.yield_now()             # let a sibling writerow interleave
+        stackweave.yield_now()             # let a sibling writerow interleave
         produced = sb.getvalue()[mark:]
     except Exception:
         # A torn shared object can raise (the documented hazard of sharing one
@@ -378,7 +378,7 @@ def post(H):
         H.log("note: the shared-object arm observed {0} torn/contended writes "
               "across {1} ops -- one csv.writer shared across concurrent fibers is "
               "documented-unsafe (its per-object field buffer is not serialized; "
-              "reproduces under plain threads), NOT a runloom bug; it never "
+              "reproduces under plain threads), NOT a stackweave bug; it never "
               "touches the load-bearing own-object checks".format(storn, schecks))
     # NON-VACUITY: both load-bearing hazards were actually exercised.
     H.check(rt > 0,
@@ -404,6 +404,6 @@ if __name__ == "__main__":
                  "field encoding its wid to its own value across a yield, AND "
                  "get_dialect(its globally-unique name) returns its own dialect "
                  "(both 0-error under plain threads GIL on AND off; a torn field "
-                 "or wrong/missing dialect is the runloom M:N bug).  A single "
+                 "or wrong/missing dialect is the stackweave M:N bug).  A single "
                  "SHARED writer's torn-buffer contention is documented-unsafe -- "
                  "measured, report-only")

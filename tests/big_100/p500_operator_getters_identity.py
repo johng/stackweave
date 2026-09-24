@@ -14,7 +14,7 @@ built is observed half-constructed by the C fetch after the fiber resumes on a
 different hub -- the getter would return the WRONG element (a different index, a
 different attribute, or a stale object) than the closed-form spec demands.
 
-WHERE M:N BREAKS IT (the gap this program probes).  runloom gives each fiber its
+WHERE M:N BREAKS IT (the gap this program probes).  stackweave gives each fiber its
 own Python frame stack, but the itemgetter/attrgetter/methodcaller objects are
 plain C objects and the target sequences/namespaces are plain Python containers.
 Nothing about them is fiber-aware.  A fiber that builds a fiber-LOCAL getter over
@@ -38,7 +38,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain threads):
   We verified with a standalone plain-threads control (8 OS threads, each building
   its own getters+targets with unique values, GIL on AND off) that 100% of
   applications return the closed-form object/value -- 0 cross-thread bleed and 0
-  identity/value drift across a sched-yield-equivalent.  Under a CORRECT runloom
+  identity/value drift across a sched-yield-equivalent.  Under a CORRECT stackweave
   it must also hold: the single-owner arm PASSES on a correct runtime (program
   exits 0 when there is no bug).  A member whose IDENTITY changes across the yield
   (the getter returned a different object), or whose VALUE no longer equals the
@@ -59,7 +59,7 @@ ORACLES:
       - methodcaller: a fiber-local target object with a method computing a
         closed-form function of its unique value; caller = methodcaller('combine',
         x, y).
-    Then it YIELDS (runloom.yield_now / a tiny sleep) so a sibling interleaves,
+    Then it YIELDS (stackweave.yield_now / a tiny sleep) so a sibling interleaves,
     re-applies every getter to the SAME target, and asserts for every selected
     member: identity stable across the yield (same object, itemgetter/attrgetter),
     value stable across the yield, and value == the closed-form per-wid
@@ -106,7 +106,7 @@ identity/value oracle fires.
 import operator
 
 import harness
-import runloom
+import stackweave
 
 # Per-fiber unique value band.  Each wid gets base = wid * VALUE_SCALE so the
 # int objects a fiber places in its sequence/namespace never numerically overlap
@@ -196,9 +196,9 @@ def getter_check(H, wid, base, state):
     expected_mc = base + 12
 
     # YIELD: let siblings run on other hubs and (maybe) migrate this fiber.
-    runloom.yield_now()
+    stackweave.yield_now()
     if base & 1:
-        runloom.sleep(0.0003)
+        stackweave.sleep(0.0003)
 
     # ---- re-apply itemgetter and verify identity + value -----------------
     got_items = ig(seq)
@@ -279,7 +279,7 @@ def shared_getter_check(H, wid, r, state):
     shared[own] = wid * VALUE_SCALE + (r & 0xFFFF)
     ig = state["shared_getter"]                 # selects several fixed slots
     first = ig(shared)
-    runloom.yield_now()
+    stackweave.yield_now()
     second = ig(shared)
     state["shared_checks"][wid & 1023] += 1
     if first != second:

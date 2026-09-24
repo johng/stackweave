@@ -1,7 +1,7 @@
 """A Python signal handler that raises during a cooperative blocking call must
 propagate out of THAT call, into the fiber's own try/except -- exactly as a
 signal interrupting a real recv()/select() does -- not get swallowed by the
-scheduler or carried out of runloom_c.run().
+scheduler or carried out of stackweave_c.run().
 
 Regression test for the scheduler-grab bypass bug: commit 34efeb5 ("make
 run_forever interruptible by signals") taught the idle scheduler to run a
@@ -22,11 +22,11 @@ import socket
 import time
 import unittest
 
-import runloom.monkey as monkey
+import stackweave.monkey as monkey
 
 monkey.patch()
 
-import runloom_c  # noqa: E402  (after patch, like the rest of the suite)
+import stackweave_c  # noqa: E402  (after patch, like the rest of the suite)
 
 HAVE_ALARM = hasattr(signal, "alarm")
 
@@ -48,8 +48,8 @@ def _run_fiber(body):
             box["result"] = "ESCAPED_GOROUTINE"
             raise
     try:
-        runloom_c.fiber(wrapper)
-        runloom_c.run()
+        stackweave_c.fiber(wrapper)
+        stackweave_c.run()
     except BaseException as e:       # noqa: BLE001
         box["escaped"] = e
     return box

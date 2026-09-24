@@ -49,10 +49,10 @@ static int runloom_sched_random_on(void)
     int v = __atomic_load_n(&on, __ATOMIC_RELAXED);
     if (v >= 0) return v;
     {
-        const char *e = getenv("RUNLOOM_SCHED_RANDOM");
+        const char *e = getenv("STACKWEAVE_SCHED_RANDOM");
         /* A controlled/replay scheduler pins the schedule for determinism --
          * never perturb it, even under a sanitizer build. */
-        if (getenv("RUNLOOM_MN_SEED") != NULL || getenv("RUNLOOM_PCT_SEED") != NULL) {
+        if (getenv("STACKWEAVE_MN_SEED") != NULL || getenv("STACKWEAVE_PCT_SEED") != NULL) {
             v = 0;
         } else {
 #if defined(RUNLOOM_SANITIZED)
@@ -72,7 +72,7 @@ static uint64_t runloom_steal_rand(int hub_id)
 {
     uint64_t x = runloom_steal_rng;
     if (x == 0) {                        /* lazy per-hub seed */
-        const char *e = getenv("RUNLOOM_SCHED_RANDOM_SEED");
+        const char *e = getenv("STACKWEAVE_SCHED_RANDOM_SEED");
         uint64_t seed = (e != NULL && *e != '\0')
             ? (uint64_t)strtoull(e, NULL, 0)
             : (uint64_t)(uintptr_t)&runloom_steal_rng;   /* ASLR entropy, per-thread */
@@ -154,7 +154,7 @@ static void runloom_mn_world_yield_if_monopolizing(runloom_hub_t *h)
             long long pause_ns = __atomic_load_n(&yield_ns, __ATOMIC_RELAXED);
             PyThreadState *yts;
             if (pause_ns < 0) {
-                const char *e = getenv("RUNLOOM_WORLD_YIELD_NS");
+                const char *e = getenv("STACKWEAVE_WORLD_YIELD_NS");
                 pause_ns = (e != NULL) ? atoll(e) : 100000LL;   /* 100 us default */
                 if (pause_ns < 0) pause_ns = 0;
                 __atomic_store_n(&yield_ns, pause_ns, __ATOMIC_RELAXED);
@@ -208,7 +208,7 @@ static int runloom_idle_backoff_cap_ms(void)
          * value via the wakep + the 500us uninterruptible-wait cap.  Set
          * RUNLOOM_IDLE_BACKOFF_MS=1 to disable (the wakep then goes fully dormant),
          * or higher for a deeper idle sleep at the cost of cooperative-wake tail. */
-        const char *e = getenv("RUNLOOM_IDLE_BACKOFF_MS");
+        const char *e = getenv("STACKWEAVE_IDLE_BACKOFF_MS");
         cur = (e != NULL && e[0]) ? atoi(e) : 32;
         if (cur < 1) cur = 1;
         __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
@@ -386,7 +386,7 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
         static int aff_mode = -1;
         int am = __atomic_load_n(&aff_mode, __ATOMIC_RELAXED);
         if (am < 0) {
-            const char *e = getenv("RUNLOOM_HUB_AFFINITY");
+            const char *e = getenv("STACKWEAVE_HUB_AFFINITY");
             am = (e != NULL && *e != '0') ? 1 : 0;
             __atomic_store_n(&aff_mode, am, __ATOMIC_RELAXED);
         }
@@ -482,7 +482,7 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
     static int starve_bound = -1;
     int sbound = __atomic_load_n(&starve_bound, __ATOMIC_RELAXED);
     if (sbound < 0) {
-        const char *e = getenv("RUNLOOM_READY_STARVE_BOUND");
+        const char *e = getenv("STACKWEAVE_READY_STARVE_BOUND");
         sbound = (e != NULL) ? atoi(e) : 64;
         if (sbound < 0) sbound = 0;
         __atomic_store_n(&starve_bound, sbound, __ATOMIC_RELAXED);
@@ -947,8 +947,8 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                     static long long sweep_thresh_ns = 100000000LL;
                     int on = __atomic_load_n(&sweep_on, __ATOMIC_RELAXED);
                     if (on < 0) {
-                        const char *e = getenv("RUNLOOM_STACK_PARK_SWEEP");
-                        const char *ms = getenv("RUNLOOM_STACK_PARK_SWEEP_MS");
+                        const char *e = getenv("STACKWEAVE_STACK_PARK_SWEEP");
+                        const char *ms = getenv("STACKWEAVE_STACK_PARK_SWEEP_MS");
                         if (ms != NULL) {
                             long long v = atoll(ms);
                             if (v > 0) sweep_thresh_ns = v * 1000000LL;
@@ -1313,7 +1313,7 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                     static int dbg = -1;
                     int dbgv = __atomic_load_n(&dbg, __ATOMIC_RELAXED);
                     if (dbgv < 0) {
-                        const char *e = getenv("RUNLOOM_DBG_MIGRATE");
+                        const char *e = getenv("STACKWEAVE_DBG_MIGRATE");
                         dbgv = (e != NULL && e[0] != '0' && e[0] != '\0') ? 1 : 0;
                         __atomic_store_n(&dbg, dbgv, __ATOMIC_RELAXED);
                     }
@@ -1329,7 +1329,7 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                             static int warned = 0;
                             if (__atomic_exchange_n(&warned, 1, __ATOMIC_RELAXED) == 0) {
                                 fprintf(stderr,
-                                    "[RUNLOOM_DBG_MIGRATE] per-g PyThreadState used on "
+                                    "[STACKWEAVE_DBG_MIGRATE] per-g PyThreadState used on "
                                     "thread %lu but bound to %lu WITHOUT a mimalloc "
                                     "abandon/adopt handshake -> _mi_page_retire "
                                     "corruption is imminent (g id=%lld). See "
@@ -1699,7 +1699,7 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
      * (pystate.c:345 asserts tstate == this thread's gilstate tstate).  Clearing
      * + deleting here, where gilstate_tss == hts, satisfies the contract; we
      * publish h->tstate = NULL first so the mn_fini sweep skips this slot. */
-    if (getenv("RUNLOOM_GILSTATE_DELETE_ON_MAIN") == NULL) {
+    if (getenv("STACKWEAVE_GILSTATE_DELETE_ON_MAIN") == NULL) {
         /* trace conformance: deleter is this hub's OWN thread (the fix) */
         runloom_gilstate_trace("Delete", h->id, h->id);
         PyThreadState_Clear(hts);

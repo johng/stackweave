@@ -7,4 +7,4 @@ This conftest is local to tests/net/ so it never affects the main suite.
 def pytest_configure(config):
     config.addinivalue_line(
         "markers",
-        "network: live remote-server test; runs only with RUNLOOM_NET_TESTS=1")
+        "network: live remote-server test; runs only with STACKWEAVE_NET_TESTS=1")

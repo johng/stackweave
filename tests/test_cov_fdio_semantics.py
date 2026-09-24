@@ -26,7 +26,7 @@ import tempfile
 
 import pytest
 
-import runloom_c as rc
+import stackweave_c as rc
 from adv_util import hang_guard
 
 POSIX = sys.platform != "win32"

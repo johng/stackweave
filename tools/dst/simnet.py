@@ -1,6 +1,6 @@
 """Deterministic simulated network for DST -- the third pillar (Slice 0).
 
-runloom already has the other two DST pillars: deterministic SCHEDULING (the
+stackweave already has the other two DST pillars: deterministic SCHEDULING (the
 controlled baton) and deterministic TIME (the logical clock).  This adds
 deterministic I/O, but at the level the WHOLE thing can be validated cheaply and
 correctly first: a pure-Python cooperative sim-socket over the single-thread
@@ -9,7 +9,7 @@ every delivery delay / loss / reset, is drawn from ONE seeded rng -- so a whole
 network scenario is a pure function of its seed, and any lost-wake / deadlock is
 reproducible from a single integer.
 
-WHAT IT IS: a determinism amplifier for runloom's INTERNAL I/O plumbing -- the
+WHAT IT IS: a determinism amplifier for stackweave's INTERNAL I/O plumbing -- the
 scheduler-to-I/O boundary where the documented lost-wake / park-commit / deadlock
 lineage lives.  It models protocol LOGIC (byte streams, connect/accept/close,
 loss/delay/reorder/reset).  WHAT IT IS NOT: it does NOT model kernel/wire quirks
@@ -17,9 +17,9 @@ loss/delay/reorder/reset).  WHAT IT IS NOT: it does NOT model kernel/wire quirks
 allocation, simul-open RST).  It will not catch the NAT-traversal/hole-punch bug
 class -- the real-network suites (tests/net, the netns chaos tools) own that.
 
-Transport: each connection direction is a runloom Chan carrying byte chunks, so a
+Transport: each connection direction is a stackweave Chan carrying byte chunks, so a
 blocked recv PARKS on the real scheduler (not a spin) and an unfed recv surfaces
-as a real runloom deadlock -- the instant, wall-clock-free hang oracle.  Delivery
+as a real stackweave deadlock -- the instant, wall-clock-free hang oracle.  Delivery
 latency is modeled by a delivery fiber that sched_sleep()s on the LOGICAL clock,
 so "arrival timing" -- the open-system limit the baton header names -- becomes a
 function of the seed.
@@ -33,8 +33,8 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 os.environ.setdefault("PYTHON_GIL", "0")
-os.environ.setdefault("RUNLOOM_LOGICAL_CLOCK", "1")     # sched_sleep on logical time
-import runloom_c
+os.environ.setdefault("STACKWEAVE_LOGICAL_CLOCK", "1")     # sched_sleep on logical time
+import stackweave_c
 
 
 class SimError(OSError):
@@ -46,12 +46,12 @@ class _Dir(object):
     closed Chan is EOF; a reset flag turns the next op into ECONNRESET."""
 
     def __init__(self, cap):
-        self.ch = runloom_c.Chan(cap)
+        self.ch = stackweave_c.Chan(cap)
         self.buf = b""
         self.reset = False
         self.closed = False
         self.pending = 0            # in-flight delayed deliveries not yet arrived
-        self.drain = runloom_c.Chan(1)   # signalled when pending hits 0 (for close)
+        self.drain = stackweave_c.Chan(1)   # signalled when pending hits 0 (for close)
 
 
 class SimSocket(object):
@@ -72,7 +72,7 @@ class SimSocket(object):
         self._addr = addr
 
     def listen(self, backlog=8):
-        self._accept = runloom_c.Chan(max(1, backlog))
+        self._accept = stackweave_c.Chan(max(1, backlog))
         self._net._register_listener(self._addr, self._accept)
 
     def accept(self):
@@ -102,7 +102,7 @@ class SimSocket(object):
         while mv:
             sent = self.send(mv)
             if sent == 0:
-                runloom_c.sched_yield()
+                stackweave_c.sched_yield()
                 continue
             mv = mv[sent:]
 
@@ -198,9 +198,9 @@ class SimNet(object):
         self.cap = cap
         self._faults = _Faults(rng, cfg)
         self._listeners = {}                             # addr -> accept Chan
-        # delivery-fiber spawn: runloom_c.fiber (single-thread) by default;
-        # inject runloom_c.mn_fiber to run the sim under the baton (Slice 1).
-        self.spawn = spawn or runloom_c.fiber
+        # delivery-fiber spawn: stackweave_c.fiber (single-thread) by default;
+        # inject stackweave_c.mn_fiber to run the sim under the baton (Slice 1).
+        self.spawn = spawn or stackweave_c.fiber
 
     def socket(self):
         return SimSocket(self)
@@ -245,7 +245,7 @@ class SimNet(object):
 
             def deliver():
                 try:
-                    runloom_c.sched_sleep(delay)
+                    stackweave_c.sched_sleep(delay)
                     if not direction.closed and not direction.reset:
                         try:
                             direction.ch.send(chunk)
@@ -301,7 +301,7 @@ def sim_program(seed, timeout=20.0):
     def acceptor():
         for _ in range(k):
             conn, _ = srv.accept()
-            runloom_c.fiber(lambda c=conn: server_conn(c))
+            stackweave_c.fiber(lambda c=conn: server_conn(c))
 
     def client(cid):
         c = net.socket()
@@ -317,15 +317,15 @@ def sim_program(seed, timeout=20.0):
         results[cid] = sum(back)                         # a per-client checksum
         c.close()
 
-    runloom_c.set_deadlock_mode(1)                       # warn -> recover transients
-    dl0 = runloom_c.count_deadlocked()
-    runloom_c.fiber(acceptor)
+    stackweave_c.set_deadlock_mode(1)                       # warn -> recover transients
+    dl0 = stackweave_c.count_deadlocked()
+    stackweave_c.fiber(acceptor)
     for cid in range(k):
-        runloom_c.fiber(lambda cid=cid: client(cid))
-    runloom_c.run()
+        stackweave_c.fiber(lambda cid=cid: client(cid))
+    stackweave_c.run()
     srv.close()
 
-    dl = runloom_c.count_deadlocked() - dl0
+    dl = stackweave_c.count_deadlocked() - dl0
     if dl > 0:
         return False, "DEADLOCK ({0} unwakeable fiber(s) -- lost wake) seed={1}".format(dl, seed)
     # exact per-client conservation: each client's echoed checksum must match
@@ -334,6 +334,6 @@ def sim_program(seed, timeout=20.0):
         if results.get(cid) != want:
             return False, ("CONSERVATION client={0} got={1} want={2} seed={3}"
                            .format(cid, results.get(cid), want, seed))
-    if runloom_c._self_check(0) != 0:
+    if stackweave_c._self_check(0) != 0:
         return False, "SELF_CHECK seed={0}".format(seed)
     return True, "ok"

@@ -9,11 +9,11 @@ M:N -- a builtin evaluated on FIBER-LOCAL, single-owner data must return a
 BIT-IDENTICAL result across a cooperative yield, and that result must match an
 INDEPENDENTLY-computed closed form.
 
-WHERE M:N COULD BREAK IT (the gap this program probes).  runloom runs goroutines
+WHERE M:N COULD BREAK IT (the gap this program probes).  stackweave runs goroutines
 in PARALLEL across hubs with the GIL off.  A pure builtin's evaluation walks C
 code (the C small-int cache, the str/bytes machinery, the tuple hash, heapq
 inside sorted, the base-conversion digit loops) -- if any of that C state were
-process-global-mutable-per-thread in a way runloom does not isolate per fiber, a
+process-global-mutable-per-thread in a way stackweave does not isolate per fiber, a
 sibling fiber running the SAME builtin on DIFFERENT data on another hub (or the
 same hub after this fiber parks across its yield) could corrupt the in-flight
 result: a torn integer, a wrong digit, a sorted list that is not a permutation of
@@ -32,7 +32,7 @@ difference (across the yield, or vs the closed form) is a torn/corrupted builtin
 evaluation -- a real runtime bug (a data race that reached a pure C computation),
 never documented Python semantics.  Verified against plain threads: 8 OS threads
 each running these identities on thread-local data, GIL on AND off, are 100%
-bit-identical -- so a correct runloom must be too.
+bit-identical -- so a correct stackweave must be too.
 
 ORACLES:
   * LOAD-BEARING -- BUILTIN PURITY (worker, HARD, fail-fast).  Per iteration, on
@@ -78,7 +78,7 @@ between a builtin's two evaluations of the same fiber-local constant.
 import builtins
 
 import harness
-import runloom
+import stackweave
 
 # Size of each fiber's private int list.  Big enough to push sum/sorted through a
 # real aggregation (and the backing list through a growth), small enough that many
@@ -276,9 +276,9 @@ def purity_check(H, wid, idx, state):
     base_hash = builtins.hash(tuple(data))
 
     # ---- YIELD: let siblings run pure builtins on their own data ------------
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0003)
+        stackweave.sleep(0.0003)
 
     # ---- post-yield: bit-identical recompute --------------------------------
     if builtins.sum(data) != base_sum:
@@ -385,7 +385,7 @@ def post(H):
         H.log("note: the shared list observed {0} torn sorted() snapshots across {1} "
               "reads -- a shared mutable list is a shared Python object, like p490's "
               "shared enum pool; this is documented M:N shared-object behaviour, NOT "
-              "a runloom bug, and never reaches the single-owner purity oracle"
+              "a stackweave bug, and never reaches the single-owner purity oracle"
               .format(storn, sreads))
 
     # NON-VACUITY: the load-bearing purity hazard was actually exercised.

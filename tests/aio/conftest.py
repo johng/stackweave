@@ -1,9 +1,9 @@
-"""Swap the event loop to runloom.aio.RunloomEventLoop for the vendored asyncio
+"""Swap the event loop to stackweave.aio.StackweaveEventLoop for the vendored asyncio
 suite, and apply the committed skip baseline -- WITHOUT editing the vendored test
 bodies.
 
 Injection covers every way a test_asyncio module obtains a loop:
-  * a global RunloomEventLoopPolicy  -> asyncio.new_event_loop() and
+  * a global StackweaveEventLoopPolicy  -> asyncio.new_event_loop() and
     IsolatedAsyncioTestCase (loop_factory=None falls back to the policy) and the
     hardcoded asyncio.Runner() paths;
   * loop_factory set on each IsolatedAsyncioTestCase subclass (belt-and-braces);
@@ -22,7 +22,7 @@ import warnings
 
 import pytest
 
-import runloom.aio as paio
+import stackweave.aio as paio
 from . import skips
 
 
@@ -72,7 +72,7 @@ def install_policy():
     # broadest single lever; suppress the one DeprecationWarning it emits.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        asyncio.set_event_loop_policy(paio.RunloomEventLoopPolicy())
+        asyncio.set_event_loop_policy(paio.StackweaveEventLoopPolicy())
 
 
 # Skip on an interpreter below the floor: the suite is not going to run, and
@@ -84,8 +84,8 @@ if not _TOO_OLD:
 
 def make_runloom_loop(self, *args, **kwargs):
     # The stock create_event_loop/new_loop take a selector or no arg; ignore
-    # whatever they pass -- RunloomEventLoop drives its own netpoll.
-    return paio.RunloomEventLoop()
+    # whatever they pass -- StackweaveEventLoop drives its own netpoll.
+    return paio.StackweaveEventLoop()
 
 
 def patch_module_loops(mod):
@@ -94,7 +94,7 @@ def patch_module_loops(mod):
         if not isinstance(obj, type):
             continue
         if issubclass(obj, unittest.IsolatedAsyncioTestCase):
-            obj.loop_factory = paio.RunloomEventLoop
+            obj.loop_factory = paio.StackweaveEventLoop
         # Only override where the class DEFINES the hook (a concrete loop-test
         # subclass), not where it merely inherits it.
         if "create_event_loop" in obj.__dict__:
@@ -111,9 +111,9 @@ def pytest_collection_modifyitems(config, items):
             patch_module_loops(mod)
             patched.add(id(mod))
     # Apply the committed skip baseline (green on the default bridge).  Set
-    # RUNLOOM_AIO_NOSKIP=1 to run the raw divergences (for closing the gaps: see
+    # STACKWEAVE_AIO_NOSKIP=1 to run the raw divergences (for closing the gaps: see
     # exactly what each skipped test needs before/while fixing the bridge).
-    if os.environ.get("RUNLOOM_AIO_NOSKIP"):
+    if os.environ.get("STACKWEAVE_AIO_NOSKIP"):
         return
     for it in items:
         mod = getattr(it, "module", None)

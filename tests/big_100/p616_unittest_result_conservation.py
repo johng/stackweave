@@ -10,12 +10,12 @@ SINGLE-OWNER accumulator: for a fiber-local suite run against a fiber-local
 TestResult, the final counts are a CLOSED-FORM function of the multiset of test
 outcomes the fiber built -- nothing else may touch that result.
 
-WHERE M:N COULD BREAK IT (the gap this program probes).  runloom drives thousands
+WHERE M:N COULD BREAK IT (the gap this program probes).  stackweave drives thousands
 of goroutines across >1 hub with the GIL off.  Each fiber builds its OWN suite of
 synthetic FunctionTestCases with KNOWN outcomes (pass / fail / error / skip) and
 runs it against its OWN TestResult.  Mid-run, inside the test bodies, the fiber
 yields so a sibling -- also mid-run, also mutating ITS own result -- interleaves on
-another hub.  If runloom leaked one fiber's result accumulation into another's (a
+another hub.  If stackweave leaked one fiber's result accumulation into another's (a
 cross-fiber write to the single-owner result, a lost/doubled testsRun RMW that
 belongs to THIS fiber alone, a torn list append, an outcome recorded against the
 wrong result), the fiber's final counts would NOT match the closed-form expected
@@ -29,7 +29,7 @@ wasSuccessful()==(#fail==0 and #error==0), and the pass count ==
 testsRun-#fail-#error-#skip.  We confirmed with a plain-threads control (8 OS
 threads, each building + running its own suite/result, GIL on AND off) that these
 counts equal the closed-form expected 100% of the time -- 0 cross-thread bleed.
-Under a correct runloom the same must hold.  A mismatch is a runloom single-owner-
+Under a correct stackweave the same must hold.  A mismatch is a stackweave single-owner-
 isolation / lost-RMW bug, not documented unittest behavior.
 
 ORACLES:
@@ -38,7 +38,7 @@ ORACLES:
         (pass/fail/error/skip) tied to (wid, iteration) -- fiber-local, never
         shared;
       - runs the suite against a FIBER-LOCAL TestResult; several test bodies call
-        runloom.yield_now() so siblings interleave WHILE this result is mid-
+        stackweave.yield_now() so siblings interleave WHILE this result is mid-
         accumulation;
       - asserts the closed-form counting law on the final result (testsRun,
         failures, errors, skipped, wasSuccessful, derived pass-count) matches the
@@ -65,7 +65,7 @@ ORACLES:
     lists empty (list.append is made thread-safe in 3.14t; the pure int RMW is the
     hazard), so this arm demonstrates the race EXISTS without risking a crash and
     NEVER reaches the single-owner oracle.  We never H.fail on it -- doing so would
-    mislabel documented shared-object semantics as a runloom bug.
+    mislabel documented shared-object semantics as a stackweave bug.
 
 FAIL ON: a fiber-local TestResult whose final counts differ from the closed-form
 expected multiset, or whose counts change across a post-run yield (a cross-fiber
@@ -82,7 +82,7 @@ and a mid-run yield under M:N concurrency.
 import unittest
 
 import harness
-import runloom
+import stackweave
 
 # Outcome kinds a synthetic test body can produce.  FunctionTestCase routes each:
 # a clean return -> pass (no list, just testsRun); AssertionError -> failures;
@@ -119,7 +119,7 @@ def make_test_func(kind, do_yield):
     result must survive that interleave untouched."""
     def tf():
         if do_yield:
-            runloom.yield_now()
+            stackweave.yield_now()
         if kind == KIND_PASS:
             return
         if kind == KIND_FAIL:
@@ -225,7 +225,7 @@ def result_check(H, wid, rng, state):
     # SNAPSHOT + YIELD + re-read: a single-owner result is quiescent after run(),
     # so the counts MUST be identical across a yield.  Any change is a cross-fiber
     # write into this fiber's result.
-    runloom.yield_now()
+    stackweave.yield_now()
     if (result.testsRun != got_run or len(result.failures) != got_fail
             or len(result.errors) != got_error
             or len(result.skipped) != got_skip):
@@ -307,7 +307,7 @@ def post(H):
         H.log("note: the SHARED TestResult lost {0} of {1} testsRun increments -- "
               "the shared `self.testsRun += 1` is a non-atomic RMW on a shared "
               "object (documented, like a shared x+=1 across threads GIL-off).  "
-              "This is NOT a runloom bug and never reaches the load-bearing single-"
+              "This is NOT a stackweave bug and never reaches the load-bearing single-"
               "owner oracle.".format(lost, offered))
 
     # NON-VACUITY: the load-bearing single-owner arm actually ran.
@@ -335,4 +335,4 @@ if __name__ == "__main__":
                  "change).  MEASURED shared-result arm (expected to lose testsRun "
                  "RMW increments, like a shared x+=1) proves the hazard exists.  A "
                  "count that mismatches the closed form or mutates across the yield "
-                 "is the runloom single-owner-isolation / lost-RMW bug")
+                 "is the stackweave single-owner-isolation / lost-RMW bug")

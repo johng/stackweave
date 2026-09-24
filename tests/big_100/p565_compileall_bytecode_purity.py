@@ -5,11 +5,11 @@
 # references to some of them, so the collector frees them early and the fiber
 # re-uses freed memory on resume -> per-thread mimalloc free-list corruption ->
 # SIGSEGV in __tls_get_addr / _PyCode_New.  (Same crash class as greenlet's,
-# fixed upstream in greenlet PR #511 for 3.15.)  runloom_c now ships the fix: the
+# fixed upstream in greenlet PR #511 for 3.15.)  stackweave_c now ships the fix: the
 # GC frames anchor (module_gcframes.c.inc) makes parked frames GC-visible, so this
 # PASSES with TLBC ON -- the default.  To RE-ARM the crash for verification,
 # disable the anchor while forcing TLBC on:
-#   RUNLOOM_TLBC=1 RUNLOOM_GC_FRAMES=0 python3 p565_compileall_bytecode_purity.py
+#   STACKWEAVE_TLBC=1 STACKWEAVE_GC_FRAMES=0 python3 p565_compileall_bytecode_purity.py
 
 """big_100 / 565 -- compileall.compile_file bytecode PURITY + determinism under M:N.
 
@@ -25,7 +25,7 @@ time is exactly the concurrency that would surface a torn compile: a code object
 whose bytecode was corrupted mid-codegen by a sibling's concurrent compilation, or
 a non-deterministic .pyc for a source that must compile bit-identically.
 
-WHERE M:N COULD BREAK IT (the gap this program probes).  runloom runs each fiber's
+WHERE M:N COULD BREAK IT (the gap this program probes).  stackweave runs each fiber's
 compileall.compile_file call in parallel across hubs.  If the C compiler's global
 state (interning, caches, the marshal path) is not free-threading-safe, a fiber
 that compiles its OWN source and gets back a code object could observe:
@@ -56,7 +56,7 @@ PURITY / round-trip law:
 
 Verified against plain threads: 8 OS threads each compiling their own distinct
 source (GIL on and off) produce correct + bit-identical bytecode 100% of the time
--- 0 wrong-value, 0 non-deterministic.  Under a CORRECT runloom it must also hold,
+-- 0 wrong-value, 0 non-deterministic.  Under a CORRECT stackweave it must also hold,
 so this program EXITS 0 when there is no bug.  A wrong RESULT, a byte-differing
 recompile of a fixed source, a spurious compile failure, or a crash is a real
 runtime (or CPython-compiler) fault, not documented Python semantics.
@@ -94,7 +94,7 @@ import tempfile
 import py_compile
 
 import harness
-import runloom
+import stackweave
 
 MASK32 = 0xFFFFFFFF
 
@@ -199,9 +199,9 @@ def check_once(H, wid, idx, src_path, state):
 
     # YIELD: let sibling fibers run the C compiler on their own sources while this
     # fiber is parked, then recompile the SAME source and assert determinism.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0003)
+        stackweave.sleep(0.0003)
 
     data2, code2 = compile_and_load(src_path)
     if data2 is None:

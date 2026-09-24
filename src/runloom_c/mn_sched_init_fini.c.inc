@@ -49,13 +49,13 @@ int runloom_mn_init(int n_threads, int offload_hubs)
      * for bring-up work).  Checked before the already-inited early return:
      * the combo is unsupported no matter when it is asked for. */
     if (runloom_sim_enabled()) {
-        const char *simmn = getenv("RUNLOOM_SIM_MN");
+        const char *simmn = getenv("STACKWEAVE_SIM_MN");
         if (simmn == NULL || simmn[0] == '\0' || simmn[0] == '0') {
             PyErr_SetString(PyExc_RuntimeError,
-                "mn_init: RUNLOOM_SIM (set to any non-empty value; it is the "
+                "mn_init: STACKWEAVE_SIM (set to any non-empty value; it is the "
                 "sim seed) with the M:N scheduler is not yet supported (the "
                 "legacy single-thread sim pump silently corrupts wait_fd "
-                "timeouts on hub threads); set RUNLOOM_SIM_MN=1 to opt into "
+                "timeouts on hub threads); set STACKWEAVE_SIM_MN=1 to opt into "
                 "the native mn-sim bring-up path "
                 "(docs/dev/soak/MN_SIM_DST_PLAN.md)");
             return -1;
@@ -68,19 +68,19 @@ int runloom_mn_init(int n_threads, int offload_hubs)
          * 5000ms timeout collapsed to 0.0001s again under BARRIER=0).  Fail
          * loudly on every such combination (I2). */
         {
-            const char *mnseed = getenv("RUNLOOM_MN_SEED");
-            const char *bar = getenv("RUNLOOM_MN_BARRIER");
+            const char *mnseed = getenv("STACKWEAVE_MN_SEED");
+            const char *bar = getenv("STACKWEAVE_MN_BARRIER");
             if (mnseed == NULL || mnseed[0] == '\0') {
                 PyErr_SetString(PyExc_RuntimeError,
-                    "mn_init: RUNLOOM_SIM_MN=1 (native mn-sim) requires "
-                    "RUNLOOM_MN_SEED -- the sim ready ledger is dispatched by "
+                    "mn_init: STACKWEAVE_SIM_MN=1 (native mn-sim) requires "
+                    "STACKWEAVE_MN_SEED -- the sim ready ledger is dispatched by "
                     "the seeded census (docs/dev/soak/MN_SIM_DST_PLAN.md I2)");
                 return -1;
             }
             if (bar != NULL && bar[0] == '0') {
                 PyErr_SetString(PyExc_RuntimeError,
-                    "mn_init: RUNLOOM_SIM_MN=1 (native mn-sim) is incompatible "
-                    "with RUNLOOM_MN_BARRIER=0 -- without the barrier the "
+                    "mn_init: STACKWEAVE_SIM_MN=1 (native mn-sim) is incompatible "
+                    "with STACKWEAVE_MN_BARRIER=0 -- without the barrier the "
                     "census never arms and the sim gates go dark "
                     "(docs/dev/soak/MN_SIM_DST_PLAN.md I2)");
                 return -1;
@@ -99,10 +99,10 @@ int runloom_mn_init(int n_threads, int offload_hubs)
              * runq wake path is UNTRACED by the mn-sim design (wake contract
              * #22) -- fenced out until separately audited. */
             {
-                const char *mig = getenv("RUNLOOM_ALLOW_UNSAFE_MIGRATION");
+                const char *mig = getenv("STACKWEAVE_ALLOW_UNSAFE_MIGRATION");
                 if (mig != NULL && mig[0] != '\0' && mig[0] != '0') {
                     PyErr_SetString(PyExc_RuntimeError,
-                        "mn_init: RUNLOOM_ALLOW_UNSAFE_MIGRATION (per-g-tstate "
+                        "mn_init: STACKWEAVE_ALLOW_UNSAFE_MIGRATION (per-g-tstate "
                         "mode) is not supported under native mn-sim -- its wake "
                         "path is unaudited (MN_SIM_DST_PLAN.md wake contract "
                         "#22)");
@@ -215,7 +215,7 @@ int runloom_mn_init(int n_threads, int offload_hubs)
      * un-controlled sim+mn run re-opens the probe-P4 corruption.  Verified
      * BEFORE any hub thread spawns, so the unwind is just the allocs above. */
     if (runloom_sim_enabled() && !runloom_mn_ctrl_controlled()) {
-        const char *simmn = getenv("RUNLOOM_SIM_MN");
+        const char *simmn = getenv("STACKWEAVE_SIM_MN");
         if (simmn != NULL && simmn[0] != '\0' && simmn[0] != '0') {
             PyMem_Free(runloom_hubs);
             runloom_hubs = NULL;
@@ -671,9 +671,9 @@ static int runloom_pair_affinity_mode(void)
 {
     static int v = -1;
     if (v < 0) {
-        const char *e = getenv("RUNLOOM_PAIR_AFFINITY");
+        const char *e = getenv("STACKWEAVE_PAIR_AFFINITY");
         v = (e && *e && *e != '0') ? 1 : 0;
-        if (v && getenv("RUNLOOM_MN_SEED")) v = 0;
+        if (v && getenv("STACKWEAVE_MN_SEED")) v = 0;
     }
     return v;
 }
@@ -697,7 +697,7 @@ static long runloom_spawn_pace(void)
     static long v = -1;
     long cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
     if (cur < 0) {
-        const char *e = getenv("RUNLOOM_SPAWN_PACE");
+        const char *e = getenv("STACKWEAVE_SPAWN_PACE");
         cur = (e != NULL) ? atol(e) : 512;
         if (cur < 0) cur = 0;
         __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
@@ -769,7 +769,7 @@ static int runloom_mn_fiber_core(PyObject *callable, runloom_c_entry_fn c_fn,
         if (adm == 0) {
             if (callable != NULL)
                 PyErr_Format(PyExc_RuntimeError,
-                             "runloom: fiber limit (%ld) exceeded",
+                             "stackweave: fiber limit (%ld) exceeded",
                              runloom_get_max_fibers());
             errno = EAGAIN;
             return -1;
@@ -949,8 +949,8 @@ PyObject *runloom_mn_offload_fiber(PyObject *callable, size_t stack_size)
     }
     if (k <= 0) {
         PyErr_SetString(PyExc_RuntimeError,
-                        "runloom: no offload hubs reserved "
-                        "(set RUNLOOM_OFFLOAD_HUBS before runloom_mn_init)");
+                        "stackweave: no offload hubs reserved "
+                        "(set STACKWEAVE_OFFLOAD_HUBS before runloom_mn_init)");
         return NULL;
     }
     slot = (unsigned long)__atomic_fetch_add(&runloom_mn_offload_rr, 1, __ATOMIC_RELAXED);
@@ -989,7 +989,7 @@ static int runloom_fibern_bulk_enabled(void)
     static int v = -1;
     int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
     if (cur < 0) {
-        const char *e = getenv("RUNLOOM_GON_BULK");
+        const char *e = getenv("STACKWEAVE_GON_BULK");
         cur = (e != NULL && *e != '0' && *e != '\0') ? 1 : 0;
         __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
     }
@@ -1105,7 +1105,7 @@ static long long runloom_create_now_ns(void)
 static int runloom_create_timing_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("RUNLOOM_GON_TIMING");
+    if (v < 0) { const char *e = getenv("STACKWEAVE_GON_TIMING");
                  v = (e && *e && *e != '0') ? 1 : 0; }
     return v;
 }
@@ -1124,7 +1124,7 @@ static int runloom_pcreate_threads(void)
     static int mode = -2;
     int m = __atomic_load_n(&mode, __ATOMIC_RELAXED);
     if (m == -2) {
-        const char *e = getenv("RUNLOOM_GON_PCREATE");
+        const char *e = getenv("STACKWEAVE_GON_PCREATE");
         if (e == NULL || !*e || e[0] == '0') m = 0;
         else if (strcmp(e, "auto") == 0)     m = -1;
         else { m = atoi(e); if (m < 0) m = 0; if (m > 64) m = 64; }
@@ -1207,8 +1207,8 @@ static int runloom_mn_fiber_n_bulk(PyObject *callable, long n, size_t stack_size
         static int nofields = -1, nosub = -1;
         const char *e;
         runloom_g_t tmpl;
-        if (nofields < 0) { e = getenv("RUNLOOM_GON_NOFIELDS"); nofields = (e && *e!='0' && *e)?1:0; }
-        if (nosub < 0)    { e = getenv("RUNLOOM_GON_NOSUBMIT"); nosub    = (e && *e!='0' && *e)?1:0; }
+        if (nofields < 0) { e = getenv("STACKWEAVE_GON_NOFIELDS"); nofields = (e && *e!='0' && *e)?1:0; }
+        if (nosub < 0)    { e = getenv("STACKWEAVE_GON_NOSUBMIT"); nosub    = (e && *e!='0' && *e)?1:0; }
 
         /* Real (submitting) path: allocate the batch descriptor so each g can
          * carry an arena-ownership marker + back-pointer.  Skipped for the
@@ -1324,7 +1324,7 @@ static int runloom_mn_fiber_n_bulk(PyObject *callable, long n, size_t stack_size
     /* All N callable references taken here, in one place (the new gs hold them). */
     {
         static int norefcnt = -1;
-        if (norefcnt < 0) { const char *e = getenv("RUNLOOM_GON_NOREFCNT");
+        if (norefcnt < 0) { const char *e = getenv("STACKWEAVE_GON_NOREFCNT");
                             norefcnt = (e && *e != '0' && *e) ? 1 : 0; }
         if (!norefcnt) for (i = 0; i < n; i++) Py_INCREF(callable);
     }
@@ -1546,7 +1546,7 @@ static long runloom_mn_deadlock_ms(void)
     static long v = -1;
     long cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
     if (cur < 0) {
-        const char *e = getenv("RUNLOOM_DEADLOCK_MS");
+        const char *e = getenv("STACKWEAVE_DEADLOCK_MS");
         cur = (e != NULL && *e != '\0') ? atol(e) : 200;
         if (cur < 0) cur = 0;
         __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
@@ -1563,7 +1563,7 @@ static long runloom_mn_stall_kick_polls(void)
     static long v = -1;
     long cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
     if (cur < 0) {
-        const char *e = getenv("RUNLOOM_STALL_KICK_MS");
+        const char *e = getenv("STACKWEAVE_STALL_KICK_MS");
         cur = (e != NULL && *e != '\0') ? atol(e) : 4;
         if (cur < 0) cur = 0;
         __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
@@ -1766,8 +1766,8 @@ Py_ssize_t runloom_mn_run(void)
         if (raise) {
             long ndead = runloom_count_deadlockable_fibers(NULL);
             PyErr_Format(PyExc_RuntimeError,
-                "runloom: deadlock -- %ld fiber(s) blocked on a channel/lock/await "
-                "with no way to wake (RUNLOOM_DEADLOCK=raise)",
+                "stackweave: deadlock -- %ld fiber(s) blocked on a channel/lock/await "
+                "with no way to wake (STACKWEAVE_DEADLOCK=raise)",
                 ndead > 0 ? ndead : 0);
             return -1;
         }

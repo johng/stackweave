@@ -37,7 +37,7 @@
  "tools/verify/cbmc/sched_readyring_cbmc.c": {
   "runloom_ready_grow": "f2e0e608608f6fc4",
   "runloom_sched_ready_pop": "f0b422e415a09480",
-  "runloom_sched_ready_push": "cd2685fb5f4efcf6"
+  "runloom_sched_ready_push": "123e1229e10e7565"
  },
  "tools/verify/cbmc/sched_steal_cbmc.c": {
   "runloom_cldeque_steal": "0f490f9c3f355330",

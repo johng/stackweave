@@ -8,9 +8,9 @@ the calling thread) and that the prompt/return value pass through.
 import threading
 import getpass as _getpass_mod
 
-import runloom            # noqa: F401  (runtime)
-import runloom_c
-from runloom.monkey import osio
+import stackweave            # noqa: F401  (runtime)
+import stackweave_c
+from stackweave.monkey import osio
 
 
 def _with_fake(body):
@@ -41,8 +41,8 @@ def test_offloaded_in_fiber():
         def work():
             out["v"] = _getpass_mod.getpass("Pwd: ")
 
-        runloom_c.fiber(work)
-        runloom_c.run()
+        stackweave_c.fiber(work)
+        stackweave_c.run()
         assert out["v"] == "s3cret"          # return value passes through
         assert seen["prompt"] == "Pwd: "     # prompt passes through
         assert seen["tid"] != main_tid       # ran on a pool worker (offloaded)
@@ -69,6 +69,6 @@ def test_patch_unpatch_restores():
 
 
 def test_registered_in_default_patch_set():
-    import runloom.monkey as monkey
+    import stackweave.monkey as monkey
     assert "getpass" in monkey._DEFAULTS
     assert "getpass" in monkey._PATCHERS

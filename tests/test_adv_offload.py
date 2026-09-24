@@ -10,7 +10,7 @@ import sys
 import time
 import zlib
 
-import runloom.monkey as monkey
+import stackweave.monkey as monkey
 monkey.patch()
 
 import selectors
@@ -19,7 +19,7 @@ import subprocess
 
 import pytest
 
-import runloom_c as rc
+import stackweave_c as rc
 from adv_util import hang_guard, assert_faster_than
 
 

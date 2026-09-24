@@ -1,10 +1,10 @@
-"""TCP open_connection / start_server tests for runloom.aio."""
+"""TCP open_connection / start_server tests for stackweave.aio."""
 import asyncio
 import socket
 import threading
 import unittest
 
-import runloom.aio as paio
+import stackweave.aio as paio
 
 
 class TestEcho(unittest.TestCase):
@@ -21,7 +21,7 @@ class TestEcho(unittest.TestCase):
             host, port = sock.getsockname()[:2]
 
             reader, writer = await paio.open_connection(host, port)
-            writer.write(b"hello runloom")
+            writer.write(b"hello stackweave")
             await writer.drain()
             data = await reader.read(4096)
             writer.close()
@@ -29,7 +29,7 @@ class TestEcho(unittest.TestCase):
             server.close()
             return data
 
-        self.assertEqual(paio.run(main()), b"hello runloom")
+        self.assertEqual(paio.run(main()), b"hello stackweave")
 
     def test_readline(self):
         async def handler(reader, writer):
@@ -281,7 +281,7 @@ class TestCancelWaitFd(unittest.TestCase):
 class TestLeakedParkerCrossThread(unittest.TestCase):
     """A fiber left parked in netpoll on one OS thread (e.g. a loop thread
     that stopped without cancelling/closing -- a leaked accept/recv) must NOT
-    keep ANOTHER thread's runloom_c.run() alive.  The single-thread drain
+    keep ANOTHER thread's stackweave_c.run() alive.  The single-thread drain
     counts only THIS sched's parkers (g->owner == this sched), not the global
     parked count -- otherwise a parker owned by a dead/other thread wedges
     every other loop forever."""

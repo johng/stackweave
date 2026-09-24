@@ -375,7 +375,7 @@ static int runloom_offload_hubs_env(void)
     static int v = -1;
     int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
     if (cur < 0) {
-        const char *e = getenv("RUNLOOM_OFFLOAD_HUBS");
+        const char *e = getenv("STACKWEAVE_OFFLOAD_HUBS");
         cur = (e != NULL) ? atoi(e) : 0;
         if (cur < 0) cur = 0;
         if (cur > RUNLOOM_OFFLOAD_HUBS_MAX) cur = RUNLOOM_OFFLOAD_HUBS_MAX;
@@ -417,7 +417,7 @@ static int runloom_hub_idle_wake_enabled(void)
     static int v = -1;
     int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
     if (cur < 0) {
-        const char *e = getenv("RUNLOOM_HUB_IDLE_WAKE");
+        const char *e = getenv("STACKWEAVE_HUB_IDLE_WAKE");
         cur = (e != NULL && e[0] == '0') ? 0 : 1;
         __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
     }

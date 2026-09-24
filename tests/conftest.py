@@ -1,9 +1,9 @@
-"""Per-test invariant checks for the runloom suite.
+"""Per-test invariant checks for the stackweave suite.
 
 Every test in this directory runs through an autouse fixture that, AFTER the
 test body, asserts two things about the C runtime:
 
-  1. ``runloom_c._self_check(0) == 0`` -- a structural walk of every live
+  1. ``stackweave_c._self_check(0) == 0`` -- a structural walk of every live
      scheduler / netpoll data structure (no list cycle, no self-looping
      per-fd bucket, the atomic parked count matches the walked count, no
      bucket entry missing from the global list).  This is a pure consistency
@@ -18,7 +18,7 @@ test body, asserts two things about the C runtime:
      to drain its own parker.
 
 Why this exists: in practice a leaked parker did not fail the test that
-caused it -- it wedged an *unrelated* ``runloom_c.run()`` several files later,
+caused it -- it wedged an *unrelated* ``stackweave_c.run()`` several files later,
 which is brutal to bisect.  Attributing the leak to the test that created it
 (via a per-test before/after delta) turns "the suite hangs sometimes" into
 "this one test leaked a parker."
@@ -28,17 +28,17 @@ parker behind (e.g. the regression that proves a leaked parker no longer
 wedges other threads).
 
 Env knobs:
-  RUNLOOM_TEST_LEAK_REPORT=1  -- print the per-test parked delta instead of
+  STACKWEAVE_TEST_LEAK_REPORT=1  -- print the per-test parked delta instead of
                               failing on it (survey mode; self_check still
                               hard-asserts).
-  RUNLOOM_TEST_NO_INVARIANTS=1 -- disable the fixture entirely.
+  STACKWEAVE_TEST_NO_INVARIANTS=1 -- disable the fixture entirely.
 """
 import os
 import sys
 import time
 
 # Match run_tests.py / test_mn.py: test the in-tree .so, not whatever else
-# might be on the path.  Harmless if runloom_c is already imported (Python
+# might be on the path.  Harmless if stackweave_c is already imported (Python
 # caches the module, so the fixture inspects the same runtime the tests use).
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _SRC = os.path.join(REPO, "src")
@@ -50,12 +50,12 @@ import threading
 import pytest
 
 try:
-    import runloom_c
-except Exception:  # pragma: no cover - runloom_c should always import here
-    runloom_c = None
+    import stackweave_c
+except Exception:  # pragma: no cover - stackweave_c should always import here
+    stackweave_c = None
 
-_REPORT_ONLY = os.environ.get("RUNLOOM_TEST_LEAK_REPORT") == "1"
-_DISABLED = os.environ.get("RUNLOOM_TEST_NO_INVARIANTS") == "1"
+_REPORT_ONLY = os.environ.get("STACKWEAVE_TEST_LEAK_REPORT") == "1"
+_DISABLED = os.environ.get("STACKWEAVE_TEST_NO_INVARIANTS") == "1"
 
 # --- swallowed-error gate (QA-steal-V2 #3) ---------------------------------
 # Errors raised on a path that cannot propagate -- a tp_dealloc / weakref
@@ -67,7 +67,7 @@ _DISABLED = os.environ.get("RUNLOOM_TEST_NO_INVARIANTS") == "1"
 # it fired under instead of disappearing.  A test that INTENTIONALLY raises on
 # such a path opts out with @pytest.mark.runloom_allow_unraisable; tests using
 # test.support.catch_unraisable_exception install their own hook for their scope
-# and are unaffected.  RUNLOOM_TEST_LEAK_REPORT=1 makes it report-only too.
+# and are unaffected.  STACKWEAVE_TEST_LEAK_REPORT=1 makes it report-only too.
 _UNRAISABLE = []
 _pg_saved_unraisablehook = None
 _pg_saved_threadexcepthook = None
@@ -136,7 +136,7 @@ def _parked():
     # stranded on another/since-exited thread's sched (e.g. a test that
     # deliberately leaks one on a dead thread) is not this test's leak and
     # must not trip the check.  Falls back to the global count on an older .so.
-    s = runloom_c.stats()
+    s = stackweave_c.stats()
     return int(s.get("netpoll_parked_self", s["netpoll_parked"]))
 
 
@@ -157,7 +157,7 @@ def _settle_parked(baseline):
 
 @pytest.fixture(autouse=True)
 def runloom_invariants(request):
-    if _DISABLED or runloom_c is None:
+    if _DISABLED or stackweave_c is None:
         yield
         return
 
@@ -187,9 +187,9 @@ def runloom_invariants(request):
             pytest.fail(msg, pytrace=False)
 
     # (1) structural integrity -- always holds, cheap, no false positives.
-    viol = runloom_c._self_check(0)
+    viol = stackweave_c._self_check(0)
     assert viol == 0, (
-        "runloom_c._self_check reported {0} violation(s) after this test "
+        "stackweave_c._self_check reported {0} violation(s) after this test "
         "(see stderr [runloom-diag] lines): netpoll/scheduler structures are "
         "inconsistent.".format(viol))
 

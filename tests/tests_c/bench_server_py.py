@@ -34,7 +34,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-import runloom_c
+import stackweave_c
 
 PAYLOAD = b"hellopyg"
 PAYLOAD_LEN = len(PAYLOAD)
@@ -95,7 +95,7 @@ def _rst_close(sock):
         pass
     if fd >= 0:
         try:
-            runloom_c.netpoll_unregister(fd)
+            stackweave_c.netpoll_unregister(fd)
         except (AttributeError, OSError):
             pass
     try:
@@ -111,7 +111,7 @@ def _recv_exactly(sock, fd, n):
         try:
             chunk = sock.recv(n - len(out))
         except (BlockingIOError, InterruptedError):
-            runloom_c.wait_fd(fd, READ)
+            stackweave_c.wait_fd(fd, READ)
             continue
         except OSError:
             return b""          # peer RST / error
@@ -128,7 +128,7 @@ def _send_all(sock, fd, data):
         try:
             sent += sock.send(view[sent:])
         except (BlockingIOError, InterruptedError):
-            runloom_c.wait_fd(fd, WRITE)
+            stackweave_c.wait_fd(fd, WRITE)
         except OSError:
             return False
     return True
@@ -153,7 +153,7 @@ def echo_handler(conn):
             pass
         if fd2 >= 0:
             try:
-                runloom_c.netpoll_unregister(fd2)
+                stackweave_c.netpoll_unregister(fd2)
             except (AttributeError, OSError):
                 pass
         try:
@@ -170,7 +170,7 @@ def accept_loop():
         try:
             conn, _addr = listen_sock.accept()
         except (BlockingIOError, InterruptedError):
-            runloom_c.wait_fd(lfd, READ)
+            stackweave_c.wait_fd(lfd, READ)
             continue
         except OSError:
             break
@@ -190,17 +190,17 @@ def accept_loop():
             # Clear any stale registration on a reused fd number before the
             # handler arms it (the registration-cache gotcha).
             try:
-                runloom_c.netpoll_unregister(cfd)
+                stackweave_c.netpoll_unregister(cfd)
             except (AttributeError, OSError):
                 pass
             accepted += 1
-            runloom_c.mn_fiber(lambda c=conn: echo_handler(c))
+            stackweave_c.mn_fiber(lambda c=conn: echo_handler(c))
             if accepted >= N:
                 break
             since_yield += 1
             if since_yield >= BATCH:
                 since_yield = 0
-                runloom_c.sched_yield()
+                stackweave_c.sched_yield()
             try:
                 conn, _addr = listen_sock.accept()
             except (BlockingIOError, InterruptedError):
@@ -209,7 +209,7 @@ def accept_loop():
                 accepted = N
                 break
     try:
-        runloom_c.netpoll_unregister(lfd)
+        stackweave_c.netpoll_unregister(lfd)
     except (AttributeError, OSError):
         pass
 
@@ -229,7 +229,7 @@ def _client_body(idx):
     try:
         s.connect((HOST, PORT))
     except BlockingIOError:
-        runloom_c.wait_fd(fd, WRITE)
+        stackweave_c.wait_fd(fd, WRITE)
         err = s.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
         if err != 0:
             _rst_close(s)
@@ -251,7 +251,7 @@ def _client_body(idx):
         # holding a stack.  The server handler is parked on recv waiting
         # for the close that comes after the idle window.
         ready.append(1)
-        runloom_c.sched_sleep(IDLE_S)
+        stackweave_c.sched_sleep(IDLE_S)
     _rst_close(s)
     return True
 
@@ -266,10 +266,10 @@ def sampler():
     global idle_rss_kib
     # Wait for all connections to reach the idle phase.
     while len(ready) < N:
-        runloom_c.sched_sleep(0.01)
+        stackweave_c.sched_sleep(0.01)
     # Let the scheduler quiesce (any in-flight parks complete / madvise
     # runs at park time) before sampling.
-    runloom_c.sched_sleep(min(0.5, IDLE_S * 0.4))
+    stackweave_c.sched_sleep(min(0.5, IDLE_S * 0.4))
     idle_rss_kib = _cur_rss_kib()
 
 
@@ -308,22 +308,22 @@ def main(argv):
     listen_sock.setblocking(False)
     PORT = listen_sock.getsockname()[1]
 
-    if runloom_c.mn_init(H) < 0:
+    if stackweave_c.mn_init(H) < 0:
         sys.stderr.write("mn_init failed\n")
         return 2
 
     t0 = time.monotonic()
-    runloom_c.mn_fiber(accept_loop)
+    stackweave_c.mn_fiber(accept_loop)
     if IDLE_S > 0.0:
-        runloom_c.mn_fiber(sampler)
+        stackweave_c.mn_fiber(sampler)
     for i in range(N):
-        runloom_c.mn_fiber(lambda i=i: client(i))
-    completed = runloom_c.mn_run()
+        stackweave_c.mn_fiber(lambda i=i: client(i))
+    completed = stackweave_c.mn_run()
     dt = time.monotonic() - t0
 
     peak = _peak_rss_kib()
     maps = _maps_count()
-    runloom_c.mn_fini()
+    stackweave_c.mn_fini()
     listen_sock.close()
 
     done = sum(1 for r in results if r is True)
@@ -342,7 +342,7 @@ def main(argv):
     if done != N:
         sys.stderr.write("FAIL: %d/%d completed\n" % (done, N))
         try:
-            runloom_c._self_check(1)
+            stackweave_c._self_check(1)
         except Exception:
             pass
         return 1

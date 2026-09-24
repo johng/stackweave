@@ -73,7 +73,7 @@ def cc():
 
 
 def py_include_flags():
-    py = os.environ.get("RUNLOOM_PYTHON",
+    py = os.environ.get("STACKWEAVE_PYTHON",
                         os.path.expanduser("~/.pyenv/versions/3.14.4t/bin/python3"))
     try:
         out = subprocess.check_output(

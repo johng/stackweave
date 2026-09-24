@@ -71,7 +71,7 @@ ALLOWED = {
     # wire it up, or delete it.
     #
     # runloom_park_until is the most interesting, and it is the same shape as
-    # the bug that motivated this lint: the RUNLOOM_FAULT_SPURIOUS_PARK note in
+    # the bug that motivated this lint: the STACKWEAVE_FAULT_SPURIOUS_PARK note in
     # runloom_sched_parkwake.c.inc says "Every consumer in-tree does
     # (runloom_blocking_call, runloom_park_until, the io_uring waits, ...)" --
     # naming it as a live consumer of the park_safe contract when it has no

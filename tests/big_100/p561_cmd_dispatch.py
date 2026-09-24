@@ -27,7 +27,7 @@ fed.  If a dispatch is DROPPED or DOUBLED, if a do_<cmd> receives an argument
 belonging to a SIBLING fiber's instance (a cross-fiber leak of single-owner
 interpreter state), if getattr(self,'do_'+cmd) resolves to the wrong bound
 method across a hub migration, or if parseline returns a value that changes
-across a yield, that is a runloom bug -- not documented cmd/Python behavior.
+across a yield, that is a stackweave bug -- not documented cmd/Python behavior.
 
 WHICH ORACLE IS LOAD-BEARING, AND WHY.  Everything the oracle touches is owned by
 exactly ONE fiber: the interpreter instance, its stdout, its tally dict, its
@@ -84,7 +84,7 @@ import io
 import cmd
 
 import harness
-import runloom
+import stackweave
 
 # The recognized commands this fiber-local interpreter knows.  Each maps to a
 # do_<name> method that records (into the single-owner instance) which command
@@ -233,7 +233,7 @@ def dispatch_conservation(H, wid, idx, state, interp):
     """LOAD-BEARING: drive a KNOWN script through the single-owner interpreter and
     assert the closed-world dispatch-conservation law holds across a mid-script
     yield.  A dropped/doubled dispatch, a cross-fiber argument leak, or a wrong
-    lastcmd is a runloom desync."""
+    lastcmd is a stackweave desync."""
     rng = state["rng_pool"][wid]
     token = interp.token
     lines, expected, expected_default, last_line = build_script(rng, token)
@@ -254,9 +254,9 @@ def dispatch_conservation(H, wid, idx, state, interp):
             # YIELD mid-script: a sibling fiber runs while this instance is only
             # half-driven.  If interpreter dispatch state is not fiber-isolated,
             # the second half could see a corrupted tally / wrong bound method.
-            runloom.yield_now()
+            stackweave.yield_now()
             if idx & 1:
-                runloom.sleep(0.0002)
+                stackweave.sleep(0.0002)
 
     if H.failed:
         return
@@ -319,7 +319,7 @@ def parseline_purity(H, wid, idx, state, interp):
     for line in PARSE_INPUTS:
         baseline.append(interp.parseline(line))
 
-    runloom.yield_now()
+    stackweave.yield_now()
 
     for k, line in enumerate(PARSE_INPUTS):
         after = interp.parseline(line)
@@ -433,4 +433,4 @@ if __name__ == "__main__":
                  "reference reimplementation.  A dropped/doubled dispatch, a "
                  "cross-fiber interpreter-state leak, a wrong bound-method "
                  "resolution, or a parseline that mutates across a yield is the "
-                 "runloom bug")
+                 "stackweave bug")

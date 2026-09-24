@@ -7,7 +7,7 @@
 # sub-skid remainder.  Full rationale + validation in docs/dev/rr_vpmu_status.md.
 #
 # Validated: records + replays single-threaded, multi-threaded (contended locks),
-# and a runloom goroutine workload (epoll backend) with ZERO divergence.
+# and a stackweave goroutine workload (epoll backend) with ZERO divergence.
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SRC="${RR_SRC:-$HOME/projects/rr-src}"

@@ -11,7 +11,7 @@ parked socket op unwinds instead of re-parking forever.  Code under test:
         TCPConn close/dealloc path (runloom_tcp_conn_io.c.inc:71,96).
   - runloom_netpoll_cancel_all_parked() -> int  (netpoll_wake_iouring.c.inc:256,
         finding B3) -- teardown backstop; cancel every by_fd parker across all
-        pools, return the count.  C binding: runloom_c.cancel_all_parked().
+        pools, return the count.  C binding: stackweave_c.cancel_all_parked().
   - runloom_netpoll_cancel_g(g)                 (netpoll_wake_iouring.c.inc:90)
         cancel ONE parked g.  C binding: G.cancel_wait_fd() (module_g.c.inc:84).
   - the WAIT_FD_CANCELLED sentinel itself        (netpoll_wait_fd.c.inc:107,227)
@@ -46,15 +46,15 @@ pytestmark = pytest.mark.skipif(
     not sys.platform.startswith(("darwin", "freebsd", "openbsd", "netbsd")),
     reason="kqueue backend only")
 
-import runloom_c          # noqa: E402
-import runloom            # noqa: E402  (high-level go/sleep/run for the M:N driver)
+import stackweave_c          # noqa: E402
+import stackweave            # noqa: E402  (high-level go/sleep/run for the M:N driver)
 
 READ = 1
 WRITE = 2
 
 # The positive cancel sentinel wait_fd returns; mirror the module constant but
 # pin the literal so a drift in the C #define is caught here too.
-CANCELLED = getattr(runloom_c, "WAIT_FD_CANCELLED", 0x40000000)
+CANCELLED = getattr(stackweave_c, "WAIT_FD_CANCELLED", 0x40000000)
 
 
 # ------------------------------------------------------------------ helpers ----
@@ -88,8 +88,8 @@ def _drive(*fibers):
         return runner
 
     for g in fibers:
-        runloom_c.fiber(wrap(g))
-    runloom_c.run()
+        stackweave_c.fiber(wrap(g))
+    stackweave_c.run()
     if box:
         raise box[0]
 
@@ -101,7 +101,7 @@ def _reset_netpoll_registration():
     conformance suite uses)."""
     for fd in range(3, 1024):
         try:
-            runloom_c.netpoll_unregister(fd)
+            stackweave_c.netpoll_unregister(fd)
         except Exception:                # noqa: BLE001
             pass
 
@@ -111,12 +111,12 @@ def _netpoll_reset():
     _reset_netpoll_registration()
     # Drain any parker stranded by a prior test before this one starts.
     try:
-        runloom_c.cancel_all_parked()
+        stackweave_c.cancel_all_parked()
     except Exception:                    # noqa: BLE001
         pass
     yield
     try:
-        runloom_c.cancel_all_parked()
+        stackweave_c.cancel_all_parked()
     except Exception:                    # noqa: BLE001
         pass
     _reset_netpoll_registration()
@@ -124,7 +124,7 @@ def _netpoll_reset():
 
 def test_backend_is_kqueue():
     """Guard: this whole module asserts kqueue-backend cancel behaviour."""
-    assert runloom_c.netpoll_backend() == "kqueue"
+    assert stackweave_c.netpoll_backend() == "kqueue"
 
 
 # ============================================================================
@@ -145,11 +145,11 @@ def test_cancel_fd_returns_sentinel_single_thread(direction):
     def parker():
         # No timeout: only the cancel can wake this (READ never fires; b never
         # writes).  Recorded raw so we assert the sentinel value precisely.
-        got.append(runloom_c.wait_fd(a.fileno(), direction))
+        got.append(stackweave_c.wait_fd(a.fileno(), direction))
 
     def canceller():
         # Runs after parker has committed PARKED + yielded (spawn order).
-        runloom_c.netpoll_cancel_fd(a.fileno())
+        stackweave_c.netpoll_cancel_fd(a.fileno())
 
     try:
         _drive(parker, canceller)
@@ -170,10 +170,10 @@ def test_cancel_fd_wakes_every_parker_on_fd(n_waiters):
     got = []
 
     def parker():
-        got.append(runloom_c.wait_fd(a.fileno(), READ))
+        got.append(stackweave_c.wait_fd(a.fileno(), READ))
 
     def canceller():
-        runloom_c.netpoll_cancel_fd(a.fileno())
+        stackweave_c.netpoll_cancel_fd(a.fileno())
 
     # Spawn all parkers first (they each commit PARKED + yield), then the
     # single canceller.
@@ -204,12 +204,12 @@ def test_cancel_all_parked_count_and_sentinel_single_thread(k):
 
     def make_parker(sock):
         def parker():
-            got.append(runloom_c.wait_fd(sock.fileno(), READ))
+            got.append(stackweave_c.wait_fd(sock.fileno(), READ))
         return parker
 
     def canceller():
-        counts.append(runloom_c.cancel_all_parked())     # first: cancels K
-        counts.append(runloom_c.cancel_all_parked())     # second: nothing parked
+        counts.append(stackweave_c.cancel_all_parked())     # first: cancels K
+        counts.append(stackweave_c.cancel_all_parked())     # second: nothing parked
 
     fibers = [make_parker(a) for (a, _b) in pairs] + [canceller]
     try:
@@ -229,7 +229,7 @@ def test_cancel_all_parked_idempotent_when_nothing_parked():
     out = []
 
     def worker():
-        out.append(runloom_c.cancel_all_parked())
+        out.append(stackweave_c.cancel_all_parked())
 
     _drive(worker)
     assert out == [0]
@@ -251,17 +251,17 @@ def test_cancel_wait_fd_one_fiber_returns_true_and_sentinel():
     got = []
 
     def parker_one():
-        box["g"] = runloom_c.current_g()      # publish our handle for the canceller
-        got.append(("one", runloom_c.wait_fd(a.fileno(), READ)))
+        box["g"] = stackweave_c.current_g()      # publish our handle for the canceller
+        got.append(("one", stackweave_c.wait_fd(a.fileno(), READ)))
 
     def parker_two():
-        got.append(("two", runloom_c.wait_fd(a.fileno(), READ)))
+        got.append(("two", stackweave_c.wait_fd(a.fileno(), READ)))
 
     def canceller():
         woke = box["g"].cancel_wait_fd()       # cancels ONLY parker_one
         box["woke"] = woke
         # parker_two is still parked on the same fd -> drain it via cancel_fd.
-        runloom_c.netpoll_cancel_fd(a.fileno())
+        stackweave_c.netpoll_cancel_fd(a.fileno())
 
     try:
         _drive(parker_one, parker_two, canceller)
@@ -279,7 +279,7 @@ def test_cancel_wait_fd_false_when_not_parked():
     out = []
 
     def worker():
-        g = runloom_c.current_g()
+        g = stackweave_c.current_g()
         out.append(g.cancel_wait_fd())          # running, not parked -> False
 
     _drive(worker)
@@ -298,8 +298,8 @@ def test_monkey_recv_cross_fiber_close_raises():
     """Under monkey.patch(), a fiber blocked in socket.recv() whose socket is
     close()d by ANOTHER fiber wakes and raises OSError (EBADF / EBADF-family),
     instead of hanging forever (BUG #5).  Driven on the single-thread scheduler
-    via runloom.run(1)."""
-    runloom.monkey.patch()
+    via stackweave.run(1)."""
+    stackweave.monkey.patch()
     result = {}
     a, b = socket.socketpair()       # patched close hook needs the patched type
 
@@ -313,18 +313,18 @@ def test_monkey_recv_cross_fiber_close_raises():
             result["outcome"] = ("err", type(e).__name__)
 
     def closer():
-        runloom.sleep(0.02)          # let reader park first
+        stackweave.sleep(0.02)          # let reader park first
         a.close()                    # cross-fiber close -> cancel_fd + EBADF
 
     def main():
-        runloom.fiber(reader)
-        runloom.fiber(closer)
-        runloom.sleep(0.2)
+        stackweave.fiber(reader)
+        stackweave.fiber(closer)
+        stackweave.sleep(0.2)
 
     try:
-        runloom.run(1, main)
+        stackweave.run(1, main)
     finally:
-        runloom.monkey.unpatch()
+        stackweave.monkey.unpatch()
         try:
             b.close()
         except OSError:
@@ -347,7 +347,7 @@ def test_monkey_recv_cancel_all_open_socket_raises_ecanceled():
     socket, cancelled by cancel_all_parked() from a sibling, must raise
     OSError(ECANCELED) (the _wait_fd_coop map of the positive sentinel) rather
     than ignore the wake and re-park on the open fd."""
-    runloom.monkey.patch()
+    stackweave.monkey.patch()
     result = {}
     a, b = socket.socketpair()
 
@@ -361,18 +361,18 @@ def test_monkey_recv_cancel_all_open_socket_raises_ecanceled():
             result["outcome"] = ("err", type(e).__name__)
 
     def canceller():
-        runloom.sleep(0.02)          # let reader park
-        runloom_c.cancel_all_parked()
+        stackweave.sleep(0.02)          # let reader park
+        stackweave_c.cancel_all_parked()
 
     def main():
-        runloom.fiber(reader)
-        runloom.fiber(canceller)
-        runloom.sleep(0.2)
+        stackweave.fiber(reader)
+        stackweave.fiber(canceller)
+        stackweave.sleep(0.2)
 
     try:
-        runloom.run(1, main)
+        stackweave.run(1, main)
     finally:
-        runloom.monkey.unpatch()
+        stackweave.monkey.unpatch()
         a.close()
         b.close()
     assert result.get("outcome") is not None, "reader never returned (re-park hang)"
@@ -391,12 +391,12 @@ def test_monkey_recv_cancel_all_open_socket_raises_ecanceled():
 @pytest.mark.parametrize("how", ["cancel_all", "cancel_fd"],
                          ids=["cancel_all", "cancel_fd"])
 def test_tcpconn_recv_cancel_open_socket_raises_ecanceled(how):
-    """runloom_c.TCPConn(fd).recv() parks via the C coop fast path.  Cancelling
+    """stackweave_c.TCPConn(fd).recv() parks via the C coop fast path.  Cancelling
     it on a STILL-OPEN socket (so the retry-recv would EAGAIN -> re-park forever
     without the coop map) via cancel_all_parked() OR netpoll_cancel_fd() must
     raise OSError(ECANCELED) -- the bare positive sentinel mapped to -1/errno."""
     a, b = _pair()
-    conn = runloom_c.TCPConn(a.fileno())       # wraps + steals a's fd
+    conn = stackweave_c.TCPConn(a.fileno())       # wraps + steals a's fd
     result = {}
 
     def reader():
@@ -410,9 +410,9 @@ def test_tcpconn_recv_cancel_open_socket_raises_ecanceled(how):
 
     def canceller():
         if how == "cancel_all":
-            runloom_c.cancel_all_parked()
+            stackweave_c.cancel_all_parked()
         else:
-            runloom_c.netpoll_cancel_fd(a.fileno())
+            stackweave_c.netpoll_cancel_fd(a.fileno())
 
     try:
         _drive(reader, canceller)
@@ -446,10 +446,10 @@ def _wait_until_parked(target, timeout_s=4.0):
     "all K fibers have committed their wait_fd park" under M:N."""
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
-        if runloom_c.stats().get("netpoll_parked", 0) >= target:
+        if stackweave_c.stats().get("netpoll_parked", 0) >= target:
             return True
         time.sleep(0.005)
-    return runloom_c.stats().get("netpoll_parked", 0) >= target
+    return stackweave_c.stats().get("netpoll_parked", 0) >= target
 
 
 @pytest.mark.parametrize("hubs,k", [(2, 4), (4, 8), (8, 16)],
@@ -464,26 +464,26 @@ def test_cancel_all_parked_mn(hubs, k):
 
     def make_parker(idx, sock):
         def parker():
-            r = runloom_c.wait_fd(sock.fileno(), READ)
+            r = stackweave_c.wait_fd(sock.fileno(), READ)
             # 1 if cancelled-sentinel, 2 otherwise (single distinct writer slot).
             seen[idx] = 1 if r == CANCELLED else 2
         return parker
 
     def main():
         for i, (a, _b) in enumerate(pairs):
-            runloom.fiber(make_parker(i, a))
+            stackweave.fiber(make_parker(i, a))
         # Wait (cooperatively) until every fiber has parked, then cancel.  We
         # poll the global stat from inside the root fiber via short sleeps.
         deadline = time.monotonic() + 4.0
-        while (runloom_c.stats().get("netpoll_parked", 0) < k
+        while (stackweave_c.stats().get("netpoll_parked", 0) < k
                and time.monotonic() < deadline):
-            runloom.sleep(0.005)
-        counts.append(runloom_c.cancel_all_parked())     # cancels all K
-        runloom.sleep(0.05)                              # let woken fibers run
-        counts.append(runloom_c.cancel_all_parked())     # nothing left -> 0
+            stackweave.sleep(0.005)
+        counts.append(stackweave_c.cancel_all_parked())     # cancels all K
+        stackweave.sleep(0.05)                              # let woken fibers run
+        counts.append(stackweave_c.cancel_all_parked())     # nothing left -> 0
 
     try:
-        runloom.run(hubs, main)
+        stackweave.run(hubs, main)
     finally:
         for a, b in pairs:
             a.close()
@@ -506,22 +506,22 @@ def test_cancel_fd_mn_wakes_all_on_one_fd(hubs):
 
     def make_parker(idx):
         def parker():
-            r = runloom_c.wait_fd(a.fileno(), READ)
+            r = stackweave_c.wait_fd(a.fileno(), READ)
             seen[idx] = 1 if r == CANCELLED else 2
         return parker
 
     def main():
         for i in range(n_waiters):
-            runloom.fiber(make_parker(i))
+            stackweave.fiber(make_parker(i))
         deadline = time.monotonic() + 4.0
-        while (runloom_c.stats().get("netpoll_parked", 0) < n_waiters
+        while (stackweave_c.stats().get("netpoll_parked", 0) < n_waiters
                and time.monotonic() < deadline):
-            runloom.sleep(0.005)
-        runloom_c.netpoll_cancel_fd(a.fileno())
-        runloom.sleep(0.05)
+            stackweave.sleep(0.005)
+        stackweave_c.netpoll_cancel_fd(a.fileno())
+        stackweave.sleep(0.05)
 
     try:
-        runloom.run(hubs, main)
+        stackweave.run(hubs, main)
     finally:
         a.close()
         b.close()
@@ -546,7 +546,7 @@ def test_tcpconn_recv_cancel_mn_raises_ecanceled(hubs):
     socks = []
     for _ in range(n):
         a, b = _pair()
-        conns.append(runloom_c.TCPConn(a.fileno()))
+        conns.append(stackweave_c.TCPConn(a.fileno()))
         a.detach()                  # TCPConn owns the fd now; detach so a's GC
                                     # can't close it (-> recv ENOTSOCK/EBADF race)
         socks.append(b)             # keep peer open so the fd stays OPEN
@@ -565,16 +565,16 @@ def test_tcpconn_recv_cancel_mn_raises_ecanceled(hubs):
 
     def main():
         for i in range(n):
-            runloom.fiber(make_reader(i))
+            stackweave.fiber(make_reader(i))
         deadline = time.monotonic() + 4.0
-        while (runloom_c.stats().get("netpoll_parked", 0) < n
+        while (stackweave_c.stats().get("netpoll_parked", 0) < n
                and time.monotonic() < deadline):
-            runloom.sleep(0.005)
-        runloom_c.cancel_all_parked()
-        runloom.sleep(0.05)
+            stackweave.sleep(0.005)
+        stackweave_c.cancel_all_parked()
+        stackweave.sleep(0.05)
 
     try:
-        runloom.run(hubs, main)
+        stackweave.run(hubs, main)
     finally:
         for c in conns:
             try:

@@ -11,7 +11,7 @@ cancel, join.
 """
 import harness
 import cancelutil
-import runloom
+import stackweave
 
 
 def child(H, ctx, done, rng):
@@ -20,13 +20,13 @@ def child(H, ctx, done, rng):
         for _ in range(rng.randint(1, 6)):
             op = rng.randrange(3)
             if op == 0:
-                runloom.yield_now()
+                stackweave.yield_now()
             elif op == 1:
                 if not cancelutil.cancellable_sleep(ctx, rng.uniform(0.0, 0.01)):
                     status = "cancelled"
                     break
             else:
-                got = cancelutil.cancellable_recv(ctx, runloom.Chan(1),
+                got = cancelutil.cancellable_recv(ctx, stackweave.Chan(1),
                                                   timeout=0.005)
                 if got is None and ctx.err() is not None:
                     status = "cancelled"
@@ -42,7 +42,7 @@ def worker(H, wid, rng, state):
     while H.running():
         ctx, cancel = cancelutil.WithCancel(cancelutil.Background())
         k = rng.randint(2, 8)
-        done = runloom.Chan(k)
+        done = stackweave.Chan(k)
         for i in range(k):
             H.fiber(child, H, ctx, done, H.derive("p96", wid, rng.getrandbits(32)))
         if rng.random() < 0.5:

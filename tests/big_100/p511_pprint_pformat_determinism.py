@@ -19,7 +19,7 @@ collide with an open-elsewhere container would be mis-marked as a recursion (a
 spurious ``<Recursion on ...>``), or a genuine cycle's marker would be dropped --
 either way the rendered text would DRIFT for a fixed, single-owner input.
 
-WHERE M:N COULD BREAK IT (the gap this program probes).  runloom gives each fiber
+WHERE M:N COULD BREAK IT (the gap this program probes).  stackweave gives each fiber
 its own Python frame stack, so the pformat() call's C-and-Python locals (including
 the `context` dict, which is a fresh per-call local, never shared) should be fully
 fiber-private.  This program pins that claim: a fiber formats a FIXED, single-owner
@@ -38,7 +38,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (holds on plain threads):
   plain-threads control -- 8 OS threads each formatting their own fixed nested
   literal in a tight loop return byte-identical strings every iteration, 0 drift).
   sort_dicts=True removes insertion-order dependence, so even the dict rendering is
-  a pure function of the (key,value) SET.  Under a CORRECT runloom this must also
+  a pure function of the (key,value) SET.  Under a CORRECT stackweave this must also
   hold across a hub migration.  The input is a SINGLE-OWNER value built by, read
   by, and formatted by exactly one fiber; nothing is shared.  So a byte difference
   between the pre-yield and post-yield rendering, or an eval() that no longer
@@ -102,7 +102,7 @@ signal before the byte-identity / eval oracle fires.
 import pprint
 
 import harness
-import runloom
+import stackweave
 
 # Scalar alphabet for random single-owner literals.  Deliberately EXCLUDES any
 # character that could spoof pprint output: no '<' (would fake a "<Recursion on")
@@ -185,9 +185,9 @@ def determinism_check(H, wid, rng, state):
 
     # PARK across the render boundary so a sibling interleaves and this fiber
     # migrates hubs while its recursion-context locals are (were) live.
-    runloom.yield_now()
+    stackweave.yield_now()
     if wid & 1:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
 
     s2 = pprint.pformat(x, sort_dicts=True)
 
@@ -227,7 +227,7 @@ def cycle_marker_check(H, wid, rng, state):
 
     c1 = pprint.pformat(obj)
 
-    runloom.yield_now()
+    stackweave.yield_now()
 
     c2 = pprint.pformat(obj)
 

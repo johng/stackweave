@@ -19,7 +19,7 @@ type's ``__reduce_ex__``) to find how to serialize a custom type.  So the memo i
 PER-FIBER state that MUST NOT bleed across fibers, while the dispatch table is
 SHARED read-mostly state every fiber's pickler reads concurrently.
 
-WHY M:N MAKES IT REACHABLE.  Under runloom each fiber runs its OWN
+WHY M:N MAKES IT REACHABLE.  Under stackweave each fiber runs its OWN
 ``_pickle.Pickler``/``_pickle.Unpickler``, but many fibers share one hub OS-thread
 (and its ``PyThreadState``).  If the C pickler keyed ANY of its memo / dispatch
 scratch off the OS thread (a per-thread cache, a thread-local scratch buffer), or
@@ -27,8 +27,8 @@ if a fiber's reduction YIELDS mid-pickle and the scheduler runs a sibling's
 pickler on the same hub before it resumes, a memo index or a reduced value could
 bleed from the sibling -- the recovered graph would then be the WRONG fiber's, or
 a back-reference would resolve to a sibling's object.  We make the yield real: a
-custom type's reducer ``__reduce__`` calls ``runloom.yield_now()`` /
-``runloom.sleep`` WHILE the pickler is mid-dump, so a sibling fiber's pickler runs
+custom type's reducer ``__reduce__`` calls ``stackweave.yield_now()`` /
+``stackweave.sleep`` WHILE the pickler is mid-dump, so a sibling fiber's pickler runs
 on the shared hub thread between this fiber's memo writes.
 
 WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain threads):
@@ -45,23 +45,23 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain threads):
       (the per-instance memo back-reference resolved to a single object, not N
       copies and not a sibling's) -- and that object's owner is ``wid``.
   We verified with a standalone plain-threads control (64 threads, the SAME hazard
-  incl. a reducer that sleeps mid-reduction, NO runloom) that this holds with
+  incl. a reducer that sleeps mid-reduction, NO stackweave) that this holds with
   PYTHON_GIL=1 AND PYTHON_GIL=0: 0 mismatches in 25600 checks each.  Stock CPython
   gives each thread its own Pickler/Unpickler (own memo), and ``copyreg``'s
   dispatch_table is read-only after the one-time registration, so the round-trip
   identity holds for ANY GIL setting -- an oracle that fired there would be a
-  false-positive detector; it does NOT fire there.  Under a CORRECT runloom it
+  false-positive detector; it does NOT fire there.  Under a CORRECT stackweave it
   must ALSO hold (each fiber owns its memo).  If a memo index leaks across the
   yield (a back-reference resolves to a SIBLING's object), or a wrong reducer from
   the shared dispatch_table serializes the wrong type, or the recovered owner is
-  not ``wid`` -- that is the runloom bug, and the single-owner arm PASSES on a
+  not ``wid`` -- that is the stackweave bug, and the single-owner arm PASSES on a
   correct runtime (the program exits 0 when there is no bug).
 
 ORACLES:
   * LOAD-BEARING -- ROUND-TRIP GRAPH IDENTITY across a mid-dump yield (worker,
     HARD, fail-fast).  Single-owner: each fiber owns its Pickler, Unpickler, graph,
     and shared Leaf.  ``g2 == g`` AND ``g2.owner == wid`` at every level AND the
-    shared Leaf deduped to ONE wid-owned object.  A failure is a runloom per-fiber
+    shared Leaf deduped to ONE wid-owned object.  A failure is a stackweave per-fiber
     memo / dispatch isolation desync.
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber that vanished mid-dump
     (stranded inside the reducer's yield, or inside the C pickler holding a memo
@@ -111,7 +111,7 @@ import pickle
 import _pickle
 
 import harness
-import runloom
+import stackweave
 
 # Per-fiber graph depth.  Deep enough that the per-instance memo holds many
 # entries (one per Graph level + the shared Leaf back-reference) so a leaked memo
@@ -183,7 +183,7 @@ def reduce_leaf(leaf):
     """Reducer registered via copyreg.pickle(Leaf, reduce_leaf).  YIELDS mid-
     reduction so the shared dispatch_table lookup + this fiber's per-instance memo
     write are exercised WHILE a sibling fiber is also mid-pickle on the hub."""
-    runloom.yield_now()
+    stackweave.yield_now()
     return (Leaf, (leaf.owner, leaf.payload))
 
 
@@ -193,9 +193,9 @@ def reduce_graph(g):
     enough that the scheduler runs a sibling's pickler mid-dump before we resume --
     the cadence that reproduces a memo/dispatch leak if one exists."""
     if (g.owner + len(g.leaves)) & 1:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
     else:
-        runloom.yield_now()
+        stackweave.yield_now()
     return (Graph, (g.owner, g.leaves, g.child))
 
 
@@ -233,7 +233,7 @@ def roundtrip(H, wid, state):
     if g2 != g:
         H.fail("pickle round-trip CORRUPTED: recovered graph != original (wid "
                "{0}) -- a sibling fiber's memo/reducer bled into this fiber's "
-               "_pickle.Pickler/Unpickler across the mid-dump yield (runloom "
+               "_pickle.Pickler/Unpickler across the mid-dump yield (stackweave "
                "shares the hub PyThreadState across fibers)".format(wid))
         return
     # (2) owner is OURS at every level (no sibling graph leaked in via the memo).
@@ -296,9 +296,9 @@ def dispatch_check(H, wid, idx, state):
     priv_type = state["priv_types"][wid & 1023]
     reducer = state["priv_reducer"]
     copyreg.pickle(priv_type, reducer)           # mutate the SHARED global dict
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
     state["disp_checks"][wid & 1023] += 1
     # Observe the shared table.  Under M:N a sibling may have unregistered OUR type
     # (its priv_type differs, but the dict is shared and mutated concurrently), or
@@ -372,7 +372,7 @@ def setup(H):
     g2 = _pickle.Unpickler(io.BytesIO(buf.getvalue())).load()
     if g2 != g or g2.owner != -1 or g2.leaves[0] is not g2.child.leaves[0]:
         H.fail("setup self-test: pickle round-trip / memo dedup broken in "
-               "isolation -- the test scaffold is wrong, not runloom")
+               "isolation -- the test scaffold is wrong, not stackweave")
         return
 
     nworkers = max(2, H.funcs)
@@ -416,10 +416,10 @@ def post(H):
               rt, dchecks, dinter, dpct))
     if dinter:
         H.log("note: the dispatch_table arm observed {0} shared-dict interleaves "
-              "across {1} observations -- runloom hub fibers hammer the ONE "
+              "across {1} observations -- stackweave hub fibers hammer the ONE "
               "module-global copyreg.dispatch_table dict on a shared hub thread, "
               "so a sibling's register/unregister is visible mid-window.  This is "
-              "documented M:N shared-global-dict behavior, NOT a runloom bug, and "
+              "documented M:N shared-global-dict behavior, NOT a stackweave bug, and "
               "never reaches the load-bearing round-trip oracle (which registers "
               "its types ONCE in setup and only READS the table)".format(
                   dinter, dchecks))
@@ -439,7 +439,7 @@ if __name__ == "__main__":
         default_funcs=8000,
         describe="the C _pickle Pickler/Unpickler keep a PER-INSTANCE memo + "
                  "reducer dispatch, and copyreg has a MODULE-GLOBAL dispatch_table; "
-                 "runloom shares one hub PyThreadState across fibers.  LOAD-BEARING: "
+                 "stackweave shares one hub PyThreadState across fibers.  LOAD-BEARING: "
                  "each fiber builds a DISTINCT nested graph tagged with its wid (a "
                  "custom type whose reducer is registered via copyreg.pickle and "
                  "YIELDS mid-dump), pickles+unpickles it with its OWN Pickler/"
@@ -447,6 +447,6 @@ if __name__ == "__main__":
                  "exactly -- right owner at every level + the shared Leaf deduped "
                  "to ONE wid-owned object (0 mismatches under plain threads GIL on "
                  "AND off; a leaked memo back-reference / wrong reducer is the "
-                 "runloom bug).  The SHARED copyreg.dispatch_table register/"
+                 "stackweave bug).  The SHARED copyreg.dispatch_table register/"
                  "unregister interleave is documented M:N shared-dict behavior -- "
                  "measured, report-only")

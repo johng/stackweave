@@ -2,7 +2,7 @@
 
 Every CLIENT_INTERVAL seconds (default 60) it fires CLIENT_BURST (default
 100) concurrent HTTP requests at the server -- one goroutine per request,
-spawned with runloom_c.mn_fiber, all using the cooperative mnweb.fetch path.
+spawned with stackweave_c.mn_fiber, all using the cooperative mnweb.fetch path.
 It collects every result over a channel, logs a latency/status summary,
 sleeps, and repeats forever.
 
@@ -15,7 +15,7 @@ import sys
 import time
 import traceback
 
-import runloom_c
+import stackweave_c
 import mnweb
 
 HOST = os.environ.get("CLIENT_HOST", "127.0.0.1")
@@ -65,13 +65,13 @@ def summarize(burst_no, latencies, ok, fails, errors):
 def driver():
     burst_no = 0
     print("[client] target {}:{}  burst={}  interval={}s  hubs={}".format(
-        HOST, PORT, BURST, INTERVAL, runloom_c.mn_hub_count()), flush=True)
+        HOST, PORT, BURST, INTERVAL, stackweave_c.mn_hub_count()), flush=True)
     while True:
         burst_no += 1
-        results = runloom_c.Chan(BURST + 16)
+        results = stackweave_c.Chan(BURST + 16)
         sent = time.perf_counter()
         for i in range(BURST):
-            runloom_c.mn_fiber(lambda i=i, r=results: one_request(i, r))
+            stackweave_c.mn_fiber(lambda i=i, r=results: one_request(i, r))
         latencies, ok, fails, errors = [], 0, 0, []
         for _ in range(BURST):
             success, status, latency, err = results.recv()[0]
@@ -86,25 +86,25 @@ def driver():
         summarize(burst_no, latencies, ok, fails, errors)
         if fails:
             print("            burst wall={:.0f}ms".format(wall), flush=True)
-        runloom_c.sched_sleep(INTERVAL)
+        stackweave_c.sched_sleep(INTERVAL)
 
 
 def arm_diagnostics():
     # See site.py arm_diagnostics: no faulthandler, level without py/wait/gdb,
     # so a fault chains to SIG_DFL -> core + die (no wedge under M:N).
-    runloom_c.set_introspect_timestamps(True)
-    level = os.environ.get("RUNLOOM_CRASH", "goroutine,backtrace")
-    runloom_c.install_crash_handler(level, CRASH_REPORT)
-    runloom_c.install_traceback_signal()
+    stackweave_c.set_introspect_timestamps(True)
+    level = os.environ.get("STACKWEAVE_CRASH", "goroutine,backtrace")
+    stackweave_c.install_crash_handler(level, CRASH_REPORT)
+    stackweave_c.install_traceback_signal()
 
 
 def main():
     os.makedirs(RUNDIR, exist_ok=True)
     arm_diagnostics()
-    runloom_c.mn_init(HUBS)
-    runloom_c.mn_fiber(driver)
-    runloom_c.mn_run()
-    runloom_c.mn_fini()
+    stackweave_c.mn_init(HUBS)
+    stackweave_c.mn_fiber(driver)
+    stackweave_c.mn_run()
+    stackweave_c.mn_fini()
 
 
 if __name__ == "__main__":

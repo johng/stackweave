@@ -8,8 +8,8 @@ import socket
 import sys
 import time
 
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 
 
 def _port(lst):
@@ -31,11 +31,11 @@ def main():
     def server():
         conn = lst.accept()
         # Two messages, spaced out, so each parked reader should get one.
-        runloom.sleep(0.5)
+        stackweave.sleep(0.5)
         conn.send_all(b"AAAA")
-        runloom.sleep(0.5)
+        stackweave.sleep(0.5)
         conn.send_all(b"BBBB")
-        runloom.sleep(4.0)
+        stackweave.sleep(4.0)
         conn.close()
         lst.close()
 

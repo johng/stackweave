@@ -1,12 +1,12 @@
 """Free-threading stress, in the spirit of CPython's Lib/test/test_free_threading,
-with runloom fibers layered in.
+with stackweave fibers layered in.
 
 CPython's free-threading tests hammer shared list/dict/GC from many OS threads
-with the GIL off and assert no loss / no corruption / no crash.  runloom's whole
+with the GIL off and assert no loss / no corruption / no crash.  stackweave's whole
 correctness story is 3.13t, and its fibers run *on* those GIL-free hub
 threads -- so the meaningful version of those tests has fibers doing the
 hammering: shared-container mutation across hubs, a read-modify-write guarded by
-a channel-mutex, and -- most pointed for runloom -- gc.collect() stop-the-world
+a channel-mutex, and -- most pointed for stackweave -- gc.collect() stop-the-world
 firing while fibers are live on every hub (the exact shape behind the
 io_uring STW deadlock and the Group-B handoff work).
 
@@ -25,11 +25,11 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 def run_mn(code, timeout=60):
     preamble = (
         "import sys; sys.path.insert(0, %r)\n"
-        "import runloom_c\n" % os.path.join(REPO, "src")
+        "import stackweave_c\n" % os.path.join(REPO, "src")
     )
     env = dict(os.environ)
     env["PYTHON_GIL"] = "0"
-    env["RUNLOOM_GIL"] = "0"
+    env["STACKWEAVE_GIL"] = "0"
     try:
         p = subprocess.run(
             [sys.executable, "-c", preamble + code],
@@ -62,7 +62,7 @@ def test_concurrent_list_append_no_loss():
     assert_pass(r"""
 NHUB, NG, K = 4, 64, 500
 shared = []
-done = runloom_c.Chan(NG)
+done = stackweave_c.Chan(NG)
 def mk(g):
     def w():
         base = g * K
@@ -70,19 +70,19 @@ def mk(g):
             shared.append(base + i)
         done.send(1)
     return w
-runloom_c.mn_init(NHUB)
+stackweave_c.mn_init(NHUB)
 for g in range(NG):
-    runloom_c.mn_fiber(mk(g))
-runloom_c.mn_run()
+    stackweave_c.mn_fiber(mk(g))
+stackweave_c.mn_run()
 fin = 0
 for _ in range(NG):
     if done.try_recv() is None: break
     fin += 1
-runloom_c.mn_fini()
+stackweave_c.mn_fini()
 assert fin == NG, (fin, NG)
 assert len(shared) == NG * K, ("lost/extra appends", len(shared), NG * K)
 assert set(shared) == set(range(NG * K)), "wrong/duplicated/corrupted items"
-assert runloom_c._self_check(0) == 0
+assert stackweave_c._self_check(0) == 0
 print("PASS", len(shared))
 """, timeout=40)
 
@@ -98,7 +98,7 @@ def test_concurrent_dict_distinct_keys():
     assert_pass(r"""
 NHUB, NG, K = 4, 48, 400
 shared = {}
-done = runloom_c.Chan(NG)
+done = stackweave_c.Chan(NG)
 def mk(g):
     def w():
         for i in range(K):
@@ -106,19 +106,19 @@ def mk(g):
             shared[key] = key * 3 + 1
         done.send(1)
     return w
-runloom_c.mn_init(NHUB)
+stackweave_c.mn_init(NHUB)
 for g in range(NG):
-    runloom_c.mn_fiber(mk(g))
-runloom_c.mn_run()
+    stackweave_c.mn_fiber(mk(g))
+stackweave_c.mn_run()
 fin = 0
 for _ in range(NG):
     if done.try_recv() is None: break
     fin += 1
-runloom_c.mn_fini()
+stackweave_c.mn_fini()
 assert fin == NG, (fin, NG)
 assert len(shared) == NG * K, ("lost keys", len(shared), NG * K)
 assert all(shared[k] == k * 3 + 1 for k in range(NG * K)), "wrong/torn values"
-assert runloom_c._self_check(0) == 0
+assert stackweave_c._self_check(0) == 0
 print("PASS", len(shared))
 """, timeout=40)
 
@@ -137,27 +137,27 @@ def test_channel_mutex_guarded_counter_exact():
     assert_pass(r"""
 NHUB, NG, K = 4, 32, 300
 box = [0]
-mu = runloom_c.Chan(1)
+mu = stackweave_c.Chan(1)
 mu.send(0)                 # one token == unlocked
-done = runloom_c.Chan(NG)
+done = stackweave_c.Chan(NG)
 def worker():
     for _ in range(K):
         mu.recv()          # acquire
         box[0] += 1        # critical section (non-atomic RMW)
         mu.send(0)         # release
     done.send(1)
-runloom_c.mn_init(NHUB)
+stackweave_c.mn_init(NHUB)
 for _ in range(NG):
-    runloom_c.mn_fiber(worker)
-runloom_c.mn_run()
+    stackweave_c.mn_fiber(worker)
+stackweave_c.mn_run()
 fin = 0
 for _ in range(NG):
     if done.try_recv() is None: break
     fin += 1
-runloom_c.mn_fini()
+stackweave_c.mn_fini()
 assert fin == NG, (fin, NG)
 assert box[0] == NG * K, ("lost updates -> mutex did not exclude", box[0], NG * K)
-assert runloom_c._self_check(0) == 0
+assert stackweave_c._self_check(0) == 0
 print("PASS", box[0])
 """, timeout=40)
 
@@ -176,7 +176,7 @@ def test_gc_stw_under_fiber_churn():
     assert_pass(r"""
 import gc
 NHUB, NWORK, ROUNDS = 4, 48, 200
-done = runloom_c.Chan(NWORK + 1)
+done = stackweave_c.Chan(NWORK + 1)
 stop = [False]
 def worker():
     for _ in range(ROUNDS):
@@ -185,28 +185,28 @@ def worker():
         a['b'] = b; b['a'] = a
         a['self'] = a
         del a, b
-        runloom_c.sched_yield_classic()
+        stackweave_c.sched_yield_classic()
     done.send(1)
 def collector():
     n = 0
     while not stop[0]:
         gc.collect()           # full STW collection
         n += 1
-        runloom_c.sched_yield_classic()
+        stackweave_c.sched_yield_classic()
     done.send(('gc', n))
-runloom_c.mn_init(NHUB)
-runloom_c.mn_fiber(collector)
+stackweave_c.mn_init(NHUB)
+stackweave_c.mn_fiber(collector)
 for _ in range(NWORK):
-    runloom_c.mn_fiber(worker)
+    stackweave_c.mn_fiber(worker)
 def stopper():
     for _ in range(NWORK):
         done.recv()            # all workers finished
     stop[0] = True
     done.recv()                # collector's final tally
-runloom_c.mn_fiber(stopper)
-runloom_c.mn_run()
-runloom_c.mn_fini()
-assert runloom_c._self_check(0) == 0
+stackweave_c.mn_fiber(stopper)
+stackweave_c.mn_run()
+stackweave_c.mn_fini()
+assert stackweave_c._self_check(0) == 0
 print("PASS")
 """, timeout=50)
 
@@ -264,11 +264,11 @@ def body():
             except Exception:
                 pass
         t.join()
-runloom_c.mn_init(NHUB)
-runloom_c.mn_fiber(body, 8 << 20)            # roomy stack: dodge the cold-import overflow
-runloom_c.mn_run()
-runloom_c.mn_fini()
-assert runloom_c._self_check(0) == 0
+stackweave_c.mn_init(NHUB)
+stackweave_c.mn_fiber(body, 8 << 20)            # roomy stack: dodge the cold-import overflow
+stackweave_c.mn_run()
+stackweave_c.mn_fini()
+assert stackweave_c._self_check(0) == 0
 print("PASS")
 """, timeout=90)
 

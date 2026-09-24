@@ -7,14 +7,14 @@ Detection: per iteration, peer sends a known byte total; all reader fibers
 count what they get.  Shortfall after deadline => lost bytes.
 """
 import os
-os.environ["RUNLOOM_TCPCONN_IOURING"] = "0"
+os.environ["STACKWEAVE_TCPCONN_IOURING"] = "0"
 import socket
 import sys
 import threading
 import time
-import runloom_c
+import stackweave_c
 
-runloom_c.mn_init(8)
+stackweave_c.mn_init(8)
 
 ITERS = 60
 CHUNKS = 30
@@ -24,7 +24,7 @@ summary = {"ok": 0, "loss": 0, "raceshort": 0}
 
 
 def sleep_f(s):
-    runloom_c.sched_sleep(s)
+    stackweave_c.sched_sleep(s)
 
 
 def one_iteration(idx):
@@ -33,7 +33,7 @@ def one_iteration(idx):
     cli = socket.socket(); cli.connect(lst.getsockname())
     srv, _ = lst.accept(); lst.close()
     fd = os.dup(srv.fileno()); srv.close()
-    conn = runloom_c.TCPConn(fd)
+    conn = stackweave_c.TCPConn(fd)
 
     lock = threading.Lock()
     st = {"arrived": 0, "got": 0, "done": 0}
@@ -57,8 +57,8 @@ def one_iteration(idx):
         with lock:
             st["done"] += 1
 
-    runloom_c.mn_fiber(racer)
-    runloom_c.mn_fiber(racer)
+    stackweave_c.mn_fiber(racer)
+    stackweave_c.mn_fiber(racer)
 
     # Wait for both racers (bounded).
     dl = time.monotonic() + 1.5
@@ -80,7 +80,7 @@ def one_iteration(idx):
             with lock:
                 st["got"] += len(b)
 
-    runloom_c.mn_fiber(collector)
+    stackweave_c.mn_fiber(collector)
     for _ in range(CHUNKS):
         cli.sendall(b"a" * CHUNK)
         sleep_f(0.001)
@@ -117,5 +117,5 @@ def main():
     os._exit(0 if summary["loss"] == 0 else 1)
 
 
-runloom_c.mn_fiber(main)
-runloom_c.mn_run()
+stackweave_c.mn_fiber(main)
+stackweave_c.mn_run()

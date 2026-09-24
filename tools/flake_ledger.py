@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """flake_ledger.py -- turn "is this a real race or sampling variance?" into DATA.
 
-runloom is M:N (not asyncio-deterministic), so an order-/scheduling-dependent test
+stackweave is M:N (not asyncio-deterministic), so an order-/scheduling-dependent test
 result is a recurring judgment call ("round-1's failure did NOT recur -- sampling
 variance").  This makes it measurable: run each test FILE K times via the
 isolated runner, classify {stable-pass, stable-fail, FLAKY}, and persist a
@@ -29,7 +29,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 RUN_ISOLATED = os.path.join(ROOT, "tests", "run_isolated.py")
-PYBIN = os.environ.get("RUNLOOM_PYTHON",
+PYBIN = os.environ.get("STACKWEAVE_PYTHON",
                        os.path.expanduser("~/.pyenv/versions/3.14.4t/bin/python3"))
 LEDGER = os.path.join(HERE, "flake_ledger.json")
 

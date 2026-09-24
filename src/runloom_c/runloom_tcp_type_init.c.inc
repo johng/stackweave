@@ -47,7 +47,7 @@ static PyGetSetDef RunloomTCPConn_getset[] = {
 
 static PyTypeObject RunloomTCPConnType = {
     PyVarObject_HEAD_INIT(NULL, 0)
-    .tp_name = "runloom_c.TCPConn",
+    .tp_name = "stackweave_c.TCPConn",
     .tp_basicsize = sizeof(RunloomTCPConn),
     .tp_itemsize = 0,
     .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,

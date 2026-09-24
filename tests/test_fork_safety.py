@@ -1,11 +1,11 @@
 """Fork safety: after os.fork() the child keeps only the forking thread, so
-the M:N hub threads and the blocking-offload workers are gone.  runloom registers
+the M:N hub threads and the blocking-offload workers are gone.  stackweave registers
 an os.register_at_fork(after_in_child=...) handler that resets the runtime so
 the child neither hangs (run/mn_run waiting on dead hubs) nor deadlocks on an
 inherited held lock, and gets its own netpoll fd.
 
 These tests cover the SUPPORTED cases: a child that runs the single-thread
-scheduler / runloom.aio (the multiprocessing-fork and pre-fork-server pattern),
+scheduler / stackweave.aio (the multiprocessing-fork and pre-fork-server pattern),
 and a child that starts a brand-new M:N scheduler when the parent never used
 one.  Re-initialising M:N *inside* a fork-child of an already-active M:N parent
 is NOT supported (use forkserver/spawn, or run single-thread in the child).
@@ -19,8 +19,8 @@ import pytest
 
 sys.path.insert(0, "src")
 
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
 # fork() is POSIX-only; this whole module forks, so it cannot run on Windows.
 pytestmark = pytest.mark.skipif(
@@ -73,11 +73,11 @@ def spawn_mn_and_await_started(n, cap=5.0):
     def make(i):
         def g():
             started[i] = 1
-            runloom.sleep(0.3)
+            stackweave.sleep(0.3)
         return g
 
     for i in range(n):
-        runloom_c.mn_fiber(make(i))
+        stackweave_c.mn_fiber(make(i))
 
     deadline = time.monotonic() + cap
     while sum(started) < n and time.monotonic() < deadline:
@@ -92,16 +92,16 @@ class TestSingleThreadChild(unittest.TestCase):
         # Parent exercises the single-thread scheduler (so netpoll is inited),
         # then forks; the child must be able to run its own scheduler.
         def warm():
-            runloom.sleep(0.005)
-        runloom.run(1, warm)
+            stackweave.sleep(0.005)
+        stackweave.run(1, warm)
 
         def child():
             out = []
             def w():
                 out.append(1)
             for _ in range(4):
-                runloom.fiber(w)
-            runloom.run(1)
+                stackweave.fiber(w)
+            stackweave.run(1)
             return 0 if len(out) == 4 else 3
 
         rc = run_child(child)
@@ -111,9 +111,9 @@ class TestSingleThreadChild(unittest.TestCase):
 class TestAioChildAfterMNParent(unittest.TestCase):
     def test_child_runs_fresh_aio_loop(self):
         import asyncio
-        import runloom.aio as paio
+        import stackweave.aio as paio
 
-        runloom_c.mn_init(4)
+        stackweave_c.mn_init(4)
         try:
             # Deterministic: fork only once the 8 fibers are actually
             # running on the hubs (not a load-dependent time.sleep guess).
@@ -128,28 +128,28 @@ class TestAioChildAfterMNParent(unittest.TestCase):
             rc = run_child(child)
             self.assertEqual(rc, 0)
         finally:
-            runloom_c.mn_run()
-            runloom_c.mn_fini()
+            stackweave_c.mn_run()
+            stackweave_c.mn_fini()
 
     def test_mn_run_in_child_does_not_hang(self):
         # The originally-reproduced deadlock: a child that calls mn_run() with
         # the parent's (now-dead) hubs.  The reset zeroes the pending counter so
         # mn_run returns immediately instead of waiting on hubs that don't exist.
-        runloom_c.mn_init(4)
+        stackweave_c.mn_init(4)
         try:
             # Deterministic: fork only once the 8 fibers are actually
             # running on the hubs (not a load-dependent time.sleep guess).
             spawn_mn_and_await_started(8)
 
             def child():
-                runloom_c.mn_run()   # must return, not hang
+                stackweave_c.mn_run()   # must return, not hang
                 return 0
 
             rc = run_child(child, timeout=6.0)
             self.assertEqual(rc, 0)
         finally:
-            runloom_c.mn_run()
-            runloom_c.mn_fini()
+            stackweave_c.mn_run()
+            stackweave_c.mn_fini()
 
     def test_calibration_lock_usable_in_child(self):
         # The default-stack CALIBRATION lock (runloom_cal_lock) must be re-inited
@@ -158,37 +158,37 @@ class TestAioChildAfterMNParent(unittest.TestCase):
         # drain's cal_record) deadlocks against a parent thread that held it at
         # fork.  Fork from an ACTIVE M:N parent, then in the single-thread child
         # exercise the calibration lock + the cal_record drain path.
-        runloom_c.mn_init(4)
+        stackweave_c.mn_init(4)
         try:
             spawn_mn_and_await_started(8)
 
             def child():
-                runloom_c.get_stack_size()                 # RLOCK(cal_lock)
+                stackweave_c.get_stack_size()                 # RLOCK(cal_lock)
                 box = bytearray(1)
-                runloom.run(1, lambda: box.__setitem__(0, 1))  # drain -> cal_record
-                runloom_c.set_stack_size(runloom_c.get_stack_size())  # cal_lock again
+                stackweave.run(1, lambda: box.__setitem__(0, 1))  # drain -> cal_record
+                stackweave_c.set_stack_size(stackweave_c.get_stack_size())  # cal_lock again
                 return 0 if box[0] == 1 else 5
 
             rc = run_child(child, timeout=6.0)
             self.assertEqual(rc, 0)
         finally:
-            runloom_c.mn_run()
-            runloom_c.mn_fini()
+            stackweave_c.mn_run()
+            stackweave_c.mn_fini()
 
 
 class TestForkUnderLoad(unittest.TestCase):
     def test_repeated_forks_under_mn_load(self):
         import asyncio
-        import runloom.aio as paio
+        import stackweave.aio as paio
         import threading
 
-        runloom_c.mn_init(4)
+        stackweave_c.mn_init(4)
         stop = [False]
 
         def churn():
             while not stop[0]:
                 for _ in range(40):
-                    runloom_c.mn_fiber(lambda: None)
+                    stackweave_c.mn_fiber(lambda: None)
                 time.sleep(0.001)
 
         t = threading.Thread(target=churn, daemon=True)
@@ -206,8 +206,8 @@ class TestForkUnderLoad(unittest.TestCase):
         finally:
             stop[0] = True
             t.join(timeout=1.0)
-            runloom_c.mn_run()
-            runloom_c.mn_fini()
+            stackweave_c.mn_run()
+            stackweave_c.mn_fini()
 
 
 class TestIntrospectionInChild(unittest.TestCase):
@@ -216,13 +216,13 @@ class TestIntrospectionInChild(unittest.TestCase):
             # registry was reset -> starts empty, populates with child fibers
             out = []
             def w():
-                runloom.sleep(0.02)
+                stackweave.sleep(0.02)
             def main():
                 for _ in range(3):
-                    runloom.fiber(w)
-                runloom.sleep(0.005)
-                out.append(runloom_c.fiber_count())
-            runloom.run(1, main)
+                    stackweave.fiber(w)
+                stackweave.sleep(0.005)
+                out.append(stackweave_c.fiber_count())
+            stackweave.run(1, main)
             return 0 if out and out[0] == 4 else 6
 
         rc = run_child(child)

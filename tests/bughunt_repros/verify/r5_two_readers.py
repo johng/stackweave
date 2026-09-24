@@ -1,6 +1,6 @@
-# run: RUNLOOM_TCPCONN_IOURING=1 timeout 25 .venv/bin/python r5_two_readers.py
+# run: STACKWEAVE_TCPCONN_IOURING=1 timeout 25 .venv/bin/python r5_two_readers.py
 import socket, time
-import runloom, runloom_c as rc
+import stackweave, stackweave_c as rc
 def _port(lst):
     s = socket.socket(fileno=socket.dup(lst.fileno()))
     try: return s.getsockname()[1]
@@ -10,9 +10,9 @@ def main():
     lst = rc.TCPConn.listen("127.0.0.1", 0); port = _port(lst); holder = {}
     def server():
         conn = lst.accept()
-        runloom.sleep(0.5); conn.send_all(b"AAAA")
-        runloom.sleep(0.5); conn.send_all(b"BBBB")
-        runloom.sleep(4.0); conn.close(); lst.close()
+        stackweave.sleep(0.5); conn.send_all(b"AAAA")
+        stackweave.sleep(0.5); conn.send_all(b"BBBB")
+        stackweave.sleep(4.0); conn.close(); lst.close()
     def reader(key):
         c = holder["cli"]; t0 = time.monotonic()
         try: out[key] = ("data", c.recv(4), round(time.monotonic() - t0, 2))

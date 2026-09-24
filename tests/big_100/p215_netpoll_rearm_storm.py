@@ -15,7 +15,7 @@ import struct
 
 import harness
 import netutil
-import runloom
+import stackweave
 
 K = 8       # round-trips per connection before it is closed
 

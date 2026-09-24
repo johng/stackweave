@@ -27,7 +27,7 @@ internal corruption, a stale negative-cache version surviving an invalidation,
 or a torn registry walk -- isinstance() would return the WRONG virtual-subclass
 answer.  That is genuine shared-C-state corruption, a real bug at any scale.
 
-WHERE M:N COULD BREAK IT (the gap this program probes).  runloom gives each fiber
+WHERE M:N COULD BREAK IT (the gap this program probes).  stackweave gives each fiber
 its own Python frame stack, but the `numbers` tower ABCs are process-global
 objects and their _abc_* caches are shared C state.  A cross-hub isinstance()
 that races a sibling's register()/isinstance() on the same ABC could observe a
@@ -49,7 +49,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against a closed-form truth).
   the commit) on a correct runtime.  The class is UNIQUE per fiber, so its cache
   key (the type object identity) never aliases a sibling's -- a correct _abc
   cache can NEVER confuse two distinct types.  Therefore on ANY correct runtime
-  (single-thread, plain threads GIL on AND off, runloom M:N) the answer equals
+  (single-thread, plain threads GIL on AND off, stackweave M:N) the answer equals
   the fixed truth vector.  If a fiber ever observes isinstance() disagree with
   (Q <= L) -- a False where the tower says True, or a True where it says False --
   that is real _abc-cache corruption under contention, LOAD-BEARING, exit 1.
@@ -99,7 +99,7 @@ closed-form truth vector even fires.
 import numbers
 
 import harness
-import runloom
+import stackweave
 
 # The numeric tower, broad -> narrow.  Level index L: 0=Number .. 4=Integral.
 # A type registered at level L satisfies isinstance(inst, TOWER[Q]) iff Q <= L
@@ -204,9 +204,9 @@ def worker(H, wid, rng, state):
                 return
 
             # ---- YIELD: let siblings register/isinstance on the same ABCs
-            runloom.yield_now()
+            stackweave.yield_now()
             if idx & 1:
-                runloom.sleep(0.0003)
+                stackweave.sleep(0.0003)
 
             # ---- re-check AFTER the yield --------------------------------
             if id(inst) != inst_id:

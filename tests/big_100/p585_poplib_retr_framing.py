@@ -67,7 +67,7 @@ import poplib
 
 import harness
 import netutil
-import runloom
+import stackweave
 
 # Fixed, deterministic mailbox.  Both the server and every client compute the
 # SAME body for message n from make_body(n), so the client knows exactly what
@@ -252,7 +252,7 @@ def client(H, wid, rng, state):
                            wid, count, size, NUM_MESSAGES, TOTAL_SIZE))
                 return
 
-            runloom.yield_now()               # let a sibling interleave the hub
+            stackweave.yield_now()               # let a sibling interleave the hub
 
             # LIST: closed-form multiline scan listing.
             resp, lines, octets = pop.list()
@@ -277,7 +277,7 @@ def client(H, wid, rng, state):
                     return
                 retrs[wid] += 1               # single-writer-per-slot, race-free
                 H.op(wid)
-                runloom.yield_now()
+                stackweave.yield_now()
 
             pop.quit()
             H.task_done(wid)

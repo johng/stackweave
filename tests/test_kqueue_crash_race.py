@@ -6,7 +6,7 @@ no use-after-free, no hang, no wrong-fiber wake.  They are the adversarial
 counterpart to the readiness-conformance suite -- correctness here is "the
 whole thing finishes and every fiber it spawned exits with the flag it should".
 
-Everything runs under ``runloom.run(n, main)`` (M:N, n hubs) so the per-hub
+Everything runs under ``stackweave.run(n, main)`` (M:N, n hubs) so the per-hub
 kqueue + cross-hub self-pipe wake + the global by_fd dispatch all participate.
 A hang is caught structurally: every round's work is bounded, every spawned
 fiber writes a single distinct completion slot (one writer per slot -- a shared
@@ -19,7 +19,7 @@ Code under test (file:line is the branch each test targets):
     by_fd[fd] parker with CANCELLED (the socket-close hook waker; POSIX has no
     auto-wake on a LOCAL close, so this is the sole, race-free close-waker).
   * netpoll_wake_iouring.c.inc:256 runloom_netpoll_cancel_all_parked (B3) --
-    cancel every parker across all pools; binding runloom_c.cancel_all_parked().
+    cancel every parker across all pools; binding stackweave_c.cancel_all_parked().
   * netpoll_pump.c.inc:202-215 -- the kqueue drain: EV_EOF/EV_ERROR fold into
     BOTH directions (B1) + wake_all=1 dispatch (B2).
   * netpoll_pump_helpers.c.inc:41-99 runloom_pump_dispatch_event -- claim
@@ -32,7 +32,7 @@ Code under test (file:line is the branch each test targets):
 wait_fd contract (verified against module_run.c.inc:83 + netpoll_wait_fd.c.inc):
   >0  ready mask (1=READ, 2=WRITE, 3=both)
    0  timeout / deadline
-  runloom_c.WAIT_FD_CANCELLED (0x40000000)  cancelled (cancel_fd / cancel_all_parked /
+  stackweave_c.WAIT_FD_CANCELLED (0x40000000)  cancelled (cancel_fd / cancel_all_parked /
                                             G.cancel_wait_fd)
   raises OSError  hard error / signal.
 """
@@ -50,12 +50,12 @@ pytestmark = pytest.mark.skipif(
 
 sys.path.insert(0, "src")
 
-import runloom        # noqa: E402  high-level M:N driver (go / run / sleep)
-import runloom_c      # noqa: E402  raw scheduler + netpoll primitives
+import stackweave        # noqa: E402  high-level M:N driver (go / run / sleep)
+import stackweave_c      # noqa: E402  raw scheduler + netpoll primitives
 
 READ = 1
 WRITE = 2
-CANCELLED = runloom_c.WAIT_FD_CANCELLED
+CANCELLED = stackweave_c.WAIT_FD_CANCELLED
 
 
 # --------------------------------------------------------------------------- #
@@ -65,12 +65,12 @@ def _reset_registration():
     """Clear the per-fd kqueue 'registered' bitmap around each test.
 
     These tests raw-``close()`` sockets / pipes, bypassing the
-    ``netpoll_unregister`` hook every real runloom close path runs.  A reused
+    ``netpoll_unregister`` hook every real stackweave close path runs.  A reused
     fd NUMBER carrying a stale armed bit would skip its EV_ADD and hang (the
     documented kqueue fd-reuse trap).  Real code never leaks this; mimic it."""
     for fd in range(3, 1024):
         try:
-            runloom_c.netpoll_unregister(fd)
+            stackweave_c.netpoll_unregister(fd)
         except Exception:           # noqa: BLE001
             pass
 
@@ -80,9 +80,9 @@ def _kqueue_only_and_clean():
     # Guard: these assertions are kqueue-specific (B1/B2 wake_all, the per-hub
     # kqueue + self-pipe).  If some other backend is forced, skip rather than
     # assert false things about it.
-    if runloom_c.netpoll_backend() != "kqueue":
+    if stackweave_c.netpoll_backend() != "kqueue":
         pytest.skip("not the kqueue backend (got %r)"
-                    % runloom_c.netpoll_backend())
+                    % stackweave_c.netpoll_backend())
     _reset_registration()
     yield
     _reset_registration()
@@ -137,7 +137,7 @@ def _await_parked(n, what, budget_s=10.0):
     The tests here all have the shape "spawn N waiters, then do the dangerous
     thing to the fd they are parked on".  That only tests what it claims if the
     waiters are ACTUALLY PARKED when the dangerous thing happens, and the
-    original code approximated it with a flat runloom.sleep(0.02).
+    original code approximated it with a flat stackweave.sleep(0.02).
 
     On a loaded runner 20ms is not enough, and the failure is silent rather than
     loud: a waiter that has not parked yet is invisible to netpoll_cancel_fd, so
@@ -147,20 +147,20 @@ def _await_parked(n, what, budget_s=10.0):
     up on it and moved on, and its slot stayed unset.  That is the intermittent
     macOS `[(176, 0)]`: not a kqueue race, a test racing its own setup.
 
-    runloom_c.stats()["netpoll_parked"] counts exactly the fd parkers and is not
+    stackweave_c.stats()["netpoll_parked"] counts exactly the fd parkers and is not
     inflated by cooperative sleeps (measured: 4 waiters -> 4, and it stays 4
     while the observing fiber itself sleeps), so this is a real synchronisation
     point rather than a guess.
     """
     deadline = time.monotonic() + budget_s
     while True:
-        got = runloom_c.stats()["netpoll_parked"]
+        got = stackweave_c.stats()["netpoll_parked"]
         if got >= n:
             return
         assert time.monotonic() < deadline, (
             "%s: only %d of %d fibers parked within %.1fs"
             % (what, got, n, budget_s))
-        runloom.sleep(0.001)
+        stackweave.sleep(0.001)
 
 
 # --------------------------------------------------------------------------- #
@@ -194,20 +194,20 @@ def test_many_waiters_one_fd_closed(hubs, nwaiters):
                 # CANCELLED on close-cancel; READ is also acceptable if the
                 # cancel happened to race a (benign) readiness edge.
                 try:
-                    outcomes[base + i] = ("rv", runloom_c.wait_fd(fd, READ, 5000))
+                    outcomes[base + i] = ("rv", stackweave_c.wait_fd(fd, READ, 5000))
                 except BaseException as e:            # noqa: BLE001
                     outcomes[base + i] = ("exc", repr(e))
                 done[i] = 1
 
             for i in range(nwaiters):
-                runloom.fiber(waiter, i)
+                stackweave.fiber(waiter, i)
             # every waiter must ACTUALLY be parked on the one fd before the
             # cancel: one that is merely about to park is invisible to
             # cancel_fd, and would then park on an fd this round is about to
             # close and the next round is about to recycle.  See _await_parked.
             _await_parked(nwaiters, "same-fd-close hubs=%d n=%d round %d"
                                     % (hubs, nwaiters, r))
-            runloom_c.netpoll_cancel_fd(fd)    # the close-hook waker
+            stackweave_c.netpoll_cancel_fd(fd)    # the close-hook waker
             a.close()
             b.close()
             # Wait for all waiters of this round to unwind before reusing fds.
@@ -217,7 +217,7 @@ def test_many_waiters_one_fd_closed(hubs, nwaiters):
             # turns a real hang into an unset slot with no explanation.
             spins = 0
             while sum(done) < nwaiters and spins < 8000:
-                runloom.sleep(0.001)
+                stackweave.sleep(0.001)
                 spins += 1
             assert sum(done) == nwaiters, (
                 "same-fd-close hubs=%d n=%d round %d: %d/%d waiters still "
@@ -225,7 +225,7 @@ def test_many_waiters_one_fd_closed(hubs, nwaiters):
                 "genuine failure to wake, not an impatient test)"
                 % (hubs, nwaiters, r, sum(done), nwaiters))
 
-    runloom.run(hubs, main)
+    stackweave.run(hubs, main)
     _assert_all_outcomes(outcomes, ROUNDS * nwaiters,
                          "same-fd-close hubs=%d n=%d" % (hubs, nwaiters),
                          ok={CANCELLED, READ, 0})
@@ -253,7 +253,7 @@ def test_fd_number_reuse_churn(hubs):
             def reader(c=c, a=a, done=done):
                 # Park; the peer write below should wake us via a fresh EV_ADD
                 # on the (possibly reused) fd number.
-                rv = runloom_c.wait_fd(a.fileno(), READ, 1000)
+                rv = stackweave_c.wait_fd(a.fileno(), READ, 1000)
                 if rv & READ:
                     try:
                         if a.recv(8) == b"go":
@@ -264,18 +264,18 @@ def test_fd_number_reuse_churn(hubs):
                     flags[c] = 1               # deadline is acceptable, not a hang
                 done[0] = True
 
-            runloom.fiber(reader)
-            runloom.sleep(0.003)               # let the reader park first
+            stackweave.fiber(reader)
+            stackweave.sleep(0.003)               # let the reader park first
             b.send(b"go")
             spins = 0
             while not done[0] and spins < 2000:
-                runloom.sleep(0.001)
+                stackweave.sleep(0.001)
                 spins += 1
             # raw close (no unregister hook) -> exercises the fd-number reuse
             a.close()
             b.close()
 
-    runloom.run(hubs, main)
+    stackweave.run(hubs, main)
     _assert_all(flags, CYCLES, "fd-reuse churn hubs=%d" % hubs)
 
 
@@ -298,7 +298,7 @@ def test_eof_storm_all_readers_unwind(hubs, nconns):
 
         def reader(i, a=None):
             a = pairs[i][0]
-            rv = runloom_c.wait_fd(a.fileno(), READ, 5000)
+            rv = stackweave_c.wait_fd(a.fileno(), READ, 5000)
             if rv & READ:
                 try:
                     if a.recv(16) == b"":      # clean EOF
@@ -309,15 +309,15 @@ def test_eof_storm_all_readers_unwind(hubs, nconns):
                 flags[i] = 1                   # deadline (no hang) acceptable
 
         for i in range(nconns):
-            runloom.fiber(reader, i)
+            stackweave.fiber(reader, i)
         _await_parked(nconns, "eof-storm hubs=%d n=%d" % (hubs, nconns))
         for a, b in pairs:                     # bulk close -> EOF storm
             b.close()
-        runloom.sleep(0.5)                     # let the fold + dispatch run
+        stackweave.sleep(0.5)                     # let the fold + dispatch run
         for a, b in pairs:
             a.close()
 
-    runloom.run(hubs, main)
+    stackweave.run(hubs, main)
     _assert_all(flags, nconns, "eof-storm hubs=%d n=%d" % (hubs, nconns))
 
 
@@ -351,7 +351,7 @@ def test_rst_storm_via_linger(hubs):
 
         def reader(i, s=None):
             s = accepted[i]
-            rv = runloom_c.wait_fd(s.fileno(), READ, 5000)
+            rv = stackweave_c.wait_fd(s.fileno(), READ, 5000)
             if rv & READ:
                 try:
                     s.recv(16)                 # may raise ECONNRESET
@@ -362,7 +362,7 @@ def test_rst_storm_via_linger(hubs):
                 flags[i] = 1
 
         for i in range(NCONNS):
-            runloom.fiber(reader, i)
+            stackweave.fiber(reader, i)
         _await_parked(NCONNS, "rst-storm hubs=%d" % (hubs,))
         # Abortive close: SO_LINGER {1,0} sends RST instead of FIN.
         linger = struct.pack("ii", 1, 0)
@@ -372,14 +372,14 @@ def test_rst_storm_via_linger(hubs):
                 c.close()
             except OSError:
                 pass
-        runloom.sleep(0.5)
+        stackweave.sleep(0.5)
         for s in accepted:
             try:
                 s.close()
             except OSError:
                 pass
 
-    runloom.run(hubs, main)
+    stackweave.run(hubs, main)
     _assert_all(flags, NCONNS, "rst-storm hubs=%d" % hubs)
 
 
@@ -406,24 +406,24 @@ def test_cancel_all_parked_from_root(hubs):
 
             def waiter(i, base=base, done=done, a=None):
                 a = pairs[i][0]
-                rv = runloom_c.wait_fd(a.fileno(), READ, 3000)
+                rv = stackweave_c.wait_fd(a.fileno(), READ, 3000)
                 flags[base + i] = 1 if rv in (CANCELLED, 0) else 0
                 done[i] = 1
 
             for i in range(NPARK):
-                runloom.fiber(waiter, i)
+                stackweave.fiber(waiter, i)
             _await_parked(NPARK, "cancel-all hubs=%d round %d" % (hubs, r))
-            n = runloom_c.cancel_all_parked()
+            n = stackweave_c.cancel_all_parked()
             assert n >= 0                      # returns a count, never crashes
             spins = 0
             while sum(done) < NPARK and spins < 3000:
-                runloom.sleep(0.001)
+                stackweave.sleep(0.001)
                 spins += 1
             for a, b in pairs:
                 a.close()
                 b.close()
 
-    runloom.run(hubs, main)
+    stackweave.run(hubs, main)
     _assert_all(flags, ROUNDS * NPARK, "cancel-all-root hubs=%d" % hubs)
 
 
@@ -443,7 +443,7 @@ def test_cancel_all_parked_from_os_thread(hubs):
         # Hammer cancel_all_parked from outside the runtime.
         while not stop.is_set():
             try:
-                runloom_c.cancel_all_parked()
+                stackweave_c.cancel_all_parked()
             except Exception:           # noqa: BLE001 -- must never raise/crash
                 pass
 
@@ -458,15 +458,15 @@ def test_cancel_all_parked_from_os_thread(hubs):
 
                 def waiter(i, base=base, done=done, a=None):
                     a = pairs[i][0]
-                    rv = runloom_c.wait_fd(a.fileno(), READ, 2000)
+                    rv = stackweave_c.wait_fd(a.fileno(), READ, 2000)
                     flags[base + i] = 1 if rv in (CANCELLED, 0, READ) else 0
                     done[i] = 1
 
                 for i in range(NPARK):
-                    runloom.fiber(waiter, i)
+                    stackweave.fiber(waiter, i)
                 spins = 0
                 while sum(done) < NPARK and spins < 3000:
-                    runloom.sleep(0.001)
+                    stackweave.sleep(0.001)
                     spins += 1
                 for a, b in pairs:
                     a.close()
@@ -475,7 +475,7 @@ def test_cancel_all_parked_from_os_thread(hubs):
             stop.set()
             t.join(timeout=10)
 
-    runloom.run(hubs, main)
+    stackweave.run(hubs, main)
     assert not stop.is_set() or True       # canceller stopped cleanly
     _assert_all(flags, DURATION_ROUNDS * NPARK,
                 "cancel-all-osthread hubs=%d" % hubs)
@@ -497,7 +497,7 @@ def test_cancel_fd_races_peer_write(hubs):
             done = [False]
 
             def waiter(fd=fd, a=a, done=done, r=r):
-                rv = runloom_c.wait_fd(fd, READ, 3000)
+                rv = stackweave_c.wait_fd(fd, READ, 3000)
                 # exactly one winner: ready, cancelled, or (rarely) deadline
                 flags[r] = 1 if rv in (READ, CANCELLED, 0) else 0
                 if rv & READ:
@@ -507,19 +507,19 @@ def test_cancel_fd_races_peer_write(hubs):
                         pass
                 done[0] = True
 
-            runloom.fiber(waiter)
-            runloom.sleep(0.005)
+            stackweave.fiber(waiter)
+            stackweave.sleep(0.005)
             # race: write AND cancel near-simultaneously
             b.send(b"x")
-            runloom_c.netpoll_cancel_fd(fd)
+            stackweave_c.netpoll_cancel_fd(fd)
             spins = 0
             while not done[0] and spins < 3000:
-                runloom.sleep(0.001)
+                stackweave.sleep(0.001)
                 spins += 1
             a.close()
             b.close()
 
-    runloom.run(hubs, main)
+    stackweave.run(hubs, main)
     _assert_all(flags, ROUNDS, "cancel-fd-vs-write hubs=%d" % hubs)
 
 
@@ -539,28 +539,28 @@ def test_g_cancel_wait_fd_self_targeted(hubs):
             done = [False]
 
             def waiter(a=a, handle_box=handle_box, done=done, r=r):
-                handle_box.append(runloom_c.current_g())
-                rv = runloom_c.wait_fd(a.fileno(), READ, 3000)
+                handle_box.append(stackweave_c.current_g())
+                rv = stackweave_c.wait_fd(a.fileno(), READ, 3000)
                 flags[r] = 1 if rv in (CANCELLED, 0, READ) else 0
                 done[0] = True
 
-            runloom.fiber(waiter)
+            stackweave.fiber(waiter)
             # wait until the waiter has published its handle AND likely parked
             spins = 0
             while not handle_box and spins < 1000:
-                runloom.sleep(0.001)
+                stackweave.sleep(0.001)
                 spins += 1
-            runloom.sleep(0.005)
+            stackweave.sleep(0.005)
             if handle_box:
                 handle_box[0].cancel_wait_fd()
             spins = 0
             while not done[0] and spins < 3000:
-                runloom.sleep(0.001)
+                stackweave.sleep(0.001)
                 spins += 1
             a.close()
             b.close()
 
-    runloom.run(hubs, main)
+    stackweave.run(hubs, main)
     _assert_all(flags, ROUNDS, "g-cancel-wait-fd hubs=%d" % hubs)
 
 
@@ -585,7 +585,7 @@ def test_park_wake_soak(hubs):
             ok = 0
             for _ in range(ITERS):
                 b.send(b"p")
-                rv = runloom_c.wait_fd(a.fileno(), READ, 2000)
+                rv = stackweave_c.wait_fd(a.fileno(), READ, 2000)
                 if rv & READ:
                     try:
                         a.recv(8)
@@ -595,7 +595,7 @@ def test_park_wake_soak(hubs):
                 elif rv == 0:
                     ok += 1                    # deadline: not a hang
                 # occasionally also exercise WRITE-readiness park
-                rw = runloom_c.wait_fd(a.fileno(), WRITE, 1000)
+                rw = stackweave_c.wait_fd(a.fileno(), WRITE, 1000)
                 if not (rw & WRITE or rw == 0):
                     ok = -1
                     break
@@ -604,9 +604,9 @@ def test_park_wake_soak(hubs):
             flags[i] = 1 if ok == ITERS else (1 if ok >= 0 else 0)
 
         for i in range(NFIBERS):
-            runloom.fiber(worker, i)
+            stackweave.fiber(worker, i)
 
-    runloom.run(hubs, main)
+    stackweave.run(hubs, main)
     _assert_all(flags, NFIBERS, "park-wake-soak hubs=%d" % hubs)
 
 
@@ -634,35 +634,35 @@ def test_dup_fd_both_directions_peer_close(hubs):
             done = bytearray(2)
 
             def rd(base=base, a=a, done=done):
-                rv = runloom_c.wait_fd(a.fileno(), READ, 4000)
+                rv = stackweave_c.wait_fd(a.fileno(), READ, 4000)
                 flags[base + 0] = 1 if rv in (READ, CANCELLED, 0) else 0
                 done[0] = 1
 
             def wr(base=base, a2=a2, done=done):
-                rv = runloom_c.wait_fd(a2, WRITE, 4000)
+                rv = stackweave_c.wait_fd(a2, WRITE, 4000)
                 flags[base + 1] = 1 if rv in (WRITE, CANCELLED, 0) else 0
                 done[1] = 1
 
-            runloom.fiber(rd)
-            runloom.fiber(wr)
-            runloom.sleep(0.02)
+            stackweave.fiber(rd)
+            stackweave.fiber(wr)
+            stackweave.sleep(0.02)
             b.close()                          # EOF on the shared description
-            runloom.sleep(0.3)
+            stackweave.sleep(0.3)
             # cancel any straggler still parked (e.g. WRITE that already fired
             # and re-armed is fine; this just guarantees teardown progress).
-            runloom_c.netpoll_cancel_fd(a.fileno())
-            runloom_c.netpoll_cancel_fd(a2)
+            stackweave_c.netpoll_cancel_fd(a.fileno())
+            stackweave_c.netpoll_cancel_fd(a2)
             spins = 0
             while sum(done) < 2 and spins < 4000:
-                runloom.sleep(0.001)
+                stackweave.sleep(0.001)
                 spins += 1
             a.close()
             os.close(a2)
 
-    runloom.run(hubs, main)
+    stackweave.run(hubs, main)
     _assert_all(flags, ROUNDS * 2, "dup-fd-both-dirs hubs=%d" % hubs)
 
 
 if __name__ == "__main__":
-    print("netpoll backend under test:", runloom_c.netpoll_backend())
+    print("netpoll backend under test:", stackweave_c.netpoll_backend())
     raise SystemExit(pytest.main([__file__, "-v"]))

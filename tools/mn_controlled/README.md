@@ -2,10 +2,10 @@
 
 The high-value follow-up to single-hub PCT: control the scheduling of the
 **real M:N hubs** (work-stealing parallel OS threads) so the parallel races
-where runloom's hard bugs live become reproducible and seed-explorable.
+where stackweave's hard bugs live become reproducible and seed-explorable.
 
 Runtime hook (`src/runloom_c/mn_sched_hub_resume_preempt.c.inc`,
-`runloom_mn_ctrl_*`): when `RUNLOOM_MN_SEED` is set, goroutine execution segments
+`runloom_mn_ctrl_*`): when `STACKWEAVE_MN_SEED` is set, goroutine execution segments
 across all hubs are serialized through one **execution baton** — a hub may run a
 goroutine (`runloom_coro_resume`) only while it holds the baton, gated in
 `runloom_hub_resume_begin/end`; a seeded controller hands the baton to the next
@@ -16,7 +16,7 @@ for liveness — see below). Off by default; zero cost when unset.
 
 ## Deterministic replay (the barrier-rendezvous)
 
-Same `RUNLOOM_MN_SEED` ⇒ **identical execution**, run to run — verified by
+Same `STACKWEAVE_MN_SEED` ⇒ **identical execution**, run to run — verified by
 `repro_probe.py` (single channel: 16/16 seeds identical, seed 1 identical over
 500/500 reps under heavy CPU load), `repro_select.py` (select over multiple
 channels + mid-run goroutine spawn: 8/8 over 16 seeds × 30 reps, and 8/8 under
@@ -25,7 +25,7 @@ staggered `sched_sleep`: 8/8). Distinct seeds still explore distinct
 interleavings. The baton alone is *not* enough — it serializes who runs, but the
 requester set, the goroutine each hub holds, the preemption point, and timer
 firing all still raced OS timing. Six levers, gated together behind
-`RUNLOOM_MN_BARRIER` (default on under a seed; `RUNLOOM_MN_BARRIER=0` reverts to
+`STACKWEAVE_MN_BARRIER` (default on under a seed; `STACKWEAVE_MN_BARRIER=0` reverts to
 timing-dependent exploration for A/B):
 
 1. **Barrier-rendezvous census.** The controller grants the baton only once the
@@ -68,7 +68,7 @@ timing-dependent exploration for A/B):
    back-to-back `mn_fiber`s a segment finishes before yielding). In barrier mode the
    eval-frame wrapper ignores the wall-clock flag and instead yields the baton
    after a fixed COUNT of Python frame entries on the baton
-   (`RUNLOOM_MN_PREEMPT_FRAMES`, default 4096) — a deterministic function of the
+   (`STACKWEAVE_MN_PREEMPT_FRAMES`, default 4096) — a deterministic function of the
    goroutine's own execution. Cooperative goroutines park in far fewer frames, so
    they never trip it (natural, reproducible schedule); a CPU-bound goroutine that
    keeps calling functions hits the count and yields (liveness), at a *reproducible*
@@ -132,7 +132,7 @@ segments, lever 5) and `sched_sleep` timers (lever 6). The one genuinely
 out-of-reach source is *real network I/O* arrival timing: the wire decides when an
 fd is ready, so an open workload replays its scheduling decisions but not external
 arrival timing — the standard limit of this technique (CHESS, Coyote, rr-for-
-syscalls all draw the same line). (The `runloom.aio` event-loop timer path —
+syscalls all draw the same line). (The `stackweave.aio` event-loop timer path —
 `call_at`/`call_later` — has its own clock and is not yet routed through the
 logical clock; the `sched_sleep` primitive is.)
 
@@ -144,16 +144,16 @@ preemption ON** — it yields a runaway goroutine at a bytecode boundary, releas
 the baton. The TLA+ model's `Preempt=FALSE` control reproduces exactly this
 (`AllRun` liveness violated).
 
-**Off-path is regression-free.** Full isolated suite green with `RUNLOOM_MN_SEED`
+**Off-path is regression-free.** Full isolated suite green with `STACKWEAVE_MN_SEED`
 unset (the controlled path is gated behind `runloom_mn_ctrl.enabled`); the only
 default-path change is one predictable-false branch.
 
-## PCT — bug-depth-guaranteed search (`RUNLOOM_MN_PCT=<depth d>`)
+## PCT — bug-depth-guaranteed search (`STACKWEAVE_MN_PCT=<depth d>`)
 
 Deterministic replay pins one schedule per seed; **which** schedules a seed sweep
 explores was, until now, the baton's *uniform-random* grant order
 (`runloom_mn_ctrl_choose`'s else branch) — fine for shallow bugs, but with **no
-guarantee** of reaching a deep one. `RUNLOOM_MN_PCT=d` upgrades the grant order to
+guarantee** of reaching a deep one. `STACKWEAVE_MN_PCT=d` upgrades the grant order to
 the **PCT algorithm** (Probabilistic Concurrency Testing, Burckhardt et al.,
 ASPLOS 2010), which adds a *provable* probabilistic guarantee parameterized by
 **bug depth** — the number of ordering constraints a bug needs:
@@ -162,13 +162,13 @@ ASPLOS 2010), which adds a *provable* probabilistic guarantee parameterized by
   the baton to the **highest-priority waiting hub** (the barrier's complete
   requester set is PCT's "enabled" set — so PCT requires the barrier, default on);
 - **d-1 seeded priority change points** are planted at grant-step indices in
-  `[1, k]` (`RUNLOOM_MN_PCT_STEPS`, default 4096); reaching one **demotes** the hub
+  `[1, k]` (`STACKWEAVE_MN_PCT_STEPS`, default 4096); reaching one **demotes** the hub
   that ran that step below all base priorities. The d-1 demotions are exactly the
   d-1 ordering inversions a depth-d bug needs.
 
 Any bug of depth ≤ d is then hit with probability **≥ 1/(n·k^(d-1))** per seed —
 a lower bound the uniform draw has no analogue of. Sweep seeds; the bound says how
-many you need. A separate PRNG stream drives PCT, so a run with `RUNLOOM_MN_PCT`
+many you need. A separate PRNG stream drives PCT, so a run with `STACKWEAVE_MN_PCT`
 **unset is bit-identical** to before the feature; the pick stays a pure function of
 (seed, schedule), so **replay determinism is preserved** (`repro_probe.py` is 8/8
 stable with PCT on as well as off).
@@ -197,8 +197,8 @@ deadlocks, ordering-sensitive logic — which is exactly the class the baton
 serializes and can replay. It is **not** the tool for **true-simultaneity** memory
 races (e.g. the free-threaded gc-churn UAFs): the baton keeps **one** Python
 thread-state attached at a time, removing the very parallelism those need. Those
-stay the province of TSan + the flight recorder (`RUNLOOM_DEBUG=ring`) + delay
-injection (`RUNLOOM_DELAY`) under genuinely parallel execution. PCT and those
+stay the province of TSan + the flight recorder (`STACKWEAVE_DEBUG=ring`) + delay
+injection (`STACKWEAVE_DELAY`) under genuinely parallel execution. PCT and those
 tools are complementary, not substitutes.
 
 ## Demo / probe
@@ -211,16 +211,16 @@ PYTHON_GIL=0 ~/.pyenv/versions/3.14.4t/bin/python3 tools/mn_controlled/demo.py
 PYTHON_GIL=0 …/python3 tools/mn_controlled/repro_probe.py 12 8    # single channel
 PYTHON_GIL=0 …/python3 tools/mn_controlled/repro_select.py 10 8   # select + spawn
 PYTHON_GIL=0 …/python3 tools/mn_controlled/repro_timer.py 10 8    # sched_sleep timers
-RUNLOOM_MN_BARRIER=0 … repro_probe.py 12 8      # A/B: reverts to nondeterministic
+STACKWEAVE_MN_BARRIER=0 … repro_probe.py 12 8      # A/B: reverts to nondeterministic
 
 # PCT bug-depth-guaranteed search (depth-1 misses an order-dependent bug,
 # PCT depth-2 finds + replays it; empirical hit rate matches the 1/(n*k) bound):
 PYTHON_GIL=0 …/python3 tools/mn_controlled/pct_find.py 80
 
 # tunables:
-RUNLOOM_MN_PREEMPT_FRAMES=1024 …   # frame budget before a CPU-bound g yields the baton
-RUNLOOM_MN_PCT=3 RUNLOOM_MN_PCT_STEPS=64 …   # PCT depth d + change-point step bound k
-RUNLOOM_MN_SEED=1 RUNLOOM_MN_TRACE=/tmp/g.txt …   # grant trace: one hub-id per baton grant
+STACKWEAVE_MN_PREEMPT_FRAMES=1024 …   # frame budget before a CPU-bound g yields the baton
+STACKWEAVE_MN_PCT=3 STACKWEAVE_MN_PCT_STEPS=64 …   # PCT depth d + change-point step bound k
+STACKWEAVE_MN_SEED=1 STACKWEAVE_MN_TRACE=/tmp/g.txt …   # grant trace: one hub-id per baton grant
 ```
 `mn_stress` (select + coordinator close) also runs clean under controlled mode —
 a randomized concurrency-testing mode on the real hubs.

@@ -72,7 +72,7 @@ import struct
 import zlib
 
 import harness
-import runloom
+import stackweave
 
 # Record layout: <QQI = (wid:u64, seq:u64, crc:u32) little-endian.  20 bytes.
 REC_FMT = "<QQI"
@@ -119,7 +119,7 @@ def write_guards(arena, lo_off, hi_off, wid):
     gw = guard_wid(wid)
     gc = record_crc(gw, GUARD_SEQ)
     struct.pack_into(REC_FMT, arena, lo_off, gw, GUARD_SEQ, gc)
-    runloom.yield_now()
+    stackweave.yield_now()
     struct.pack_into(REC_FMT, arena, hi_off, gw, GUARD_SEQ, gc)
 
 
@@ -180,7 +180,7 @@ def do_guard_concurrent(H, wid, rng, arena, offs, seq, last_seq, slot, counts):
     (record vs guards never bleed across the boundary)."""
     rec_off, lo_off, hi_off = offs
     crc = record_crc(wid, seq)
-    wg = runloom.WaitGroup()
+    wg = stackweave.WaitGroup()
     wg.add(1)
 
     def sibling():
@@ -190,9 +190,9 @@ def do_guard_concurrent(H, wid, rng, arena, offs, seq, last_seq, slot, counts):
             wg.done()
 
     H.fiber(sibling)
-    runloom.yield_now()
+    stackweave.yield_now()
     struct.pack_into(REC_FMT, arena, rec_off, wid, seq, crc)
-    runloom.yield_now()
+    stackweave.yield_now()
     wg.wait()
     return verify_region(H, arena, rec_off, lo_off, hi_off, wid, last_seq, slot,
                          counts)
@@ -205,7 +205,7 @@ def do_mvslice(H, wid, rng, arena, offs, seq, last_seq, slot, counts):
     rec_off, lo_off, hi_off = offs
     crc = record_crc(wid, seq)
     mv = memoryview(arena)
-    wg = runloom.WaitGroup()
+    wg = stackweave.WaitGroup()
     wg.add(1)
 
     def sibling():
@@ -217,7 +217,7 @@ def do_mvslice(H, wid, rng, arena, offs, seq, last_seq, slot, counts):
     H.fiber(sibling)
     try:
         sl = mv[rec_off:rec_off + REC_SIZE]
-        runloom.yield_now()
+        stackweave.yield_now()
         struct.pack_into(REC_FMT, sl, 0, wid, seq, crc)
         sl.release()
     finally:
@@ -236,7 +236,7 @@ def do_resize_churn(H, wid, rng, seq, slot, counts):
     Returns ("ok", seq_read) | ("buffererror", None) | ("fail", None)."""
     buf = bytearray(REC_SIZE + 64)             # padding so a resize moves storage
     crc = record_crc(wid, seq)
-    wg = runloom.WaitGroup()
+    wg = stackweave.WaitGroup()
     wg.add(1)
 
     def resizer(buf=buf):
@@ -254,7 +254,7 @@ def do_resize_churn(H, wid, rng, seq, slot, counts):
     H.fiber(resizer)
     try:
         mv = memoryview(buf)                   # live export -> resize may refuse
-        runloom.yield_now()                    # sibling tries to resize HERE
+        stackweave.yield_now()                    # sibling tries to resize HERE
         struct.pack_into(REC_FMT, mv, 0, wid, seq, crc)
         mv.release()
     except BufferError:

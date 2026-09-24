@@ -1,6 +1,6 @@
 """Signal-storm robustness (S2).
 
-runloom runs no code in async-signal context (S0: preemption is eval-breaker
+stackweave runs no code in async-signal context (S0: preemption is eval-breaker
 based, the Ctrl-C path runs at a safe point). This hammers the signal-delivery
 machinery anyway: fire SIGALRM at ~1 kHz while many goroutines do heavy
 park/wake (chan ping-pong + sched_sleep), and verify the scheduler neither
@@ -13,7 +13,7 @@ import signal
 import sys
 
 sys.path.insert(0, "src")
-import runloom_c
+import stackweave_c
 
 fires = [0]
 
@@ -34,7 +34,7 @@ def main():
 
         # heavy park/wake: 32 ping-pong pairs, each bouncing N times, plus
         # sleepers parking on the timer -- all while signals rain down.
-        # NB: runloom_c.fiber(fn, stack_size) does NOT forward args (the 2nd
+        # NB: stackweave_c.fiber(fn, stack_size) does NOT forward args (the 2nd
         # positional is stack_size) -- capture everything via closures.
         def make_pinger(a, b):
             def pinger():
@@ -53,15 +53,15 @@ def main():
 
         def sleeper():
             for _ in range(50):
-                runloom_c.sched_sleep(0.0005)
+                stackweave_c.sched_sleep(0.0005)
 
         for _ in range(32):
-            a, b = runloom_c.Chan(), runloom_c.Chan()
-            runloom_c.fiber(make_pinger(a, b))
-            runloom_c.fiber(make_ponger(a, b))
+            a, b = stackweave_c.Chan(), stackweave_c.Chan()
+            stackweave_c.fiber(make_pinger(a, b))
+            stackweave_c.fiber(make_ponger(a, b))
         for _ in range(32):
-            runloom_c.fiber(sleeper)
-        runloom_c.run()
+            stackweave_c.fiber(sleeper)
+        stackweave_c.run()
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, signal.SIG_DFL)

@@ -1,6 +1,6 @@
-# Runloom benchmark suite
+# Stackweave benchmark suite
 
-Throughput / speed / memory benchmarks comparing runloom against Go, asyncio,
+Throughput / speed / memory benchmarks comparing stackweave against Go, asyncio,
 uvloop, gevent and raw greenlet. Produces a single consolidated
 [`../report.html`](../report.html) and curated README sections
 ([`../README_SECTIONS.md`](../README_SECTIONS.md)).
@@ -11,17 +11,17 @@ The original spec and every scoping decision are archived verbatim in
 ## What it measures
 
 - **Performance** (`run_perf.py`) — req/s (1 KiB) and bandwidth (1.5 MiB) for 9
-  server configs: 5 runloom tiers (sync wrappers / C scaffold / io_uring /
+  server configs: 5 stackweave tiers (sync wrappers / C scaffold / io_uring /
   io_uring+Cython / +optimize(throughput)) plus asyncio, uvloop, gevent and Go.
   A Go closed-loop loadgen walks a connection ladder until req/s plateaus.
 - **Speed** (`run_speed.py`) — spawn 1M tasks, context switch, HTTP req/s vs a Go
-  server, and TCP round-trip latency, for [runloom, go, asyncio, greenlet, uvloop].
+  server, and TCP round-trip latency, for [stackweave, go, asyncio, greenlet, uvloop].
 - **Memory** (`run_mem.py`) — used RSS (not virtual) per idle fiber and at 1M
-  fibers, for [go, runloom py handler, runloom py+optimize(memory), runloom c handler].
+  fibers, for [go, stackweave py handler, stackweave py+optimize(memory), stackweave c handler].
 
 ## Prerequisites
 
-- Free-threaded CPython 3.13t with the runloom C extension built
+- Free-threaded CPython 3.13t with the stackweave C extension built
   (`python setup.py build_ext --inplace` from the repo root) and Cython 3.x.
 - The GIL build of 3.13 with `uvloop` + `gevent` (the single-threaded baselines
   run there — their best case).
@@ -59,8 +59,8 @@ Individual phases: `run_perf.py`, `run_speed.py`, `run_mem.py` (each `--quick`,
   M:1 cooperative scheduler, a different runtime than the M:N work-stealer.
 - **The 16-core client can't saturate the fastest servers** for a symmetric echo,
   so each peak records the CPU-bound side and a server-ceiling estimate.
-- **Zero-PyObject Cython handler** calls runloom's cooperative recv/send as plain C
-  via the `runloom_c.__tcp_capi__` capsule; `servers/disasm_check.sh` objdumps the
+- **Zero-PyObject Cython handler** calls stackweave's cooperative recv/send as plain C
+  via the `stackweave_c.__tcp_capi__` capsule; `servers/disasm_check.sh` objdumps the
   hot loop to prove it.
 
 See `harness/config.py` for the exact numbers and `gen_report.py` for the full

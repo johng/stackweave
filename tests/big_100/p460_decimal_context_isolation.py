@@ -9,7 +9,7 @@ current Context as a NEW private object (its own ContextVar token), runs the blo
 against that copy, and on __exit__ resets the ContextVar back -- so a block's prec
 change is supposed to be invisible to every other execution context.
 
-WHERE M:N BREAKS IT (the gap this program probes).  runloom gives each fiber a
+WHERE M:N BREAKS IT (the gap this program probes).  stackweave gives each fiber a
 per-fiber context via PyContext_CopyCurrent, which copies the context MAPPING --
 i.e. the ContextVar -> value bindings.  But the decimal ContextVar's *value* is the
 Context OBJECT, and a shallow mapping copy copies the REFERENCE: every hub fiber's
@@ -19,8 +19,8 @@ corrupts another fiber's "private" arithmetic across a yield.  localcontext() do
 NOT save it: it copies that same shared object and (under M:N) the copy can be the
 object a SIBLING is also mutating, or the ContextVar token reset desyncs across a
 hub migration.  Empirically (verified, not assumed) localcontext arithmetic that is
-race-free under stock threads (GIL on AND off) corrupts under runloom M:N -- a true
-runloom isolation bug, the decimal sibling of the BUG#7 contextvar class.
+race-free under stock threads (GIL on AND off) corrupts under stackweave M:N -- a true
+stackweave isolation bug, the decimal sibling of the BUG#7 contextvar class.
 
 WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain threads):
 
@@ -28,15 +28,15 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain threads):
   ctx.prec = P and computes Decimal(1)/Decimal(7) MUST get a value with exactly P
   significant digits, and recomputing it after a yield MUST give the identical
   value, no matter what siblings do -- the block's prec is private.  We verified
-  with a standalone plain-threads control (64 threads, same hazard, NO runloom)
+  with a standalone plain-threads control (64 threads, same hazard, NO stackweave)
   that this holds with PYTHON_GIL=1 AND PYTHON_GIL=0: 0 mismatches in 25600 checks
   each.  Stock CPython keys the decimal ContextVar per OS thread, so each thread
   gets its OWN Context object and localcontext is genuinely private for any GIL
   setting.  An oracle that fired there would be a false-positive detector; it does
-  NOT fire there.  Under a CORRECT runloom it must ALSO hold (each fiber a private
-  context).  If runloom leaks a sibling's prec across the yield -- localcontext's
+  NOT fire there.  Under a CORRECT stackweave it must ALSO hold (each fiber a private
+  context).  If stackweave leaks a sibling's prec across the yield -- localcontext's
   recomputed 1/7 has the WRONG digit count, or r1 != r2, or the Inexact/Rounded
-  flags are polluted by a sibling -- that is the runloom isolation bug, and the
+  flags are polluted by a sibling -- that is the stackweave isolation bug, and the
   serialized single-owner localcontext arm PASSES on a correct runtime (program
   exits 0 when there is no bug).
 
@@ -44,7 +44,7 @@ ORACLES:
   * LOAD-BEARING -- localcontext() PRIVATE-CONTEXT INTEGRITY (worker, HARD,
     fail-fast).  Each fiber opens `with decimal.localcontext() as ctx:`, sets
     ctx.prec to a unique-per-wid value P, clears the flags, computes
-    r1 = Decimal(1)/Decimal(7), YIELDS (runloom.sleep / yield_now), then asserts:
+    r1 = Decimal(1)/Decimal(7), YIELDS (stackweave.sleep / yield_now), then asserts:
       - r2 = Decimal(1)/Decimal(7) recomputed at its own prec equals r1 (private
         prec survived the yield);
       - r1 has exactly P significant digits (the prec actually in force is P, not a
@@ -55,7 +55,7 @@ ORACLES:
       - the Inexact flag is set and Overflow/DivisionByZero (impossible for 1/7)
         are NOT set -- a sibling cannot have polluted the flags.
     Single-owner: nothing but THIS fiber should touch its localcontext block.  A
-    failure is a runloom per-fiber decimal-context isolation desync.
+    failure is a stackweave per-fiber decimal-context isolation desync.
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber that vanished mid-block
     (stranded inside localcontext.__exit__ on a desynced ContextVar token) never
     returns; the watchdog + require_no_lost catch it.
@@ -93,7 +93,7 @@ import decimal
 from decimal import Decimal, localcontext, getcontext
 
 import harness
-import runloom
+import stackweave
 
 # Per-fiber prec values are drawn from this band.  Each prec yields a 1/7 with a
 # DISTINCT, deterministic value (exactly `prec` significant digits), so a leaked
@@ -152,7 +152,7 @@ def setup(H):
 # localcontext() is DOCUMENTED to give a private context; under a correct runtime
 # (and plain threads, GIL on AND off -- verified) the block's prec is invisible to
 # siblings, so r1==r2, r1 has exactly P digits, and r1 == the canonical 1/7 at P.
-# A leak of a sibling's prec across the yield breaks one of those -> runloom bug.
+# A leak of a sibling's prec across the yield breaks one of those -> stackweave bug.
 # --------------------------------------------------------------------------
 def lc_check(H, wid, idx, state):
     # Rotate prec by (wid + idx) so a fiber's prec differs from its hub siblings'
@@ -168,11 +168,11 @@ def lc_check(H, wid, idx, state):
         # mid-block at a different prec) while this fiber is PARKED.  The sleep-park
         # -- not a bare yield_now -- is what reliably deschedules this fiber long
         # enough that the scheduler runs a sibling mid-block on the shared Context
-        # object before we resume.  If runloom leaks that shared object, the
+        # object before we resume.  If stackweave leaks that shared object, the
         # sibling's prec change is now in force when we recompute.
-        runloom.yield_now()
+        stackweave.yield_now()
         if idx & 1:
-            runloom.sleep(0.0002)
+            stackweave.sleep(0.0002)
         r2 = Decimal(1) / Decimal(7)            # recomputed at OUR own prec
         # Snapshot the flags WHILE still inside the block (before __exit__ resets).
         inexact = ctx.flags[decimal.Inexact]
@@ -185,7 +185,7 @@ def lc_check(H, wid, idx, state):
     if r1 != r2:
         H.fail("localcontext NOT private: 1/7 changed across a yield, {0} -> {1} "
                "(wid {2} set prec {3}) -- a sibling fiber's prec leaked into this "
-               "fiber's localcontext block (runloom shares the thread-affine "
+               "fiber's localcontext block (stackweave shares the thread-affine "
                "decimal Context object across hub fibers)".format(
                    r1, r2, wid, p))
         return
@@ -240,9 +240,9 @@ def lc_check(H, wid, idx, state):
 def global_check(H, wid, r, state):
     p = PREC_MIN + ((wid * 7 + r) % PREC_SPAN)
     getcontext().prec = p                        # mutate the SHARED global in place
-    runloom.yield_now()
+    stackweave.yield_now()
     if r & 1:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
     got = getcontext().prec
     state["global_checks"][wid & 1023] += 1
     if got != p:
@@ -317,11 +317,11 @@ def post(H):
               lc, gchecks, gleaks, gpct, H.state["have_cv"]))
     if gleaks:
         H.log("note: the global getcontext().prec path observed {0} cross-fiber "
-              "leaks across {1} checks -- runloom hub fibers share one thread-"
+              "leaks across {1} checks -- stackweave hub fibers share one thread-"
               "affine decimal Context object, so getcontext() mutations are "
               "visible to siblings (0 under plain threads only because each OS "
               "thread owns its context).  This is documented M:N shared-object "
-              "behavior, NOT a runloom bug, and never reaches the load-bearing "
+              "behavior, NOT a stackweave bug, and never reaches the load-bearing "
               "localcontext oracle".format(gleaks, gchecks))
     # NON-VACUITY: the load-bearing localcontext hazard was actually exercised.
     H.check(lc > 0,
@@ -338,13 +338,13 @@ if __name__ == "__main__":
         "p460_decimal_context_isolation", body, setup=setup, post=post,
         default_funcs=8000,
         describe="decimal's active context is a thread-affine MUTABLE Context "
-                 "object (contextvar-backed); runloom's per-fiber "
+                 "object (contextvar-backed); stackweave's per-fiber "
                  "PyContext_CopyCurrent shallow-copies the ContextVar->Context "
                  "binding so hub fibers share ONE Context object.  LOAD-BEARING: "
                  "decimal.localcontext() MUST give a private context -- 1/7 at a "
                  "unique per-fiber prec keeps its value+digit-count across a yield "
                  "and matches the canonical 1/7 at that prec, with un-polluted "
                  "flags (0 under plain threads GIL on AND off; a sibling-prec leak "
-                 "is the runloom bug).  The GLOBAL getcontext().prec leak is the "
+                 "is the stackweave bug).  The GLOBAL getcontext().prec leak is the "
                  "documented thread-affine shared-object M:N behavior -- measured, "
                  "report-only")

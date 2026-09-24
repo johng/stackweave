@@ -294,7 +294,7 @@ static int runloom_perhub_epoll(void)
     static int v = -1;
     int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
     if (cur < 0) {
-        const char *e = getenv("RUNLOOM_PERHUB_EPOLL");
+        const char *e = getenv("STACKWEAVE_PERHUB_EPOLL");
         /* default ON; only an explicit "0" disables. */
         cur = (e != NULL && e[0] == '0' && e[1] == '\0') ? 0 : 1;
         __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
@@ -318,7 +318,7 @@ static int runloom_wake_dedup_enabled(void)
     static int v = -1;
     int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
     if (cur < 0) {
-        const char *e = getenv("RUNLOOM_WAKE_DEDUP");
+        const char *e = getenv("STACKWEAVE_WAKE_DEDUP");
         /* default ON; only an explicit "0" disables */
         cur = (e != NULL && e[0] == '0' && e[1] == '\0') ? 0 : 1;
         __atomic_store_n(&v, cur, __ATOMIC_RELAXED);

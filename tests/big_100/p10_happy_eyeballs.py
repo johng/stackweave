@@ -12,7 +12,7 @@ import socket
 
 import harness
 import netutil
-import runloom
+import stackweave
 
 
 def echo_handle(conn):
@@ -48,7 +48,7 @@ def connector(family, addr, jitter, result):
     """Try to connect; push (family, socket-or-None) onto the result chan."""
     sock = None
     try:
-        runloom.sleep(jitter)
+        stackweave.sleep(jitter)
         if addr is None:
             result.send((family, None))
             return
@@ -64,7 +64,7 @@ def connector(family, addr, jitter, result):
 def client(H, wid, rng, state):
     H.sleep(rng.random() * 0.5)
     while H.running():
-        result = runloom.Chan(2)
+        result = stackweave.Chan(2)
         j4 = rng.random() * 0.01
         j6 = rng.random() * 0.01
         v4addr = netutil.pick_server(state["v4_servers"], rng)

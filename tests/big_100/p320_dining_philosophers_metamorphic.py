@@ -2,7 +2,7 @@
 
 The corpus measures lock fairness (p214), contention (p46) and priority
 inversion (p43), but nothing asserts a *metamorphic* equality: that an
-aggregate conservation computed over cooperative ``runloom.sync.Lock`` forks is
+aggregate conservation computed over cooperative ``stackweave.sync.Lock`` forks is
 INVARIANT to how the M:N scheduler ran it.  This program seeds that style (and
 its sibling, deterministic replay) with the cleanest possible vehicle: dining
 philosophers under a resource-hierarchy (lock-ordering) discipline so it can
@@ -65,7 +65,7 @@ often the first signal, and the same-seed replay arm pins the otherwise
 intermittent divergence so a green run is evidence, not luck.
 """
 import harness
-import runloom
+import stackweave
 
 # Each philosopher eats between these many meals.  Its exact count is a pure
 # function of (master seed, wid) so the workload is deterministic and timing-free.
@@ -117,7 +117,7 @@ def eat_once(lo_fork, hi_fork, holder, lo_i, hi_i, wid):
     holder[hi_i] = wid
     # Both forks held.  Yield inside the critical section to widen the window for
     # a broken grant to let a second holder stamp over us.
-    runloom.yield_now()
+    stackweave.yield_now()
     if holder[hi_i] != wid:
         v += 1
     if holder[lo_i] != wid:
@@ -189,7 +189,7 @@ def setup(H):
     # ring with the requested goroutine count.  NF forks == NF philosophers on a
     # ring; need >= 2 for the lo/hi hierarchy to mean anything.
     nf = max(3, min(H.funcs, 2000))
-    forks = [runloom.sync.Lock() for _ in range(nf)]
+    forks = [stackweave.sync.Lock() for _ in range(nf)]
     H.state = {
         "nf": nf,
         "forks": forks,
@@ -216,7 +216,7 @@ def body(H):
     # returns once exited>=expected) before starting Phase B so the two phases
     # never overlap and the per-phase meal vectors are written cleanly.
     state["holder"] = [-1] * nf
-    run_phase(H, state, "A", serializer=runloom.sync.Lock())
+    run_phase(H, state, "A", serializer=stackweave.sync.Lock())
     H.wait_for_deadline()
 
     if not H.running():

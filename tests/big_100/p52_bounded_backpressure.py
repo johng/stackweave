@@ -10,13 +10,13 @@ Stresses: blocking put/get, backpressure, producer wake-ups.
 import threading
 
 import harness
-import runloom
+import stackweave
 
 
 def setup(H):
     # produced/consumed: one slot per goroutine (indexed by wid) — no two
     # goroutines share a slot, eliminating the data race under GIL=0.
-    H.state = {"ch": runloom.Chan(2), "lock": threading.Lock(),
+    H.state = {"ch": stackweave.Chan(2), "lock": threading.Lock(),
                "prod_done": [0], "produced": [0] * H.funcs,
                "consumed": [0] * H.funcs, "nproducers": [0]}
 
@@ -54,7 +54,7 @@ def consumer(H, wid, rng, state):
         if not ok:
             break
         n += 1
-        runloom.sleep(0.001)        # slow consumer
+        stackweave.sleep(0.001)        # slow consumer
     state["consumed"][wid] += n
 
 

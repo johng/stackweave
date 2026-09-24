@@ -3,11 +3,11 @@
 (SQLite stacked OOM+IO injectors, AWS ShardStore faults-in-the-op-alphabet;
 QA-steal rank 10).
 
-pygo's counted sweep (fault_sweep_counted.py) arms ONE RUNLOOM_FAULT_* site at a
+pygo's counted sweep (fault_sweep_counted.py) arms ONE STACKWEAVE_FAULT_* site at a
 time.  The highest-risk, least-tested code is the unwind path that ITSELF hits a
 fault -- fd/handle/g leaks and half-migrated tstate corruption hide there.  The
 runtime already keys arming + counters per-site (netpoll_init.c.inc), so stacking
-needs no C change: set TWO RUNLOOM_FAULT_* env vars.
+needs no C change: set TWO STACKWEAVE_FAULT_* env vars.
 
 For each historically bug-dense pair, site A faults ONCE (one error+cleanup) --
 not persistently, which would SHADOW an earlier site in the same path -- and site
@@ -46,8 +46,8 @@ DEFAULT_PAIRS = [
 
 def run_pair(a_spec, b_site, b_spec, timeout):
     env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src", SWEEP_SITE=b_site)
-    env["RUNLOOM_FAULT_" + PAIR_A] = a_spec          # A persistent / baseline
-    env["RUNLOOM_FAULT_" + b_site] = b_spec          # B swept
+    env["STACKWEAVE_FAULT_" + PAIR_A] = a_spec          # A persistent / baseline
+    env["STACKWEAVE_FAULT_" + b_site] = b_spec          # B swept
     try:
         p = subprocess.run([PY, "-c", WORKLOAD], cwd=ROOT, env=env,
                            capture_output=True, text=True, timeout=timeout)

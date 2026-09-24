@@ -56,7 +56,7 @@ contents; two OS threads each scanning their own private dir get exactly their o
 contents (verified with a plain-threads control, GIL on and off: 0 cross-thread
 leaks, every scan == its own expected set).  So under a correct runtime the law
 holds and the program exits 0.  A dropped/extra/torn ModuleInfo, an
-out-of-universe name, or a cross-fiber leak is a runloom / free-threaded
+out-of-universe name, or a cross-fiber leak is a stackweave / free-threaded
 import-machinery concurrency bug.
 
 NON-VACUITY (post): the discovery arm actually ran (scans > 0).
@@ -81,7 +81,7 @@ import tempfile
 import pkgutil
 
 import harness
-import runloom
+import stackweave
 
 # Valid module base names (no leading underscore; all valid identifiers) used as
 # bare `<name>.py` files -> ModuleInfo(ispkg=False).  Disjoint from PKG_POOL so a
@@ -213,9 +213,9 @@ def worker(H, wid, rng, state):
             # YIELD at the hazard boundary so siblings run their own scans and
             # pound the shared path_importer_cache / FileFinder machinery on
             # other hubs before this fiber re-reads its own directory.
-            runloom.yield_now()
+            stackweave.yield_now()
             if wid & 1:
-                runloom.sleep(0.0003)
+                stackweave.sleep(0.0003)
 
             # Second scan of the UNCHANGED dir: hits the now-cached FileFinder.
             # Must still be exactly `expected` (stable, uncorrupted by siblings).

@@ -1,13 +1,13 @@
 # Stack sizing & memory
 
-Each fiber in runloom owns a private C stack -- this is what enables
+Each fiber in stackweave owns a private C stack -- this is what enables
 the "looks-like-a-thread, costs-like-a-callback" cooperative model.
-This page explains how runloom manages that stack so you can run a lot of
+This page explains how stackweave manages that stack so you can run a lot of
 fibers at once without burning memory.
 
 ## The mechanisms in one paragraph
 
-runloom defaults to **512 KB** per fiber -- enough to cover everything a
+stackweave defaults to **512 KB** per fiber -- enough to cover everything a
 fiber realistically does (the deepest stdlib frame, `_decimal` at 256 KB;
 full TLS/SSH crypto in a callback; nested parsers) without hitting the guard
 page.  It's cheap because stacks are demand-paged (virtual, not resident -- the
@@ -25,11 +25,11 @@ not their reservation.
 
 ## Automatic grow-down (on by default, M:N)
 
-Under M:N scheduling (`run(n)` with `n > 1`) runloom **learns each function's
+Under M:N scheduling (`run(n)` with `n > 1`) stackweave **learns each function's
 real stack need and reserves only that** -- automatically, no setup. This is the
 function-bound *grow-down*, and it is **on by default**.
 
-The first time you `runloom.fiber(fn)` a function, its fiber starts at the safe
+The first time you `stackweave.fiber(fn)` a function, its fiber starts at the safe
 default stack (a "cold start" -- a size the function is known to complete on),
 measures its real C-stack high-water mark on return, and writes a derived size
 back onto the function itself (`fn.__dict__["runloom_stack"]` -- the function
@@ -50,14 +50,14 @@ finally gets the deep input would load a too-small size.
 ### Turning it off
 
 ```python
-import runloom
+import stackweave
 
-runloom.set_grow_down(False)     # reserve the fixed default for every fiber
-runloom.grow_down_enabled()      # -> current state
+stackweave.set_grow_down(False)     # reserve the fixed default for every fiber
+stackweave.grow_down_enabled()      # -> current state
 ```
 
-or set `RUNLOOM_GROW_DOWN=0` in the environment before `import runloom`. A
-per-call `runloom.fiber(fn, stack_size=N)` pin always wins regardless -- use it to
+or set `STACKWEAVE_GROW_DOWN=0` in the environment before `import stackweave`. A
+per-call `stackweave.fiber(fn, stack_size=N)` pin always wins regardless -- use it to
 opt a single function out and choose its exact size. The grow-down also steps
 aside automatically when you explicitly enable the opt-in C auto-sizer
 ([below](#letting-runloom-size-them-for-you)) -- the sizer you turned on by hand
@@ -70,14 +70,14 @@ margin) where grow-down would measure-and-shrink.
   default -- there the per-spawn learning is pure overhead (a tight spawn loop
   runs nothing until it finishes, so the sampler can't amortise) and the memory
   win, which only pays off at scale, isn't on the table.
-- **Per `runloom.fiber()`-spawned function.** Goroutines spawned through the raw C
-  entry points (`runloom_c.mn_fiber`) use the plain default; the learning lives in
-  the friendly `runloom.fiber()` wrapper. Arg-bearing `runloom.fiber(fn, x)` binds the
+- **Per `stackweave.fiber()`-spawned function.** Goroutines spawned through the raw C
+  entry points (`stackweave_c.mn_fiber`) use the plain default; the learning lives in
+  the friendly `stackweave.fiber()` wrapper. Arg-bearing `stackweave.fiber(fn, x)` binds the
   size to `fn` (shared across all its arg variants), not the per-call wrapper.
 
 ## Why fibers have stacks at all
 
-Stackful coroutines (runloom, greenlet, gevent, Go) keep the C stack
+Stackful coroutines (stackweave, greenlet, gevent, Go) keep the C stack
 *per coroutine*.  Switching between them is a single `swap` instruction
 that saves callee-saved registers, swaps the stack pointer, and
 restores the new context -- ~80 ns on x86_64.
@@ -87,7 +87,7 @@ state in heap-allocated frame objects and switch by returning to a
 trampoline.  No per-coroutine C stack -- but every `await` requires
 allocating frame state and walking back through the event loop.
 
-Both models are valid; runloom picks stackful because the switch cost is
+Both models are valid; stackweave picks stackful because the switch cost is
 ~22× lower and the user code can be ordinary blocking-style without
 async/await colour.  The cost is *per-fiber memory* -- which is
 exactly what this page is about minimising.
@@ -102,9 +102,9 @@ the calibration window the default is locked to `next_pow2(max_hwm × 4)` but
 default.  After:
 
 ```python
-import runloom
+import stackweave
 
-s = runloom.stats()
+s = stackweave.stats()
 print(s["stack_size_default"])    # the new default (post-calibration)
 print(s["stack_hwm"])              # max bytes any fiber actually used
 print(s["stack_completed"])        # how many fibers were measured
@@ -144,7 +144,7 @@ matters because the safety factor (4×) covers reasonable transients.
 
 When a fiber finishes, its stack returns to a free list (a per-thread
 cache that overflows to a shared cross-hub depot, bounded by
-`RUNLOOM_STACK_DEPOT_CAP`, default 1024). The release path reclaims the
+`STACKWEAVE_STACK_DEPOT_CAP`, default 1024). The release path reclaims the
 stack body's physical pages so idle pool entries don't pin
 **capacity × stack_size** of RAM.
 
@@ -156,7 +156,7 @@ reclaims pays **no re-fault**. Measured ~2.3× cheaper per call than
 workload (mass spawn+complete). The cost is *lazy* RSS: freed pages stay
 counted until pressure, so RSS can look higher than the live set.
 
-Tune it with `RUNLOOM_STACK_MADV`:
+Tune it with `STACKWEAVE_STACK_MADV`:
 
 | value | behaviour |
 |---|---|
@@ -166,7 +166,7 @@ Tune it with `RUNLOOM_STACK_MADV`:
 
 The first 4 KB (the pool's linked-list header) is never reclaimed. This is
 a Linux/POSIX optimisation; on Windows (Fibers backend) the OS manages
-stacks and runloom lets it. The security scrub (`RUNLOOM_STACK_SCRUB`)
+stacks and stackweave lets it. The security scrub (`STACKWEAVE_STACK_SCRUB`)
 stays on `MADV_DONTNEED` for its zero-on-next-touch guarantee.
 
 ## Prewarming the stack pool (burst servers)
@@ -185,21 +185,21 @@ in ~5.9 s cold vs ~1.6 s prewarmed (**~3.7×**).
 Three forms, smallest commitment first:
 
 ```python
-import runloom
+import stackweave
 
 # 1. One-shot, per-hub (synchronous): fills the CALLING thread's cache.
-runloom.warmup(50_000, stack_size=512 * 1024)
+stackweave.warmup(50_000, stack_size=512 * 1024)
 
 # 2. One-shot, GLOBAL (cross-hub).  background=True (default) fills it on a
 #    detached helper thread and returns instantly -- prefetch ahead of demand.
-runloom.prewarm(200_000)                       # returns 0 immediately
-runloom.prewarm(200_000, background=False)     # blocks; returns count retained
+stackweave.prewarm(200_000)                       # returns 0 immediately
+stackweave.prewarm(200_000, background=False)     # blocks; returns count retained
 
 # 3. CONTINUOUS daemon: keeps the global pool topped to `target`, refilling as
 #    bursts drain it and idling when full -- "always a backlog ready".
-runloom.prewarm_keep(200_000)                  # start (or re-target) the daemon
+stackweave.prewarm_keep(200_000)                  # start (or re-target) the daemon
 # ... serve traffic; bursts always find a ready backlog ...
-runloom.prewarm_stop()                         # halt + join the daemon
+stackweave.prewarm_stop()                         # halt + join the daemon
 ```
 
 **Sizing:** prewarmed/pooled stacks are bounded by the depot cap, so raise it
@@ -208,7 +208,7 @@ prewarmed stack costs ~2 VMAs; freshly-mapped stacks are lazy, so **0 RSS until
 first touched**):
 
 ```sh
-RUNLOOM_STACK_DEPOT_CAP=220000 python your_server.py   # see resource-limits.md
+STACKWEAVE_STACK_DEPOT_CAP=220000 python your_server.py   # see resource-limits.md
 ```
 
 Notes: `prewarm_keep` runs **one daemon per process** (a second call just
@@ -222,13 +222,13 @@ child starts with none).
 ## Per-call override
 
 ```python
-import runloom
+import stackweave
 
 # Goroutine known to recurse deeply or call into a heavy C extension:
-runloom.fiber(deep_handler, stack_size=512 * 1024)
+stackweave.fiber(deep_handler, stack_size=512 * 1024)
 
 # Pure-compute callable that you've confirmed fits in 8 KB:
-runloom.fiber(tight_loop,  stack_size=8 * 1024)
+stackweave.fiber(tight_loop,  stack_size=8 * 1024)
 ```
 
 The `stack_size=N` kwarg overrides the calibrated default for that
@@ -244,13 +244,13 @@ default's virtual footprint? Lock a smaller size up-front (an explicit size
 overrides the default and its floor, down to the 16 KB hard minimum):
 
 ```python
-import runloom
+import stackweave
 
-# Before any runloom.fiber() call:
-runloom.set_stack_size(32 * 1024)
+# Before any stackweave.fiber() call:
+stackweave.set_stack_size(32 * 1024)
 
 # Subsequent fibers use exactly 32 KB:
-runloom.fiber(worker)
+stackweave.fiber(worker)
 ```
 
 `set_stack_size` also **freezes** calibration (no further auto-tuning)
@@ -263,9 +263,9 @@ and disables painting (no per-spawn overhead).  Use this when:
 - You're running a benchmark and want the size to not drift.
 
 ```python
-import runloom
+import stackweave
 
-print(runloom.get_stack_size())   # current default
+print(stackweave.get_stack_size())   # current default
 ```
 
 Bounds: `[16 KB, 8 MB]`.  Below or above is silently clamped.
@@ -296,10 +296,10 @@ When in doubt, run with calibration on, look at the measured
 ## Inspecting current usage
 
 ```python
-import runloom
+import stackweave
 
 # Snapshot of calibration state
-print(runloom.stats())
+print(stackweave.stats())
 # {
 #   'ready': 0, 'sleeping': 0, 'netpoll_parked': 0,
 #   'completed': 1042, 'running': 0,
@@ -326,20 +326,20 @@ protection the main thread gets, scaled to the fiber's smaller stack:
   calls) hits a catchable `RecursionError` well before the stack overflows.
 - **Stacks grow on demand.** At each resume boundary a fiber whose headroom
   has dropped below a quarter of its stack is copied onto a stack twice as big
-  (`RUNLOOM_STACK_GROW`, default on; `RUNLOOM_STACK_GROW=0` disables). A fiber
+  (`STACKWEAVE_STACK_GROW`, default on; `STACKWEAVE_STACK_GROW=0` disables). A fiber
   that gradually deepens grows with it.
 - **Every stack has a guard page.** A `PROT_NONE` page sits just below each
   fiber stack (the OS provides one on the Windows Fibers backend). An
   overflow faults *immediately and cleanly* at the guard rather than silently
   scribbling over a neighbouring stack. With the crash reporter installed
-  (`runloom.inspect.install_crash_handler()` or `RUNLOOM_CRASH=on`) that fault
+  (`stackweave.inspect.install_crash_handler()` or `STACKWEAVE_CRASH=on`) that fault
   is turned into a classified message that *names the overflowing fiber and
   its stack size* instead of a bare segfault -- see
   [Crash reporting](debugging.md#crash-reporting-sigsegv--sigbus).
 - **CPython's stack-hungry error paths are neutralised.** A missing-attribute
   lookup on a module makes CPython 3.13 reserve a 32 KB path buffer just to
   build a "did you shadow a stdlib module?" hint -- on its own larger than a
-  default fiber stack. runloom skips that hint while on a fiber (the
+  default fiber stack. stackweave skips that hint while on a fiber (the
   `AttributeError` is otherwise unchanged), so `getattr`/`hasattr` misses on a
   module can't blow the stack, by any lookup path.
 
@@ -352,9 +352,9 @@ guard; a non-probing extension could corrupt. If you have such a fiber,
 give it a bigger stack up front:
 
 ```python
-runloom.set_stack_size(128 * 1024)        # process-wide default floor
+stackweave.set_stack_size(128 * 1024)        # process-wide default floor
 # or just the suspicious fiber:
-runloom.fiber(work, stack_size=512 * 1024)
+stackweave.fiber(work, stack_size=512 * 1024)
 ```
 
 So the 16 KB minimum is a *floor for the calibrator*, not a blanket "safe for
@@ -371,15 +371,15 @@ fiber counts) or running close to its limit (a candidate for an explicit
 bigger `stack_size`), measure it directly:
 
 ```python
-import runloom
+import stackweave
 
-runloom.inspect.enable_stack_advice()      # opt-in; keeps stack painting on
+stackweave.inspect.enable_stack_advice()      # opt-in; keeps stack painting on
 ... run your real workload ...
-runloom.inspect.print_stack_advice()
+stackweave.inspect.print_stack_advice()
 ```
 
 ```
-=== runloom stack advice (3 kinds) ===
+=== stackweave stack advice (3 kinds) ===
 samples  max_use  reserved  suggested  kind
    4012      41K       32K        16K   app.handle_request (server.py:88)  (tight -- consider a bigger stack)
   12030       1K       32K        16K   app.heartbeat (server.py:204)  (over-reserved)
@@ -389,34 +389,34 @@ samples  max_use  reserved  suggested  kind
 Each row is one **fiber kind** (its entry callable), with the deepest C
 stack any fiber of that kind actually used (`max_use`) versus what it
 reserved, plus a `suggested` `stack_size` that covers the observed peak with
-margin. `runloom.inspect.stack_advice()` returns the same data as a list of
+margin. `stackweave.inspect.stack_advice()` returns the same data as a list of
 dicts (`kind`, `samples`, `max_hwm`, `reserved`, `suggested`).
 
-It is **purely advisory**: runloom never changes or persists a stack size from
+It is **purely advisory**: stackweave never changes or persists a stack size from
 this -- a remembered-small size is only ever a lower bound on what a future
 input might need (recursion depth is data-dependent), so the guard page and
 crash reporter stay the safety net. You read the advice and apply it yourself,
 e.g. give the `tight` kind a roomier stack:
 
 ```python
-runloom.fiber(handle_request, stack_size=128 * 1024)
+stackweave.fiber(handle_request, stack_size=128 * 1024)
 ```
 
 Enabling the profiler keeps stack painting on (a small per-spawn cost) for the
 session; it is off by default and costs nothing until you turn it on.
 
-### Letting runloom size them for you
+### Letting stackweave size them for you
 
 If you'd rather not read the table and apply sizes by hand, turn on the
 **adaptive auto-sizer**, which does it automatically:
 
 ```python
-runloom.inspect.enable_stack_autosize()    # or RUNLOOM_STACK_AUTOSIZE=1
+stackweave.inspect.enable_stack_autosize()    # or STACKWEAVE_STACK_AUTOSIZE=1
 ```
 
 It works by **starting large and learning down**: the first time a fiber
 kind is seen its fibers start at a generous size (256 KiB by default,
-`RUNLOOM_STACK_AUTOSIZE_START`); once runloom has measured how much C stack that
+`STACKWEAVE_STACK_AUTOSIZE_START`); once stackweave has measured how much C stack that
 kind really uses, its later fibers start at the learned size
 (`next_pow2(peak * 4)`). A kind that turns out shallow shrinks toward the floor;
 a deep one settles at a roomy size. Because over-sizing the first few is cheap
@@ -429,7 +429,7 @@ is only a lower bound on what a *future* input might need (recursion depth is
 data-dependent), so writing it out would be a foot-gun across restarts and
 deploys -- the run that finally gets the deep input would load a too-small size.
 The guard page, on-demand growth, and the crash reporter remain the safety net
-for any underestimate. An explicit `runloom.fiber(fn, stack_size=...)` always wins
+for any underestimate. An explicit `stackweave.fiber(fn, stack_size=...)` always wins
 over the auto-sizer. Off by default (it changes per-kind stack sizes); enable it
 before the runtime starts so kinds are sized from their first spawn.
 
@@ -443,7 +443,7 @@ it. The standout offender is `Decimal` arithmetic -- a single
 the fattest single frame in the whole 3.13 stdlib.
 
 ```python
-runloom.inspect.enable_stack_autosize(prescan=True)   # or RUNLOOM_STACK_AUTOSIZE=prescan
+stackweave.inspect.enable_stack_autosize(prescan=True)   # or STACKWEAVE_STACK_AUTOSIZE=prescan
 ```
 
 With `prescan` on, an unseen kind's bytecode is loosely scanned for symbols whose
@@ -468,7 +468,7 @@ references a crypto symbol (`encrypt`, `decrypt`, `sign`, `verify`, `Cipher`,
 `Fernet`, `Ed25519PrivateKey`, `HKDF`, ...) cold-starts at **1 MiB**. The symbol
 list is in `tools/heavy_frames/gen_heavy_frames.py` (a *name* list, not a
 measured-size table -- it needs no third-party installs and covers libraries
-runloom has never seen); keep additions crypto-specific so a false match only
+stackweave has never seen); keep additions crypto-specific so a false match only
 over-provisions virtual stack.
 
 **Heuristic floor.** Unlike ordinary kinds, a prescan-matched kind (crypto,
@@ -479,9 +479,9 @@ protects the deep path it didn't happen to exercise this time (a small RSA sign
 now, a 4096-bit one later). Learn-down still right-sizes everything else; the
 floor only pins the classes whose depth is most likely to surprise you. To
 reclaim that memory anyway, pin the kind explicitly with
-`runloom.fiber(fn, stack_size=...)` -- an explicit size always wins, floor and all.
+`stackweave.fiber(fn, stack_size=...)` -- an explicit size always wins, floor and all.
 
-> Arg-bearing spawns are keyed correctly too: `runloom.fiber(fn, x)` wraps `fn` in
+> Arg-bearing spawns are keyed correctly too: `stackweave.fiber(fn, x)` wraps `fn` in
 > a binding lambda, but the auto-sizer follows `__wrapped__` to `fn`, so the
 > per-kind size and the prescan scan apply to *your* function, not the wrapper.
 > (Decorated functions with `functools.wraps` get the same treatment.)
@@ -500,7 +500,7 @@ one-line rule that keeps you out of that case:
 
 Concretely:
 
-* **Recursion that stays in pure Python is already safe** — it runs on runloom's
+* **Recursion that stays in pure Python is already safe** — it runs on stackweave's
   *growable* datastack (proven to ~1M deep) and degrades to a clean
   `RecursionError`, never a stack-overflow SEGV. Depth here is not the
   auto-sizer's concern.
@@ -524,19 +524,19 @@ auto-sizer) or offload the deep call.
 For a production service:
 
 ```python
-import runloom
+import stackweave
 
 # Optional: pre-calibrate during a dry-run, then lock for production
-runloom.set_stack_size(32 * 1024)        # whatever your dry-run found
+stackweave.set_stack_size(32 * 1024)        # whatever your dry-run found
 
 # Spawn workers
 for i in range(10000):
-    runloom.fiber(worker)
+    stackweave.fiber(worker)
 
-runloom.run(1)
+stackweave.run(1)
 
 # Inspect after the burst
-print("peak resident usage:", runloom.stats())
+print("peak resident usage:", stackweave.stats())
 ```
 
 For exploratory work or benchmarks, just let calibration run and

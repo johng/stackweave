@@ -8,7 +8,7 @@ producer sends exactly MSGS and every consumer receives exactly MSGS over a
 buffered channel, so the program always terminates -- any hang is a real bug.
 Params from env; prints PASS on clean completion.
 
-Note: runloom_c.Chan.recv() returns (value, ok) (Go-style); the value is unused
+Note: stackweave_c.Chan.recv() returns (value, ok) (Go-style); the value is unused
 here.
 """
 import gc
@@ -16,12 +16,12 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "src"))
-import runloom_c
+import stackweave_c
 
 import os as _crashos
-if _crashos.environ.get("RUNLOOM_CRASH"):
-    runloom_c.install_crash_handler(_crashos.environ["RUNLOOM_CRASH"],
-                                 _crashos.environ.get("RUNLOOM_CRASH_FILE"))
+if _crashos.environ.get("STACKWEAVE_CRASH"):
+    stackweave_c.install_crash_handler(_crashos.environ["STACKWEAVE_CRASH"],
+                                 _crashos.environ.get("STACKWEAVE_CRASH_FILE"))
 
 NHUB = int(os.environ.get("HH_NHUB", "4"))
 PAIRS = int(os.environ.get("HH_PAIRS", "16"))          # producer/consumer pairs
@@ -29,12 +29,12 @@ MSGS = int(os.environ.get("HH_MSGS", "200"))           # messages per pair
 CAP = int(os.environ.get("HH_CHAN_CAP", "1"))          # channel buffer
 GC = os.environ.get("HH_GC", "1") != "0"
 
-done = runloom_c.Chan(2 * PAIRS + 1)
+done = stackweave_c.Chan(2 * PAIRS + 1)
 stop = [False]
 
 
 def mk(cap):
-    ch = runloom_c.Chan(cap)
+    ch = stackweave_c.Chan(cap)
 
     def producer():
         for _ in range(MSGS):
@@ -53,17 +53,17 @@ def collector():
     while not stop[0]:
         gc.collect()
         n += 1
-        runloom_c.sched_yield_classic()
+        stackweave_c.sched_yield_classic()
     done.send(("gc", n))
 
 
-runloom_c.mn_init(NHUB)
+stackweave_c.mn_init(NHUB)
 for _ in range(PAIRS):
     prod, cons = mk(CAP)
-    runloom_c.mn_fiber(prod)
-    runloom_c.mn_fiber(cons)
+    stackweave_c.mn_fiber(prod)
+    stackweave_c.mn_fiber(cons)
 if GC:
-    runloom_c.mn_fiber(collector)
+    stackweave_c.mn_fiber(collector)
 
 
 def reaper():
@@ -74,8 +74,8 @@ def reaper():
         done.recv()
 
 
-runloom_c.mn_fiber(reaper)
-runloom_c.mn_run()
-runloom_c.mn_fini()
-assert runloom_c._self_check(0) == 0, "self_check failed"
+stackweave_c.mn_fiber(reaper)
+stackweave_c.mn_run()
+stackweave_c.mn_fini()
+assert stackweave_c._self_check(0) == 0, "self_check failed"
 print("PASS")

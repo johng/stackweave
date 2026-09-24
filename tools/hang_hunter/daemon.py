@@ -1,7 +1,7 @@
-"""hang-hunter: an autonomous, always-on stress+fuzz daemon for the runloom M:N
+"""hang-hunter: an autonomous, always-on stress+fuzz daemon for the stackweave M:N
 scheduler, with automatic triage and deduplication.
 
-It keeps a pool of randomized runloom workloads running in parallel (sized to the
+It keeps a pool of randomized stackweave workloads running in parallel (sized to the
 box, load-gated so it never fights the CI runner or foreground work).  When a job
 HANGS (exceeds its timeout while still alive) it attaches gdb to the LIVE process
 and captures the all-thread backtrace + the interpreter stop-the-world state +
@@ -368,7 +368,7 @@ class Hunter(object):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="autonomous runloom hang/crash hunter")
+    ap = argparse.ArgumentParser(description="autonomous stackweave hang/crash hunter")
     ap.add_argument("--engines", default="stress,hypo")
     ap.add_argument("--rr", action="store_true",
                     help="on a CRASH finding, recapture the repro under rr "

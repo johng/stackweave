@@ -1,6 +1,6 @@
 """Resource-leak probe v2: correct workload (single closer), plus an EMPTY-run control."""
 import os, sys, gc, threading
-import runloom
+import stackweave
 
 HUBS = int(sys.argv[1]) if len(sys.argv) > 1 else 4
 ITERS = int(sys.argv[2]) if len(sys.argv) > 2 else 100
@@ -16,8 +16,8 @@ def nfds():
     return len(os.listdir("/proc/self/fd"))
 
 def workload_chan():
-    ch = runloom.Chan(16)
-    done = runloom.Chan(0)
+    ch = stackweave.Chan(16)
+    done = stackweave.Chan(0)
     NP, NC, PER = 4, 4, 2000
     def prod():
         for i in range(PER):
@@ -32,9 +32,9 @@ def workload_chan():
             n += 1
         done.send(("c", n))
     for _ in range(NP):
-        runloom.fiber(prod)
+        stackweave.fiber(prod)
     for _ in range(NC):
-        runloom.fiber(cons_all)
+        stackweave.fiber(cons_all)
     def wait():
         pdone = 0
         ctotal = 0
@@ -49,7 +49,7 @@ def workload_chan():
                 cdone += 1
                 ctotal += n
         assert ctotal == NP * PER, ctotal
-    runloom.fiber(wait)
+    stackweave.fiber(wait)
 
 def workload_empty():
     pass
@@ -58,13 +58,13 @@ def workload_spawn():
     def w():
         pass
     for _ in range(5000):
-        runloom.fiber(w)
+        stackweave.fiber(w)
 
 wl = {"chan": workload_chan, "empty": workload_empty, "spawn": workload_spawn}[MODE]
 
 samples = []
 for it in range(ITERS):
-    runloom.run(HUBS, wl)
+    stackweave.run(HUBS, wl)
     if it % 10 == 0 or it == ITERS - 1:
         gc.collect()
         samples.append((it, rss_kb(), nfds()))

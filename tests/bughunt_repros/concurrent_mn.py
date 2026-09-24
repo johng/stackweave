@@ -1,7 +1,7 @@
 """Two OS threads call run(2, work) concurrently, many rounds.
 Expect: one wins, other raises cleanly. Watch for double-init, lost work, crash, hang."""
 import threading, sys
-import runloom
+import stackweave
 
 ROUNDS = int(sys.argv[1]) if len(sys.argv) > 1 else 30
 
@@ -13,11 +13,11 @@ for rnd in range(ROUNDS):
     def t(i):
         def work():
             for _ in range(50):
-                runloom.yield_now()
+                stackweave.yield_now()
             ran[i] = 1
         barrier.wait()
         try:
-            runloom.run(2, work)
+            stackweave.run(2, work)
         except Exception as e:
             errs.append((i, type(e).__name__))
 

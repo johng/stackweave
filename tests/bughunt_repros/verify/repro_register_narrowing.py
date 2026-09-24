@@ -1,9 +1,9 @@
 """Verify: concurrent netpoll_register on one fd from two hubs races the
 out-of-lock epoll_ctl -> spurious EEXIST from wait_fd, or kernel-set narrowing
-(lost WRITE wakeup).  Run with RUNLOOM_PERHUB_EPOLL=0."""
+(lost WRITE wakeup).  Run with STACKWEAVE_PERHUB_EPOLL=0."""
 import os, sys, socket, time
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 
 ROUNDS = int(os.environ.get("ROUNDS", "1500"))
 PARK_MS = int(os.environ.get("PARK_MS", "600"))
@@ -44,8 +44,8 @@ def main():
             except OSError as e:
                 state[key] = "exc:%d" % e.errno
 
-        runloom.fiber(lambda: waiter(READ, "res_r"))
-        runloom.fiber(lambda: waiter(WRITE, "res_w"))
+        stackweave.fiber(lambda: waiter(READ, "res_r"))
+        stackweave.fiber(lambda: waiter(WRITE, "res_w"))
         while state["arrived"] != 2:
             pass
         state["go"] = True
@@ -90,4 +90,4 @@ def main():
         sys.exit(1)
 
 
-runloom.run(4, main)
+stackweave.run(4, main)

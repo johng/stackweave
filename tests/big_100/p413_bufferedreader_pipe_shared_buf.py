@@ -5,7 +5,7 @@ Nothing in the corpus drives a BUFFERED file object across a cooperative refill
 park: p228/p309 read raw pipe fds with os.read (no Python-level buffer), and the
 C io.BufferedReader can't be made cooperative at all (io.FileIO issues its
 read() syscall directly in C, OS-blocking the hub -- see monkey/__init__.py).
-The interesting object is the PURE-PYTHON _pyio.BufferedReader, which runloom's
+The interesting object is the PURE-PYTHON _pyio.BufferedReader, which stackweave's
 patched open(pollable_fd) hands back exactly so a buffered read on a pipe parks
 the fiber instead of wedging the hub.  _pyio.BufferedReader keeps ONE internal
 `_read_buf` bytearray and a `_read_pos` cursor, and it mutates BOTH across each
@@ -25,7 +25,7 @@ stream oracle.  Each worker:
   * owns its OWN os.pipe() and wraps the READ end in a cooperative
     _pyio.BufferedReader (CoopRaw routes readinto through the PATCHED os.read so
     a refill parks on the pipe's netpoll arm -- the raw _pyio.FileIO would use
-    os.readinto, which runloom does NOT patch, so it would NOT park);
+    os.readinto, which stackweave does NOT patch, so it would NOT park);
   * spawns a sibling FEEDER fiber on the hubs that writes a deterministic byte
     stream -- byte at absolute position p is stream_byte(p, salt) -- in small
     chunks with a yield/sleep between them, so each write lands while the reader
@@ -73,7 +73,7 @@ if not POSIX:
 import _pyio
 
 import harness
-import runloom
+import stackweave
 
 # Per-worker fed-stream length in bytes.  Big enough to force the buffered
 # reader through MANY refills (each refill is a fresh os.read park where a tear
@@ -125,7 +125,7 @@ class CoopRaw(_pyio.RawIOBase):
     (wait_fd) instead of OS-blocking the hub or returning short on EAGAIN.
 
     This is the cooperative analogue of _pyio.FileIO: _pyio.FileIO.readinto uses
-    os.readinto (which runloom does NOT patch -> would not park / would return
+    os.readinto (which stackweave does NOT patch -> would not park / would return
     None on EAGAIN), so we substitute os.read here.  Wrapped in a
     _pyio.BufferedReader, this gives the exact pure-Python _read_buf/_read_pos
     mutate-across-park the test is about."""
@@ -183,7 +183,7 @@ def feeder(H, wfd, salt, total, rng):
             pos += n
             # Yield so the reader is the one parked in os.read when the NEXT
             # write arrives -- this is what lands the feed inside the refill park.
-            runloom.yield_now()
+            stackweave.yield_now()
     finally:
         try:
             os.close(wfd)                   # clean EOF -> reader's os.read -> b""
@@ -299,7 +299,7 @@ def worker(H, wid, rng, state):
         # _read_buf/_read_pos across those parks.
         br = _pyio.BufferedReader(CoopRaw(rfd), buffer_size=BUFFER_SIZE)
 
-        wg = runloom.WaitGroup()
+        wg = stackweave.WaitGroup()
         wg.add(1)
 
         def run_feeder(wfd=wfd, salt=salt, fseed=fseed):

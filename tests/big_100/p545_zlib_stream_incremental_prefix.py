@@ -8,7 +8,7 @@ INCREMENTALLY -- you push plaintext chunk by chunk and the emitted deflate bytes
 depend on ALL prior chunks (the sliding window back-references them) -- so the
 object's C state is a running accumulator, not a per-call pure function.
 
-WHERE M:N COULD BREAK IT (the hazard this program probes).  runloom runs tens of
+WHERE M:N COULD BREAK IT (the hazard this program probes).  stackweave runs tens of
 thousands of goroutines M:N across >1 hubs with the GIL OFF.  A fiber that is
 parked (yield_now / sleep) BETWEEN two chunk feeds of its own compressobj -- while
 a sibling on another hub drives ITS OWN compressobj/decompressobj -- must have its
@@ -51,7 +51,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY.
 
   This is an M:N-SPECIFIC hazard (0 under plain OS threads): real threads own
   their own compressobj/decompressobj and z_stream structs, so an incremental
-  round-trip never diverges.  A runloom fiber can be preempted WHILE parked
+  round-trip never diverges.  A stackweave fiber can be preempted WHILE parked
   between feeds; if that ever let a sibling's zlib call touch this fiber's
   z_stream, the prefix law breaks.
 
@@ -93,7 +93,7 @@ after a sibling ran -- localizes the torn stream before the prefix law even clos
 import zlib
 
 import harness
-import runloom
+import stackweave
 
 # Chunks per stream session.  Enough that the sliding window carries real cross-
 # chunk back-references (so a torn mid-stream state would visibly break the prefix
@@ -164,9 +164,9 @@ def run_stream(H, wid, rng, state):
         # YIELD at the hazard boundary: park BETWEEN feeds so a sibling driving its
         # own compressobj on this or another hub reliably interleaves before this
         # fiber resumes and re-checks its private z_stream.
-        runloom.yield_now()
+        stackweave.yield_now()
         if cidx & 1:
-            runloom.sleep(0.0002)
+            stackweave.sleep(0.0002)
 
         # STREAMING-PREFIX conservation law: after Z_SYNC_FLUSH the decompressor
         # has emitted every byte fed so far, so the accumulated decompressed prefix

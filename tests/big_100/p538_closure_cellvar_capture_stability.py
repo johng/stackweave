@@ -9,7 +9,7 @@ writes a free variable (via `nonlocal`), the write goes through `STORE_DEREF` in
 the cell and later reads come back via `LOAD_DEREF`.  The cell object is the single
 mutable box holding the free variable's contents.
 
-WHERE M:N COULD BREAK IT (the gap this program probes).  runloom gives each fiber
+WHERE M:N COULD BREAK IT (the gap this program probes).  stackweave gives each fiber
 its own stackful C stack and its own Python frame chain, but a closure's cell is
 heap-allocated and reachable from BOTH the (now-dead) factory frame and the live
 closure object.  If hub-migration relocates a fiber's frame or its `f_localsplus`
@@ -72,7 +72,7 @@ across a yield + hub migration, single-owner cell conservation under sustained
 M:N churn.
 """
 import harness
-import runloom
+import stackweave
 
 # Number of late-binding closures each fiber builds per ARM-A pass.  Enough that a
 # freevars-array relocation would corrupt several slots, not just one, and enough
@@ -136,9 +136,9 @@ def capture_check(H, wid, idx, state):
     closures = [make_capture(base + i) for i in range(SPAN)]
 
     # YIELD: let siblings build their own factory closures / cells on this hub.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
 
     for i in range(SPAN):
         got = closures[i]()
@@ -166,7 +166,7 @@ def cell_conservation_check(H, wid, idx, state):
         # Yield mid-RMW-sequence so a sibling's cell op interleaves between this
         # fiber's STORE_DEREF and its next LOAD_DEREF.
         if b & 3 == 0:
-            runloom.yield_now()
+            stackweave.yield_now()
 
     got = get()                             # LOAD_DEREF of the private cell
     if got != BUMPS:

@@ -7,10 +7,10 @@ import argparse
 import time
 import types
 
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
-SYC = runloom_c.sched_yield
+SYC = stackweave_c.sched_yield
 _K = 0
 
 
@@ -69,10 +69,10 @@ def main():
 
     def root():
         for w in workers:
-            runloom.fiber(w)
+            stackweave.fiber(w)
 
     t0 = time.perf_counter()
-    runloom.run(a.hubs, root)
+    stackweave.run(a.hubs, root)
     dt = time.perf_counter() - t0
     print("%-18s %12.0f switches/s" % (a.variant, SW / dt), flush=True)
 

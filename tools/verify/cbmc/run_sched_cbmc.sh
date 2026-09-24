@@ -6,8 +6,8 @@
 # Prints "N passed, M failed".
 #
 # These ~22 cbmc runs are independent, so they go through a bounded worker pool
-# (RUNLOOM_CBMC_JOBS, default nproc) instead of strictly serially.  Set
-# RUNLOOM_CBMC_JOBS=1 for the old serial order.  (All are fast -- ~2s each --
+# (STACKWEAVE_CBMC_JOBS, default nproc) instead of strictly serially.  Set
+# STACKWEAVE_CBMC_JOBS=1 for the old serial order.  (All are fast -- ~2s each --
 # once they run concurrently, so this whole script is no longer a check_all
 # bottleneck.)
 set -u
@@ -17,12 +17,12 @@ if ! command -v cbmc >/dev/null 2>&1; then
   echo "  (cbmc not found -- skipping; apt-get install cbmc)"; exit 0
 fi
 pass=0; fail=0
-UNWIND="${RUNLOOM_CBMC_UNWIND:-10}"
+UNWIND="${STACKWEAVE_CBMC_UNWIND:-10}"
 
 # ---- bounded parallel job pool (verdict carried by exit code; output + tally
 #      replayed in submission order by collect, so the report is stable) ------
 NPROC="$(command -v nproc >/dev/null 2>&1 && nproc || echo 4)"
-CJOBS="${RUNLOOM_CBMC_JOBS:-$NPROC}"
+CJOBS="${STACKWEAVE_CBMC_JOBS:-$NPROC}"
 case "$CJOBS" in ''|*[!0-9]*) CJOBS=1 ;; esac
 [ "$CJOBS" -ge 1 ] || CJOBS=1
 JDIR="$(mktemp -d "${TMPDIR:-/tmp}/runloom_sched_cbmc.XXXXXX")"
@@ -108,7 +108,7 @@ want_bug_slab() {
 launch want_ok_slab
 launch want_bug_slab
 
-# datastack chunk-pool alias: runloom's pool reuses _PyStackChunk.previous as its
+# datastack chunk-pool alias: stackweave's pool reuses _PyStackChunk.previous as its
 # free-list link -- the SAME field CPython's data-stack chain walks + frees.  A
 # pooled chunk must never be reachable from the live datastack_chunk via ->previous
 # (else PopFrame arena-frees / re-owns a pooled chunk = double-owned UAF).  Two

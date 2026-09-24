@@ -16,7 +16,7 @@ echo "--- resolv.conf in namespace ---"
 cat /etc/resolv.conf
 echo "--- stock python (glibc getaddrinfo) ---"
 timeout 15 "$PY" "$D/client_stock.py" || true
-echo "--- runloom monkey.patch()ed getaddrinfo ---"
+echo "--- stackweave monkey.patch()ed getaddrinfo ---"
 timeout 15 "$PY" "$D/client_runloom.py" || true
 echo "--- queries the fake nameserver received ---"
 cat "$D/queries.log"

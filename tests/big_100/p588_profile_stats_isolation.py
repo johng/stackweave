@@ -3,10 +3,10 @@
 profile (the PURE-PYTHON profiler, distinct from cProfile) is a PROCESS-adjacent
 module built on sys.setprofile.  Its active hook is NOT single-owner and NOT
 fiber-local: sys.setprofile installs the C profile function on the CURRENT OS
-THREAD's PyThreadState -- i.e. it is HUB-LOCAL under runloom's M:N (all goroutines
+THREAD's PyThreadState -- i.e. it is HUB-LOCAL under stackweave's M:N (all goroutines
 sharing a hub share that thread's profile hook; see p71 / FINDINGS BUG #11).  So
 the hook itself cannot be the oracle -- testing it would test documented
-per-thread-hook semantics, not runloom.
+per-thread-hook semantics, not stackweave.
 
   (Contrast p560/cProfile: cProfile registers as the ONE sys.monitoring PROFILER
   tool for the WHOLE PROCESS, so concurrent enable() raises ValueError.  profile
@@ -28,18 +28,18 @@ deterministic fiber-local workload with its OWN profile.Profile via runcall(),
 freezes it, builds its own pstats.Stats snapshot, records a full serialization of
 it + its closed-world CALL-COUNT totals, then YIELDS (so the scheduler migrates it
 to another hub and runs siblings building their own snapshots), then re-reads the
-SAME single-owner object.  If runloom corrupts a single-owner object's fields
+SAME single-owner object.  If stackweave corrupts a single-owner object's fields
 across the yield (a torn dict entry, a cross-fiber leak of another fiber's Stats
 state, a value/identity change), the re-read serialization differs or the closed-
 world law breaks.  On a correct runtime the object is untouched and every check
 passes (program exits 0).
 
-THE PER-THREAD HOOK is serialized by a cooperative runloom Lock (created in the
+THE PER-THREAD HOOK is serialized by a cooperative stackweave Lock (created in the
 root).  Only the runcall region (setprofile -> workload -> setprofile(None)) is
 held; holding it across ALL hubs means no sibling installs its own hook -- or even
 runs profiled application code -- while this fiber's hook is live, so production is
 the clean ONE-profiler-at-a-time usage (never a runloom-thread-safety claim about
-profile, which has none).  The workload contains NO runloom yield, so the held
+profile, which has none).  The workload contains NO stackweave yield, so the held
 region never cooperatively hands off and the lock is released promptly.  The load-
 bearing oracle -- object stability across the yield -- runs OUTSIDE the lock,
 concurrently across fibers each holding its own single-owner Stats.
@@ -65,7 +65,7 @@ ORACLES:
   * LOAD-BEARING -- SINGLE-OWNER Stats STABILITY (worker, HARD, fail-fast).  Each
     fiber builds its own pstats.Stats, checks the closed-world laws, yields, then
     asserts the object is bit-identical + still self-consistent.  Single-owner:
-    the Profile and Stats are fiber-local, never shared.  A failure is a runloom
+    the Profile and Stats are fiber-local, never shared.  A failure is a stackweave
     single-owner-object desync across hub migration.
 
   * MEASURED (report-ONLY, NEVER fails): per-thread-hook contention.  Because
@@ -73,7 +73,7 @@ ORACLES:
     this fiber's hook is live, its calls can leak into the window and leaf()'s
     recorded count can differ from LEAF_CALLS (documented per-thread-hook
     behavior; the cooperative lock keeps it near zero, which is the CORRECT use of
-    a per-thread hook -- not a runloom bug either way).  We MEASURE the deviation;
+    a per-thread hook -- not a stackweave bug either way).  We MEASURE the deviation;
     we NEVER fail on it.
 
   * NON-VACUITY (post, HARD): the load-bearing arm actually ran (checks > 0).
@@ -97,7 +97,7 @@ import profile
 import pstats
 
 import harness
-import runloom
+import stackweave
 
 # Deterministic fiber-local workload.  leaf() is called exactly LEAF_CALLS times
 # per snapshot (cc == nc == LEAF_CALLS in an uncontaminated window); rec() recurses
@@ -124,7 +124,7 @@ def rec(n):
 
 def driver(n):
     """Deterministic fiber-local workload profiled into the single-owner snapshot.
-    Contains NO runloom yield -- the profiled region never cooperatively hands off,
+    Contains NO stackweave yield -- the profiled region never cooperatively hands off,
     so the hub-local sys.setprofile hook is installed only briefly and no sibling
     runs profiled code inside the window."""
     s = 0
@@ -162,7 +162,7 @@ def profile_check(H, wid, rng, idx, state):
     """Produce a single-owner pstats.Stats snapshot via profile.Profile.runcall,
     verify the closed-world laws, yield, then assert the snapshot is bit-identical
     + still self-consistent.  A cross-yield change to this fiber's private object
-    is a runloom desync."""
+    is a stackweave desync."""
     lock = state["lock"]
     pr = profile.Profile()
 
@@ -170,7 +170,7 @@ def profile_check(H, wid, rng, idx, state):
     # Only runcall (setprofile -> workload -> setprofile(None)) is serialized.
     # Holding the cooperative lock across ALL hubs means no sibling installs its
     # own hub-local hook -- or runs profiled application code -- while this fiber's
-    # hook is live.  No runloom yield inside driver(), so the lock is released
+    # hook is live.  No stackweave yield inside driver(), so the lock is released
     # promptly.
     with lock:
         pr.runcall(driver, LEAF_CALLS)
@@ -215,9 +215,9 @@ def profile_check(H, wid, rng, idx, state):
             state["contention"][wid & 1023] += 1
 
     # ---- YIELD: hazard boundary -- migrate hubs, let siblings build snapshots --
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
 
     # ---- re-read the SAME single-owner object; must be untouched --------------
     sig1 = serialize(st.stats)
@@ -271,7 +271,7 @@ def setup(H):
     # per-thread hook clean and the MEASURED contention arm race-free).  Built
     # here, inside the root, where cooperative primitives are valid.
     H.state = {
-        "lock": runloom.sync.Lock(),
+        "lock": stackweave.sync.Lock(),
         "checks": [0] * H.funcs,        # LOAD-BEARING single-owner checks (wid-indexed)
         "measured": [0] * 1024,         # MEASURED leaf-count observations (report-only)
         "contention": [0] * 1024,       # per-thread-hook leaks (report-only)
@@ -298,7 +298,7 @@ def post(H):
         H.log("note: {0} of {1} profiler windows recorded a leaf() count != "
               "LEAF_CALLS -- sys.setprofile is HUB-LOCAL and a sibling preempted "
               "onto the same hub leaked calls into the window.  This is documented "
-              "per-thread-hook behavior, NOT a runloom bug, and never reaches the "
+              "per-thread-hook behavior, NOT a stackweave bug, and never reaches the "
               "load-bearing single-owner oracle".format(contention, measured))
 
     # NON-VACUITY: the load-bearing single-owner arm was actually exercised.
@@ -326,6 +326,6 @@ if __name__ == "__main__":
                  "total_calls, sum cc == prim_calls, total!=prim via recursion), "
                  "yields (hub migration), then asserts the single-owner snapshot "
                  "is bit-identical + still self-consistent.  A cross-yield change "
-                 "to the private object is the runloom desync.  Per-thread-hook "
+                 "to the private object is the stackweave desync.  Per-thread-hook "
                  "contention (leaf-count leak under preemption) is MEASURED "
                  "report-only (documented sys.setprofile semantics)")

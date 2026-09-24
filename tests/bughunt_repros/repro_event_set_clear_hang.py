@@ -13,11 +13,11 @@ import os
 import sys
 import threading as _th
 
-import runloom.monkey as monkey
+import stackweave.monkey as monkey
 monkey.patch()
 
 import time
-import runloom_c as rc
+import stackweave_c as rc
 
 ev = _th.Event()          # patched -> CoEvent
 results = []

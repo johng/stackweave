@@ -37,7 +37,7 @@ often the first signal, before the value oracle even fires.
 import random
 
 import harness
-import runloom
+import stackweave
 
 VAL_A = 0x5A5A0001
 VAL_B = 0xA5A50002
@@ -118,7 +118,7 @@ def mutator(H, mid, inst, cls, rng):
     scratch attr to bump tp_version_tag.  A short head-start sleep lets readers
     arm their inline caches before invalidation begins."""
     scratch = "scratch_{0}".format(mid)
-    runloom.sleep(0.02)
+    stackweave.sleep(0.02)
     for _ in H.round_range():
         if not H.running():
             break
@@ -132,7 +132,7 @@ def mutator(H, mid, inst, cls, rng):
             setattr(cls, scratch, 1)            # add-attr -> harder version bump
             delattr(cls, scratch)               # remove-attr -> version bump
             if (rng.getrandbits(4)) == 0:
-                runloom.yield_now()
+                stackweave.yield_now()
 
 
 def worker(H, wid, rng, state):

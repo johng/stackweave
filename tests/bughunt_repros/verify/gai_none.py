@@ -4,7 +4,7 @@ import socket
 stock = socket.getaddrinfo('127.0.0.1', None, socket.AF_INET, socket.SOCK_STREAM)
 print("stock:  ", stock[0])
 
-import runloom.monkey as monkey
+import stackweave.monkey as monkey
 monkey.patch(dns=True)
 
 patched = socket.getaddrinfo('127.0.0.1', None, socket.AF_INET, socket.SOCK_STREAM)

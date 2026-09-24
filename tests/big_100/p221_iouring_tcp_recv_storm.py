@@ -1,6 +1,6 @@
 """big_100 / 221 -- io_uring per-conn TCP recv/send proactor storm.
 
-The io_uring per-conn proactor recv/send path (RUNLOOM_TCPCONN_IOURING) is the
+The io_uring per-conn proactor recv/send path (STACKWEAVE_TCPCONN_IOURING) is the
 +20% Stage-2 win and a COMPLETELY separate cooperative-block + cancel +
 fd-identity implementation from the default epoll TCPConn path.  ZERO other
 big_100 program forces it, so its recv/cancel/close-while-blocked/fd-reuse
@@ -8,11 +8,11 @@ behaviour is entirely unexercised here -- every prior network bug class
 (stale-arm hang, close-while-blocked cancel, fd recycle) was found on epoll only
 and could re-occur differently on the ring.
 
-This program forces the ring on (RUNLOOM_TCPCONN_IOURING=1, set at module top
-BEFORE importing runloom_c) and drives a fleet of long-lived echo connections
-THROUGH the runloom_c.TCPConn proactor objects -- NOT through the monkey-patched
+This program forces the ring on (STACKWEAVE_TCPCONN_IOURING=1, set at module top
+BEFORE importing stackweave_c) and drives a fleet of long-lived echo connections
+THROUGH the stackweave_c.TCPConn proactor objects -- NOT through the monkey-patched
 socket stack, which routes recv/send via the raw-fd epoll fast path and would
-never touch the per-conn ring backend.  The server is runloom_c.serve(...,
+never touch the per-conn ring backend.  The server is stackweave_c.serve(...,
 acceptors=4); its handler receives a TCPConn, so server-side recv/send also ride
 the ring.  Each worker does K tagged round-trips: it struct-packs a unique
 (wid, seq, k) tag, send_all's it, recv's exactly that many bytes back, and
@@ -34,27 +34,27 @@ Oracle / invariants:
     caught at the end (post-check);
   * leaked fds stay bounded (no per-conn fd leak on the ring close path).
 
-Stresses: Stresses: io_uring per-conn TCP recv/send proactor (RUNLOOM_TCPCONN_IOURING) under many concurrent long-lived echo conns: cooperative recv completion, sticky per-conn backend choice, threshold flip mid-run, and close-while-blocked cancel on the ring path.
+Stresses: Stresses: io_uring per-conn TCP recv/send proactor (STACKWEAVE_TCPCONN_IOURING) under many concurrent long-lived echo conns: cooperative recv completion, sticky per-conn backend choice, threshold flip mid-run, and close-while-blocked cancel on the ring path.
 """
 import os
 import struct
 import sys
 
 # Force the io_uring per-conn proactor ON, and set the auto-flip threshold, BOTH
-# BEFORE runloom_c is imported -- the mode is resolved once from the env on the
+# BEFORE stackweave_c is imported -- the mode is resolved once from the env on the
 # first TCPConn recv/send and latched, so it must be present at import time.
 # "1" = unconditional ring; the THRESHOLD knob is read in the same resolve pass
 # (it only governs "auto", but we set it so a mid-run flip to "auto" would honour
 # a value below our connection count -- documenting the crossover the proactor
 # uses).
-os.environ.setdefault("RUNLOOM_TCPCONN_IOURING", "1")
-os.environ.setdefault("RUNLOOM_TCPCONN_IOURING_THRESHOLD", "2048")
+os.environ.setdefault("STACKWEAVE_TCPCONN_IOURING", "1")
+os.environ.setdefault("STACKWEAVE_TCPCONN_IOURING_THRESHOLD", "2048")
 
-import harness   # noqa: E402  (harness imports runloom_c after the env is set)
+import harness   # noqa: E402  (harness imports stackweave_c after the env is set)
 
-# runloom_c is importable via harness's sys.path bootstrap.
-import runloom_c   # noqa: E402
-import runloom     # noqa: E402
+# stackweave_c is importable via harness's sys.path bootstrap.
+import stackweave_c   # noqa: E402
+import stackweave     # noqa: E402
 
 # Tag layout: (wid, seq, k) as three unsigned 32-bit ints, then padded out to a
 # fixed per-round-trip length so a dropped/duplicated completion changes the
@@ -141,11 +141,11 @@ class _ConnReaper(object):
 
 def setup(H):
     # Availability guard: skip-clean when the ring isn't usable.
-    if sys.platform != "linux" or not runloom_c.iouring_available():
+    if sys.platform != "linux" or not stackweave_c.iouring_available():
         H.log("SKIP: io_uring not available "
               "(platform={0}, iouring_available={1})".format(
                   sys.platform,
-                  getattr(runloom_c, "iouring_available", lambda: "n/a")()))
+                  getattr(stackweave_c, "iouring_available", lambda: "n/a")()))
         H.state = {"skip": True}
         return
 
@@ -156,17 +156,17 @@ def setup(H):
     # proceed; if the env didn't switch the backend we still run (echo
     # round-trips remain a valid correctness oracle on whichever path resolves),
     # but a non-"1" env means we are NOT testing the ring, so SKIP-clean.
-    forced = os.environ.get("RUNLOOM_TCPCONN_IOURING", "")
+    forced = os.environ.get("STACKWEAVE_TCPCONN_IOURING", "")
     if forced != "1":
-        H.log("SKIP: RUNLOOM_TCPCONN_IOURING did not force on (={0!r}); "
+        H.log("SKIP: STACKWEAVE_TCPCONN_IOURING did not force on (={0!r}); "
               "not exercising the ring".format(forced))
         H.state = {"skip": True}
         return
 
-    H.log("io_uring forced ON: RUNLOOM_TCPCONN_IOURING={0} threshold={1} "
+    H.log("io_uring forced ON: STACKWEAVE_TCPCONN_IOURING={0} threshold={1} "
           "netpoll={2} (ring pumped via its eventfd)".format(
-              forced, os.environ.get("RUNLOOM_TCPCONN_IOURING_THRESHOLD"),
-              runloom_c.netpoll_backend()))
+              forced, os.environ.get("STACKWEAVE_TCPCONN_IOURING_THRESHOLD"),
+              stackweave_c.netpoll_backend()))
 
     global HARNESS
     HARNESS = H
@@ -178,7 +178,7 @@ def setup(H):
     # parked in a ring recv (waking it) before the M:N join.
     H.register_close(_ConnReaper())
     host = H.net_ip(0)
-    bound_port, listeners = runloom_c.serve(host, 0, echo_handler, acceptors=4)
+    bound_port, listeners = stackweave_c.serve(host, 0, echo_handler, acceptors=4)
     for ln in listeners:
         H.register_close(ln)
     H.state = {"skip": False, "host": host, "port": bound_port,
@@ -220,7 +220,7 @@ def worker(H, wid, rng, state):
             break
         conn = None
         try:
-            conn = runloom_c.TCPConn.connect(host, port)
+            conn = stackweave_c.TCPConn.connect(host, port)
         except OSError:
             if not H.running():
                 break
@@ -308,6 +308,6 @@ if __name__ == "__main__":
     harness.main("p221_iouring_tcp_recv_storm", body, setup=setup, post=post,
                  default_funcs=5000,
                  describe="force the io_uring per-conn TCP recv/send proactor "
-                          "(RUNLOOM_TCPCONN_IOURING) under many long-lived echo "
+                          "(STACKWEAVE_TCPCONN_IOURING) under many long-lived echo "
                           "conns: ring recv completion, sticky backend choice, "
                           "and close-while-blocked cancel on the ring path")

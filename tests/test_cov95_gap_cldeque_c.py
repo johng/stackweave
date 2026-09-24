@@ -6,7 +6,7 @@ fresh gs onto the bottom (`runloom_cldeque_push`, hub_main.c.inc:377) and pops
 them (`runloom_cldeque_pop`, :451/:464); an IDLE neighbour hub steals from a
 busy hub's bottom-up deque (`runloom_cldeque_steal`, hub_main.c.inc:498).  So
 the only Python-reachable driver for the uncovered steal/pop-race lines is a
-multi-hub `runloom.run(N>=2)` with deliberate hub imbalance: pile many fresh,
+multi-hub `stackweave.run(N>=2)` with deliberate hub imbalance: pile many fresh,
 quick gs onto a hub so neighbours go idle and STEAL, and keep the owner popping
 its own deque down to the last element so its pop CAS races the thieves' steal
 CAS on `top`.
@@ -57,7 +57,7 @@ pytestmark = pytest.mark.skipif(
 
 
 def _run_py(src, env_extra=None, timeout=90):
-    """Run a snippet in a clean subprocess with the runloom env set.
+    """Run a snippet in a clean subprocess with the stackweave env set.
 
     The snippet must print its own success marker and return 0 -- a crash or
     _exit does NOT flush gcov, so the call site always asserts returncode==0 +
@@ -66,7 +66,7 @@ def _run_py(src, env_extra=None, timeout=90):
     pollute stderr we surface on failure.
     """
     env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src",
-               RUNLOOM_SYSMON_QUIET="1")
+               STACKWEAVE_SYSMON_QUIET="1")
     if env_extra:
         env.update(env_extra)
     return subprocess.run([PY, "-c", textwrap.dedent(src)],
@@ -88,7 +88,7 @@ def _run_py(src, env_extra=None, timeout=90):
 def test_steal_success_path_drives_item_read_and_cas():
     p = _run_py(r"""
         import sys
-        import runloom, runloom_c as rc
+        import stackweave, stackweave_c as rc
         N = 6000
         ran = bytearray(N)          # ran[i] written ONLY by g i -> race-free
         def main():
@@ -103,7 +103,7 @@ def test_steal_success_path_drives_item_read_and_cas():
             for i in range(N):
                 rc.mn_fiber(lambda i=i: worker(i))
         # 8 hubs, N gs round-robin'd -> idle hubs steal from busy deques.
-        runloom.run(8, main)
+        stackweave.run(8, main)
         lost = N - sum(ran)
         sys.stdout.write("STEAL_RAN:%d:LOST:%d\n" % (sum(ran), lost))
     """)
@@ -127,7 +127,7 @@ def test_steal_success_path_drives_item_read_and_cas():
 def test_steal_cas_loser_returns_null():
     p = _run_py(r"""
         import sys
-        import runloom, runloom_c as rc
+        import stackweave, stackweave_c as rc
         N = 8000
         ran = bytearray(N)          # ran[i] written ONLY by g i -> race-free
         def worker(i):              # fiber_n(indexed=True) passes a distinct i
@@ -139,7 +139,7 @@ def test_steal_cas_loser_returns_null():
             # bulk burst: all N land on one hub's deque in a C loop, so the
             # other hubs wake simultaneously and race the same top -> losers.
             rc.fiber_n(worker, N, 0, indexed=True)
-        runloom.run(12, main)
+        stackweave.run(12, main)
         sys.stdout.write("LOSER_RAN:%d:LOST:%d\n" % (sum(ran), N - sum(ran)))
     """)
     assert p.returncode == 0, p.stderr[-2000:]
@@ -163,7 +163,7 @@ def test_steal_cas_loser_returns_null():
 def test_owner_pop_last_element_loses_to_thief():
     p = _run_py(r"""
         import sys
-        import runloom, runloom_c as rc
+        import stackweave, stackweave_c as rc
         ROUNDS = 6
         N = 3000
         total_ran = 0
@@ -182,7 +182,7 @@ def test_owner_pop_last_element_loses_to_thief():
                     ran[i] = 1
                 for i in range(N):
                     rc.mn_fiber(lambda i=i: worker(i))
-            runloom.run(8, main)
+            stackweave.run(8, main)
             assert sum(ran) == N, ("LOST", N - sum(ran))
             total_ran += sum(ran)
         sys.stdout.write("POP_RACE_RAN:%d\n" % total_ran)
@@ -202,7 +202,7 @@ def test_owner_pop_last_element_loses_to_thief():
 def test_work_stealing_soak_exact_once():
     p = _run_py(r"""
         import sys
-        import runloom, runloom_c as rc
+        import stackweave, stackweave_c as rc
         ROUNDS = 4
         N = 5000
         grand = 0
@@ -221,7 +221,7 @@ def test_work_stealing_soak_exact_once():
                 rc.fiber_n(lambda: None, 1, 0)
                 for i in range(N):
                     rc.mn_fiber(lambda i=i: worker(i))
-            runloom.run(12, main)
+            stackweave.run(12, main)
             miss = N - sum(ran)
             assert miss == 0, ("ROUND", r, "LOST", miss)
             grand += sum(ran)

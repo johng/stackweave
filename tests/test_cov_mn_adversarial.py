@@ -1,6 +1,6 @@
 """Adversarial stress of the M:N scheduler + epoll backend -- NOT the happy path.
 
-Weaponises the runtime's built-in fault-injection points (RUNLOOM_FAULT_<SITE>=
+Weaponises the runtime's built-in fault-injection points (STACKWEAVE_FAULT_<SITE>=
 once|always:<errno>) and the env-gated scheduler modes to manufacture the
 conditions that break lock-free schedulers: a spawn that fails mid-storm
 (admission-slot backout), I/O syscalls that error under a running workload,
@@ -27,11 +27,11 @@ FT = needs_free_threading()
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PY = sys.executable
 
-SYSMON_ON = {"RUNLOOM_SYSMON": "1", "RUNLOOM_SYSMON_QUIET": "1", "RUNLOOM_SYSMON_MS": "5"}
+SYSMON_ON = {"STACKWEAVE_SYSMON": "1", "STACKWEAVE_SYSMON_QUIET": "1", "STACKWEAVE_SYSMON_MS": "5"}
 ALL_MODES = dict(SYSMON_ON, **{
-    "RUNLOOM_PREEMPT": "1", "RUNLOOM_PREEMPT_MS": "5",
-    "RUNLOOM_STACK_PARK_SWEEP": "1", "RUNLOOM_STACK_PARK_SWEEP_MS": "1",
-    "RUNLOOM_HUB_IDLE_WAKE": "0", "RUNLOOM_WORLD_YIELD_NS": "2000",
+    "STACKWEAVE_PREEMPT": "1", "STACKWEAVE_PREEMPT_MS": "5",
+    "STACKWEAVE_STACK_PARK_SWEEP": "1", "STACKWEAVE_STACK_PARK_SWEEP_MS": "1",
+    "STACKWEAVE_HUB_IDLE_WAKE": "0", "STACKWEAVE_WORLD_YIELD_NS": "2000",
 })
 
 
@@ -52,7 +52,7 @@ def _assert_no_crash(p, label):
 # --------------------------------------------------------------------------
 _SPAWN_FAULT = r'''
 import sys; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
+import stackweave, stackweave_c as rc
 def main():
     ran = [0]; failed = [0]
     def child(): ran[0] += 1
@@ -61,7 +61,7 @@ def main():
             rc.mn_fiber(child)
         except BaseException:
             failed[0] += 1
-runloom.run(4, main)
+stackweave.run(4, main)
 sys.stdout.write("SPAWN_OK r=%d\n" % 0)
 '''
 
@@ -70,7 +70,7 @@ sys.stdout.write("SPAWN_OK r=%d\n" % 0)
 @pytest.mark.parametrize("site", ["SPAWN_G", "SPAWN_STACK", "SPAWN_TSTATE"])
 @pytest.mark.parametrize("spec", ["once:12", "always:12"])
 def test_spawn_fault_no_crash(site, spec):
-    p = _run({"RUNLOOM_FAULT_" + site: spec, "RUNLOOM_GOROUTINE_PANIC": "silent"},
+    p = _run({"STACKWEAVE_FAULT_" + site: spec, "STACKWEAVE_GOROUTINE_PANIC": "silent"},
              [PY, "-c", _SPAWN_FAULT])
     _assert_no_crash(p, "spawn-fault %s=%s" % (site, spec))
 
@@ -85,8 +85,8 @@ def test_spawn_fault_no_crash(site, spec):
     ("TCP_CONNECT", "once:111"), ("TCP_ACCEPT", "once:24"),
 ])
 def test_io_fault_under_workload_no_crash(site, spec):
-    p = _run(dict(SYSMON_ON, **{"RUNLOOM_FAULT_" + site: spec,
-                                "RUNLOOM_GOROUTINE_PANIC": "silent"}),
+    p = _run(dict(SYSMON_ON, **{"STACKWEAVE_FAULT_" + site: spec,
+                                "STACKWEAVE_GOROUTINE_PANIC": "silent"}),
              [PY, "tests/cov_workload.py", "--hubs", "4"])
     _assert_no_crash(p, "io-fault %s=%s" % (site, spec))
 
@@ -96,7 +96,7 @@ def test_io_fault_under_workload_no_crash(site, spec):
 # --------------------------------------------------------------------------
 _TEARDOWN_STORM = r'''
 import sys; sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 for cycle in range(40):
     rc.mn_init(8)
     seen = [0]
@@ -121,20 +121,20 @@ def test_teardown_storm_under_detectors_no_hang():
 # --------------------------------------------------------------------------
 _EXC_STORM = r'''
 import sys; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
+import stackweave, stackweave_c as rc
 def main():
     def boom(): raise ValueError("storm")
     def ok(): pass
     for i in range(600):
         rc.mn_fiber(boom if (i % 2) else ok)
-runloom.run(4, main)
+stackweave.run(4, main)
 sys.stdout.write("EXC_OK\n")
 '''
 
 
 @pytest.mark.skipif(not FT, reason="M:N")
 def test_exception_storm_all_modes_no_crash():
-    p = _run(dict(ALL_MODES, RUNLOOM_GOROUTINE_PANIC="silent"),
+    p = _run(dict(ALL_MODES, STACKWEAVE_GOROUTINE_PANIC="silent"),
              [PY, "-c", _EXC_STORM], timeout=90)
     _assert_no_crash(p, "exception storm")
     assert "EXC_OK" in p.stdout, "exception storm hung\nerr=%s" % p.stderr[-800:]
@@ -145,7 +145,7 @@ def test_exception_storm_all_modes_no_crash():
 # --------------------------------------------------------------------------
 _MAXFIB = r'''
 import sys; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
+import stackweave, stackweave_c as rc
 rc.set_max_fibers(16)
 def main():
     ok = [0]; err = [0]
@@ -155,7 +155,7 @@ def main():
             rc.mn_fiber(child); ok[0] += 1
         except RuntimeError:
             err[0] += 1
-runloom.run(4, main)
+stackweave.run(4, main)
 rc.set_max_fibers(0)
 sys.stdout.write("MAXFIB_OK\n")
 '''
@@ -173,8 +173,8 @@ def test_fiber_admission_exhaustion_no_crash():
 # --------------------------------------------------------------------------
 _CHAN_CLOSE = r'''
 import sys; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave, stackweave_c as rc
+from stackweave.sync import WaitGroup
 def main():
     for _ in range(25):
         ch = rc.Chan(0)
@@ -191,7 +191,7 @@ def main():
         rc.sched_sleep(0.001)
         ch.close()
         wg.wait()
-runloom.run(4, main)
+stackweave.run(4, main)
 sys.stdout.write("CHANCLOSE_OK\n")
 '''
 
@@ -208,11 +208,11 @@ def test_channel_close_race_storm_no_crash():
 # --------------------------------------------------------------------------
 _OVERFLOW = r'''
 import sys; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
+import stackweave, stackweave_c as rc
 rc.install_crash_handler("backtrace")
 def main():
     rc.mn_fiber(lambda: rc._crash_selftest_overflow(), 131072)   # small hub stack
-runloom.run(2, main)
+stackweave.run(2, main)
 sys.stdout.write("UNREACHABLE\n")
 '''
 
@@ -231,8 +231,8 @@ def test_hub_stack_overflow_is_classified_not_silent():
 # --------------------------------------------------------------------------
 @pytest.mark.skipif(not FT, reason="M:N")
 def test_all_modes_plus_io_fault_no_crash():
-    p = _run(dict(ALL_MODES, RUNLOOM_FAULT_FD_READ="once:5",
-                  RUNLOOM_FAULT_TCP_SEND="once:32", RUNLOOM_GOROUTINE_PANIC="silent"),
+    p = _run(dict(ALL_MODES, STACKWEAVE_FAULT_FD_READ="once:5",
+                  STACKWEAVE_FAULT_TCP_SEND="once:32", STACKWEAVE_GOROUTINE_PANIC="silent"),
              [PY, "tests/cov_workload.py", "--hubs", "6"], timeout=90)
     _assert_no_crash(p, "all-modes + io-fault")
 

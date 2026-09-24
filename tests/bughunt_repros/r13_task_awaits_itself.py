@@ -1,7 +1,7 @@
 """Stock asyncio: a task awaiting itself raises RuntimeError('Task cannot
-await on itself'). Runloom: suspected silent deadlock."""
+await on itself'). Stackweave: suspected silent deadlock."""
 import sys, asyncio
-import runloom.aio as aio
+import stackweave.aio as aio
 
 async def main():
     holder = {}

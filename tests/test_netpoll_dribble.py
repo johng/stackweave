@@ -8,7 +8,7 @@ partial-CQE / provided-buffer-ring recycle window that benign bulk LAN reads
 never touch.  The client reassembles the dribble and reports a CRC + byte count.
 
 The test runs the SAME workload as a subprocess under BOTH netpoll backends
-(RUNLOOM_TCPCONN_IOURING 0 vs 1) and asserts:
+(STACKWEAVE_TCPCONN_IOURING 0 vs 1) and asserts:
   * each reassembles the payload byte-exact (CRC + length match the input), and
   * the two backends agree byte-for-byte (any divergence is a bug), and
   * neither hangs -- a dropped edge-triggered readiness on a 1-byte slice would
@@ -21,7 +21,7 @@ import unittest
 import zlib
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
-import runloom_c
+import stackweave_c
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -29,7 +29,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # "OK <crc> <n>" on success or "ERR <repr>" + exit 2 on a fiber exception.
 WORKLOAD = r'''
 import os, socket, sys, zlib
-import runloom_c
+import stackweave_c
 NB = int(os.environ["DRIBBLE_NBYTES"])
 SLICE = int(os.environ.get("DRIBBLE_SLICE", "1"))
 
@@ -50,7 +50,7 @@ def bound_port(l):
     return p
 
 def server():
-    l = runloom_c.TCPConn.listen("127.0.0.1", 0)
+    l = stackweave_c.TCPConn.listen("127.0.0.1", 0)
     port[0] = bound_port(l)
     c = l.accept()
     buf = bytearray(NB)
@@ -66,14 +66,14 @@ def server():
     while i < got:
         c.send_all(bytes(buf[i:i + SLICE]))
         i += SLICE
-        runloom_c.sched_yield()
+        stackweave_c.sched_yield()
     c.close()
     l.close()
 
 def client():
     while port[0] == 0:
-        runloom_c.sched_yield()
-    c = runloom_c.TCPConn.connect("127.0.0.1", port[0])
+        stackweave_c.sched_yield()
+    c = stackweave_c.TCPConn.connect("127.0.0.1", port[0])
     c.send_all(payload)
     acc = bytearray()
     while len(acc) < NB:
@@ -93,9 +93,9 @@ def wrap(fn):
             box.append(repr(e))
     return r
 
-runloom_c.fiber(wrap(server))
-runloom_c.fiber(wrap(client))
-runloom_c.run()
+stackweave_c.fiber(wrap(server))
+stackweave_c.fiber(wrap(client))
+stackweave_c.run()
 if box:
     print("ERR", box[0])
     sys.exit(2)
@@ -107,7 +107,7 @@ def _run_backend(iouring, nbytes, slice_):
     env = dict(os.environ,
                PYTHON_GIL="0", PYTHON_TLBC="0",
                PYTHONPATH=os.path.join(REPO, "src"),
-               RUNLOOM_TCPCONN_IOURING=("1" if iouring else "0"),
+               STACKWEAVE_TCPCONN_IOURING=("1" if iouring else "0"),
                DRIBBLE_NBYTES=str(nbytes), DRIBBLE_SLICE=str(slice_))
     return subprocess.run([sys.executable, "-c", WORKLOAD], env=env,
                           capture_output=True, text=True, timeout=90)
@@ -139,7 +139,7 @@ class TestNetpollDribble(unittest.TestCase):
     def test_dribble_epoll_vs_iouring_agree(self):
         ep = _run_backend(iouring=False, nbytes=self.NBYTES, slice_=self.SLICE)
         epout = self._assert_ok(ep, "epoll")
-        if not runloom_c.iouring_available():
+        if not stackweave_c.iouring_available():
             self.skipTest("io_uring not available on this kernel")
         io = _run_backend(iouring=True, nbytes=self.NBYTES, slice_=self.SLICE)
         ioout = self._assert_ok(io, "io_uring")

@@ -9,7 +9,7 @@ round must always complete -- a lost close-wakeup would hang the join.
 Stresses: cancellation/wakeup on close, channel teardown correctness.
 """
 import harness
-import runloom
+import stackweave
 
 PRODUCERS = 3
 CONSUMERS = 3
@@ -45,8 +45,8 @@ def consumer(H, ch, got, done):
 
 def session(H, wid, rng, state):
     while H.running():
-        ch = runloom.Chan(8)
-        done = runloom.Chan(PRODUCERS + CONSUMERS)
+        ch = stackweave.Chan(8)
+        done = stackweave.Chan(PRODUCERS + CONSUMERS)
         sent = [[0] for _ in range(PRODUCERS)]
         got = [[0] for _ in range(CONSUMERS)]
         for i in range(PRODUCERS):
@@ -54,7 +54,7 @@ def session(H, wid, rng, state):
         for i in range(CONSUMERS):
             H.fiber(consumer, H, ch, got[i], done)
         # Let some traffic build up, then close mid-flight.
-        runloom.sleep(rng.uniform(0.0005, 0.005))
+        stackweave.sleep(rng.uniform(0.0005, 0.005))
         ch.close()
         # Join everyone -- this only returns if every parked op woke on close.
         for _ in range(PRODUCERS + CONSUMERS):

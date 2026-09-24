@@ -1,6 +1,6 @@
 """p207 + A1b experiment: immortalize the shared hub-0-owned instances.
 
-Identical workload to p207_park_wake_pingpong, but when RUNLOOM_IMMORTALIZE_SHARED=1
+Identical workload to p207_park_wake_pingpong, but when STACKWEAVE_IMMORTALIZE_SHARED=1
 the per-op shared instances -- the harness H and every channel -- are made
 immortal in setup(), BEFORE the worker pool fans out across hubs.  Each per-op
 H.op()/H.running()/H.check()/a.send()/b.recv() pushes `self` as a new reference;
@@ -14,22 +14,22 @@ cost).  See docs/dev/HUB_SCALING.md.
 import os
 
 import harness
-import runloom_c
+import stackweave_c
 
 import p207_park_wake_pingpong as p207
 
 
 def setup(H):
     p207.setup(H)                       # builds pairs into H.state, registers channels
-    if os.environ.get("RUNLOOM_IMMORTALIZE_SHARED") == "1":
-        runloom_c.immortalize(H)
+    if os.environ.get("STACKWEAVE_IMMORTALIZE_SHARED") == "1":
+        stackweave_c.immortalize(H)
         for a, b in H.state:
-            runloom_c.immortalize(a)
-            runloom_c.immortalize(b)
+            stackweave_c.immortalize(a)
+            stackweave_c.immortalize(b)
 
 
 if __name__ == "__main__":
     harness.main("p207_immortal", p207.body, setup=setup,
                  default_funcs=4000,
                  describe="p207 ping-pong with the shared H + channels "
-                          "immortalized (RUNLOOM_IMMORTALIZE_SHARED=1)")
+                          "immortalized (STACKWEAVE_IMMORTALIZE_SHARED=1)")

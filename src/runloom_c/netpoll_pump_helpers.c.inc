@@ -75,7 +75,7 @@ static int runloom_pump_dispatch_event(int fd, int mask, int wake_all)
                     if (p->g != NULL &&
                         __atomic_load_n(&p->g->done, __ATOMIC_ACQUIRE)) {
                         fprintf(stderr,
-                            "[runloom] pump waking DEAD g: g=%p done=1 "
+                            "[stackweave] pump waking DEAD g: g=%p done=1 "
                             "refcount=%d parker=%p fd=%d\n",
                             (void *)p->g,
                             (int)__atomic_load_n(&p->g->refcount,
@@ -339,7 +339,7 @@ static int runloom_netpoll_wait_failed(int n)
         __atomic_store_n(&eintr_run, 0, __ATOMIC_RELAXED);
         if (!__atomic_exchange_n(&warned, 1, __ATOMIC_RELAXED)) {
             fprintf(stderr,
-                    "[runloom] netpoll pump: blocking wait failed (errno=%d); "
+                    "[stackweave] netpoll pump: blocking wait failed (errno=%d); "
                     "backing off to avoid a busy-spin -- the poll fd is likely "
                     "closed (teardown race) or corrupt\n", err);
         }

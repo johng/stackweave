@@ -38,9 +38,9 @@ A NOTE ON WHAT IS LEGITIMATE TO ATTACK.  Generators are documented as NOT
 concurrently reentrant: two threads literally inside one generator frame at the
 SAME instant (a driver in next() running simultaneously with a sibling's
 throw()/close()) is undefined in ANY free-threaded Python -- verified here with
-plain threading.Thread, GIL-off, no runloom: two threads in one frame -> SIGSEGV;
+plain threading.Thread, GIL-off, no stackweave: two threads in one frame -> SIGSEGV;
 the same code GIL-on -> clean.  That is caller misuse / an upstream-CPython
-free-threaded limitation, not a runloom invariant, so this program does NOT do
+free-threaded limitation, not a stackweave invariant, so this program does NOT do
 that.  Instead the driver PARKS strictly OUT of next() while the sibling fires
 its single op, so the sibling strikes a generator that is genuinely SUSPENDED on
 the driver's grown-down C stack, on another hub.  The race that remains is the
@@ -48,7 +48,7 @@ real one: the sibling's entry into the single embedded gi_iframe and its write o
 the single gi_frame_state byte (FRAME_SUSPENDED -> EXECUTING/CLEARED, plus
 frame->owner / frame->stacktop) racing the M:N machinery that owns that suspended
 frame across the park.  The serialized strike is provably clean on plain
-GIL-off threads, so any failure HERE is a runloom M:N frame-state defect.
+GIL-off threads, so any failure HERE is a stackweave M:N frame-state defect.
 
 CLOSED-WORLD UNIT-CONSERVATION ORACLE (one generator per round).  The generator
 yields a fixed sentinel sequence -- UNIVERSE values v_i = BASE + i for
@@ -103,7 +103,7 @@ gi_frame_state, or a single doubled/lost finalize under replay, localizes the
 corruption before the conservation sum even closes.
 """
 import harness
-import runloom
+import stackweave
 
 # Finite sentinel UNIVERSE of yielded values: v_i = BASE + i.  A value the driver
 # pulls that is NOT BASE + (its expected index) is a torn/replayed/garbage slot --
@@ -237,11 +237,11 @@ def run_raced(H, wid, rng, state, slot, do_close):
                                                                PULLS_BEFORE_PARK))
         return False
 
-    go = runloom.WaitGroup()            # driver releases the sibling to strike
+    go = stackweave.WaitGroup()            # driver releases the sibling to strike
     go.add(1)
-    strike_done = runloom.WaitGroup()   # sibling signals its single op finished
+    strike_done = stackweave.WaitGroup()   # sibling signals its single op finished
     strike_done.add(1)
-    wg = runloom.WaitGroup()            # both fibers join here before we read state
+    wg = stackweave.WaitGroup()            # both fibers join here before we read state
     wg.add(2)
 
     # The sibling's verdict is published into a 1-slot box (single sibling writer,

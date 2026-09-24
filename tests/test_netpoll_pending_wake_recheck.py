@@ -20,8 +20,8 @@ import time
 
 import pytest
 
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
 READ = 1
 
@@ -42,7 +42,7 @@ def test_fd_reuse_no_spurious_wait_fd_return():
 
         def cycle(do_write):
             t0 = time.monotonic()
-            runloom_c.wait_fd(r, READ, 500)        # 0.5s deadline
+            stackweave_c.wait_fd(r, READ, 500)        # 0.5s deadline
             dt = time.monotonic() - t0
             try:
                 os.read(r, 64)                     # drain (the byte, if any)
@@ -61,17 +61,17 @@ def test_fd_reuse_no_spurious_wait_fd_return():
                 cycle(do_write)
                 done[0] = True
 
-            runloom.fiber(run)
-            runloom.sleep(0.05)
+            stackweave.fiber(run)
+            stackweave.sleep(0.05)
             if do_write:
                 os.write(w, b"\x01")
             while not done[0]:                     # serialize cycles on the one fd
-                runloom.sleep(0.01)
+                stackweave.sleep(0.01)
 
         os.close(r)
         os.close(w)
 
-    runloom.run(8, main)
+    stackweave.run(8, main)
     assert box["cycles"] == 20, box
     assert box["spurious"] == 0, box
 
@@ -80,7 +80,7 @@ def test_high_fanin_event_no_spurious_false():
     """500 fibers wait on one monkey-patched Event; set() must wake them all
     True -- none may time out / wake False off a stale stash.  Repeated trials
     because the stale-stash leak grew across trials before the fix."""
-    from runloom import monkey
+    from stackweave import monkey
     monkey.patch()
     import threading
 
@@ -95,15 +95,15 @@ def test_high_fanin_event_no_spurious_false():
                 outs.append(ev.wait(0.5))
 
             for _ in range(500):
-                runloom.fiber(waiter)
-            runloom.sleep(0.1)
+                stackweave.fiber(waiter)
+            stackweave.sleep(0.1)
             ev.set()
-            runloom.sleep(0.4)
+            stackweave.sleep(0.4)
             box["total"] += len(outs)
             box["false"] += sum(1 for o in outs if not o)
             box["trials"] += 1
 
-    runloom.run(8, main)
+    stackweave.run(8, main)
     assert box["trials"] == 5, box
     assert box["total"] == 5 * 500, box
     assert box["false"] == 0, box

@@ -21,7 +21,7 @@ static int runloom_wake_skew_n_(void)
 {
     static int n = -1;
     if (n < 0) {
-        const char *e = getenv("RUNLOOM_WAKE_SKEW");
+        const char *e = getenv("STACKWEAVE_WAKE_SKEW");
         n = (e && *e) ? atoi(e) : 4;      /* yields per skew point; default 4 */
         if (n < 0) n = 0;
     }
@@ -553,15 +553,15 @@ void runloom_sim_foreign_wake_note(const char *what)
     __atomic_add_fetch(&runloom_sim_foreign_wake_total_v, 1, __ATOMIC_RELAXED);
     st = __atomic_load_n(&strict, __ATOMIC_RELAXED);
     if (st < 0) {
-        const char *e = getenv("RUNLOOM_SIM_STRICT");
+        const char *e = getenv("STACKWEAVE_SIM_STRICT");
         st = (e == NULL || e[0] == '\0') ? 1 : (e[0] != '0');
         __atomic_store_n(&strict, st, __ATOMIC_RELAXED);
     }
     {
         int strict_now = st;
-        fprintf(stderr, "runloom mn-sim: FOREIGN-THREAD WAKE via %s during a "
+        fprintf(stderr, "stackweave mn-sim: FOREIGN-THREAD WAKE via %s during a "
                 "seeded run -- a wall-clock wake source the census cannot order "
-                "(wake contract #13/#15; RUNLOOM_SIM_STRICT=0 downgrades to "
+                "(wake contract #13/#15; STACKWEAVE_SIM_STRICT=0 downgrades to "
                 "counter-only)\n", what);
         if (strict_now) abort();
     }
@@ -731,7 +731,7 @@ static int runloom_spurious_park_every(void)
     static int v = -1;
     int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
     if (cur < 0) {
-        const char *e = getenv("RUNLOOM_FAULT_SPURIOUS_PARK");
+        const char *e = getenv("STACKWEAVE_FAULT_SPURIOUS_PARK");
         cur = (e != NULL && e[0] != '\0') ? atoi(e) : 0;
         if (cur < 2) cur = 0;                    /* off, or refuse a livelock */
         __atomic_store_n(&v, cur, __ATOMIC_RELAXED);

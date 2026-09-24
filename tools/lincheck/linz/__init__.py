@@ -1,4 +1,4 @@
-"""linz -- a generative linearizability battery for runloom's concurrent objects.
+"""linz -- a generative linearizability battery for stackweave's concurrent objects.
 
 This is the *abstract* generalization of tests/big_100 (which is concrete: 170-odd
 hand-written programs).  Instead of enumerating programs, `linz` is built from:
@@ -14,7 +14,7 @@ hand-written programs).  Instead of enumerating programs, `linz` is built from:
   * workloads.py -- random concurrent op-sequence generators (seed -> program).
   * record.py    -- runs a workload on the REAL M:N scheduler and records the
                     call/return history.  Two modes: wall-clock (genuine real-time
-                    overlap) and DST-seeded (RUNLOOM_MN_SEED -> deterministic
+                    overlap) and DST-seeded (STACKWEAVE_MN_SEED -> deterministic
                     logical-clock history, so every non-linearizable finding
                     reduces to a single reproducible integer seed).
   * battery.py   -- the driver: sweep seeds x primitives, record, check, and on a

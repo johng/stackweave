@@ -17,7 +17,7 @@ write far more than any kernel socket buffer can absorb, so the transport's
 _write_buf grows past the high watermark and pause_writing() fires; then we
 drain the peer and watch resume_writing() fire.
 
-Driven through runloom.aio.run() (its asyncio.run drop-in), no pytest-asyncio.
+Driven through stackweave.aio.run() (its asyncio.run drop-in), no pytest-asyncio.
 """
 import asyncio
 import socket
@@ -25,7 +25,7 @@ import sys
 
 import pytest
 
-import runloom.aio as aio
+import stackweave.aio as aio
 from adv_util import hang_guard
 
 

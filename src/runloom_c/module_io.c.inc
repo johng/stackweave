@@ -441,7 +441,7 @@ static PyObject *m_serve(PyObject *self, PyObject *args, PyObject *kw)
         ) {
         PyErr_SetString(PyExc_TypeError,
                         "serve(): handler must be callable, None for the built-in all-C "
-                        "echo, or a runloom_c.c_handler PyCapsule (custom C handler)");
+                        "echo, or a stackweave_c.c_handler PyCapsule (custom C handler)");
         return NULL;
     }
     /* serve() hosts each accept loop on an M:N hub (runloom_mn_fiber / mn_go_c).
@@ -450,7 +450,7 @@ static PyObject *m_serve(PyObject *self, PyObject *args, PyObject *kw)
      * fast with an actionable message instead, before any listener is bound. */
     if (runloom_mn_hub_count() < 1) {
         PyErr_SetString(PyExc_RuntimeError,
-                        "serve(): requires the M:N runtime -- call runloom.run(n, ...) "
+                        "serve(): requires the M:N runtime -- call stackweave.run(n, ...) "
                         "with n >= 2; single-thread mode has no hubs to host the accept loops");
         return NULL;
     }

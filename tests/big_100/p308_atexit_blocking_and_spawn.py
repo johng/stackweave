@@ -1,6 +1,6 @@
 """big_100 / 308 -- atexit handlers post-mn_fini: blocking IO + scheduler spawn.
 
-atexit handlers run AFTER `runloom.run()` returns -- i.e. after mn_fini has torn
+atexit handlers run AFTER `stackweave.run()` returns -- i.e. after mn_fini has torn
 the M:N scheduler down and the hub threads are gone.  An atexit handler is thus
 the WORST possible caller of a monkey-patched cooperative primitive: there is no
 live goroutine (TLS peek is NULL) and, worse, the hub array the scheduler used
@@ -13,7 +13,7 @@ boundary.
 p79 only registers a trivial print; it never exercises a blocking-IO atexit
 handler nor a scheduler-touching (`fiber()`) atexit handler post-mn_fini.
 
-A CHILD runloom program registers four atexit handlers BEFORE run() (so they
+A CHILD stackweave program registers four atexit handlers BEFORE run() (so they
 fire in REVERSE registration order during interpreter finalization, after the
 scheduler is gone):
 
@@ -29,7 +29,7 @@ scheduler is gone):
   * h2:  blocking IO on a real socketpair: send 4 bytes, recv them back via a
     patched socket.  Post-scheduler the patched recv must do a real kernel recv,
     not register a netpoll arm on a freed hub.
-  * h3 (registered last, runs FIRST):  attempt `runloom.fiber(noop)` with NO live
+  * h3 (registered last, runs FIRST):  attempt `stackweave.fiber(noop)` with NO live
     scheduler.  The SHARPEST sub-probe: it must take the no-scheduler path
     cleanly -- it must NOT crash and must NOT run the body on a (freed) hub.  We
     prove it took that path by printing a FALLBACK marker: either fiber() raised
@@ -61,7 +61,7 @@ require_no_lost on the parent pool.
 
 Stresses: atexit / interpreter-finalization ordering post-mn_fini, monkey-patched
 blocking primitives (time.sleep / Lock / socket) falling back to the real OS with
-the scheduler GONE, runloom.fiber() with no live scheduler, no park of a
+the scheduler GONE, stackweave.fiber() with no live scheduler, no park of a
 non-existent g, no touch of a freed hub array, no crash/hang at the
 scheduler-already-gone boundary.
 
@@ -86,9 +86,9 @@ SLEEP_FLOOR = 0.02
 CHILD = r'''
 import sys, os, time, atexit, threading, socket
 sys.path.insert(0, {src!r})
-import runloom
-import runloom.monkey
-runloom.monkey.patch()                    # patched time.sleep / Lock / socket
+import stackweave
+import stackweave.monkey
+stackweave.monkey.patch()                    # patched time.sleep / Lock / socket
 
 SLEEP_S = {sleep_s}
 
@@ -96,7 +96,7 @@ def emit(s):
     sys.stdout.write(s + "\n"); sys.stdout.flush()
 
 # --- atexit handlers, registered h0..h3; they FIRE in reverse: h3,h2,h1,h0. ---
-# Each runs AFTER runloom.run() returns -> after mn_fini -> scheduler gone.
+# Each runs AFTER stackweave.run() returns -> after mn_fini -> scheduler gone.
 
 def h0_sleep():
     # Wall-time-checked: the patched time.sleep must fall back to a REAL kernel
@@ -129,7 +129,7 @@ def h2_sock():
         a.close(); b.close()
 
 def h3_fiber():
-    # SHARPEST probe: runloom.fiber() with NO live scheduler.  Must take the
+    # SHARPEST probe: stackweave.fiber() with NO live scheduler.  Must take the
     # no-scheduler path -- clean raise OR a no-op whose body never runs on a
     # (freed) hub -- never crash, never "silently work" by executing on a hub.
     ran = [False]
@@ -137,7 +137,7 @@ def h3_fiber():
         ran[0] = True
     took_fallback = False
     try:
-        g = runloom.fiber(noop)
+        g = stackweave.fiber(noop)
         # If it returned, give any (illegitimate) live-hub execution a real
         # window to run the body.  On a sound runtime there is no scheduler, so
         # the body must NOT run -> ran[0] stays False -> this is the fallback.
@@ -164,15 +164,15 @@ stop = [False]
 def bg():
     n = 0
     while not stop[0] and n < 2000:
-        runloom.sleep(0.001); n += 1
+        stackweave.sleep(0.001); n += 1
 
 def main():
     for _ in range(4):
-        runloom.fiber(bg)
-    runloom.sleep(0.02)
+        stackweave.fiber(bg)
+    stackweave.sleep(0.02)
     stop[0] = True                           # wind the background g's down
 
-runloom.run(4, main)
+stackweave.run(4, main)
 emit("MAIN-EXIT")                            # printed BEFORE atexit handlers fire
 '''
 
@@ -279,7 +279,7 @@ def worker(H, wid, rng, state):
         #    didn't run its body on a torn-down/freed hub).
         if not H.check(b"FALLBACK" in out and
                        b"FIBER-BODY-RAN-ON-DEAD-HUB" not in out,
-                       "post-mn_fini runloom.fiber() did NOT take the no-"
+                       "post-mn_fini stackweave.fiber() did NOT take the no-"
                        "scheduler fallback wid={0} (body ran on a torn-down hub "
                        "or touched the freed hub array): {1!r}".format(
                            wid, out[:240])):
@@ -312,6 +312,6 @@ if __name__ == "__main__":
                  default_funcs=100,
                  describe="child runs atexit handlers AFTER mn_fini (scheduler "
                           "gone): wall-timed time.sleep + Lock + socket blocking "
-                          "IO fall back to real OS, runloom.fiber() takes the "
+                          "IO fall back to real OS, stackweave.fiber() takes the "
                           "no-scheduler path; exit 0, markers in reverse order, "
                           "FALLBACK proven, sleep actually waited")

@@ -1,4 +1,4 @@
-"""Memory probe for the runloom columns: hold N parked fibers in a given state
+"""Memory probe for the stackweave columns: hold N parked fibers in a given state
 and report USED memory (RSS / PSS -- NOT virtual size).
 
 Configs (via flags):
@@ -10,7 +10,7 @@ Configs (via flags):
                           _PyEval_EvalFrameDefault interpreter activation.  For
                           'socket' it is the stack-buffer Cython handler; for
                           'empty' the bare parker itself is compiled (see below).
-  --optimize memory       call runloom.optimize("memory") first
+  --optimize memory       call stackweave.optimize("memory") first
 
 States (--state):
   empty   : N fibers parked on a shared Chan recv (bare fiber: g + stack).
@@ -30,8 +30,8 @@ import json
 import os
 import socket as sk
 
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
 
 def rss_bytes():
@@ -63,7 +63,7 @@ def compile_empty_parker(shared):
     -> ~1 page).  Reuses benchmark/bench/cycompile (the on-the-fly handler
     compiler), so this measures the SAME source as the py parker, just compiled.
 
-    Spawned with no args, so runloom.fiber uses the callable directly (no
+    Spawned with no args, so stackweave.fiber uses the callable directly (no
     arg-binding lambda wrapper) -- the only frame between runloom_g_entry and
     Chan.recv is the native parker, the cleanest apples-to-apples vs --handler py.
     Raises (never silently falls back to the Python parker) if compilation is
@@ -96,7 +96,7 @@ def main():
     args = ap.parse_args()
 
     if args.optimize == "memory":
-        runloom.optimize("memory")
+        stackweave.optimize("memory")
     handler_fn = None
     if args.handler == "c" and args.state == "socket":
         import sys
@@ -107,7 +107,7 @@ def main():
 
     n = args.n
     settle = args.settle or max(3.0, n / 150000.0)
-    shared = runloom_c.Chan()
+    shared = stackweave_c.Chan()
     peers = []   # keep socketpair peer ends alive so recv never returns
 
     def worker_empty():
@@ -117,7 +117,7 @@ def main():
         a, b = sk.socketpair()
         peers.append(b)                     # keep peer open -> recv blocks
         afd = a.detach()
-        conn = runloom_c.TCPConn(afd)
+        conn = stackweave_c.TCPConn(afd)
         if args.handler == "py":
             buf = bytearray(65536)          # the py-handler's per-conn heap buffer
             conn.recv_into(buf)             # parks forever
@@ -132,8 +132,8 @@ def main():
         worker = worker_empty                   # interpreted bare fiber (~2 pages)
 
     def measurer():
-        runloom.sleep(settle)
-        out = {"runtime": "runloom", "handler": args.handler,
+        stackweave.sleep(settle)
+        out = {"runtime": "stackweave", "handler": args.handler,
                "optimize": args.optimize, "state": args.state, "n": n,
                "hubs": args.hubs, "rss_bytes": rss_bytes(), "pss_bytes": pss_bytes()}
         print(json.dumps(out), flush=True)
@@ -141,10 +141,10 @@ def main():
 
     def root():
         for _ in range(n):
-            runloom.fiber(worker)
-        runloom.fiber(measurer)
+            stackweave.fiber(worker)
+        stackweave.fiber(measurer)
 
-    runloom.run(args.hubs, root)
+    stackweave.run(args.hubs, root)
 
 
 if __name__ == "__main__":

@@ -8,7 +8,7 @@ explicitly defined (to reject redefinition), and an implicit stack of nested
 array / inline-table contexts as the descent recurses.  All of that lives on the
 CALL STACK and in a per-parse Output/Flags object created fresh inside loads().
 
-WHERE M:N COULD BREAK IT (the gap this program probes).  runloom gives every
+WHERE M:N COULD BREAK IT (the gap this program probes).  stackweave gives every
 fiber its own Python frame stack, so a parse's cursor/flags/current-table live in
 that fiber's own frames and should be untouchable by a sibling.  But the whole
 point of a stress test is to falsify that: if a hub migration mid-parse were to
@@ -28,10 +28,10 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY.
   verified against a plain-threads control (8 OS threads, GIL on AND off, each
   looping loads() over its own wid-seeded doc): 100% of parses return the exact
   wid-derived dict and every malformed doc raises -- 0 cross-thread bleed.  Under
-  a CORRECT runloom the same must hold.  If a fiber's parse of its OWN fiber-local
+  a CORRECT stackweave the same must hold.  If a fiber's parse of its OWN fiber-local
   text returns a dict that differs across a yield, or holds a value that is not
   its wid-derived expected (a sibling's value bled through the shared C-less-but-
-  stateful parser), that is a runloom parse-state-isolation bug, and this single-
+  stateful parser), that is a stackweave parse-state-isolation bug, and this single-
   owner oracle PASSES on a correct runtime (program exits 0 when there is no bug).
 
   SINGLE-OWNER: the document TEXT (a str built deterministically from wid), and
@@ -55,7 +55,7 @@ ORACLES:
       - parses a fiber-local MALFORMED doc (unterminated array, seeded by wid) and
         asserts tomllib.TOMLDecodeError is raised -- the parser's error path must
         also stay fiber-isolated (a swapped cursor could mask the error).
-    A failure here is a runloom parse-state desync, not Python semantics.
+    A failure here is a stackweave parse-state desync, not Python semantics.
 
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber stranded mid-parse
     (spinning inside the recursive descent on a crossed cursor) never returns; the
@@ -75,7 +75,7 @@ isolation across hub migration + yield, re-parse determinism, error-path
 import tomllib
 
 import harness
-import runloom
+import stackweave
 
 
 # Each wid seeds a distinct base value so every scalar in a fiber's document is
@@ -187,9 +187,9 @@ def parse_check(H, wid, state):
     # YIELD: allow siblings to parse in the window.  If parse state (cursor,
     # _current_table, flags) is not fiber-isolated, a sibling's concurrent parse
     # could corrupt this fiber's re-parse.
-    runloom.yield_now()
+    stackweave.yield_now()
     if wid & 1:
-        runloom.sleep(0.0003)
+        stackweave.sleep(0.0003)
 
     d1 = tomllib.loads(text)
     if not verify(H, wid, "d1", d1, expected):
@@ -273,4 +273,4 @@ if __name__ == "__main__":
                  "derived expected, and a malformed fiber-local doc raises "
                  "TOMLDecodeError.  A parsed value that is not the wid-derived "
                  "expected, a re-parse that changes across the yield, or a masked "
-                 "error is the runloom parse-state-isolation bug")
+                 "error is the stackweave parse-state-isolation bug")

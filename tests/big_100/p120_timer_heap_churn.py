@@ -1,12 +1,12 @@
 """big_100 / 120 -- timer-heap churn (Stop must mean no second fire).
 
-Each round a worker creates a batch of `runloom.time.NewTimer(s)` timers and
+Each round a worker creates a batch of `stackweave.time.NewTimer(s)` timers and
 `.Stop()`s MOST of them before they can fire, letting a few short ones fire.
 Per-worker counters track created / fired / stopped, classified by whether the
 timer ACTUALLY delivered a value (not by Stop()'s return -- see the finding
 below).
 
-FINDING (recorded, not a crash): runloom's `Timer.Stop()` returns `True` even
+FINDING (recorded, not a crash): stackweave's `Timer.Stop()` returns `True` even
 when the timer has ALREADY fired and delivered into its channel -- unlike Go's
 `time.Timer.Stop()`, which returns `false` if the timer already
 expired/fired.  So Stop()'s return value is NOT a reliable "I prevented the
@@ -25,8 +25,8 @@ empty drain) breaks the invariant.
 Stresses: timer creation/Stop churn, the timer heap, no double/late fire.
 """
 import harness
-import runloom
-import runloom.time as rtime
+import stackweave
+import stackweave.time as rtime
 
 BATCH = 16
 
@@ -68,7 +68,7 @@ def worker(H, wid, rng, state):
             if want_fire:
                 # Wait for it to fire (bounded by a backstop), then drain.
                 backstop = rtime.After(0.5)
-                idx, _p = runloom.select([("recv", tm.c), ("recv", backstop)])
+                idx, _p = stackweave.select([("recv", tm.c), ("recv", backstop)])
                 # Whether it fired via select or not, Stop it and drain to a
                 # definitive empty so it can never deliver again, then classify.
                 tm.Stop()
@@ -101,7 +101,7 @@ def worker(H, wid, rng, state):
 
         # A Stopped-and-empty timer must NEVER produce a value later.  Yield so
         # any phantom delayed delivery would have a chance to land, then re-drain.
-        runloom.yield_now()
+        stackweave.yield_now()
         for tm in stopped_empty:
             v, ok = drain_once(tm.c)
             if ok:

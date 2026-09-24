@@ -1,9 +1,9 @@
 """cancel_all_parked (teardown backstop) must unwind fibers parked in I/O.
 A plain-socket recv waiter honours the CANCELLED sentinel (OSError ECANCELED)
-and unwinds; a TLS recv waiter ignores it (raw runloom_c.wait_fd in tls.py)
+and unwinds; a TLS recv waiter ignores it (raw stackweave_c.wait_fd in tls.py)
 and RE-PARKS on the still-open fd forever."""
 import socket, ssl, os, sys, time
-import runloom, runloom_c
+import stackweave, stackweave_c
 
 D = os.path.dirname(os.path.abspath(__file__))
 MODE = sys.argv[1]   # "plain" or "tls"
@@ -18,7 +18,7 @@ def main():
                 state["out"] = ("recv", d)
             except Exception as e:
                 state["out"] = ("exc", type(e).__name__, str(e))
-        runloom.fiber(reader)
+        stackweave.fiber(reader)
     else:
         sctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         sctx.load_cert_chain(os.path.join(D, "cert.pem"), os.path.join(D, "key.pem"))
@@ -27,7 +27,7 @@ def main():
         holder = {}
         def server():
             holder["s"] = sctx.wrap_socket(a, server_side=True)
-        runloom.fiber(server)
+        stackweave.fiber(server)
         ctls = cctx.wrap_socket(b)
         def reader():
             try:
@@ -35,13 +35,13 @@ def main():
                 state["out"] = ("recv", d)
             except Exception as e:
                 state["out"] = ("exc", type(e).__name__, str(e))
-        runloom.fiber(reader)
-    runloom.sleep(0.3)          # reader is parked now
-    n = runloom_c.cancel_all_parked()
+        stackweave.fiber(reader)
+    stackweave.sleep(0.3)          # reader is parked now
+    n = stackweave_c.cancel_all_parked()
     print("cancelled %d parked" % n, flush=True)
-    runloom.sleep(0.5)
+    stackweave.sleep(0.5)
     print("reader state after cancel_all_parked:", state.get("out", "STILL PARKED"), flush=True)
 
-runloom.monkey.patch()
-runloom.run(2, main)
+stackweave.monkey.patch()
+stackweave.run(2, main)
 print("run() returned", flush=True)

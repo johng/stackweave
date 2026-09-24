@@ -30,7 +30,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against a plain re-render):
   successive renders of the same dynamically-built class compare byte-equal, and
   that the output contains exactly the fiber's own sentinel markers (class name
   Widget_<wid>, the "widget number <wid>" body, and each method's per-wid
-  docstring).  Under a CORRECT runloom that determinism must survive a yield that
+  docstring).  Under a CORRECT stackweave that determinism must survive a yield that
   interleaves siblings rendering their own classes: the re-render must equal the
   baseline and carry no foreign wid.  The load-bearing single-owner oracle PASSES
   on a correct runtime (exit 0 when there is no bug).
@@ -52,7 +52,7 @@ ORACLES:
         the expected number of times and NO OTHER fiber's token "WIDMARK<other>Z"
         appears (no cross-fiber splice).
     Single-owner: the class and the TextDoc renderer are fiber-local.  A failure
-    is a pydoc/inspect render-isolation desync in runloom.
+    is a pydoc/inspect render-isolation desync in stackweave.
 
   * PURITY SIDE-CHECK (worker, HARD, fail-fast).  pydoc.splitdoc(getdoc(cls)) and
     pydoc.getdoc(cls) are recomputed across the same yield on the fiber-local
@@ -87,7 +87,7 @@ fires.
 import pydoc
 
 import harness
-import runloom
+import stackweave
 
 # Source template for each fiber's private class.  Every docstring + the class
 # attribute value embeds the fiber's unique sentinel token WIDMARK<wid>Z so a
@@ -166,9 +166,9 @@ def render_check(H, wid, other_token, state):
 
     # YIELD: siblings render their own distinct classes on other hubs, driving the
     # shared reprlib recursion state + inspect walks concurrently.
-    runloom.yield_now()
+    stackweave.yield_now()
     if wid & 1:
-        runloom.sleep(0.0003)
+        stackweave.sleep(0.0003)
 
     # RE-render the SAME class; must be byte-identical to the baseline.
     again = td.docclass(cls)
@@ -282,5 +282,5 @@ if __name__ == "__main__":
                  "byte-identical to the baseline, carry the fiber's own sentinel "
                  "the exact expected number of times, splice in NO foreign "
                  "sentinel, and getdoc/splitdoc must be identity-stable -- a "
-                 "differing re-render or a leaked foreign token is the runloom "
+                 "differing re-render or a leaked foreign token is the stackweave "
                  "render-isolation bug")

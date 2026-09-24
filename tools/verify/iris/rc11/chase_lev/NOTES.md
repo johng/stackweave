@@ -322,7 +322,7 @@ executions.** Verdict: **no live bug — production does NOT skimp.**
    equivalent to the model's relaxed-store + SC-fence + acquire-load. The
    `steal` load-load ordering is an **explicit `SEQ_CST` fence** (`:65`). So the
    `-DBUG_NO_FENCE` duplication is **not** reachable in the shipped code.
-2. **Resize finding is N/A to runloom.** `cldeque.c` is fixed-cap circular
+2. **Resize finding is N/A to stackweave.** `cldeque.c` is fixed-cap circular
    (`RUNLOOM_CLDEQUE_CAP`, `& MASK`; `push` returns -1 when full). It never grows
    (header: *"growable if needed later"*). The rel/acq-on-array-pointer race
    (`chase_lev_resize.c -DBUG_RLX_ARR`) applies only to the growable variant — a
@@ -356,7 +356,7 @@ ingredient gpfsl does not export:
    GPS_Reader top t' ∗ ⌜t ≤ t'⌝` where `t'` is a lower bound certified across the
   fence — i.e. an SC-fence variant of `GPS_iSP_SWWriter_latest` spanning the
   *other* protocol. This is iRC11 metatheory (gpfsl/orc11 `psc` reasoning), a
-  candidate to raise with the gpfsl authors, **not** runloom work.
+  candidate to raise with the gpfsl authors, **not** stackweave work.
 
 ## Files
 

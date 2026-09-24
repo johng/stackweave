@@ -17,10 +17,10 @@ import sys
 import time
 import unittest
 
-import runloom
-import runloom.monkey
+import stackweave
+import stackweave.monkey
 
-runloom.monkey.patch()
+stackweave.monkey.patch()
 
 # A fast child that writes a known marker (explicit flush: free-threaded builds
 # don't deterministically flush on implicit close).
@@ -41,7 +41,7 @@ class TestGoroutinePopen(unittest.TestCase):
             o, _ = p.communicate()
             out.append((p.returncode, o))
 
-        runloom.run(2, w)
+        stackweave.run(2, w)
         self.assertEqual(out, [(0, b"hi")])
 
     def test_init_exception_propagates_to_fiber(self):
@@ -56,7 +56,7 @@ class TestGoroutinePopen(unittest.TestCase):
             except FileNotFoundError:
                 seen.append("ok")
 
-        runloom.run(2, w)
+        stackweave.run(2, w)
         self.assertEqual(seen, ["ok"])
 
     def test_spawn_storm_completes(self):
@@ -75,10 +75,10 @@ class TestGoroutinePopen(unittest.TestCase):
 
         def main():
             for i in range(N):
-                runloom.fiber(w, i)
+                stackweave.fiber(w, i)
 
         t0 = time.monotonic()
-        runloom.run(8, main)
+        stackweave.run(8, main)
         self.assertEqual(len(done), N)
         # Generous bound: a lost-wake hang would blow well past this.
         self.assertLess(time.monotonic() - t0, 60.0)

@@ -7,7 +7,7 @@ depends on the process-GLOBAL locale.LC_TIME setting.  Unlike decimal.localconte
 or warnings.catch_warnings(), calendar offers NO context manager to isolate locale:
 it is a bare global that affects ALL subsequent strftime calls.
 
-WHERE M:N BREAKS IT (the gap this program probes).  Under runloom's M:N scheduler
+WHERE M:N BREAKS IT (the gap this program probes).  Under stackweave's M:N scheduler
 many fibers ("goroutines") share ONE hub OS-thread.  A fiber sets the global
 locale.LC_TIME to get localized month/day names, yields/parks at a scheduling
 point, and another SIBLING fiber on the same hub can run and CHANGE the locale
@@ -34,18 +34,18 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain threads):
   with real locale chains (a locale for each thread), this always succeeds: each
   thread's locale is independent, so a thread never sees a sibling's locale.
 
-  Under runloom WITHOUT per-fiber locale isolation, the test FAILS because the
-  sibling's locale change is visible.  A CORRECT runloom would need to isolate
+  Under stackweave WITHOUT per-fiber locale isolation, the test FAILS because the
+  sibling's locale change is visible.  A CORRECT stackweave would need to isolate
   locale PER FIBER (e.g. a contextvar-backed locale stack, or a fiber-local
   locale shadow), similar to how it handles decimal.localcontext.
 
   HOWEVER: the PRACTICAL workaround for calendar is EXPLICIT SAVE/RESTORE in
   user code (locale.setlocale(locale.LC_TIME, saved) at each fiber entry/exit).
   This program tests that such save/restore WORKS UNDER M:N without corruption --
-  i.e., that locale.setlocale() itself is fiber-safe and that no runloom preempt
+  i.e., that locale.setlocale() itself is fiber-safe and that no stackweave preempt
   or migration desyncs a saved/restored locale across the yield.  We DO NOT fail
   on the fact that calendar is a global (we MEASURE that leak rate, like p67/p321);
-  we FAIL if the user's explicit save/restore is BROKEN by runloom (a desync across
+  we FAIL if the user's explicit save/restore is BROKEN by stackweave (a desync across
   a yield that leaves a fiber stranded with the wrong locale set).
 
 ORACLES:
@@ -58,7 +58,7 @@ ORACLES:
         sibling's locale).
     A mismatch is either (a) a sibling's locale leaked in (the documented-unsafe
     global-state hazard, which we MEASURE/REPORT but do not fail on), or (b) a
-    runloom save/restore desync (a REAL runloom bug, which fails).  We distinguish
+    stackweave save/restore desync (a REAL stackweave bug, which fails).  We distinguish
     by checking if the read names are AT LEAST a valid locale's names (a plausible
     sibling's, or this fiber's).  A name that is NOT any locale's name is a torn
     value or corruption (a real bug).
@@ -82,7 +82,7 @@ NEVER fail on the measured cross-fiber leak rate (documented-unsafe).
 
 IMPORTANT: this program does NOT test that calendar can change locale safely
 under concurrent fibers (it can't -- locale is a global). It tests that
-runloom's fiber machinery (save/restore, migration, preemption) does NOT
+stackweave's fiber machinery (save/restore, migration, preemption) does NOT
 DESYNC an explicit user save/restore around a yield.
 
 Stresses: calendar._localized_month and _localized_day locale-dependent
@@ -99,7 +99,7 @@ import locale
 import time
 
 import harness
-import runloom
+import stackweave
 
 
 # Canonical month and day names for each supported locale.
@@ -230,9 +230,9 @@ def worker(H, wid, rng, state):
                 stored_day_abbr = tuple(calendar.day_abbr)
 
                 # YIELD / PARK: a sibling may run and change the locale.
-                runloom.yield_now()
+                stackweave.yield_now()
                 if rng.random() < 0.3:
-                    runloom.sleep(0.0002)
+                    stackweave.sleep(0.0002)
 
                 # READ BACK the names.  If a sibling changed the locale, these may
                 # differ from what we stored.
@@ -359,7 +359,7 @@ if __name__ == "__main__":
                  describe="calendar module caches localized month/day names via "
                           "strftime, which depends on the process-global "
                           "locale.LC_TIME.  Fibers explicitly save/restore locale "
-                          "around calendar accesses; runloom's migration/preemption "
+                          "around calendar accesses; stackweave's migration/preemption "
                           "MUST NOT desync a saved/restored locale across a yield.  "
                           "LOAD-BEARING: each fiber's month/day names survive a "
                           "yield and match its saved locale (no torn values).  "

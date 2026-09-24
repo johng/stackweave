@@ -1,5 +1,5 @@
 """A user socket set non-blocking must raise BlockingIOError from recv()
-when no data is ready.  Patched runloom parks the fiber forever instead."""
+when no data is ready.  Patched stackweave parks the fiber forever instead."""
 import socket, sys
 
 def scenario(tag):
@@ -32,11 +32,11 @@ def scenario2(tag):
 if sys.argv[1] == "stock":
     scenario("stock nb-recv:"); scenario2("stock timeout0:")
 else:
-    import runloom
+    import stackweave
     def main():
         def f():
             scenario2("patched timeout0:")
             scenario("patched nb-recv:")   # runs second: expected to hang
-        runloom.fiber(f)
-    runloom.monkey.patch()
-    runloom.run(2, main)
+        stackweave.fiber(f)
+    stackweave.monkey.patch()
+    stackweave.run(2, main)

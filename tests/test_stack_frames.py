@@ -29,7 +29,7 @@ import subprocess
 import sys
 import unittest
 
-import runloom_c
+import stackweave_c
 
 import os as _hwm_os
 import pytest as _hwm_pytest
@@ -39,7 +39,7 @@ import pytest as _hwm_pytest
 # whole stack resident), so these HWM/advice/sizing tests can't measure precisely
 # there -- skip them (the diagnostic itself just over-reserves, which is safe).
 _RELIABLE_HWM = (_hwm_os.name == "posix"
-                 and runloom_c.backend() in ("fcontext-asm", "ucontext")
+                 and stackweave_c.backend() in ("fcontext-asm", "ucontext")
                  and _hwm_os.sysconf("SC_PAGESIZE") == 4096)
 pytestmark = _hwm_pytest.mark.skipif(
     not _RELIABLE_HWM,
@@ -53,7 +53,7 @@ pytestmark = _hwm_pytest.mark.skipif(
 # then returns the ALLOCATION for every measurement -- 2 MiB here, whatever the
 # frame really used.  Observed on both ubuntu-latest legs, where all three
 # footprint assertions failed with the identical value 2097152: three different
-# frames cannot all be exactly 2 MiB, so that is the probe failing, not runloom.
+# frames cannot all be exactly 2 MiB, so that is the probe failing, not stackweave.
 #
 # Rather than predict it, ASK: measure a fiber whose body is `pass`.  It cannot
 # have touched 2 MiB.  If the probe says it did, every number this class
@@ -71,15 +71,15 @@ def _hwm_probe_untrustworthy():
         stack = 2 * 1024 * 1024
         code = (
             "import sys; sys.path.insert(0, %r)\n"
-            "import runloom_c\n"
+            "import stackweave_c\n"
             "def worker():\n"
             "    pass\n"
-            "runloom_c.fiber(worker, stack_size=%d)\n"
-            "runloom_c.run()\n"
-            "print('HWM', runloom_c.stats().get('stack_hwm', 0))\n"
+            "stackweave_c.fiber(worker, stack_size=%d)\n"
+            "stackweave_c.run()\n"
+            "print('HWM', stackweave_c.stats().get('stack_hwm', 0))\n"
             % (os.path.join(REPO, "src"), stack)
         )
-        env = dict(os.environ, PYTHON_GIL="0", RUNLOOM_GIL="0")
+        env = dict(os.environ, PYTHON_GIL="0", STACKWEAVE_GIL="0")
         try:
             p = subprocess.run([sys.executable, "-c", code], cwd=REPO, env=env,
                                timeout=60, stdout=subprocess.PIPE,
@@ -100,12 +100,12 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 def run_child(code, timeout=60):
     preamble = (
         "import sys; sys.path.insert(0, %r)\n"
-        "import runloom, runloom_c\n"
-        "runloom.monkey.patch()\n" % os.path.join(REPO, "src")
+        "import stackweave, stackweave_c\n"
+        "stackweave.monkey.patch()\n" % os.path.join(REPO, "src")
     )
     env = dict(os.environ)
     env["PYTHON_GIL"] = "0"
-    env["RUNLOOM_GIL"] = "0"
+    env["STACKWEAVE_GIL"] = "0"
     try:
         p = subprocess.run(
             [sys.executable, "-c", preamble + code],
@@ -133,7 +133,7 @@ import select
 def w():
     for _ in range(50):
         select.select([], [], [], 0)
-runloom_c.fiber(w); runloom_c.run()
+stackweave_c.fiber(w); stackweave_c.run()
 print("PASS")
 """)
 
@@ -144,11 +144,11 @@ pairs = [socket.socketpair() for _ in range(3)]
 def w():
     for _ in range(30):
         select.select([a for a, b in pairs], [], [], 0)
-        runloom.sleep(0.0001)
-runloom.mn_init(2)
+        stackweave.sleep(0.0001)
+stackweave.mn_init(2)
 for _ in range(6):
-    runloom_c.mn_fiber(w)
-runloom.mn_run(); runloom.mn_fini()
+    stackweave_c.mn_fiber(w)
+stackweave.mn_run(); stackweave.mn_fini()
 print("PASS")
 """)
 
@@ -162,7 +162,7 @@ def w():
     assert r == [a], (r, wl, x)
     assert a.recv(1) == b"x"
 print("READY")  # marker before
-runloom_c.fiber(w); runloom_c.run()
+stackweave_c.fiber(w); stackweave_c.run()
 print("PASS")
 """)
 
@@ -173,7 +173,7 @@ a, b = socket.socketpair()
 def w():
     r, wl, x = select.select([], [a], [], 1.0)
     assert wl == [a], (r, wl, x)
-runloom_c.fiber(w); runloom_c.run()
+stackweave_c.fiber(w); stackweave_c.run()
 print("PASS")
 """)
 
@@ -188,7 +188,7 @@ def w():
     dt = time.monotonic() - t0
     assert (r, wl, x) == ([], [], []), (r, wl, x)
     assert dt >= 0.15, dt
-runloom_c.fiber(w); runloom_c.run()
+stackweave_c.fiber(w); stackweave_c.run()
 print("PASS")
 """)
 
@@ -198,19 +198,19 @@ print("PASS")
         # or busy-poll), the canary would barely tick.  M:1 (one thread) is the
         # strictest check.
         out = assert_pass(r"""
-import select, socket, runloom_c
+import select, socket, stackweave_c
 a, b = socket.socketpair()
 ticks = [0]
 def canary():
     for _ in range(40):
-        runloom_c.sched_sleep(0.01)
+        stackweave_c.sched_sleep(0.01)
         ticks[0] += 1
 def waiter():
     r, wl, x = select.select([a], [], [], 0.3)   # never readable -> parks 0.3s
     assert (r, wl, x) == ([], [], []), (r, wl, x)
-runloom_c.fiber(canary)
-runloom_c.fiber(waiter)
-runloom_c.run()
+stackweave_c.fiber(canary)
+stackweave_c.fiber(waiter)
+stackweave_c.run()
 assert ticks[0] >= 10, ticks[0]   # cooperative: canary ran while waiter parked
 print("PASS ticks=%d" % ticks[0])
 """)
@@ -252,15 +252,15 @@ class TestStdlibFrameFootprint(unittest.TestCase):
         # frame can't crash the measurement.
         code = (
             "import sys; sys.path.insert(0, %r)\n"
-            "import runloom_c\n"
+            "import stackweave_c\n"
             "def worker():\n"
             "    %s\n"
-            "runloom_c.fiber(worker, stack_size=%d)\n"
-            "runloom_c.run()\n"
-            "print('HWM', runloom_c.stats().get('stack_hwm', 0))\n"
+            "stackweave_c.fiber(worker, stack_size=%d)\n"
+            "stackweave_c.run()\n"
+            "print('HWM', stackweave_c.stats().get('stack_hwm', 0))\n"
             % (os.path.join(REPO, "src"), op_src, _PROBE_STACK)
         )
-        env = dict(os.environ, PYTHON_GIL="0", RUNLOOM_GIL="0")
+        env = dict(os.environ, PYTHON_GIL="0", STACKWEAVE_GIL="0")
         p = subprocess.run([sys.executable, "-c", code], cwd=REPO, env=env,
                            timeout=60, stdout=subprocess.PIPE,
                            stderr=subprocess.PIPE, text=True)
@@ -288,12 +288,12 @@ class TestStdlibFrameFootprint(unittest.TestCase):
             self.skipTest(
                 "stack HWM probe returned the whole {0} B allocation ({1} B) -- "
                 "mincore is reporting residency, not touched pages, so this "
-                "measurement is meaningless (not a runloom failure)"
+                "measurement is meaningless (not a stackweave failure)"
                 .format(_PROBE_STACK, hwm))
         return hwm
 
     def test_leaf_frames_fit_default_stack(self):
-        default = runloom_c.get_stack_size()
+        default = stackweave_c.get_stack_size()
         # Leave headroom for the Python/user frames stacked above the leaf.
         budget = int(default * 0.6)
         for name, src in self.LEAVES.items():
@@ -312,7 +312,7 @@ class TestStdlibFrameFootprint(unittest.TestCase):
         # of blocking the hub.  Still assert it's the known-fat frame so a CPython
         # change is noticed; and that it now fits the default.
         hwm = self._measure_hwm("import select; select.select([], [], [], 0)")
-        default = runloom_c.get_stack_size()
+        default = stackweave_c.get_stack_size()
         self.assertGreater(hwm, 32 * 1024,
             "select's frame ({0} B) is no longer fat; re-check the measurement"
             .format(hwm))
@@ -327,14 +327,14 @@ class TestStdlibFrameFootprint(unittest.TestCase):
         # prepay.  Documented/measured here so it isn't forgotten.
         hwm = self._measure_hwm(
             "import ssl; ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)")
-        default = runloom_c.get_stack_size()
+        default = stackweave_c.get_stack_size()
         self.assertGreater(hwm, 32 * 1024,
             "first ssl use ({0} B) is no longer fat; re-check".format(hwm))
         self.assertLess(hwm, default,
             "first ssl use ({0} B) exceeds the {1} B default".format(hwm, default))
 
     def test_ssl_warmed_on_main_thread_so_fiber_is_safe(self):
-        # Mitigation: runloom.monkey imports ssl on the main thread and
+        # Mitigation: stackweave.monkey imports ssl on the main thread and
         # _patch_ssl forces OpenSSL init there, off any fiber stack.  So a
         # fiber that is the first to create an SSLContext must NOT crash.
         # (Guard against a future refactor that lazy-imports ssl -> re-arms the
@@ -343,7 +343,7 @@ class TestStdlibFrameFootprint(unittest.TestCase):
 import ssl
 def w():
     ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)   # first context, on a fiber
-runloom_c.fiber(w); runloom_c.run()
+stackweave_c.fiber(w); stackweave_c.run()
 print("PASS")
 """)
 
@@ -372,7 +372,7 @@ def w():
     except RecursionError:
         ok = "clean"
     assert ok == "clean", ok
-runloom_c.fiber(w); runloom_c.run()
+stackweave_c.fiber(w); stackweave_c.run()
 print("PASS")
 """)
 
@@ -391,7 +391,7 @@ def w():
     except RecursionError:
         ok = "clean"
     assert ok == "clean", ok
-runloom_c.fiber(w); runloom_c.run()
+stackweave_c.fiber(w); stackweave_c.run()
 print("PASS")
 """)
 
@@ -403,7 +403,7 @@ SRC = "(" * 100 + "1" + ")" * 100
 def w():
     code = compile(SRC, "<s>", "eval")   # auto-offloaded inside a fiber
     assert eval(code) == 1
-runloom_c.fiber(w); runloom_c.run()
+stackweave_c.fiber(w); stackweave_c.run()
 print("PASS")
 """)
 
@@ -415,7 +415,7 @@ SRC = "(" * 100 + "1" + ")" * 100
 def w():
     tree = ast.parse(SRC)
     assert type(tree).__name__ == "Module"
-runloom_c.fiber(w); runloom_c.run()
+stackweave_c.fiber(w); stackweave_c.run()
 print("PASS")
 """)
 

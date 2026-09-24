@@ -7,7 +7,7 @@ those maps.  The MODULE-LEVEL functions (mimetypes.guess_type, add_type, init)
 operate on a PROCESS-GLOBAL default MimeTypes db -- that db is a shared object
 and is NOT single-owner, so it must NOT be the fail-fast oracle (a shared map
 mutated by many fibers races EXACTLY like a shared dict across threads --
-documented Python behavior, not a runloom bug).
+documented Python behavior, not a stackweave bug).
 
 Instead the load-bearing oracle is built on a SINGLE-OWNER MimeTypes INSTANCE.
 Each fiber constructs its OWN mimetypes.MimeTypes() and populates it with a set
@@ -18,7 +18,7 @@ private instance are then pure functions of that fiber's own maps: the result
 must be bit-identical across a yield and must match the closed-form expected
 value this fiber wrote.
 
-WHERE M:N COULD BREAK IT (the gap this program probes).  runloom multiplexes
+WHERE M:N COULD BREAK IT (the gap this program probes).  stackweave multiplexes
 tens of thousands of fibers over a handful of hubs with the GIL off.  A fiber
 adds custom types to its private MimeTypes instance, records the expected
 guess_type result, YIELDS (so siblings run and mutate THEIR own instances +
@@ -35,9 +35,9 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain threads):
   building its own MimeTypes with per-thread-unique custom types, GIL on AND
   off) returns 100% the correct per-thread type for every custom filename, and
   the result is bit-stable across a yield/sleep -- 0 cross-thread leaks.  Under
-  a CORRECT runloom it must also hold.  If a fiber's private-instance guess
+  a CORRECT stackweave it must also hold.  If a fiber's private-instance guess
   returns a value that differs from what it wrote, or changes across a yield,
-  that is a runloom isolation/torn-lookup bug, and the single-owner oracle is
+  that is a stackweave isolation/torn-lookup bug, and the single-owner oracle is
   clean on a correct runtime (program exits 0 when there is no bug).
 
 ORACLES:
@@ -58,7 +58,7 @@ ORACLES:
       (d) an extension this fiber NEVER added guesses to (None, None) on its
           private instance -- a sibling's add_type must not have leaked in.
     Single-owner: the instance and its maps are fiber-local; a failure is a
-    runloom purity/isolation desync, never documented shared-map semantics.
+    stackweave purity/isolation desync, never documented shared-map semantics.
 
   * NON-VACUITY (post, HARD): the load-bearing arm actually ran (checks > 0).
 
@@ -89,7 +89,7 @@ instance map behavior, dict get/insert under GIL-off concurrency.
 import mimetypes
 
 import harness
-import runloom
+import stackweave
 
 # Number of custom (extension, type) mappings each fiber adds to its own private
 # MimeTypes instance.  Enough to push the instance's maps through several dict
@@ -157,9 +157,9 @@ def purity_check(H, wid, mt, expected, state):
     # YIELD at the hazard boundary so siblings interleave: they mutate THEIR own
     # private instances + the shared global db + the shared MEASURED instance on
     # other hubs while this fiber is parked.
-    runloom.yield_now()
+    stackweave.yield_now()
     if wid & 1:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
 
     # Re-pass: assert stability + closed-form correctness.
     my_exts = frozenset(fiber_ext(i) for i in range(NCUSTOM))
@@ -320,10 +320,10 @@ def post(H):
 
     if sdiffs:
         H.log("note: the shared MimeTypes instance observed {0} cross-fiber "
-              "guess/add-back disagreements across {1} probes -- runloom hub "
+              "guess/add-back disagreements across {1} probes -- stackweave hub "
               "fibers see each other's mutations on a SHARED map object (like "
               "p490's shared-enum pool).  Documented M:N shared-object behavior, "
-              "NOT a runloom bug; it never reaches the load-bearing single-owner "
+              "NOT a stackweave bug; it never reaches the load-bearing single-owner "
               "oracle.".format(sdiffs, schecks))
 
     # NON-VACUITY: the load-bearing single-owner purity hazard was exercised.
@@ -350,4 +350,4 @@ if __name__ == "__main__":
                  "never-added extension stays unknown).  MEASURED shared-instance "
                  "probe (expected to show cross-fiber visibility, like p490) "
                  "proves the hazard is real.  A wrong/unstable private-instance "
-                 "guess is the runloom isolation/torn-lookup bug")
+                 "guess is the stackweave isolation/torn-lookup bug")

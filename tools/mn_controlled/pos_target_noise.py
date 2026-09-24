@@ -22,19 +22,19 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "..", "src"))
 os.environ.setdefault("PYTHON_GIL", "0")
-import runloom_c
+import stackweave_c
 
 K = int(os.environ.get("POS_NOISE", "0"))        # independent noise channels
 MN = int(os.environ.get("POS_NOISE_M", "2"))     # ops per noise channel
 
-runloom_c.mn_init(3 + 2 * K)                      # one fiber per hub
-cht = runloom_c.Chan(8)                           # target (buffered): dpor_id 1
+stackweave_c.mn_init(3 + 2 * K)                      # one fiber per hub
+cht = stackweave_c.Chan(8)                           # target (buffered): dpor_id 1
 st = {"seen": None}
 
 
 def p0():
     cht.send("a0")
-    runloom_c.sched_sleep(0)     # force a baton grant point between the two sends
+    stackweave_c.sched_sleep(0)     # force a baton grant point between the two sends
     cht.send("a1")               # (a buffered send does not block, so would not)
 
 
@@ -49,7 +49,7 @@ def cons():
 # Noise channels are UNBUFFERED so each op rendezvous-blocks -> yields the baton
 # -> a real grant STEP.  More noise => more steps => PCT's single change point
 # must land at the right one among more, diluting its hit rate.  cht is untouched.
-noise = [runloom_c.Chan(0) for _ in range(K)]        # dpor_id 2..K+1
+noise = [stackweave_c.Chan(0) for _ in range(K)]        # dpor_id 2..K+1
 
 
 def nprod(ch):
@@ -62,14 +62,14 @@ def ncons(ch):
         ch.recv()
 
 
-runloom_c.mn_fiber(p0)
-runloom_c.mn_fiber(p1)
-runloom_c.mn_fiber(cons)
+stackweave_c.mn_fiber(p0)
+stackweave_c.mn_fiber(p1)
+stackweave_c.mn_fiber(cons)
 for ch in noise:
-    runloom_c.mn_fiber(lambda c=ch: nprod(c))
-    runloom_c.mn_fiber(lambda c=ch: ncons(c))
-runloom_c.mn_run()
-runloom_c.mn_fini()
+    stackweave_c.mn_fiber(lambda c=ch: nprod(c))
+    stackweave_c.mn_fiber(lambda c=ch: ncons(c))
+stackweave_c.mn_run()
+stackweave_c.mn_fini()
 
 seen = st["seen"]
 print("BUG order=%s" % seen if seen == ["a0", "b", "a1"] else "OK order=%s" % seen)

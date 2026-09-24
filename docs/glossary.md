@@ -1,4 +1,4 @@
-# runloom glossary
+# stackweave glossary
 
 For engineers reading the codebase for the first time. Terms are grouped by
 subsystem rather than alphabetised, because most of them only make sense
@@ -18,7 +18,7 @@ under monkey-patching: nothing needs rewriting. The C struct is `runloom_g_t`.
 
 **hub** — an OS thread running a scheduler loop, with its own run queue,
 parker pool and (usually) poller. Go's `P` and `M` fused into one object.
-`runloom.run(8, main)` starts 8 of them.
+`stackweave.run(8, main)` starts 8 of them.
 
 **M:N** — M fibers multiplexed across N OS threads. Only meaningful with the
 GIL off, since otherwise the hubs cannot run Python simultaneously.
@@ -28,7 +28,7 @@ with no global interpreter lock. The `t` suffix marks it. Real parallelism,
 and also the reason a bare `counter += 1` across fibers loses updates.
 
 **tstate** (`PyThreadState`) — CPython's per-thread interpreter state. Central
-to most of runloom's hard problems, because a suspended fiber's frames bake in
+to most of stackweave's hard problems, because a suspended fiber's frames bake in
 the tstate pointer of the hub they were suspended on.
 
 **coro** — the low-level stack-switching primitive under a fiber
@@ -44,13 +44,13 @@ end lock-free, thieves claim the other end. Crucially, a thief needs **no
 cooperation from the owner**, so a blocked hub's queued work is still
 stealable.
 
-**work stealing** — an idle hub takes work from a busy one's deque. runloom
+**work stealing** — an idle hub takes work from a busy one's deque. stackweave
 uses Go's **randomOrder**: each hub starts at its own id and steps by a stride
 coprime with the hub count, so every victim is visited exactly once and K idle
 hubs don't all hammer hub 0's CAS in lockstep.
 
 **global runq** — a process-wide queue that any hub drains. Used only under
-`RUNLOOM_PER_G_TSTATE`, to rescue fibers *woken* while their origin hub is
+`STACKWEAVE_PER_G_TSTATE`, to rescue fibers *woken* while their origin hub is
 blocked. Off by default.
 
 **submission list** (`runloom_mn_hub_submit`) — a hub's owner-drained inbox for
@@ -65,7 +65,7 @@ channel, a timer), and being made runnable again. `wake_g` is the wake path.
 fibers, summed by `mn_run` to decide when a run is over. Sharded per hub
 because a single global counter was a contended cache line.
 
-**spawn pace** (`RUNLOOM_SPAWN_PACE`) — a cooperative yield every N spawns, so
+**spawn pace** (`STACKWEAVE_SPAWN_PACE`) — a cooperative yield every N spawns, so
 a fiber spawning in a tight loop interleaves running with spawning instead of
 monopolising its hub.
 
@@ -80,7 +80,7 @@ drives **preemption**. Deep-sleeps when no hub is running work.
 **wedge** — a hub whose current fiber resume has exceeded
 `runloom_sysmon_wedge_ns` (50 ms default) without yielding. Reported once per
 episode with a matching `RECOVERED` line. Logging is off unless
-`RUNLOOM_SYSMON=1`.
+`STACKWEAVE_SYSMON=1`.
 
 **ATTACHED / DETACHED / SUSPENDED** — how sysmon classifies a wedge, by the
 hub tstate's attach state:
@@ -117,7 +117,7 @@ Lives in a **parker pool**, one per hub (up to
 `RUNLOOM_PARKER_POOL_HUBS`, 64), so registration and wake don't serialise
 across hubs on one kernel lock.
 
-**per-hub epoll** (`RUNLOOM_PERHUB_EPOLL`, default **on**) — each hub polls its
+**per-hub epoll** (`STACKWEAVE_PERHUB_EPOLL`, default **on**) — each hub polls its
 own epoll set plus a wake eventfd, instead of all hubs sharing one
 `runloom_epoll_fd`. Measured **+34–40 %** saturation throughput on a 64-core
 box versus the shared set; the shared path still exists at `=0`.
@@ -137,12 +137,12 @@ I/O where available, versus dispatching to a worker thread.
 
 ## Blocking work
 
-**blocking call** — something runloom cannot make cooperative: buffered file
+**blocking call** — something stackweave cannot make cooperative: buffered file
 `read`/`write`, a C-extension DB driver, `socket.gethostbyaddr` (libc, and it
 takes no timeout), CPU-bound hashing. It must not run on a general hub, or that
 hub's scheduler loop stops.
 
-**offload** (`runloom.monkey.offload`) — the sanctioned escape hatch for
+**offload** (`stackweave.monkey.offload`) — the sanctioned escape hatch for
 running one.
 
 **backend thread pool** (`_ThreadPoolBackend`) — the original offload
@@ -157,7 +157,7 @@ syscalls); the inmem parker uses none (faster, but off the netpoll). Chosen
 adaptively by queue backlog.
 
 **offload hub** — a hub reserved to run blocking calls as *ordinary fibers*
-(`offload_hubs=K` / `RUNLOOM_OFFLOAD_HUBS`). Excluded from general placement,
+(`offload_hubs=K` / `STACKWEAVE_OFFLOAD_HUBS`). Excluded from general placement,
 work-stealing (both directions), sysmon preemption, and the monopoly-yield
 scan, so no general work can land on one and stall. Needs no patched CPython,
 because nothing migrates: the offload fiber is born and dies on its hub and the
@@ -190,10 +190,10 @@ stock CPython for two independent reasons, either of which corrupts:
   thread, so a resumed fiber keeps using the origin hub's tstate. Fixed by
   `Py_TSTATE_EXEC_HOME`.
 
-`runloom.migration_available()` reports whether the running build has both
+`stackweave.migration_available()` reports whether the running build has both
 patches; without them, migration modes stay gated off.
 
-**`RUNLOOM_PER_G_TSTATE`** — give each fiber its own migratable tstate so woken
+**`STACKWEAVE_PER_G_TSTATE`** — give each fiber its own migratable tstate so woken
 work can be rescued from a blocked hub. Experimental, default off, with a known
 SEGV under churn at ≥2 hubs absent the patches.
 

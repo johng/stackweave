@@ -23,7 +23,7 @@ token stream.
 WHERE M:N COULD BREAK IT (the gap this program probes).  Each fiber owns its own
 source string + its own generate_tokens generator, and drives it token-by-token,
 YIELDING at the midpoint of tokenization (half the tokens pulled, scheduler free
-to run a sibling that is itself mid-scan on ITS OWN generator).  runloom gives
+to run a sibling that is itself mid-scan on ITS OWN generator).  stackweave gives
 each fiber its own Python frame stack, so a sibling's tokenizer state (its
 indent stack, parenlev, continuation accumulator, f-string nesting stack, source
 cursor) must stay completely disjoint from this fiber's generator frame.  If
@@ -48,13 +48,13 @@ WHICH ORACLES ARE LOAD-BEARING, AND WHY:
   * LOAD-BEARING -- STREAM PURITY (worker, HARD, fail-fast).  Drain the fiber's
     OWN generate_tokens generator into a baseline list of (type, string, start,
     end) tuples one next() at a time; at the exact MIDPOINT of the drain, YIELD
-    (runloom.yield_now / sleep) so siblings interleave their own mid-scan
+    (stackweave.yield_now / sleep) so siblings interleave their own mid-scan
     generators.  Then, AFTER the drain, tokenize the SAME source AGAIN into a
     second list and assert it equals the baseline EXACTLY (same length, same
     (type, string, start, end) per token).  generate_tokens is a pure function of
     the source, so the recompute must be bit-identical to the baseline that was
     captured across the midpoint yield.  A difference means this fiber's paused
-    generator resumed mid-scan with state corrupted by a sibling -- a runloom
+    generator resumed mid-scan with state corrupted by a sibling -- a stackweave
     stream-isolation bug.  Single-owner: the source, the generator, and both
     token lists are all fiber-local.
 
@@ -88,7 +88,7 @@ tokenizer state -- torn/dropped/merged token, mis-nested INDENT/DEDENT, stale
 parenlev/f-string nesting), or an untokenize round-trip that changes the
 significant token sequence of a fiber's OWN tokens, or a SIGSEGV mid-scan.  There
 is NO shared source and NO shared generator anywhere in the load-bearing path, so
-a failure cannot be documented shared-object behavior -- it can only be a runloom
+a failure cannot be documented shared-object behavior -- it can only be a stackweave
 per-fiber-generator isolation bug.
 
 Stresses: tokenize.generate_tokens generator-frame state (indent stack, parenlev,
@@ -109,7 +109,7 @@ import token
 import tokenize
 
 import harness
-import runloom
+import stackweave
 
 # Self-contained Python statement templates.  Each formats to ONE valid,
 # independent module-level statement (or a def) so any random selection joined in
@@ -222,7 +222,7 @@ def drain_with_midpoint_yield(src):
             # accumulator, f-string nesting, source cursor) frozen inside the
             # paused generator frame.  A sibling mid-scan on ITS OWN generator
             # must not perturb this state.
-            runloom.yield_now()
+            stackweave.yield_now()
     return res
 
 
@@ -281,9 +281,9 @@ def roundtrip_check(H, wid, idx, state):
     before = sig_significant(toks)
 
     text = tokenize.untokenize(toks)                   # documented exact inverse
-    runloom.yield_now()                                # sibling round-trips here
+    stackweave.yield_now()                                # sibling round-trips here
     if idx & 1:
-        runloom.sleep(0.0003)                          # occasionally sleep-park
+        stackweave.sleep(0.0003)                          # occasionally sleep-park
     again = list(tokenize.generate_tokens(io.StringIO(text).readline))
     after = sig_significant(again)
 
@@ -375,5 +375,5 @@ if __name__ == "__main__":
                  "midpoint yield (type,string,start,end per token). LOAD-BEARING 2: "
                  "tokenize.untokenize round-trip (tokenize->untokenize->tokenize) "
                  "conserves the significant token sequence of a fiber's OWN source. "
-                 "Nothing is shared, so a mismatch is a runloom per-generator "
+                 "Nothing is shared, so a mismatch is a stackweave per-generator "
                  "stream-isolation bug, never shared-object tokenize semantics")

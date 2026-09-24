@@ -2,7 +2,7 @@
 scheduler, then emit it as JSON for the linearizability checker.
 
 Two timing modes:
-  * --seeded S : run under RUNLOOM_MN_SEED=S (DST Plane 1 -- the seeded baton
+  * --seeded S : run under STACKWEAVE_MN_SEED=S (DST Plane 1 -- the seeded baton
       serialises fiber segments into one deterministic grant order) and timestamp
       events with a LOGICAL clock (a shared monotonic counter, safe to bump under
       the baton exactly as the mn-sim determinism suite bumps a shared completion
@@ -30,7 +30,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "..", "..", "src"))
 
-import runloom_c  # noqa: E402
+import stackweave_c  # noqa: E402
 
 
 class Recorder(object):
@@ -75,19 +75,19 @@ class Recorder(object):
 def record(primitive, seed, seeded, hubs, procs, ops, cap, out_path):
     import workloads  # local import: needs sys.path set above
     if seeded:
-        os.environ["RUNLOOM_MN_SEED"] = str(seed)
+        os.environ["STACKWEAVE_MN_SEED"] = str(seed)
     else:
-        os.environ.pop("RUNLOOM_MN_SEED", None)
+        os.environ.pop("STACKWEAVE_MN_SEED", None)
 
     rec = Recorder(seeded)
     thunks, meta = workloads.build(primitive, seed, hubs, procs, ops, cap, rec)
 
-    runloom_c.mn_init(hubs)
+    stackweave_c.mn_init(hubs)
     for gid, fn in thunks:
-        runloom_c.mn_fiber(fn)
-    runloom_c.mn_run()
-    runloom_c.mn_fini()
-    assert runloom_c._self_check(0) == 0, "self_check failed after run"
+        stackweave_c.mn_fiber(fn)
+    stackweave_c.mn_run()
+    stackweave_c.mn_fini()
+    assert stackweave_c._self_check(0) == 0, "self_check failed after run"
 
     events = rec.events()
     meta.update({"primitive": primitive, "seed": seed, "seeded": bool(seeded),

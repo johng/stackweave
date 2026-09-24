@@ -83,8 +83,8 @@ static volatile int runloom_tcpconn_live_count = 0;
 
 static void runloom_tcpconn_resolve_mode(void)
 {
-    const char *e = getenv("RUNLOOM_TCPCONN_IOURING");
-    const char *t = getenv("RUNLOOM_TCPCONN_IOURING_THRESHOLD");
+    const char *e = getenv("STACKWEAVE_TCPCONN_IOURING");
+    const char *t = getenv("STACKWEAVE_TCPCONN_IOURING_THRESHOLD");
     int mode = RUNLOOM_IOURING_MODE_OFF;
     if (e != NULL) {
         if (e[0] == '1') mode = RUNLOOM_IOURING_MODE_ON;

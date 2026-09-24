@@ -1,7 +1,7 @@
 # Stage 3 — weak memory (iRC11 / gpfsl): DONE
 
 Stages 1–2 (`OneShotWake.v`, `WakeQueue.v`) are sequentially-consistent Iris.
-This is the genuine weak-memory tier: runloom's commit-publish release/acquire
+This is the genuine weak-memory tier: stackweave's commit-publish release/acquire
 pattern proved correct under the **RC11** relaxed-memory model in a separation
 logic, with **iRC11** (the relaxed-memory logic built on Iris, shipped as
 `gpfsl`).
@@ -39,7 +39,7 @@ under RC11 — i.e. the release/acquire pair is sufficient for the publish to be
 visible. The proof uses a GPS single-writer boolean protocol whose `true`
 state ships an escrow that transfers ownership of `ready ↦ 42`, so the
 acquiring reader obtains it (a faithful adaptation of gpfsl's own
-`gpfsl-examples/mp` proof, specialized to the runloom framing, with the unique
+`gpfsl-examples/mp` proof, specialized to the stackweave framing, with the unique
 token inlined so the file is self-contained).
 
 ## Corroboration at the fence level (no gpfsl needed)
@@ -67,7 +67,7 @@ opam repo add iris-dev git+https://gitlab.mpi-sws.org/iris/opam.git
 opam install -y coq-gpfsl
 ```
 `run_rc11.sh` auto-selects the `runloom-weakmem` switch (override with
-`RUNLOOM_WEAKMEM_SWITCH`) and uses `rocq compile` (Rocq 9.2) or `coqc`. It is kept
+`STACKWEAVE_WEAKMEM_SWITCH`) and uses `rocq compile` (Rocq 9.2) or `coqc`. It is kept
 in its own switch so it never disturbs the released-Iris build of Stages 1–2.
 
 ## What remains genuinely open

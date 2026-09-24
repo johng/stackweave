@@ -36,7 +36,7 @@ All claims below are backed by the GenMC oracle (`run_chase_lev.sh`).
    fence is NECESSARY at ≥2 elements (`chase_lev2.c -DBUG_NO_FENCE` →
    duplication). So this is **not** a safe removal in general; it would only be
    sound under a proof that the deque is never accessed with ≥2 elements while a
-   pop races a steal — which is not an invariant runloom maintains. Logged as an
+   pop races a steal — which is not an invariant stackweave maintains. Logged as an
    observation; **the fence stays.**
 
 ### Net

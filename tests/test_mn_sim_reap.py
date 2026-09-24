@@ -24,7 +24,7 @@ pytestmark = pytest.mark.skipif(
     not needs_free_threading(),
     reason="the M:N scheduler is only real on free-threaded builds")
 
-SIM_ENV = {"RUNLOOM_SIM": "1", "RUNLOOM_SIM_MN": "1", "RUNLOOM_MN_SEED": "12345"}
+SIM_ENV = {"STACKWEAVE_SIM": "1", "STACKWEAVE_SIM_MN": "1", "STACKWEAVE_MN_SEED": "12345"}
 
 
 def run_snip(code, extra=None, timeout=60):
@@ -40,11 +40,11 @@ def run_snip(code, extra=None, timeout=60):
 class TestSettleReap:
     def test_stranded_parkers_reaped_and_run_terminates(self):
         """Two shuttler-style fibers parked forever after traffic drains: the
-        run exits fast (no RUNLOOM_DEADLOCK_MS wedge), reap count == 2 exactly
+        run exits fast (no STACKWEAVE_DEADLOCK_MS wedge), reap count == 2 exactly
         (the workload's expected infra total), and the completion digest is
         deterministic across runs."""
         code = (
-            "import socket, time, runloom_c as rc\n"
+            "import socket, time, stackweave_c as rc\n"
             "conns = []\n"
             "for k in range(2):\n"
             "    a, b = socket.socketpair()\n"
@@ -90,7 +90,7 @@ class TestSettleReap:
         get its BYTES, never a premature reap -- the settle predicate requires
         no timer pending, and the sleeping shuttler holds one."""
         p = run_snip(
-            "import socket, runloom_c as rc\n"
+            "import socket, stackweave_c as rc\n"
             "a, b = socket.socketpair()\n"
             "a.setblocking(False); b.setblocking(False)\n"
             "cid = rc.sim_conn_register(a.fileno(), b.fileno())\n"
@@ -116,7 +116,7 @@ class TestSettleReap:
         stale errno made PyErr_SetFromErrno surface RANDOM OSError subclasses
         (FileNotFoundError was measured on the H=1 plane)."""
         p = run_snip(
-            "import errno, socket, runloom_c as rc\n"
+            "import errno, socket, stackweave_c as rc\n"
             "a, b = socket.socketpair()\n"
             "a.setblocking(False); b.setblocking(False)\n"
             "cid = rc.sim_conn_register(a.fileno(), b.fileno())\n"
@@ -139,7 +139,7 @@ class TestSettleReap:
         per logical instant leaves the re-park for the deadlock census, which
         fires its LOUD dump/raise.  Reap count stays exactly 1."""
         p = run_snip(
-            "import socket, runloom_c as rc\n"
+            "import socket, stackweave_c as rc\n"
             "rc.set_deadlock_mode(2)\n"
             "a, b = socket.socketpair()\n"
             "a.setblocking(False); b.setblocking(False)\n"
@@ -157,7 +157,7 @@ class TestSettleReap:
             "except RuntimeError:\n"
             "    print('LOUD_DEADLOCK', rc.sim_reap_count())\n"
             "rc.mn_fini()\n",
-            extra={"RUNLOOM_DEADLOCK_MS": "150"}, timeout=90)
+            extra={"STACKWEAVE_DEADLOCK_MS": "150"}, timeout=90)
         assert "LOUD_DEADLOCK 1" in p.stdout, (p.stdout, p.stderr[-800:])
 
     def test_chan_deadlock_still_raises(self):
@@ -165,7 +165,7 @@ class TestSettleReap:
         still raises on a genuine chan deadlock (reap covers only the netpoll
         plane)."""
         p = run_snip(
-            "import runloom_c as rc\n"
+            "import stackweave_c as rc\n"
             "rc.set_deadlock_mode(2)\n"
             "ch = rc.Chan(0)\n"
             "def stuck():\n"
@@ -177,7 +177,7 @@ class TestSettleReap:
             "except RuntimeError as e:\n"
             "    print('CHAN_DEADLOCK_RAISED')\n"
             "rc.mn_fini()\n",
-            extra={"RUNLOOM_DEADLOCK_MS": "150"}, timeout=90)
+            extra={"STACKWEAVE_DEADLOCK_MS": "150"}, timeout=90)
         assert "CHAN_DEADLOCK_RAISED" in p.stdout, (p.stdout, p.stderr[-800:])
 
 

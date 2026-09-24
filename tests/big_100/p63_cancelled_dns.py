@@ -12,7 +12,7 @@ import socket
 
 import harness
 import cancelutil
-import runloom
+import stackweave
 
 NAMES = ["127.0.0.1", "::1", "localhost", "10.1.2.3", "192.0.2.7",
          "not-numeric-host", "8.8.8.8"]
@@ -31,7 +31,7 @@ def do_lookup(host, out):
 def worker(H, wid, rng, state):
     while H.running():
         host = rng.choice(NAMES)
-        out = runloom.Chan(1)               # buffered: child can always deliver
+        out = stackweave.Chan(1)               # buffered: child can always deliver
         H.fiber(do_lookup, host, out)
         # Race the result against a tiny cancel window.
         ctx, cancel = cancelutil.WithTimeout(cancelutil.Background(),

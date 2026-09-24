@@ -3,7 +3,7 @@ set +e
 cd "$(dirname "$0")"
 sudo -n prlimit --pid $$ --nofile=8388608:8388608 2>/dev/null
 scale="$1"; tmo="$2"; arena="$3"; shift 3
-GON="RUNLOOM_HARNESS_GON=1 RUNLOOM_GON_BULK=1 RUNLOOM_GON_FRESH=1 RUNLOOM_STACK_ARENA_N=$arena"
+GON="STACKWEAVE_HARNESS_GON=1 STACKWEAVE_GON_BULK=1 STACKWEAVE_GON_FRESH=1 STACKWEAVE_STACK_ARENA_N=$arena"
 PY=$HOME/.pyenv/versions/3.14.4t/bin/python3
 RES="_scale_logs/results_${scale}.txt"
 : > "$RES"
