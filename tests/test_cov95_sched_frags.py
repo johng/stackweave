@@ -27,13 +27,12 @@ SUBPROCESSES that exit cleanly so gcov flushes their counters; a
 TimeoutExpired is treated as box contention (skip), not a bug.
 
 UNREACHABLE-from-a-test lines are NOT faked -- they are catalogued in the
-structured report's exclusions[]: the per-g-tstate teardown (STACKWEAVE_PER_G_TSTATE
-is GATED OFF behind STACKWEAVE_ALLOW_UNSAFE_MIGRATION, which the rules forbid),
-the OOM-cleanup branches with no fault hook, the Go-style abort()-on-panic and
-the corrupt-excobj abort() guard (crash-only / defensive), the thread-create-
-fail branch (no spawn fault hook reaches it), and the cross-thread
-runloom_sched_wake delivery between two independent single-thread run() loops
-(an unsupported topology that deadlock-detects rather than delivering).
+structured report's exclusions[]: the OOM-cleanup branches with no fault hook,
+the Go-style abort()-on-panic and the corrupt-excobj abort() guard (crash-only /
+defensive), the thread-create-fail branch (no spawn fault hook reaches it), and
+the cross-thread runloom_sched_wake delivery between two independent
+single-thread run() loops (an unsupported topology that deadlock-detects rather
+than delivering).
 """
 import os
 import subprocess

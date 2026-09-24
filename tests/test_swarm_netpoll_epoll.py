@@ -1515,15 +1515,14 @@ def test_netpoll_workload_under_env_mode_subprocess(mode_env):
         % (sorted(mode_env), p.stdout, p.stderr[-1000:]))
 
 
-def test_netpoll_workload_under_gated_off_unsafe_flag_subprocess():
-    # STACKWEAVE_PER_G_TSTATE is KNOWN-CRASH at hub-count>=2; set it WITHOUT
-    # STACKWEAVE_ALLOW_UNSAFE_MIGRATION -> the runtime must WARN to stderr and run
-    # the default (safe) scheduler.  Assert: no crash, work completes, the warn
-    # path was taken (default scheduler).  NEVER set the allow flag.
-    p = _subproc(_NETPOLL_WORKLOAD, env_extra={"STACKWEAVE_PER_G_TSTATE": "1"}, timeout=50)
-    _assert_no_signal_crash(p, "gated-off per_g_tstate")
+@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
+def test_netpoll_workload_default_mode_subprocess():
+    # The same workload with no mode env: the plain M:N scheduler (cross-hub
+    # migration on) must deliver every netpoll wake without crash.
+    p = _subproc(_NETPOLL_WORKLOAD, timeout=50)
+    _assert_no_signal_crash(p, "default mode")
     assert "WOKE 40" in p.stdout, (
-        "gated-off unsafe-flag workload did not complete: %r / %r"
+        "netpoll workload in the default mode lost wakes / hung: %r / %r"
         % (p.stdout, p.stderr[-1000:]))
 
 
@@ -1587,12 +1586,7 @@ def test_netpoll_poll_delivers_readiness_on_sleep0():
 #       (i) a deadline park interleaved with a netpoll_poll drain (the timed
 #           park must still expire; the poll must not eat its deadline);
 #       (j) fd_read partial/short read and fd_write of a large buffer that parks
-#           WRITE for real (no fault injection);
-#       (k) a connect/accept/recv full round-trip through the raw module_tcp
-#           primitives under SIGALRM is already covered; add the gated-OFF
-#           STACKWEAVE_STEAL_WOKEN unsafe-flag warn path over a netpoll workload
-#           (the sibling of PER_G_TSTATE -- both KNOWN-CRASH at hub>=2, both must
-#           warn + run the default scheduler WITHOUT the allow flag).
+#           WRITE for real (no fault injection).
 # ==========================================================================
 
 def test_wait_fd_timeout_zero_nonready_expires_immediately():
@@ -2042,19 +2036,6 @@ def test_fd_read_partial_and_large_fd_write_real_park():
     assert sub.get("written") == 512 * 1024, "fd_write short: %r" % sub.get("written")
     assert sub.get("read_len") == 512 * 1024, "pipe transfer short: %r" % sub.get("read_len")
     assert sub.get("read_ok") is True, "fd_write WRITE-park corrupted the pipe transfer"
-
-
-def test_netpoll_workload_under_gated_off_steal_woken_subprocess():
-    # STACKWEAVE_STEAL_WOKEN is the sibling of STACKWEAVE_PER_G_TSTATE: KNOWN-CRASH at
-    # hub-count>=2.  Set it WITHOUT STACKWEAVE_ALLOW_UNSAFE_MIGRATION -> the runtime
-    # must WARN to stderr and run the DEFAULT (safe) scheduler over the netpoll
-    # workload.  Assert: no crash, all wakes delivered.  NEVER set the allow flag.
-    # The first pass covered the PER_G_TSTATE gated-off path; this is its twin.
-    p = _subproc(_NETPOLL_WORKLOAD, env_extra={"STACKWEAVE_STEAL_WOKEN": "1"}, timeout=50)
-    _assert_no_signal_crash(p, "gated-off steal_woken")
-    assert "WOKE 40" in p.stdout, (
-        "gated-off STEAL_WOKEN workload did not complete: %r / %r"
-        % (p.stdout, p.stderr[-1000:]))
 
 
 def test_wait_fd_at_rlimit_minus_one_high_fd_no_crash_subprocess():

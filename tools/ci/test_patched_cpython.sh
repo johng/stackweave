@@ -19,7 +19,7 @@
 #
 # PHASES (each REQUIRED -- any failure fails the run):
 #   cpython       CPython's own stdlib suite       (--only=cpython)
-#   build-ext     build the stackweave C extension + migration capability check
+#   build-ext     build the stackweave C extension + an M:N smoke run
 #                                                   (--only=build-ext)
 #   runloom-tests stackweave's suite, tests/run_isolated.py
 #                                                   (--only=runloom-tests)
@@ -131,7 +131,7 @@ if [ "$run_cpython" = yes ]; then
     fi
 fi
 
-# ---- B1. build the stackweave C extension + migration capability ---------------
+# ---- B1. build the stackweave C extension + M:N smoke -------------------------
 
 if [ "$run_buildext" = yes ]; then
     rl_step "build stackweave C extension against $VERSION"
@@ -154,10 +154,9 @@ if [ "$run_buildext" = yes ]; then
         || { tail -40 "$WORK/runloom-build-$VERSION.log" >&2; rl_die "stackweave failed to build against the patched interpreter"; }
     rl_log "stackweave C extension built"
 
-    # The end-to-end proof that the patches reached an EXTENSION MODULE, not just
-    # CPython's own TUs.  If pyconfig.h had not been armed, these read 0 while
-    # the interpreter itself still worked -- exactly the silent-mismatch case.
-    rl_step "verify migration capability bits"
+    # The extension really loads and an M:N run -- where every woken fiber may
+    # resume on another hub -- completes on the patched interpreter.
+    rl_step "verify the extension imports and runs M:N"
     if ( cd "$ROOT" && PYTHONPATH=src "$PYBIN" - <<'PYEOF'
 import sys, stackweave_c
 # src/runloom_c/ is the C SOURCE directory, so if the extension failed to build,
@@ -168,23 +167,28 @@ if getattr(stackweave_c, "__file__", None) is None:
     sys.exit("FAIL: 'stackweave_c' resolved to the src/runloom_c/ SOURCE directory as a "
              "namespace package -- the extension module was not built")
 import stackweave
-status = stackweave.migration_status()
-print("migration_status():", status)
-print("alloc_home_available:", stackweave_c.alloc_home_available)
-print("exec_home_available: ", stackweave_c.exec_home_available)
-missing = [k for k in ("alloc_home", "exec_home") if not status.get(k)]
-if missing:
-    sys.exit("FAIL: patched build does not advertise: %s -- the patch did not "
-             "reach the extension module (check pyconfig.h)" % ", ".join(missing))
-if not stackweave.migration_available():
-    sys.exit("FAIL: migration_available() is False on a fully patched build")
-print("OK: both halves present, migration_available() is True")
+N = 256
+got = bytearray(N)
+def main():
+    ch = stackweave.Chan(0)
+    def consumer(i):
+        v, ok = ch.recv()
+        if ok:
+            got[v] = 1
+    for i in range(N):
+        stackweave.fiber(consumer, i)
+    for i in range(N):
+        stackweave.fiber(ch.send, i)
+stackweave.run(2, main)
+if sum(got) != N:
+    sys.exit("FAIL: M:N smoke delivered %d/%d cross-hub channel values" % (sum(got), N))
+print("OK: M:N smoke delivered all %d cross-hub channel values" % N)
 PYEOF
     ); then
-        rl_ci_summary "✅ **stackweave extension** ($VERSION, $PLATFORM): built + migration_available()"
+        rl_ci_summary "✅ **stackweave extension** ($VERSION, $PLATFORM): built + M:N smoke"
     else
-        rl_warn "capability check FAILED"
-        rl_ci_summary "❌ **stackweave extension** ($VERSION, $PLATFORM): build/capability FAILED"
+        rl_warn "M:N smoke FAILED"
+        rl_ci_summary "❌ **stackweave extension** ($VERSION, $PLATFORM): build/M:N smoke FAILED"
         rc_total=1
     fi
 fi

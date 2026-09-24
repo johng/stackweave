@@ -89,8 +89,7 @@ class TestFencesRaise:
             "    rc.mn_init(2)\n"
             "    print('FENCE_MISSING')\n"
             "except RuntimeError as e:\n"
-            "    print('PERG_FENCED' if 'UNSAFE_MIGRATION' in str(e) else 'WRONG')\n",
-            extra={"STACKWEAVE_ALLOW_UNSAFE_MIGRATION": "1"})
+            "    print('PERG_FENCED' if 'UNSAFE_MIGRATION' in str(e) else 'WRONG')\n")
         assert "PERG_FENCED" in p.stdout, (p.stdout, p.stderr[-800:])
         assert p.returncode == 0, (p.stdout, p.stderr[-800:])
 

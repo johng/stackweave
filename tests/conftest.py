@@ -117,34 +117,27 @@ def pytest_configure(config):
 # ---------------------------------------------------------------------------
 # Known gaps of migration mode (always on).
 #
-# Migration stands M:N preemption down (mn_sched_sysmon.c.inc: the hub's bound
-# tstate is DETACHED on every per-g resume, so the ATTACHED-wedge arm can never
-# fire), and a parked fiber's frames live on its OWN tstate rather than the
-# hub's.  The tests below encode the old per-hub-tstate semantics for exactly
-# those two things, so they fail by construction, not by regression.  Remove an
+# A parked fiber's frames live on its OWN tstate rather than the hub's, and a
+# woken fiber arrives through the global run-queue rather than a hub-local ring
+# pop.  The tests below encode the old per-hub-tstate semantics for exactly
+# those things, so they fail by construction, not by regression.  Remove an
 # entry when the gap it names is closed; a new failure elsewhere is a
-# regression.
+# regression.  (The entries that needed preemption or the sysmon's ATTACHED
+# classification came off this list when fork #26 made both work under
+# migration by reading the running fiber's tstate.)
 _PER_G_KNOWN_GAPS = {
-    "test_sched_fairness.py::test_preemption_busy_loop_yields_to_sibling":
-        "needs preemption (a while: pass loop at H=1 never yields)",
-    "test_sysmon_oracle.py::TestSysmonOracle::test_attached_cpu_loop_classified":
-        "sysmon cannot classify an ATTACHED wedge: the hub tstate is DETACHED on every per-g resume",
     "test_cov100_hubinfo_waitfd.py::test_hubinfo_blocked_at_for_detached_wedge":
         "hubinfo blocked_at walks the hub tstate; a per-g fiber's frames are on its own tstate",
     "test_hub_introspect.py::HubIntrospectTest::test_wedge_and_blocked_at":
         "hubinfo blocked_at walks the hub tstate; a per-g fiber's frames are on its own tstate",
-    "test_hub_introspect.py::HubIntrospectTest::test_print_hubs_smoke":
-        "hub introspection shows no running_g under per-g mode",
     "test_cov95_diag.py::test_ring_dump_covers_every_reachable_op_name_arm":
         "G_POP is a hub-local ring-pop label; per-g woken gs arrive via the global run-queue",
     "test_cov95_datastack.py::test_datastack_sweep_debug_decompose":
-        "the datastack dwell sweep accounts the hub tstate's chunks; per-g fibers use their own",
+        "the datastack dwell sweep accounts the hub tstate's chunks; per-g fibers use their own "
+        "(the chunks/resident assertions run on Linux only, so macOS passes this by skipping them)",
     "test_stack_pool_balance.py::test_stack_pool_plateaus_under_fanout":
         "per-g tstates add a datastack mapping per fiber slot: the pool plateaus ~40x higher "
         "(bounded: flat over 320 rounds on Linux) and sometimes after the test's midpoint window",
-    "test_sysmon_oracle.py::TestSysmonOracle::test_heavy_autooffload_prevents_wedge":
-        "the hub tstate is DETACHED on every per-g resume, so a DETACHED wedge no longer tells "
-        "an un-offloaded hash from OS descheduling under load (the oracle this test relies on)",
 }
 
 
@@ -173,12 +166,6 @@ _SEEDED_MN_TODO = (
     "test_cov100_resume_preempt.py::test_seeded_uniform_baton_no_pct",
     "test_chess_greybox_aliaspair.py::TestOnRealWorkload::test_chess_chan_yields_cross_hub_alias_pairs",
     "test_cov95_diag.py::test_mn_events_trace_env_emits_baton_protocol",
-    "test_linz_battery.py::TestLiveBattery::test_chan",
-    "test_linz_battery.py::TestLiveBattery::test_event",
-    "test_linz_battery.py::TestLiveBattery::test_mutex",
-    "test_linz_battery.py::TestLiveBattery::test_rwmutex",
-    "test_linz_battery.py::TestLiveBattery::test_semaphore",
-    "test_linz_battery.py::TestLiveBattery::test_waitgroup",
     "test_mn_sim_bytes.py::TestCrossPlane::test_h1_sim_beside_live_armed_pool",
     "test_mn_sim_bytes.py::TestMnSimBytes::test_byte_plane_digest_deterministic",
     "test_mn_sim_bytes.py::TestMnSimBytes::test_delayed_delivery_clock_compression",

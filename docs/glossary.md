@@ -49,14 +49,13 @@ uses Go's **randomOrder**: each hub starts at its own id and steps by a stride
 coprime with the hub count, so every victim is visited exactly once and K idle
 hubs don't all hammer hub 0's CAS in lockstep.
 
-**global runq** — a process-wide queue that any hub drains. Used only under
-`STACKWEAVE_PER_G_TSTATE`, to rescue fibers *woken* while their origin hub is
-blocked. Off by default.
+**global runq** — a process-wide queue that any hub drains. Every M:N run
+routes *woken* fibers here, so a fiber woken while its origin hub is blocked
+resumes on another hub instead of stranding.
 
-**submission list** (`runloom_mn_hub_submit`) — a hub's owner-drained inbox for
-woken fibers. In default mode a woken fiber routes here rather than to a
-stealable deque, which is why a blocked hub **strands** its woken work: nothing
-else drains this list.
+**submission list** (`runloom_mn_hub_submit`) — a hub's owner-drained inbox.
+Nothing else drains it, so work that lands here strands if its hub blocks;
+woken fibers bypass it for the global runq.
 
 **park / unpark** — a fiber suspending until some event (fd readiness, a
 channel, a timer), and being made runnable again. `wake_g` is the wake path.
@@ -180,8 +179,10 @@ collector cannot see frames living in `g->snap` and frees their referents early
 **TLBC** — CPython's thread-local bytecode. Interacts badly with stackful
 fibers; kept on only when the frames anchor is active.
 
-**migration** — resuming a suspended fiber on a *different* hub. Unsound on
-stock CPython for two independent reasons, either of which corrupts:
+**migration** — resuming a suspended fiber on a *different* hub. Always on
+under M:N: every fiber owns its own tstate, so a woken fiber resumes on any
+idle hub. Unsound on stock CPython for two independent reasons, either of which
+corrupts:
 - *allocation* — the fiber allocates on the origin hub's mimalloc heap
   (`heap->thread_id` mismatch → `_mi_page_retire` corruption). Fixed by
   `Py_TSTATE_ALLOC_HOME`.
@@ -189,12 +190,8 @@ stock CPython for two independent reasons, either of which corrupts:
   thread, so a resumed fiber keeps using the origin hub's tstate. Fixed by
   `Py_TSTATE_EXEC_HOME`.
 
-`stackweave.migration_available()` reports whether the running build has both
-patches; without them, migration modes stay gated off.
-
-**`STACKWEAVE_PER_G_TSTATE`** — give each fiber its own migratable tstate so woken
-work can be rescued from a blocked hub. Experimental, default off, with a known
-SEGV under churn at ≥2 hubs absent the patches.
+Both patches (`src/patches/`) are required for a sound M:N run; nothing checks
+for them at runtime.
 
 **slab** — the allocator for `runloom_g` structs. A freed g is **retained**,
 never returned to the OS: a stale dup-wake still dereferences it, so freeing
