@@ -28,7 +28,7 @@ def eq(actual, expected, name):
 # ── Test 1: backend identifies itself ──────────────────────────────
 def test_backend_name():
     b = stackweave_c.backend()
-    assert b in ("ucontext", "fibers", "fcontext-asm"), "unexpected backend: " + b
+    assert b in ("ucontext", "fcontext-asm"), "unexpected backend: " + b
 
 
 # ── Test 2: yield/resume chain on raw Coro ─────────────────────────

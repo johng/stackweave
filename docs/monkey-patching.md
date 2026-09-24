@@ -218,13 +218,6 @@ The pool is not going away: it is still the only route for a caller outside any
 fiber (foreign OS threads must never park a non-existent fiber), for a
 single-thread `run(1)`, and for anyone who reserves none.
 
-### Windows
-
-The Windows patch is selective: socket / time / select / queue /
-threading work the same way (via `WSAPoll`).  File I/O dispatches to a
-worker.  `subprocess` works.  `os.read`/`os.write` on regular files
-goes through the same executor path.
-
 ## Listing applied patches
 
 ```python

@@ -104,9 +104,6 @@ import os
 import sys
 
 # ---- availability guard (POSIX-only: pipe fds must be pollable, writev exists)
-# Windows pipe fds are not pollable by the netpoll backend, so a vectored write
-# on an os.pipe() write end can't park cooperatively; and os.writev/os.readv are
-# POSIX-only.  Detect-and-skip-clean.
 POSIX = sys.platform.startswith(("linux", "darwin", "freebsd"))
 if not POSIX or not hasattr(os, "writev") or not hasattr(os, "readv"):
     print("SKIP: POSIX os.writev/os.readv on pollable pipe fds required "

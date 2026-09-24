@@ -7,11 +7,10 @@
  *      threads each run their own scheduler independently.
  *
  * Backend is chosen at compile time via plat.h:
- *   - Windows: ConvertThreadToFiber + CreateFiber + SwitchToFiber.
- *              Available since Windows 95.  Fastest + simplest on Win.
- *   - POSIX:   getcontext / makecontext / swapcontext.  POSIX.1-2001.
- *              Still works on every Unix we care about despite being
- *              deprecated by POSIX.1-2008.
+ *   - fcontext: hand-rolled asm context switch (x86_64 / aarch64).
+ *   - ucontext: getcontext / makecontext / swapcontext.  POSIX.1-2001.
+ *               Still works on every Unix we care about despite being
+ *               deprecated by POSIX.1-2008.
  *
  * The public API is the same on both.
  */
@@ -24,8 +23,7 @@ typedef struct runloom_coro runloom_coro_t;
 
 typedef void (*runloom_entry_fn)(void *user);
 
-/* Lifecycle: returns NULL on alloc failure (errno set, or
- * GetLastError on Windows). */
+/* Lifecycle: returns NULL on alloc failure (errno set). */
 runloom_coro_t *runloom_coro_new(size_t stack_size,
                            runloom_entry_fn entry,
                            void *user);
@@ -80,17 +78,15 @@ void runloom_coro_yield(void);
 /* Predicates. */
 int runloom_coro_done(const runloom_coro_t *c);
 
-/* This coro's stack size in bytes, or 0 if the backend has no
- * introspectable stack (Fibers).  Used by the fiber dump. */
+/* This coro's stack size in bytes.  Used by the fiber dump. */
 size_t runloom_coro_stack_size(const runloom_coro_t *c);
 
 /* Lowest usable byte of this coro's stack (the PROT_NONE guard page is the page
- * immediately below it), or NULL on backends with no introspectable stack.
- * Used by the crash handler to map a faulting address back to a fiber. */
+ * immediately below it).  Used by the crash handler to map a faulting address
+ * back to a fiber. */
 void *runloom_coro_stack_base(const runloom_coro_t *c);
 
-/* Size in bytes of the guard page below each coro stack (0 if the backend
- * installs no guard, e.g. Windows Fibers). */
+/* Size in bytes of the guard page below each coro stack. */
 size_t runloom_coro_guard_size(void);
 
 /* Force park-time idle-page reclaim on/off programmatically (in addition to the
@@ -98,7 +94,7 @@ size_t runloom_coro_guard_size(void);
  * starting fibers large stays RSS-free. */
 void runloom_coro_park_reclaim_set(int on);
 
-/* Backend identifier ("fibers", "ucontext"); useful for tests. */
+/* Backend identifier ("fcontext-asm", "ucontext"); useful for tests. */
 const char *runloom_coro_backend(void);
 
 /* R0 gauges (lock-free): live depot-backed C-stacks IN USE, and freed stacks
@@ -108,13 +104,12 @@ long runloom_coro_depot_pooled(void);
 
 /* Per-thread setup / teardown.  Must be called once per OS thread
  * before any coro on that thread.  Idempotent. */
-int runloom_coro_thread_init(void);
+void runloom_coro_thread_init(void);
 void runloom_coro_thread_fini(void);
 
 /* Pre-warm the stack pool with n pre-mmaped stacks of the given
  * size.  Eliminates the first-spawn mmap stall for servers that
  * know they're about to spawn a known number of fibers.
- * No-op on the Fibers backend (CreateFiber handles its own pool).
  * No-op if n <= 0.  Returns the number actually pre-allocated. */
 int runloom_coro_warmup(size_t stack_size, int n);
 
@@ -123,14 +118,14 @@ int runloom_coro_warmup(size_t stack_size, int n);
  * (the spawn burst then pops instead of mmap'ing); background=0 runs synchronously
  * and returns the count retained (-1 if a background thread couldn't start).
  * Bounded by the depot cap (RUNLOOM_STACK_DEPOT_CAP) -- raise it near the target
- * for a large prewarm.  No-op on the Windows Fibers backend. */
+ * for a large prewarm. */
 int runloom_coro_prewarm(size_t stack_size, int n, int background);
 
 /* CONTINUOUS prewarm daemon: keep the GLOBAL depot topped to `target` stacks so a
  * spawn burst always finds a ready backlog (it refills as the pool drains, idling
  * when full).  One daemon per process: _keep starts it or re-targets a running
  * one (target<=0 stops it); _stop halts + joins it.  Returns 0 ok / -1 if the
- * thread couldn't start.  No-op on Windows Fibers.  _reset_after_fork zeroes the
+ * thread couldn't start.  _reset_after_fork zeroes the
  * (copied, threadless) daemon state in a fork child. */
 int  runloom_coro_prewarm_keep(size_t stack_size, int target);
 void runloom_coro_prewarm_stop(void);
@@ -151,7 +146,7 @@ void runloom_stack_autocap_reset(void);
  * touched pages (~one page fault).  MUST be called only while c is
  * SUSPENDED (so its saved stack pointer is valid).  No-op unless
  * RUNLOOM_STACK_PARK_DONTNEED=1, and on backends without an inspectable
- * saved SP (ucontext / Fibers).
+ * saved SP (ucontext).
  *
  * M:N SAFETY: race-free against a concurrent resume even though a netpoll
  * parker is wakeable (commit==PARKED) before its yield returns control
@@ -194,8 +189,7 @@ int  runloom_coro_scrub_enabled(void);
 
 /* Returns the high-water mark in bytes (deepest write detected by
  * scanning for the sentinel).  Returns 0 if painting was disabled or
- * the coro hasn't been used.  Backend may return 0 on Fibers
- * (no introspectable stack). */
+ * the coro hasn't been used. */
 size_t runloom_coro_scan_hwm(runloom_coro_t *c);
 
 /* After fork(): re-init the FCONTEXT coro cross-hub balance lock in the child

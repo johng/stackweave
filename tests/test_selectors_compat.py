@@ -14,7 +14,6 @@ the monkey-patches target.
 """
 import errno
 import os
-import platform
 import select
 import selectors
 import socket
@@ -24,8 +23,6 @@ import unittest
 import stackweave
 import stackweave.monkey
 import stackweave_c
-
-_IS_WINDOWS = platform.system() == "Windows"
 
 
 def _drive(fn):

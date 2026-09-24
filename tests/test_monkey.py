@@ -4,7 +4,6 @@ These tests exercise the C scheduler (stackweave_c.fiber / stackweave_c.run)
 because that's the path the monkey-patches target.
 """
 import os
-import platform
 import queue
 import socket
 import sys
@@ -12,7 +11,6 @@ import threading
 import time
 import unittest
 
-_IS_WINDOWS = platform.system() == "Windows"
 
 sys.path.insert(0, "src")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -44,11 +42,8 @@ def tearDownModule():
     The patches mutate process-global stdlib state (threading.Lock/
     Condition -> cooperative shims, socket.*, os.read/write, builtins.open,
     ...).  Without this, that state leaks into every later test file in the
-    same pytest process.  On POSIX the leak is benign, but on Windows the
-    leaked cooperative threading.Condition deadlocks pytest's fd-capture
-    teardown (a real OS thread parks on a primitive that only a running
-    fiber scheduler can wake), which intermittently wedges the whole
-    suite.  Restoring stdlib here keeps the run deterministic everywhere."""
+    same pytest process.  Restoring stdlib here keeps the run
+    deterministic."""
     stackweave.monkey.unpatch()
 
 
@@ -163,9 +158,6 @@ class TestQueue(unittest.TestCase):
 
 
 class TestOsReadWrite(unittest.TestCase):
-    @unittest.skipIf(_IS_WINDOWS,
-        "Windows pipes aren't pollable via Winsock select/WSAPoll; "
-        "this test exercises the POSIX pipe-cooperative path.")
     def test_pipe_round_trip(self):
         stackweave.monkey.patch()
         r, w = os.pipe()
@@ -183,9 +175,6 @@ class TestOsReadWrite(unittest.TestCase):
         self.assertEqual(got[0], b"hello")
 
 
-@unittest.skipIf(_IS_WINDOWS,
-    "select.select on Windows only accepts SOCKET handles, not pipe "
-    "fds.  The pipe-based select integration is a POSIX-only path.")
 class TestSelect(unittest.TestCase):
     def test_select_single_fd(self):
         import select
@@ -375,50 +364,6 @@ class TestSubprocessWait(unittest.TestCase):
         for e in log:
             if e[1] == "done":
                 self.assertEqual(e[2], 0)
-
-
-class TestParkerSocketpair(unittest.TestCase):
-    """Verify the socket-backed parker path works (used on Windows where
-    select() can only poll sockets, not pipe fds).  We force the path on
-    POSIX by toggling the module flag; socket.socketpair() returns
-    AF_UNIX sockets on POSIX and AF_INET on Windows, both fd-pollable."""
-
-    def _drain_parker_pool(self, M):
-        """Empty the parker pool, closing any socketpair sockets so
-        ResourceWarning doesn't fire."""
-        while M._Parker._pool:
-            entry = M._Parker._pool.pop()
-            socks = entry[2] if len(entry) > 2 else None
-            if socks is not None:
-                for s in socks:
-                    try: s.close()
-                    except OSError: pass
-
-    def test_socketpair_parker_round_trip(self):
-        import stackweave.monkey as M
-        stackweave.monkey.patch()
-        # Drain any pooled parkers so the next _Parker() actually
-        # constructs a fresh one through the forced path.
-        self._drain_parker_pool(M)
-        was_windows = M._IS_WINDOWS
-        M._IS_WINDOWS = True
-        try:
-            sequence = []
-            def coordinator():
-                p = M._Parker()
-                def signaller():
-                    sequence.append("signal")
-                    p.unpark()
-                stackweave_c.fiber(signaller)
-                p.park()
-                sequence.append("woken")
-                p.release()
-            stackweave_c.fiber(coordinator)
-            stackweave_c.run()
-        finally:
-            M._IS_WINDOWS = was_windows
-            self._drain_parker_pool(M)
-        self.assertEqual(sequence, ["signal", "woken"])
 
 
 class TestSocketStillWorks(unittest.TestCase):

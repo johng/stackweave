@@ -41,9 +41,7 @@ def _drive(*fibers):
 
 
 def _port(listener):
-    # socket.dup (WSADuplicateSocket on Windows), NOT os.dup: os.dup is a CRT
-    # fd op and corrupts a raw WinSock socket handle on Windows (access
-    # violation).  Matches test_tcpconn / test_tcp_scenarios.
+    # Matches test_tcpconn / test_tcp_scenarios.
     s = socket.socket(fileno=socket.dup(listener.fileno()))
     try:
         return s.getsockname()[1]

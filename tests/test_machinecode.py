@@ -6,13 +6,10 @@ one: MachineCode maps the bytes W^X and a call jumps the CPU directly into them
 results from the main thread and from fibers (M:1 and M:N).
 
 Execution is x86-64-only (the blobs are architecture-specific machine code); on
-other arches the type is still checked but execution is skipped.  x86-64 has TWO
-C ABIs and the MachineCode trampoline emits the HOST one (it is portable C), so
-the blobs are assembled for the host's argument registers: System V (Linux /
-macOS) takes args in rdi, rsi, ...; Windows x64 takes them in rcx, rdx, ....
+other arches the type is still checked but execution is skipped.  The blobs are
+assembled for the System V (Linux / macOS) argument registers: rdi, rsi, ....
 The blobs are trusted/self-generated -- never do this with untrusted bytes.
 """
-import os
 import platform
 import unittest
 
@@ -20,19 +17,11 @@ import stackweave
 import stackweave_c
 
 _IS_X86_64 = platform.machine() in ("x86_64", "AMD64", "x86-64")
-_IS_WIN64 = _IS_X86_64 and os.name == "nt"
 
-# Same functions, host-ABI registers.  Return value is rax on both ABIs.
-if _IS_WIN64:
-    # Windows x64: 1st arg rcx, 2nd rdx.
-    INC = bytes([0x48, 0x89, 0xc8, 0x48, 0xff, 0xc0, 0xc3])        # mov rax,rcx; inc rax
-    SQ  = bytes([0x48, 0x89, 0xc8, 0x48, 0x0f, 0xaf, 0xc1, 0xc3])  # mov rax,rcx; imul rax,rcx
-    ADD = bytes([0x48, 0x89, 0xc8, 0x48, 0x01, 0xd0, 0xc3])        # mov rax,rcx; add rax,rdx
-else:
-    # x86-64 System V: 1st arg rdi, 2nd rsi.
-    INC = bytes([0x48, 0x89, 0xf8, 0x48, 0xff, 0xc0, 0xc3])        # mov rax,rdi; inc rax
-    SQ  = bytes([0x48, 0x89, 0xf8, 0x48, 0x0f, 0xaf, 0xc7, 0xc3])  # mov rax,rdi; imul rax,rdi
-    ADD = bytes([0x48, 0x89, 0xf8, 0x48, 0x01, 0xf0, 0xc3])        # mov rax,rdi; add rax,rsi
+# x86-64 System V: 1st arg rdi, 2nd rsi; return value in rax.
+INC = bytes([0x48, 0x89, 0xf8, 0x48, 0xff, 0xc0, 0xc3])        # mov rax,rdi; inc rax
+SQ  = bytes([0x48, 0x89, 0xf8, 0x48, 0x0f, 0xaf, 0xc7, 0xc3])  # mov rax,rdi; imul rax,rdi
+ADD = bytes([0x48, 0x89, 0xf8, 0x48, 0x01, 0xf0, 0xc3])        # mov rax,rdi; add rax,rsi
 RET0 = bytes([0x48, 0x31, 0xc0, 0xc3])                            # xor eax,eax; ret (no args)
 
 

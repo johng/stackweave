@@ -109,8 +109,8 @@ fiber parked forever. Distinguished from a strand: the wake *happened*.
 
 ## Netpoll (I/O readiness)
 
-**netpoll** — the readiness layer: epoll on Linux, kqueue on BSD/macOS, IOCP or
-select on Windows. Fibers park on an fd and are woken when it is ready.
+**netpoll** — the readiness layer: epoll on Linux, kqueue on BSD/macOS, select
+elsewhere. Fibers park on an fd and are woken when it is ready.
 
 **parker** — the per-park record linking an fd to the fiber waiting on it.
 Lives in a **parker pool**, one per hub (up to

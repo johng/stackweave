@@ -25,9 +25,6 @@ import sys
 import textwrap
 import unittest
 
-_IS_POSIX = os.name == "posix"
-
-
 def _run(snippet, sysmon_ms=20, timeout=90):
     env = dict(os.environ)
     env["PYTHONPATH"] = "src"
@@ -73,7 +70,6 @@ def _wedges(out):
     return [(int(h), float(ms), st) for h, ms, st in _WEDGE_RE.findall(out)]
 
 
-@unittest.skipUnless(_IS_POSIX, "sysmon WEDGED log is a POSIX-path diagnostic")
 class TestSysmonOracle(unittest.TestCase):
     def test_unwrapped_heavy_wedges(self):
         """Negative control: inline CPU-heavy hashing pins hubs -> WEDGED.

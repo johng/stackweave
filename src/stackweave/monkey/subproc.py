@@ -143,8 +143,7 @@ def _patched_popen_wait(self, timeout=None):
     # Fast path: park on an exit fd until the child exits, then poll() reaps it
     # -- no busy-poll tick.  The exit fd is a pidfd (Linux 5.3+) or a dup'd
     # EVFILT_PROC kqueue (mac/BSD); both go readable on termination.  poll() is
-    # what records the returncode (Windows: WaitForSingleObject 0ms; POSIX:
-    # waitpid(WNOHANG)).
+    # what records the returncode (waitpid(WNOHANG)).
     pfd = _proc_exit_fd(getattr(self, "pid", None))
     if pfd is not None:
         try:
@@ -166,7 +165,7 @@ def _patched_popen_wait(self, timeout=None):
                 # pidfd signalled exit -> loop back; poll() reaps the zombie.
         finally:
             os.close(pfd)
-    # Fallback: portable WNOHANG poll loop (Windows, or no pidfd).  _co_sleep
+    # Fallback: portable WNOHANG poll loop (no pidfd).  _co_sleep
     # yields to other fibers, so this is cooperatively safe.
     step = 0.001
     while True:
@@ -203,11 +202,10 @@ def _unpatch_subprocess():
 #
 # subprocess.Popen.wait is handled above, but bare os.wait* calls (used by
 # code that forks directly, by os.popen, by some test harnesses) and
-# os.system still block the OS thread.  On POSIX we make the wait family
-# cooperative: park on a single-child exit fd (pidfd / EVFILT_PROC kqueue) when
-# possible, else a WNOHANG poll loop.  os.system has no non-blocking form, so it
-# is offloaded to the backend pool.  On Windows WNOHANG does not exist, so
-# os.waitpid is offloaded too.
+# os.system still block the OS thread.  We make the wait family cooperative:
+# park on a single-child exit fd (pidfd / EVFILT_PROC kqueue) when possible,
+# else a WNOHANG poll loop.  os.system has no non-blocking form, so it is
+# offloaded to the backend pool.
 # ============================================================
 _orig_os_waitpid = None
 _orig_os_wait    = None
@@ -216,15 +214,10 @@ _orig_os_wait3   = None
 _orig_os_wait4   = None
 _orig_os_system  = None
 
-_HAVE_WNOHANG = hasattr(os, "WNOHANG")
-
 
 def _patched_os_waitpid(pid, options):
     if not _in_fiber():
         return _orig_os_waitpid(pid, options)
-    if not _HAVE_WNOHANG:
-        # Windows: no polling form -- offload the blocking wait.
-        return _blocking_call(_orig_os_waitpid, pid, options)
     if options & os.WNOHANG:
         return _orig_os_waitpid(pid, options)
     # Event-driven fast path: park on an exit fd (pidfd / EVFILT_PROC kqueue)
@@ -255,7 +248,7 @@ def _patched_os_waitpid(pid, options):
 
 
 def _patched_os_wait():
-    if not _in_fiber() or not _HAVE_WNOHANG:
+    if not _in_fiber():
         return _orig_os_wait()
     # os.wait() == waitpid(-1, 0): wait for any child.
     return _patched_os_waitpid(-1, 0)
@@ -293,7 +286,7 @@ def _patched_os_waitid(idtype, id, options):
 
 def _patched_os_wait4(pid, options):
     # wait4(pid, options) -> (pid, status, rusage); like waitpid + rusage.
-    if not _in_fiber() or not _HAVE_WNOHANG:
+    if not _in_fiber():
         return _orig_os_wait4(pid, options)
     if options & os.WNOHANG:
         return _orig_os_wait4(pid, options)
@@ -321,7 +314,7 @@ def _patched_os_wait4(pid, options):
 
 def _patched_os_wait3(options):
     # wait3(options) == wait4(-1, options): any child, with rusage.
-    if not _in_fiber() or not _HAVE_WNOHANG:
+    if not _in_fiber():
         return _orig_os_wait3(options)
     return _patched_os_wait4(-1, options)
 

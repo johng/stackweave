@@ -10,18 +10,10 @@
 /* Set O_NONBLOCK on a fd.  Idempotent. */
 static int runloom_set_nonblock(int fd)
 {
-#if defined(RUNLOOM_OS_WINDOWS)
-    u_long mode = 1;
-    if (ioctlsocket((SOCKET)fd, FIONBIO, &mode) == SOCKET_ERROR) {
-        return -1;
-    }
-    return 0;
-#else
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags < 0) return -1;
     if (flags & O_NONBLOCK) return 0;
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-#endif
 }
 
 /* Set TCP_NODELAY.  Best effort; ignore errors. */
@@ -29,28 +21,19 @@ static void runloom_set_nodelay(int fd, int family)
 {
     int on = 1;
     if (family != AF_INET && family != AF_INET6) return;
-#if defined(RUNLOOM_OS_WINDOWS)
-    (void)setsockopt((SOCKET)fd, IPPROTO_TCP, TCP_NODELAY,
-                     (const char *)&on, sizeof(on));
-#else
     (void)setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
-#endif
 }
 
-/* Translate the last errno/WSAGetLastError to a Python exception. */
+/* Translate the last errno to a Python exception. */
 static PyObject *runloom_raise_errno(void)
 {
-#if defined(RUNLOOM_OS_WINDOWS)
-    return PyErr_SetFromWindowsErr(WSAGetLastError());
-#else
     return PyErr_SetFromErrno(PyExc_OSError);
-#endif
 }
 
-/* ---- test-only socket-surface fault injection (kqueue/Windows) -------------
- * Linux faults the socket syscalls with strace; the kqueue/Windows backends
- * have no such tracer, so they gate in-process on RUNLOOM_FAULT_TCP_<CALL> (see
- * netpoll.c).  runloom_tcp_fault_armed() caches whether ANY such env is set, so
+/* ---- test-only socket-surface fault injection (kqueue) ----------------------
+ * Linux faults the socket syscalls with strace; the kqueue backend has no such
+ * tracer, so it gates in-process on RUNLOOM_FAULT_TCP_<CALL> (see
+ * netpoll_init.c.inc).  runloom_tcp_fault_armed() caches whether ANY such env is set, so
  * the hot recv/send path pays only a load+branch when disarmed -- the getenv
  * scan runs once.  cached is written idempotently (always the same 0/1), so
  * the benign first-call race needs no atomic.  Compiled out on Linux, where
@@ -58,7 +41,7 @@ static PyObject *runloom_raise_errno(void)
  *
  * Usage:  int injerr = RUNLOOM_TCP_FINJ(SITE);
  *         r = injerr ? (errno = injerr, -1) : <real syscall>; */
-#if defined(RUNLOOM_OS_WINDOWS) || defined(RUNLOOM_HAVE_KQUEUE)
+#if defined(RUNLOOM_HAVE_KQUEUE)
 static int runloom_tcp_fault_armed(void)
 {
     static int cached = -1;
@@ -73,43 +56,6 @@ static int runloom_tcp_fault_armed(void)
 #  define RUNLOOM_TCP_FINJ(site) 0
 #endif
 
-#if defined(RUNLOOM_OS_WINDOWS)
-/* Used only on Windows branches below; the POSIX paths inline the
- * errno comparisons.  Tagged so non-Windows builds (which include
- * this header anyway for the prototype) don't warn. */
-static int runloom_is_wouldblock(void)
-{
-    return WSAGetLastError() == WSAEWOULDBLOCK;
-}
-
-static int runloom_is_intr(void)
-{
-    return WSAGetLastError() == WSAEINTR;
-}
-#endif
-
-/* errno-equivalent of the last socket operation, NORMALIZED so the errno-based
- * I/O-return classifier (runloom_io_fsm.h) spans the Windows/WSA backend too:
- * on POSIX it is plain errno; on Windows it maps the WSA codes the classifier
- * cares about onto their errno spelling (everything else passes through, and the
- * ERROR path still raises via runloom_raise_errno -> the original WSA code). */
-static int runloom_sock_errno(void)
-{
-#if defined(RUNLOOM_OS_WINDOWS)
-    int e = WSAGetLastError();
-    switch (e) {
-    case WSAEWOULDBLOCK:  return EWOULDBLOCK;
-    case WSAEINTR:        return EINTR;
-#ifdef WSAEINPROGRESS
-    case WSAEINPROGRESS:  return EINPROGRESS;
-#endif
-    case WSAECONNABORTED: return ECONNABORTED;
-    default:              return e;
-    }
-#else
-    return errno;
-#endif
-}
 
 /* ============================================================
  * Address parsing -- AF_INET / AF_INET6.

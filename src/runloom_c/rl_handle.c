@@ -3,7 +3,6 @@
 #include "rl_handle.h"
 #include "plat.h"
 #include "plat_compat.h"
-#include "plat_atomic.h"
 #include "runloom_kcsan.h"
 
 #include <stdatomic.h>

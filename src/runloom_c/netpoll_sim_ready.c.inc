@@ -51,32 +51,12 @@
  * and from the census dispatcher, so both are guarded by
  * runloom_sim_ledger_lock (rank RUNLOOM_RANK_SIM_LEDGER=15: taken under
  * ctrl(5), ALWAYS released before pool(80)/sub(60) -- the three-phase dispatch
- * below never holds it across a wake).  Self-initialising (the cal_lock
- * pattern) so it needs no PyInit hook on Windows. */
+ * below never holds it across a wake). */
 typedef struct { int fd_a, fd_b, closed; } runloom_sim_conn_t;
 static runloom_sim_conn_t *runloom_sim_conns;
 static long long runloom_sim_conn_n, runloom_sim_conn_cap;
 
 static runloom_mutex_t runloom_sim_ledger_lock = RUNLOOM_MUTEX_STATIC_INIT;
-static int runloom_sim_ledger_lock_inited = 0;
-
-static void runloom_sim_ledger_ensure_lock(void)
-{
-#if defined(RUNLOOM_OS_WINDOWS)
-    int st = __atomic_load_n(&runloom_sim_ledger_lock_inited, __ATOMIC_ACQUIRE);
-    if (st == 2) return;
-    if (st == 0 &&
-        __atomic_compare_exchange_n(&runloom_sim_ledger_lock_inited, &st, 1, 0,
-                                    __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
-        runloom_mutex_init(&runloom_sim_ledger_lock);
-        __atomic_store_n(&runloom_sim_ledger_lock_inited, 2, __ATOMIC_RELEASE);
-        return;
-    }
-    while (__atomic_load_n(&runloom_sim_ledger_lock_inited, __ATOMIC_ACQUIRE) != 2) { }
-#else
-    (void)runloom_sim_ledger_lock_inited;  /* POSIX: static initialiser suffices */
-#endif
-}
 
 long long runloom_sim_conn_register(int fd_a, int fd_b)
 {
@@ -113,7 +93,6 @@ long long runloom_sim_conn_register(int fd_a, int fd_b)
     runloom_fd_arrays_init();
     RUNLOOM_RUNLOCK(&runloom_pool.lock, RUNLOOM_RANK_PARKER_POOL);
 
-    runloom_sim_ledger_ensure_lock();
     RUNLOOM_RLOCK(&runloom_sim_ledger_lock, RUNLOOM_RANK_SIM_LEDGER);
     if (runloom_sim_conn_n >= runloom_sim_conn_cap) {
         long long ncap = runloom_sim_conn_cap ? runloom_sim_conn_cap * 2 : 16;
@@ -142,7 +121,6 @@ int runloom_sim_conn_has_fd(int fd)
 {
     long long i;
     int found = 0;
-    runloom_sim_ledger_ensure_lock();
     RUNLOOM_RLOCK(&runloom_sim_ledger_lock, RUNLOOM_RANK_SIM_LEDGER);
     for (i = 0; i < runloom_sim_conn_n; i++) {
         if (runloom_sim_conns[i].fd_a == fd || runloom_sim_conns[i].fd_b == fd) {
@@ -195,7 +173,6 @@ void runloom_sim_deliver_ready(long long conn_id, int fd, int dir, long long del
     /* Plane = the sender's context: a hub fiber (baton holder) is the mn plane,
      * a non-hub caller is the legacy H=1 plane.  A TLS read, no lock. */
     plane = (runloom_mn_current_hub_opaque() != NULL) ? 1 : 0;
-    runloom_sim_ledger_ensure_lock();
     RUNLOOM_RLOCK(&runloom_sim_ledger_lock, RUNLOOM_RANK_SIM_LEDGER);
     if (runloom_sim_ready_n >= runloom_sim_ready_cap) {
         long long ncap = runloom_sim_ready_cap ? runloom_sim_ready_cap * 2 : 32;
@@ -245,7 +222,6 @@ static long long runloom_sim_ready_next_ns(void)
 {
     long long i, earliest = -1;
     long long nowl = runloom_sched_logical_ns();
-    runloom_sim_ledger_ensure_lock();
     RUNLOOM_RLOCK(&runloom_sim_ledger_lock, RUNLOOM_RANK_SIM_LEDGER);
     for (i = 0; i < runloom_sim_ready_n; i++) {
         long long d = runloom_sim_ready[i].deliver_at;
@@ -264,7 +240,6 @@ static long long runloom_sim_ready_next_ns(void)
 long long runloom_sim_ready_peek_ns(void)
 {
     long long i, earliest = -1;
-    runloom_sim_ledger_ensure_lock();
     RUNLOOM_RLOCK(&runloom_sim_ledger_lock, RUNLOOM_RANK_SIM_LEDGER);
     for (i = 0; i < runloom_sim_ready_n; i++) {
         if (runloom_sim_ready[i].plane != 1) continue;   /* census: mn plane only */
@@ -289,7 +264,6 @@ long long runloom_sim_ready_peek_ns(void)
  * and bounds the otherwise-monotonic conn registry.  Call only between run()s. */
 void runloom_sim_reset(void)
 {
-    runloom_sim_ledger_ensure_lock();
     RUNLOOM_RLOCK(&runloom_sim_ledger_lock, RUNLOOM_RANK_SIM_LEDGER);
     runloom_sim_ready_n = 0;
     runloom_sim_ready_seq = 0;
@@ -335,7 +309,6 @@ int runloom_sim_dispatch_due_plane(long long now_ns, int plane)
 {
     long long i, keep = 0, ndue = 0, nsel;
     int woke = 0;
-    runloom_sim_ledger_ensure_lock();
     RUNLOOM_RLOCK(&runloom_sim_ledger_lock, RUNLOOM_RANK_SIM_LEDGER);
     if (runloom_sim_ready_n == 0) {
         RUNLOOM_RUNLOCK(&runloom_sim_ledger_lock, RUNLOOM_RANK_SIM_LEDGER);

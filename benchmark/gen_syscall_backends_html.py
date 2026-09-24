@@ -1,43 +1,40 @@
 #!/usr/bin/env python3
-"""big_100 per-BACKEND syscall profile -- epoll (Linux) vs kqueue (macOS) vs
-iocp-afd (Windows), on the latest origin/main, same workload.
+"""big_100 per-BACKEND syscall profile -- epoll (Linux) vs kqueue (macOS), on
+the latest origin/main, same workload.
 
 Each platform is traced with its native facility (Linux strace -c, macOS ktrace
-KDEBUG, Windows xperf NT-kernel SYSCALL + symbols), then every syscall is mapped
-into common CATEGORIES so the three netpoll backends are directly comparable --
-you can see how epoll_wait vs kevent vs the IOCP completion port show up, where
-the locking/wake traffic goes, etc.
+KDEBUG), then every syscall is mapped into common CATEGORIES so the netpoll
+backends are directly comparable -- you can see how epoll_wait vs kevent show
+up, where the locking/wake traffic goes, etc.
 """
 import glob, html, os, re
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LIN = os.path.join(HERE, "lin_sys")   # *.strace  (strace -c)
 MAC = os.path.join(HERE, "mac_sys")   # *.counts  ("<n> BSC_name")
-WIN = os.path.join(HERE, "win_sys")   # *.counts  ("<n> NtName")
 OUT = os.path.join(HERE, "big100_syscall_backends.html")
-COL = {"Linux": "#3fb950", "macOS": "#58a6ff", "Windows": "#d29922"}
+COL = {"Linux": "#3fb950", "macOS": "#58a6ff"}
 
 # Ordered category rules: (category, regex) -- first match wins.  Patterns are
 # matched case-insensitively against the bare syscall name (prefixes stripped).
-# Ordered MORE-SPECIFIC-FIRST so e.g. NtOpenProcess hits proc/thr before file's
-# generic "open", and registry keys aren't miscounted as files.
+# Ordered MORE-SPECIFIC-FIRST so a specific rule wins over file's generic
+# "open"/"read"/"write".
 CATRULES = [
-    ("poll/wait", r"epoll|kevent|kqueue|removeiocompletion|waitforworkvia|associatewaitcompletion|iocompletion"),
-    ("net",       r"recvmsg|recvfrom|recvmmsg|\brecv|sendmsg|sendto|sendmmsg|\bsend|accept|connect|socket|bind|listen|shutdown|sockopt|getpeername|getsockname|deviceiocontrol|afd|wsa"),
-    ("registry",  r"valuekey|openkey|querykey|enumeratekey|createkey|notifychangekey|deletekey|setvaluekey"),
-    ("sync",      r"futex|psynch|ulock|semwait|waitforalert|alertthread|keyedevent|waitforsingleobject|waitformultiple|signalandwait|releasemutant|releasesemaphore|setevent|resetevent|clearevent|pulseevent|mutant|waitforgate|releasekeyed"),
-    ("yield",     r"sched_yield|yieldexecution|thread_switch"),
-    ("time",      r"nanosleep|clock_|gettimeofday|delayexecution|querysystemtime|queryperformance|setitimer|getitimer|timer_|settimer|waitabletimer"),
-    ("proc/thr",  r"clone|fork|vfork|execve|posix_spawn|wait4|waitid|^exit|exit_group|bsdthread|workq|createthread|createprocess|createuserprocess|terminateprocess|terminatethread|openprocess|openthread|resumethread|suspendthread|setinformationthread|queryinformationthread|queryinformationprocess|setinformationprocess|informationtoken|impersonate|processortoken|thread_selfid"),
-    ("mem",       r"mmap|munmap|mprotect|madvise|\bbrk|mremap|mlock|virtualmemory|mapviewofsection|unmapview|sharedregion|flushvirtual"),
-    ("file",      r"read|write|open|close|stat|lseek|fcntl|ioctl|getdents|getdirentries|fsync|fdatasync|access|pread|pwrite|\bdup|pipe|createfile|queryinformationfile|queryattributes|openfile|querydirectory|flushbuffers|queryvolume|fstatat|readlink|unlink|rename|mkdir|ftruncate|getattrlist|fsetattr|createnamedpipe|fscontrol|setinformationfile"),
-    ("signal",    r"sigaction|sigprocmask|sigreturn|sigaltstack|sigsuspend|sigpending|pthread_kill|raiseexception|raisehard|\bkill|tgkill|exceptionhandler"),
+    ("poll/wait", r"epoll|kevent|kqueue"),
+    ("net",       r"recvmsg|recvfrom|recvmmsg|\brecv|sendmsg|sendto|sendmmsg|\bsend|accept|connect|socket|bind|listen|shutdown|sockopt|getpeername|getsockname"),
+    ("sync",      r"futex|psynch|ulock|semwait"),
+    ("yield",     r"sched_yield|thread_switch"),
+    ("time",      r"nanosleep|clock_|gettimeofday|setitimer|getitimer|timer_"),
+    ("proc/thr",  r"clone|fork|vfork|execve|posix_spawn|wait4|waitid|^exit|exit_group|bsdthread|workq|thread_selfid"),
+    ("mem",       r"mmap|munmap|mprotect|madvise|\bbrk|mremap|mlock|sharedregion"),
+    ("file",      r"read|write|open|close|stat|lseek|fcntl|ioctl|getdents|getdirentries|fsync|fdatasync|access|pread|pwrite|\bdup|pipe|fstatat|readlink|unlink|rename|mkdir|ftruncate|getattrlist|fsetattr"),
+    ("signal",    r"sigaction|sigprocmask|sigreturn|sigaltstack|sigsuspend|sigpending|pthread_kill|\bkill|tgkill"),
 ]
 
 
 def categorize(name):
     low = name.lower()
-    bare = re.sub(r"^(bsc_|msc_|sys_|nt|zw)", "", low)   # strip BSC_/Nt/etc.
+    bare = re.sub(r"^(bsc_|msc_|sys_)", "", low)   # strip BSC_/MSC_/sys_
     for cat, pat in CATRULES:
         if re.search(pat, low) or re.search(pat, bare):
             return cat
@@ -83,25 +80,10 @@ def disp(name):
 data = {
     "Linux":   load(LIN, "*.strace", parse_strace),
     "macOS":   load(MAC, "*.counts", parse_counts),
-    "Windows": load(WIN, "*.counts", parse_counts),
 }
-
-# Windows syscall ETW events carry no process id, so the capture is system-wide;
-# subtract an idle BASELINE (captured with nothing running) to strip background
-# (registry, idle waits) and leave ~the program's contribution. Floor at 0.
-winbase = None
-for k in list(data["Windows"].keys()):
-    if "BASELINE" in k.upper():
-        winbase = data["Windows"].pop(k); break
-if winbase:
-    for prog, d in data["Windows"].items():
-        for k in list(d.keys()):
-            d[k] = max(0, d[k] - winbase.get(k, 0))
-            if d[k] == 0:
-                del d[k]
-plats = ["Linux", "macOS", "Windows"]
-CATS = ["poll/wait", "net", "sync", "yield", "time", "registry", "file", "mem", "proc/thr", "signal", "other"]
-backend = {"Linux": "epoll", "macOS": "kqueue", "Windows": "iocp-afd"}
+plats = ["Linux", "macOS"]
+CATS = ["poll/wait", "net", "sync", "yield", "time", "file", "mem", "proc/thr", "signal", "other"]
+backend = {"Linux": "epoll", "macOS": "kqueue"}
 
 progs = set()
 for pl in plats:
@@ -129,8 +111,7 @@ P.append("""<!doctype html><meta charset=utf-8><title>big_100 syscall profile by
 Same workload (<code>--hubs 2 --funcs 150 --duration 3</code>) on the latest
 origin/main, each platform traced with its native facility:
 <b>Linux</b> epoll via <code>strace -c</code>,
-<b>macOS</b> kqueue via <code>ktrace</code> (KDEBUG; SIP blocks dtrace, not this),
-<b>Windows</b> iocp-afd via <code>xperf</code> (NT-kernel SYSCALL + MS symbols).
+<b>macOS</b> kqueue via <code>ktrace</code> (KDEBUG; SIP blocks dtrace, not this).
 Syscalls are bucketed into shared categories so the backends line up; counts are
 the per-syscall call totals (Linux excludes parked time).  Each tracer perturbs
 timing differently, so read the <i>mix</i> across backends, not raw cross-OS magnitudes.
@@ -172,7 +153,7 @@ for c in CATS:
     P.append('</tr>')
 P.append('</table>')
 
-# ---- per-program: 3 columns, category rollup + top syscalls ----
+# ---- per-program: one column per platform, category rollup + top syscalls ----
 for prog in progs:
     P.append('<h2 id="{0}">{0}</h2>'.format(E(prog)))
     P.append('<div class=cols>')

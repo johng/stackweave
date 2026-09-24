@@ -456,11 +456,9 @@ int runloom_netpoll_wait_fd(int fd, int events, long long timeout_ns)
          * drain_expired_pub after each advance -- the temporary I2 EINVAL
          * guard is retired. */
     }
-#if !defined(RUNLOOM_HAVE_EPOLL) && !defined(RUNLOOM_HAVE_KQUEUE) && \
-    !defined(RUNLOOM_OS_WINDOWS)
+#if !defined(RUNLOOM_HAVE_EPOLL) && !defined(RUNLOOM_HAVE_KQUEUE)
     if (fd >= FD_SETSIZE) { errno = EINVAL; return -1; }
 #endif
-#if !defined(RUNLOOM_OS_WINDOWS)
     /* Reject a fd at/above the process's hard max-open-files: it cannot be a
      * live fd, and indexing the per-fd parker/arm arrays by it (in
      * runloom_parker_fd_index_ensure / the epoll arm cache) would force a growth
@@ -478,7 +476,6 @@ int runloom_netpoll_wait_fd(int fd, int events, long long timeout_ns)
         }
         if ((long)fd >= cap) { errno = EBADF; return -1; }
     }
-#endif
 
     park = runloom_parker_pool_acquire();
     if (park == NULL) { errno = ENOMEM; return -1; }
@@ -612,7 +609,7 @@ int runloom_netpoll_wait_fd(int fd, int events, long long timeout_ns)
      *      M:N another hub's pump may have observed an event between
      *      this g's previous unlink (on its last wake) and the link
      *      above; the pending-wake bitmap captured it.
-     *   3. Only then call epoll_ctl ADD / IOCP submit.  If ADD
+     *   3. Only then call epoll_ctl ADD.  If ADD
      *      synthesizes an edge because the fd is already ready, the
      *      parker is already visible -- the pump will route it.
      *
@@ -683,62 +680,6 @@ int runloom_netpoll_wait_fd(int fd, int events, long long timeout_ns)
         }
     }
 
-#if defined(RUNLOOM_OS_WINDOWS)
-    /* IOCP-AFD: submit the poll request now; pump just drains
-     * completions.  Falls through to the no-op register for the
-     * WSAPoll / select paths. */
-    if (runloom_win_use_iocp) {
-        /* Fault injection short-circuits the real submit so no AFD IRP is left
-         * in flight on a simulated failure; the parker is cleanly unlinked. */
-        int finj = runloom_fault_inject(RUNLOOM_FAULT_IOCP_SUBMIT);
-        void *ctx = NULL;
-        /* ONE TIMEOUT OWNER: submit with an INFINITE AFD Timeout (-1) regardless
-         * of this park's deadline, so the IRP NEVER self-completes on timeout and
-         * is never left in flight after the deadline heap releases the parker.
-         * The deadline heap (runloom_pump_drain_expired) is the sole timeout: when
-         * it expires it unlinks the parker, and the unlink choke point
-         * (runloom_parker_unlink) runloom_iocp_cancel's this exact IRP.  Without
-         * this, a per-op AFD Timeout could fire AFTER the heap released + the fd
-         * was reused, dispatching a stale completion against the new owner (UAF). */
-        if (finj || runloom_iocp_submit(fd, events, -1, park->gen, &ctx) != 0) {
-            RUNLOOM_RLOCK(&pool->lock, RUNLOOM_RANK_PARKER_POOL);
-            runloom_parker_unlink(pool, park);
-            RUNLOOM_RUNLOCK(&pool->lock, RUNLOOM_RANK_PARKER_POOL);
-            runloom_parker_pool_release(park);
-            return -1;
-        }
-        /* Track the in-flight IRP's ctx on the parker (a tracking ref backed by
-         * the ctx's two-party refcount, refs==2 from submit) under pool->lock so
-         * the unlink choke point can runloom_iocp_cancel it on EVERY early-release
-         * path.  The lock makes the field consistent: every runloom_parker_unlink
-         * runs holding it, and it EXTRACTS iocp_ctx exactly once (clear-after-read),
-         * so whichever unlink sees the non-NULL ctx drops the parker party's ref.
-         *
-         * Race with an immediate pump claim: the IRP can complete and be drained
-         * the instant it is queued (before this store), so a pump on another hub
-         * may claim+unlink this parker while iocp_ctx is still NULL -- it then
-         * does NOT cancel, leaving the parker ref undropped.  That is fine: the
-         * pump's claim CASes commit to WOKEN, so THIS fiber's own commit-CAS below
-         * fails and takes the abort path, whose runloom_parker_unlink runs AFTER
-         * this store, extracts the now-stored ctx, and drops the parker ref then.
-         * So the parker ref is always dropped exactly once (here-stored ctx is
-         * extracted by whichever unlink runs after the store), and the IRP ref is
-         * dropped exactly once by the wait-drain -- refcount frees on the second.
-         * No store can be "lost": the abort path is guaranteed to run an unlink
-         * after a lost commit-CAS.  See the self-review for the full interleaving. */
-        RUNLOOM_RLOCK(&pool->lock, RUNLOOM_RANK_PARKER_POOL);
-        park->iocp_ctx = ctx;
-        RUNLOOM_RUNLOCK(&pool->lock, RUNLOOM_RANK_PARKER_POOL);
-    } else {
-        if (runloom_netpoll_register(fd, events) != 0) {
-            RUNLOOM_RLOCK(&pool->lock, RUNLOOM_RANK_PARKER_POOL);
-            runloom_parker_unlink(pool, park);
-            RUNLOOM_RUNLOCK(&pool->lock, RUNLOOM_RANK_PARKER_POOL);
-            runloom_parker_pool_release(park);
-            return -1;
-        }
-    }
-#else
     if (runloom_netpoll_register(fd, events) != 0) {
         RUNLOOM_RLOCK(&pool->lock, RUNLOOM_RANK_PARKER_POOL);
         runloom_parker_unlink(pool, park);
@@ -746,7 +687,6 @@ int runloom_netpoll_wait_fd(int fd, int events, long long timeout_ns)
         runloom_parker_pool_release(park);
         return -1;
     }
-#endif
 
     /* Re-check pending bits after register: the ADD may have
      * synthesized an edge that another hub's pump processed in the

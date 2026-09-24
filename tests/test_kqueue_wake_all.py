@@ -9,7 +9,7 @@ runloom_pump_dispatch_event(fd, mask, wake_all=1)
 WHOLE pool->by_fd[fd] bucket and wakes every parker whose events & mask -- it does
 NOT stop at first match (netpoll_pump_helpers.c.inc:80-91).  The one-shot knote
 auto-disabled after firing once and there is no re-arm path for it, so a
-first-match-only wake (the wake_all=0 epoll/iocp behaviour) would STRAND every
+first-match-only wake (the wake_all=0 epoll behaviour) would STRAND every
 sibling parker on that fd forever.  These tests prove all siblings wake.
 
 Because wake_all walks by_fd[fd] keyed on the fd NUMBER, the N siblings must all

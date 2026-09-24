@@ -30,7 +30,6 @@
 #define RUNLOOM_GSTATE_H
 
 #include "plat.h"
-#include "plat_atomic.h"
 #include "runloom_diag.h"
 
 #ifdef __cplusplus

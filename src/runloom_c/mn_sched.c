@@ -39,11 +39,9 @@
  *   - park-on-eventfd: today hubs busy-loop trying to steal when
  *     local is empty.  A real impl uses futex / eventfd to sleep.
  */
-#if !defined(_WIN32)
-#  define _POSIX_C_SOURCE 200809L
-#  ifndef _GNU_SOURCE
-#    define _GNU_SOURCE
-#  endif
+#define _POSIX_C_SOURCE 200809L
+#ifndef _GNU_SOURCE
+#  define _GNU_SOURCE
 #endif
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
@@ -80,15 +78,13 @@
 #include <string.h>
 #include <stdalign.h>   /* alignas for cache-line padding (B4 / R6) */
 
-#if !defined(RUNLOOM_OS_WINDOWS)
-#  include <unistd.h>
-#endif
+#include <unistd.h>
 
 /* Cache-line size for false-sharing avoidance (B4 / R6).  x86-64 and most ARM
  * use 64B lines; Apple M-series and some ARM64 use 128B.  Pad to the larger on
  * arm64 so one layout is false-sharing-free on every target we build for. */
 #ifndef RUNLOOM_CACHELINE
-#  if defined(__aarch64__) || defined(__arm64__) || defined(_M_ARM64)
+#  if defined(__aarch64__) || defined(__arm64__)
 #    define RUNLOOM_CACHELINE 128
 #  else
 #    define RUNLOOM_CACHELINE 64
@@ -430,9 +426,8 @@ static int runloom_hub_idle_wake_enabled(void)
  * does a check-then-act on interp->gc.immortalize OUTSIDE its HEAD_LOCK, so N
  * hubs calling PyThreadState_New at once race there.  Stock CPython never hits
  * it (threads are spawned serially); this lock restores that serialization.
- * Process-lifetime, init-once (CRITICAL_SECTION can't be statically inited on
- * Windows), never destroyed -- mn_init runs single-threaded so the flag needs
- * no atomics. */
+ * Process-lifetime, init-once in mn_init, never destroyed -- mn_init runs
+ * single-threaded so the flag needs no atomics. */
 static runloom_mutex_t runloom_hub_tstate_lock;
 static int runloom_hub_tstate_lock_inited = 0;
 

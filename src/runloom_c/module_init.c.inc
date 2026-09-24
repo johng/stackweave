@@ -56,11 +56,10 @@ static PyMethodDef module_methods[] = {
     {"fd_read", m_fd_read, METH_VARARGS,
      "fd_read(fd, writable_buffer, n) -> bytes_read.  POSIX read(2) "
      "with cooperative blocking via netpoll.  Works on pipes, ttys, "
-     "any pollable fd.  On Windows file fds aren't pollable: blocks "
-     "the OS thread (use the monkey.py thread-pool path instead)."},
+     "any pollable fd."},
     {"fd_write", m_fd_write, METH_VARARGS,
      "fd_write(fd, bytes_like) -> bytes_written.  POSIX write(2) "
-     "loop with cooperative blocking.  Same Windows caveat as fd_read."},
+     "loop with cooperative blocking."},
     {"file_read", m_file_read, METH_VARARGS,
      "file_read(fd, writable_buffer, n, offset=-1) -> bytes_read.  "
      "Uses io_uring on Linux >=5.1, falls back to pread/read.  "
@@ -206,10 +205,10 @@ static PyMethodDef module_methods[] = {
      "sim_foreign_wake_count() -> int.  Foreign-thread wakes observed during "
      "seeded mn-sim runs (the I3 tripwire); a green run asserts 0."},
     {"_fault_count", m_fault_count, METH_O,
-     "_fault_count(site): test-only.  Times the Windows netpoll fault-injection "
-     "site (WSAPOLL/SELECT/IOCP_WAIT/IOCP_SUBMIT) fired; -1 if unknown/non-Win."},
+     "_fault_count(site): test-only.  Times the netpoll fault-injection site "
+     "(e.g. SELECT/KQUEUE_WAIT) fired; -1 if unknown."},
     {"_fault_reset", m_fault_reset, METH_NOARGS,
-     "_fault_reset(): test-only.  Clear all Windows fault-injection counters."},
+     "_fault_reset(): test-only.  Clear all fault-injection counters."},
     {"_cover_report", m_cover_report, METH_NOARGS,
      "_cover_report(): dict {named-interesting-state: hits} for the Sometimes() "
      "reachability oracle.  All zero unless built -DRUNLOOM_COVER (STACKWEAVE_COVER=1)."},
@@ -401,9 +400,8 @@ static PyMethodDef module_methods[] = {
      "install_traceback_signal(signum=SIGQUIT) -> int.  Install a RAW C "
      "handler that writes the fiber dump to stderr -- Go's GOTRACEBACK.  "
      "On POSIX it's `kill -QUIT` (a signal handler that works even when the "
-     "interpreter is wedged, unlike a Python signal handler).  On Windows it's "
-     "Ctrl+Break / CTRL_BREAK_EVENT via a console control handler (signum is "
-     "ignored).  Also via STACKWEAVE_TRACEBACK=1."},
+     "interpreter is wedged, unlike a Python signal handler).  Also via "
+     "STACKWEAVE_TRACEBACK=1."},
     {"_diag_flags", m_diag_flags, METH_NOARGS,
      "_diag_flags() -> int.  Current STACKWEAVE_DEBUG flag mask."},
     {"_datastack_sweep_stats", m_datastack_sweep_stats, METH_NOARGS,
@@ -577,7 +575,6 @@ PyMODINIT_FUNC PyInit_stackweave_c(void)
     const char *scrub_env;
     runloom_diag_init();          /* parses RUNLOOM_DEBUG once; cheap; idempotent */
     runloom_introspect_init();    /* fiber registry lock; reads RUNLOOM_INTROSPECT_TIME */
-    runloom_timer_res_init();     /* Windows: 1ms timer resolution (no-op POSIX) */
 #if PY_VERSION_HEX >= 0x030E0000
     runloom_coro_pre_swap = runloom_coro_rearm_stackprot;  /* 3.14: re-arm fiber C-stack limit on every resume */
 #endif
@@ -586,20 +583,15 @@ PyMODINIT_FUNC PyInit_stackweave_c(void)
         runloom_coro_scrub_set(1);
     }
     {
-        /* GOTRACEBACK-style fiber dump: SIGQUIT on POSIX, Ctrl+Break
-         * (CTRL_BREAK_EVENT) on Windows. */
+        /* GOTRACEBACK-style fiber dump on SIGQUIT. */
         const char *tb_env = getenv("STACKWEAVE_TRACEBACK");
         if (tb_env && tb_env[0] && tb_env[0] != '0') {
-#if !defined(_WIN32)
             struct sigaction sa;
             memset(&sa, 0, sizeof sa);
             sa.sa_handler = runloom_traceback_signal_handler;
             sigemptyset(&sa.sa_mask);
             sa.sa_flags = SA_RESTART;
             (void)sigaction(SIGQUIT, &sa, NULL);
-#else
-            (void)SetConsoleCtrlHandler(runloom_console_ctrl_handler, TRUE);
-#endif
         }
     }
     runloom_install_module_getattro();   /* fiber-safe module attr lookup */

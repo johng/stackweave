@@ -84,8 +84,6 @@ chase (see the structured report's `exclusions` for the precise category):
     code computes a valid size and there is no STACKWEAVE_FAULT_ hook for
     sigaltstack, so the failure arm is unreachable without editing src.
     DEFENSIVE.
-  * L507-558 (the entire #else _WIN32 path: runloom_crash_veh + the Windows
-    install/uninstall/arm stubs) -- compiled out on this Linux build.  PLATFORM.
 """
 import os
 import signal
@@ -98,11 +96,6 @@ import stackweave_c as rc
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PY = sys.executable
-
-POSIX = os.name == "posix"
-requires_posix = pytest.mark.skipif(
-    not POSIX, reason="runloom_crash.c POSIX path (sigaltstack/SIGCONT) needs POSIX")
-
 
 def _run_child(body, timeout=200, extra_env=None):
     """Run `body` in a fresh clean-exit child (so gcov flushes its counters).
@@ -130,7 +123,6 @@ def _run_child(body, timeout=200, extra_env=None):
 # (L456-463).  We assert the returned flags carry the WAIT bit and the handler
 # is reported installed, then uninstall cleanly.
 # --------------------------------------------------------------------------
-@requires_posix
 def test_install_wait_arms_ptracer_and_sigcont():
     body = r"""
 flags = stackweave.inspect.install_crash_handler("wait")
@@ -172,7 +164,6 @@ print("WAIT_INSTALL_OK", WAIT_FLAGS, flags2)
 # rather than the SIGCONT defaulting to its stop/continue behaviour after a bad
 # install.
 # --------------------------------------------------------------------------
-@requires_posix
 def test_sigcont_handler_runs_and_is_harmless():
     body = r"""
 stackweave.inspect.install_crash_handler("wait")
@@ -212,7 +203,6 @@ print("SIGCONT_AFTER_UNINSTALL_OK")
 # install path's `!runloom_crash_cont_saved` guard must be TRUE again (cont_saved
 # was cleared), so a second "wait" install succeeds and re-arms cleanly.
 # --------------------------------------------------------------------------
-@requires_posix
 def test_uninstall_restores_sigcont_disposition():
     body = r"""
 stackweave.inspect.install_crash_handler("wait")
@@ -245,7 +235,6 @@ print("SIGCONT_RESTORE_OK")
 # old fd (L421-422) and adopts fileB (L423).  We assert both files exist and the
 # handler is installed; the close itself is the covered line.
 # --------------------------------------------------------------------------
-@requires_posix
 def test_reinstall_with_new_report_file_closes_old_fd(tmp_path):
     fileA = str(tmp_path / "crashA.log")
     fileB = str(tmp_path / "crashB.log")
@@ -284,7 +273,6 @@ print("REPORT_REINSTALL_OK")
 # the second install's report_path block must see report_fd == -1 again, i.e. NOT
 # try to close a stale fd -- exercised by the install/uninstall/install cycle).
 # --------------------------------------------------------------------------
-@requires_posix
 def test_uninstall_closes_report_fd(tmp_path):
     f = str(tmp_path / "crash_close.log")
     body = r"""
@@ -320,7 +308,6 @@ print("REPORT_CLOSE_OK")
 # the handler FIRST, then mn_init -> mn_run -> mn_fini: each hub thread arms at
 # start (handler on) and runs the FULL disarm body when it exits at mn_fini.
 # --------------------------------------------------------------------------
-@requires_posix
 def test_mn_hub_disarm_runs_full_body():
     body = r"""
 import sys
@@ -367,7 +354,6 @@ print("MN_DISARM_OK", ran)
 # m_install_crash_handler flags<0 branch), and the gdb-level prctl branch.  This
 # also re-confirms parse_flags for the WAIT/GDB strings the corpus skips.
 # --------------------------------------------------------------------------
-@requires_posix
 def test_off_and_gdb_levels_roundtrip():
     body = r"""
 # "gdb" -> GDB bit set, prctl(PR_SET_PTRACER) branch (L449) taken.

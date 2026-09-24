@@ -18,7 +18,7 @@ oracle: every parker must wake with the EXACT byte its partner wrote, inside the
 watchdog window.  A lost cross-hub wake strands the parker, no byte is observed,
 and the watchdog/_dump_parkers fires (readyParked>0 = lost wakeup).
 
-It is meaningful only on Linux-epoll (the toggle is a no-op under kqueue/iocp/
+It is meaningful only on Linux-epoll (the toggle is a no-op under kqueue/
 select), so it SKIPs cleanly off epoll.  Because the backend is resolved ONCE
 per process from STACKWEAVE_PERHUB_EPOLL (read before the hubs start), the =1-vs-=0
 parity comparison can't happen in one scheduler: the top-level invocation

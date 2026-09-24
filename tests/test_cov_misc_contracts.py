@@ -81,11 +81,9 @@ def test_immortalize_singletons_are_noops():
 # ==========================================================================
 # (2) set_stack_scrub -- the actual WIPE of a recycled fiber stack
 # ==========================================================================
-# The stack HWM / scrub machinery is only introspectable on a POSIX guard-page
-# backend (fcontext-asm / ucontext); Windows Fibers have no reachable stack and
-# the madvise/mincore scrub is POSIX-only.  Gate exactly like test_stack_advice.
-_SCRUB_TESTABLE = (os.name == "posix"
-                   and rc.backend() in ("fcontext-asm", "ucontext"))
+# The stack HWM / scrub machinery is introspectable on the guard-page backends
+# (fcontext-asm / ucontext).
+_SCRUB_TESTABLE = rc.backend() in ("fcontext-asm", "ucontext")
 
 # A tiny helper whose local C-stack buffer we poke a sentinel into (fiber A) and
 # peek back (fiber B).  ONE function with a `fill` flag so both fibers use an

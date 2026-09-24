@@ -3,11 +3,6 @@
  * Backends, picked by plat.h:
  *   Linux           -> epoll
  *   macOS / *BSD    -> kqueue
- *   Windows         -> WSAPoll (sockets) -- POSIX poll()-shaped Winsock API,
- *                      Vista+, no FD_SETSIZE cap.  IOCP would be more
- *                      efficient for the file-handle case but only sockets
- *                      flow through wait_fd today (regular files go to the
- *                      thread-pool backend in monkey.py).
  *   else            -> select() POSIX fallback
  *
  * Park mechanics:
@@ -18,9 +13,7 @@
  *     runloom_netpoll_pump(timeout) instead of sleeping the OS thread.
  *   - pump waits for I/O / timeout, wakes parked fibers, returns.
  */
-#if !defined(_WIN32)
-#  define _POSIX_C_SOURCE 200809L
-#endif
+#define _POSIX_C_SOURCE 200809L
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 
@@ -40,9 +33,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#if !defined(RUNLOOM_OS_WINDOWS)
-#  include <sys/resource.h>   /* getrlimit(RLIMIT_NOFILE) for fd-array sizing */
-#endif
+#include <sys/resource.h>   /* getrlimit(RLIMIT_NOFILE) for fd-array sizing */
 
 #if defined(RUNLOOM_HAVE_EPOLL)
 #  include <sys/epoll.h>
@@ -55,22 +46,6 @@
 #  include <sys/time.h>
 #  include <unistd.h>
 #  include <fcntl.h>      /* self-pipe wake: O_NONBLOCK / FD_CLOEXEC */
-#elif defined(RUNLOOM_OS_WINDOWS)
-   /* winsock2.h, ws2tcpip.h and windows.h are already pulled in via
-    * plat_compat.h.  WSAPoll + WSAPOLLFD live in winsock2.h, FD_SET /
-    * FD_ISSET likewise -- no extra header needed here. */
-   /* IOCP-AFD backend prototypes (runloom_iocp_cancel/submit/wait/...).  Pulled
-    * in HERE -- before the .c.inc fragments below -- because the single
-    * parker-unlink choke point in netpoll_parker_link.c.inc (the FIRST fragment
-    * after the parker pool) calls runloom_iocp_cancel to tear down a released
-    * parker's in-flight AFD IRP.  netpoll_diag_fd.c.inc re-includes this header
-    * (idempotent via its guard) for the backend-selection statics.  */
-#  include "netpoll_iocp.h"
-   /* Runtime backend-selection flag; the definition (a file-scope static) lives
-    * in netpoll_diag_fd.c.inc, included further down.  Forward-declared here so
-    * the earlier parker-link fragment can gate its IOCP cancel on it.  A static
-    * forward decl + later static definition is one internal-linkage object. */
-static int runloom_win_use_iocp;
 #else
 #  include <sys/select.h>
 #  include <unistd.h>
@@ -163,18 +138,6 @@ typedef struct runloom_parked {
      * Interval: RUNLOOM_STALE_ARM_PROBE_MS (default 250; 0 disables). */
     long long user_deadline_ns;
     int probe_pending;
-    /* Windows IOCP-AFD backend ONLY.  WEAK reference to the per-park
-     * runloom_poll_ctx_t whose AFD_POLL IRP this parker submitted
-     * (netpoll_wait_fd's IOCP branch).  The ctx is owned and freed
-     * EXCLUSIVELY by runloom_iocp_wait when its completion drains -- the
-     * parker never frees it; it only needs the pointer to runloom_iocp_cancel
-     * the still-in-flight IRP when the parker is released early (deadline
-     * heap timeout, fd-ready dispatch on a sibling completion, cross-fiber
-     * close, cancel_all).  Stored under pool->lock at submit, cancelled +
-     * cleared at the single unlink choke point (runloom_parker_unlink).
-     * Typed void* to keep runloom_poll_ctx_t private to netpoll_iocp.c (no
-     * header cycle).  NULL on every non-Windows / non-IOCP park. */
-    void *iocp_ctx;
 } runloom_parked_t;
 
 #define RUNLOOM_PARK_ARMED  0

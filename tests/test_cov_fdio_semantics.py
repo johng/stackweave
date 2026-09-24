@@ -29,10 +29,6 @@ import pytest
 import stackweave_c as rc
 from adv_util import hang_guard
 
-POSIX = sys.platform != "win32"
-
-pytestmark = pytest.mark.skipif(not POSIX, reason="POSIX fd / io_uring model")
-
 
 def _run_single(fn):
     box = {}

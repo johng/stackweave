@@ -115,7 +115,7 @@ stackweave.aio.run(main())
 ```
 
 The server runs at full speed using stackweave's netpoll (epoll on Linux,
-kqueue on BSD/macOS, WSAPoll/IOCP on Windows).  Per-connection
+kqueue on BSD/macOS).  Per-connection
 overhead is one fiber -- by default 16 KB of stack after
 [calibration](stack-sizing.md).
 

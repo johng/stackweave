@@ -114,19 +114,6 @@ int runloom_mn_init(int n_threads, int offload_hubs)
 
     if (runloom_hubs != NULL) return 0;  /* already inited */
     runloom_introspect_init();   /* registry lock; idempotent (also done in PyInit) */
-#if defined(RUNLOOM_OS_WINDOWS)
-    /* CRITICAL_SECTION can't be statically initialised; do it exactly once
-     * for the process (never destroyed -- a process-lifetime lock).  mn_init
-     * runs single-threaded before any hub spawns, so the flag needs no
-     * atomics beyond surviving repeated mn_init/mn_fini cycles. */
-    {
-        static int runq_lock_inited = 0;
-        if (!runq_lock_inited) {
-            runloom_mutex_init(&runloom_global_runq_lock);
-            runq_lock_inited = 1;
-        }
-    }
-#endif
     if (n_threads <= 0) {
         /* Auto: min(cores, 16).  Agent 6 measured runloom on 3.13t scaling
          * linearly to H=16 (~1.17 M ops/sec) then REGRESSING past H=32
@@ -1037,12 +1024,8 @@ struct runloom_fibern_batch {
  * contract, applied to the arena.  (A bounded per-quiescence reclaim is a future
  * memory refinement, mirroring the slab's own QSBR TODO.) */
 static struct runloom_fibern_batch *runloom_garena_quar = NULL;  /* quarantine head */
-/* A tiny int spinlock guards the head push.  Pointer CAS/exchange is NOT
- * portable: the cross-platform atomic shim (plat_atomic.h) only provides
- * compare_exchange_n / exchange_n for integer types, not exotic pointer types,
- * so a lock-free pointer Treiber stack fails to compile under MSVC.  Integer
- * exchange/store ARE in the shim, so a test-and-set int lock is portable and the
- * push under it is a plain two-pointer splice. */
+/* A tiny test-and-set int spinlock guards the head push; the push under it is
+ * a plain two-pointer splice. */
 static int runloom_garena_quar_lock = 0;
 
 /* Free every retired garena.  Called from mn_fini with all hub threads joined,
@@ -1072,7 +1055,7 @@ void runloom_fibern_batch_finish_one(struct runloom_fibern_batch *b)
         free(b->carena);
         runloom_coro_arena_release(b->start_slot, b->nslots, b->stack_size, b->node);
         /* Push under the int spinlock (see runloom_garena_quar_lock): a plain
-         * pointer splice -- no exotic-pointer atomics, so it compiles on MSVC. */
+         * pointer splice. */
         while (__atomic_exchange_n(&runloom_garena_quar_lock, 1, __ATOMIC_ACQUIRE))
             ; /* spin until we own the lock */
         b->quar_next = runloom_garena_quar;
@@ -1097,9 +1080,7 @@ void runloom_fibern_batch_finish_one(struct runloom_fibern_batch *b)
  * passes dominates the ~1.32M/s create wall -- see docs/dev/spawn_above_1m.md. */
 static long long runloom_create_now_ns(void)
 {
-    /* Portable monotonic clock (QueryPerformanceCounter on Windows,
-     * clock_gettime(CLOCK_MONOTONIC) on POSIX) -- raw clock_gettime does not
-     * compile under MSVC. */
+    /* CLOCK_MONOTONIC via the plat_compat shim. */
     return runloom_monotonic_ns();
 }
 static int runloom_create_timing_on(void)
@@ -1574,9 +1555,7 @@ static long runloom_mn_stall_kick_polls(void)
 Py_ssize_t runloom_mn_run(void)
 {
     int i;
-    /* Py_ssize_t to match the per-hub completed counter (which is
-     * Py_ssize_t -- long long on 64-bit Windows MSVC, long on
-     * 64-bit POSIX).  Using plain long would truncate on Windows. */
+    /* Py_ssize_t to match the per-hub completed counter. */
     Py_ssize_t total_completed = 0;
     PyThreadState *saved;
     /* Controlled-replay: all pre-run mn_fiber placement is done; release the hubs'

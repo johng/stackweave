@@ -30,13 +30,9 @@ descendants are cancelled too.  This is the main reason for the
 explicit tree, vs. just passing a channel around.
 """
 import os
-import socket as _socket
-import sys as _sys
 import threading as _threading
 import time as _time
 import stackweave_c
-
-_IS_WINDOWS = _sys.platform == "win32"
 
 # Capture the REAL, un-cooperative lock ONCE at import -- single-threaded, before
 # monkey.patch() (same rationale as the wake fd below).  Each _CancelCtx guards
@@ -59,30 +55,17 @@ _READ = 1   # stackweave_c.wait_fd READ direction
 # fd number never changes and is never closed, so it cannot poison the netpoll
 # arm cache (the fd-reuse hazard), and many wakers can park on it at once (each
 # wakes/cancels independently).
-# On Windows the readiness backend (iocp-afd) can ONLY poll Winsock sockets, not
-# pipe fds, so wait_fd on an os.pipe() read end fails (OSError) -- use a socketpair
-# there instead (an AF_INET loopback pair, which AFD can poll), the same thing
-# monkey/_base.py + stackweave.aio already do.  Nothing is ever written to either end,
-# so READ never becomes ready: a waker only ever times out or is cancelled.
-_wake_socks = None   # keep the Windows socketpair objects alive (so the fds stay valid)
 
 # Create the permanent wake fd ONCE, eagerly at import -- single-threaded, before
-# any fiber runs and before monkey.patch() (so the REAL, un-patched socket/pipe is
+# any fiber runs and before monkey.patch() (so the REAL, un-patched pipe is
 # used).  A LAZY `_wake_fd()` (guarded only by `if _wake_rfd is None`) was a data
 # race under free-threading: every timed wait spawns a deadline-waker fiber that
 # calls _wake_fd(), and a 100k-cancellation storm had thousands of them hit the
-# None check at once -- each then creating its OWN wake fd.  On Windows
-# socket.socketpair() is a heavy listen/connect/accept FALLBACK, so that storm
-# raced thousands of socketpairs simultaneously -> ephemeral-port / handle
-# exhaustion and an access-violation crash during teardown (big_100 p63).  Eager
-# init = exactly one wake fd, no race, no per-waker socket work.
-if _IS_WINDOWS:
-    _s1, _s2 = _socket.socketpair()
-    _wake_socks = (_s1, _s2)            # never closed -- a permanent parking target
-    _wake_rfd = _s1.fileno()
-    _wake_wfd = _s2.fileno()
-else:
-    _wake_rfd, _wake_wfd = os.pipe()
+# None check at once -- each then creating its OWN wake fd.  Eager init =
+# exactly one wake fd, no race, no per-waker fd work.  Nothing is ever written
+# to either end, so READ never becomes ready: a waker only ever times out or is
+# cancelled.
+_wake_rfd, _wake_wfd = os.pipe()
 
 
 def _wake_fd():

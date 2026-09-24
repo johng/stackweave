@@ -27,9 +27,7 @@
  * for hubs), so we drop the channel lock BEFORE yielding to avoid
  * holding it across an asm context switch.
  */
-#if !defined(_WIN32)
-#  define _POSIX_C_SOURCE 200809L
-#endif
+#define _POSIX_C_SOURCE 200809L
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 

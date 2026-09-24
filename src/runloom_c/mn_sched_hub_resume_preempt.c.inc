@@ -1256,9 +1256,6 @@ static PyObject *runloom_preempt_eval_frame(PyThreadState *ts,
      * init/fini windows while hub gs already run Python) writes this pointer
      * with release; a plain read on the per-frame hot path was a data race. */
     {
-        /* Cast through void** for the MSVC atomic shim's _Generic (it can't
-         * name _PyFrameEvalFunction in the shared macro -- some TUs lack the
-         * Python headers); a no-op on GCC's type-generic builtin. */
         _PyFrameEvalFunction prev = (_PyFrameEvalFunction)
             __atomic_load_n((void **)&runloom_preempt_prev_eval, __ATOMIC_ACQUIRE);
         return prev(ts, frame, throwflag);

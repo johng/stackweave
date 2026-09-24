@@ -18,9 +18,7 @@
  * sleep / run`.
  */
 
-#if !defined(_WIN32)
-#  define _POSIX_C_SOURCE 200809L
-#endif
+#define _POSIX_C_SOURCE 200809L
 
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
@@ -45,15 +43,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#if !defined(_WIN32)
-#  include <sys/mman.h>          /* madvise / MADV_DONTNEED, mincore */
-#  include <unistd.h>            /* sysconf(_SC_PAGESIZE) */
-#endif
-
-/* ---- monotonic seconds ----
- * Shim-backed: plat_compat's runloom_monotonic_ns() picks
- * QueryPerformanceCounter on Windows and clock_gettime(CLOCK_MONOTONIC)
- * on POSIX (macOS/Linux/BSD).  Both have sub-microsecond resolution. */
+#include <sys/mman.h>          /* madvise / MADV_DONTNEED, mincore */
+#include <unistd.h>            /* sysconf(_SC_PAGESIZE) */
 
 /* ---------------------------------------------------------------------------
  * runloom_sched.c is split across the runloom_sched_*.c.inc fragments below for readability.

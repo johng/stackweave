@@ -30,14 +30,9 @@ static PyObject *RunloomTCPConn_send(RunloomTCPConn *self, PyObject *args)
     while (1) {
         /* Classify through the total I/O FSM; send emits only PROGRESS (>=0,
          * possibly partial) / WOULDBLOCK_W / INTR / ERROR. */
-#if defined(RUNLOOM_OS_WINDOWS)
-        long long r = (long long)send((SOCKET)fd, (const char *)buf.buf,
-                                      (int)buf.len, flags);
-#else
         long long r = (long long)send(fd, (const char *)buf.buf,
                                       (size_t)buf.len, flags);
-#endif
-        RUNLOOM_IO_SWITCH(runloom_io_classify(RUNLOOM_IO_SEND, r, runloom_sock_errno())) {
+        RUNLOOM_IO_SWITCH(runloom_io_classify(RUNLOOM_IO_SEND, r, errno)) {
         case RUNLOOM_IO_PROGRESS:
             sent = (Py_ssize_t)r;
             goto send_done;
@@ -112,16 +107,11 @@ static PyObject *RunloomTCPConn_send_all(RunloomTCPConn *self, PyObject *args)
         /* Same total-FSM classification; PROGRESS advances `sent` and the loop
          * re-checks sent < buf.len (a `continue` from inside the switch targets
          * the enclosing while, not the switch). */
-#if defined(RUNLOOM_OS_WINDOWS)
-        long long r = (long long)send((SOCKET)fd, (const char *)buf.buf + sent,
-                                      (int)(buf.len - sent), flags);
-#else
         int injerr = RUNLOOM_TCP_FINJ(RUNLOOM_FAULT_TCP_SEND);
         long long r = injerr ? (errno = injerr, -1LL)
                              : (long long)send(fd, (const char *)buf.buf + sent,
                                                (size_t)(buf.len - sent), flags);
-#endif
-        RUNLOOM_IO_SWITCH(runloom_io_classify(RUNLOOM_IO_SEND, r, runloom_sock_errno())) {
+        RUNLOOM_IO_SWITCH(runloom_io_classify(RUNLOOM_IO_SEND, r, errno)) {
         case RUNLOOM_IO_PROGRESS:
             sent += (Py_ssize_t)r;
             continue;                   /* loop re-checks sent < buf.len */

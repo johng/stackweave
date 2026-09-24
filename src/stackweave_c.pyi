@@ -61,11 +61,11 @@ def sched_sleep(seconds: float) -> None:
 
 # ---- Backend introspection -------------------------------------------
 
-def backend() -> Literal["fibers", "fcontext-asm", "ucontext"]:
+def backend() -> Literal["fcontext-asm", "ucontext"]:
     """Coroutine stack-switch backend."""
     ...
 
-def netpoll_backend() -> Literal["epoll", "kqueue", "iocp-afd", "wsapoll", "select"]:
+def netpoll_backend() -> Literal["epoll", "kqueue", "select"]:
     """Active netpoll backend selected at first init."""
     ...
 

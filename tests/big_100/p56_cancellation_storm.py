@@ -86,7 +86,7 @@ def body(H):
             fds = harness.count_fds()
             H.fd_ceiling = max(H.fd_ceiling, fds)
             # Every concurrently-PARKED waiter holds a TWO-fd wake primitive (an
-            # os.pipe on POSIX, a socketpair on Windows), so under a cancellation
+            # os.pipe), so under a cancellation
             # storm where ~all workers park at once the legitimate peak is ~2 fds
             # per worker, not 1.  Bound at 2*funcs (+ headroom) so the auditor
             # still catches a real leak -- cancelled ops not freeing their parker

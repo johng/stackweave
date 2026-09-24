@@ -72,5 +72,5 @@ def current() -> Goroutine | None:
     ...
 
 def backend() -> str:
-    """Coroutine backend name: 'fibers' | 'fcontext-asm' | 'ucontext'."""
+    """Coroutine backend name: 'fcontext-asm' | 'ucontext'."""
     ...

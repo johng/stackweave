@@ -26,7 +26,7 @@ stackweave.monkey.patch()
 # don't deterministically flush on implicit close).
 _HI = [sys.executable, "-c", "import sys; sys.stdout.write('hi'); sys.stdout.flush()"]
 # Cheapest possible child for the storm (no output needed -- only completion).
-_NOOP = ["true"] if sys.platform != "win32" else [sys.executable, "-c", ""]
+_NOOP = ["true"]
 
 
 class TestGoroutinePopen(unittest.TestCase):

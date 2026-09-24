@@ -20,14 +20,12 @@ import stackweave
 import stackweave_c
 from stackweave.runtime import GROW_DOWN_KEY, GROW_DOWN_MIN, GROW_DOWN_SAMPLES
 
-# Stack high-water-mark is precise only on a POSIX guard-page backend
-# (fcontext-asm / ucontext) with 4 KB pages -- see test_stack_autosize.py.
-_RELIABLE_HWM = (os.name == "posix"
-                 and stackweave_c.backend() in ("fcontext-asm", "ucontext")
-                 and os.sysconf("SC_PAGESIZE") == 4096)
+# Stack high-water-mark is precise only with 4 KB pages -- see
+# test_stack_autosize.py.
+_RELIABLE_HWM = os.sysconf("SC_PAGESIZE") == 4096
 pytestmark = pytest.mark.skipif(
     not _RELIABLE_HWM,
-    reason="stack HWM is reliable only on a POSIX guard-page backend with 4 KB pages")
+    reason="stack HWM is reliable only with 4 KB pages")
 
 # THE EXACT FLOOR IS NOT ASSERTABLE ONCE STACK PAINTING IS OFF.
 #

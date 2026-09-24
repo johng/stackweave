@@ -13,21 +13,17 @@
  * to runloom_tcp.c's translation unit.  Per-connection cost (accept method call
  * + partial + spawn) is paid once per connection, not per request. */
 
-/* errno.h is standard C and needed on EVERY platform here: the acceptor loop
- * classifies a failed accept by errno to decide retry-vs-give-up, and that code
- * is not POSIX-only.  (It used to live in the POSIX block below, which would
- * have left EMFILE/ECONNABORTED/... undefined in a Windows build.) */
+/* The acceptor loop classifies a failed accept by errno to decide
+ * retry-vs-give-up. */
 #include <errno.h>
 
-#if !defined(RUNLOOM_OS_WINDOWS)
-#  include <sys/socket.h>
-#  include <netinet/in.h>
-#  include <netinet/tcp.h>
-#  include <unistd.h>
-#  include <stdint.h>
-#  include <fcntl.h>      /* non-Linux accept(): O_NONBLOCK via fcntl */
-#  include <stdlib.h>     /* malloc/free for the custom-handler acceptor arg */
-#endif
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <unistd.h>
+#include <stdint.h>
+#include <fcntl.h>      /* non-Linux accept(): O_NONBLOCK via fcntl */
+#include <stdlib.h>     /* malloc/free for the custom-handler acceptor arg */
 
 #include "runloom_tcp_capi.h"   /* RUNLOOM_C_HANDLER_CAPSULE_NAME + raw-fd capi */
 
@@ -209,7 +205,6 @@ static int runloom_io_lazy_init(PyObject *module)
 /* Bound port of a TCPConn listener via fileno() + getsockname(). */
 static int runloom_io_listener_port(PyObject *listener)
 {
-#if !defined(RUNLOOM_OS_WINDOWS)
     PyObject *fo = PyObject_CallMethod(listener, "fileno", NULL);
     int fd, port = -1;
     struct sockaddr_storage ss;
@@ -227,10 +222,6 @@ static int runloom_io_listener_port(PyObject *listener)
     else if (ss.ss_family == AF_INET6)
         port = ntohs(((struct sockaddr_in6 *)&ss)->sin6_port);
     return port;
-#else
-    (void)listener;
-    return -1;
-#endif
 }
 
 /* ---- All-C echo path (handler=None): tstate-free C fibers ----
@@ -241,7 +232,6 @@ static int runloom_io_listener_port(PyObject *listener)
  * cooperative via runloom_netpoll_wait_fd (same pattern module_tcp / TCPConn
  * already use).  This is the "written + integrated the right way" fast path:
  * zero PyObjects in the hot loop, zero tstate juggle per round-trip. */
-#if !defined(RUNLOOM_OS_WINDOWS)
 /* Close a connection fd from the all-C path, clearing its netpoll arm cache
  * first.  The readiness fallback parks via runloom_netpoll_wait_fd, which leaves
  * a process-global per-fd LEVEL arm; a bare close() does NOT clear it, so when
@@ -411,7 +401,6 @@ static int runloom_io_listener_fd(PyObject *listener)
     Py_DECREF(fo);
     return fd;
 }
-#endif
 
 /* runloom_c.serve(host, port, handler, acceptors=1, backlog=128)
  *     -> (bound_port, [listeners])
@@ -435,9 +424,7 @@ static PyObject *m_serve(PyObject *self, PyObject *args, PyObject *kw)
                                      &acceptors, &backlog))
         return NULL;
     if (handler != Py_None && !PyCallable_Check(handler)
-#if !defined(RUNLOOM_OS_WINDOWS)
         && !PyCapsule_IsValid(handler, RUNLOOM_C_HANDLER_CAPSULE_NAME)
-#endif
         ) {
         PyErr_SetString(PyExc_TypeError,
                         "serve(): handler must be callable, None for the built-in all-C "
@@ -476,7 +463,6 @@ static PyObject *m_serve(PyObject *self, PyObject *args, PyObject *kw)
         if (PyList_Append(listeners, ln) < 0) {
             Py_DECREF(ln); Py_DECREF(listeners); return NULL;
         }
-#if !defined(RUNLOOM_OS_WINDOWS)
         if (PyCapsule_IsValid(handler, RUNLOOM_C_HANDLER_CAPSULE_NAME)) {
             /* Custom C handler: spawn the user's C function per connection as a
              * tstate-free c_entry fiber (the all-C echo's fast path + custom
@@ -511,7 +497,6 @@ static PyObject *m_serve(PyObject *self, PyObject *args, PyObject *kw)
             }
             continue;
         }
-#endif
         /* Spawn the accept loop: partial(_serve_acceptor, ln, handler)(). */
         part = PyObject_CallFunctionObjArgs(runloom_io_partial,
                                             runloom_io_acceptor_fn,

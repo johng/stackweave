@@ -340,13 +340,8 @@ def _connect_resolve(sock, address):
 
 def _connect_wait_result(sock, timeout_ms):
     """In-flight connect: wait for writability, then read the outcome via
-    SO_ERROR.  The POSIX idiom of re-calling connect() to learn the result does
-    NOT work on Windows -- a refused connect re-reports WSAEALREADY/
-    WSAEWOULDBLOCK forever instead of the actual error, so the old loop hung
-    there.  SO_ERROR is the portable way both stacks agree on (it is exactly
-    what asyncio's selector loop uses), and OSError(err, ...) maps to the
-    right subclass -- ConnectionRefusedError etc. -- on Linux AND Windows
-    (where errno.ECONNREFUSED is the WSA code)."""
+    SO_ERROR (exactly what asyncio's selector loop uses).  OSError(err, ...)
+    maps to the right subclass -- ConnectionRefusedError etc."""
     while True:
         if timeout_ms is not None:
             if _wait_fd_coop(sock.fileno(), WRITE, timeout_ms) == 0:
@@ -398,15 +393,9 @@ def _patched_connect(self, address):
     err = self.connect_ex(address)
     if err == 0 or err == errno.EISCONN:
         return
-    in_progress = (errno.EINPROGRESS, errno.EALREADY)
-    if _IS_WINDOWS:
-        # A non-blocking TCP connect on Windows reports WSAEWOULDBLOCK (not
-        # EINPROGRESS) while the handshake is in flight -- treat it as such.
-        in_progress = in_progress + (errno.EWOULDBLOCK,)
-    if err not in in_progress:
+    if err not in (errno.EINPROGRESS, errno.EALREADY):
         if err in (errno.EWOULDBLOCK, errno.EAGAIN):
-            # POSIX only reaches here (Windows EWOULDBLOCK handled above): an
-            # AF_UNIX connect with a full listen backlog.  NO connection was
+            # An AF_UNIX connect with a full listen backlog.  NO connection was
             # started -- do NOT treat it as connect-in-progress (that reads
             # SO_ERROR==0 on an unconnected socket and reports FALSE SUCCESS).
             t = _coop_timeout(self)

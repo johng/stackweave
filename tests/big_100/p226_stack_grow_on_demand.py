@@ -214,15 +214,6 @@ def setup(H):
         "deepest_box": [0],      # max json depth round-tripped (primary proof)
         "start_size": SMALL_STACK,
     }
-    # Availability guard: all Linux/posix asm-stack-switch backends support the
-    # copy-grow; Windows Fibers cannot introspect/grow (current_g_hwm -> 0).  No
-    # hard-unavailable case on the Linux box, but skip cleanly if a no-grow
-    # backend ever reports here.
-    backend = stackweave_c.backend()
-    if "fiber" in backend.lower():
-        H.state["available"] = False
-        H.log("SKIP: backend {0!r} has no grow-on-demand "
-              "(Windows Fibers): nothing to stress".format(backend))
 
 
 def body(H):

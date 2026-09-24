@@ -12,7 +12,6 @@ import shutil
 import socket
 import ssl
 import subprocess
-import sys
 import tempfile
 
 import harness
@@ -20,26 +19,8 @@ import netutil
 
 
 def find_openssl():
-    """Locate the openssl CLI.  It is on PATH on mac/Linux; on Windows it is
-    usually present only under Git-for-Windows (shipped, but NOT on PATH), so
-    probe there before giving up.  Returns the executable path or None.
-
-    Both Git binaries mint a valid '/CN=localhost' cert with the args below
-    (verified on the Win11 test box); the mingw64 build is the native one and
-    is preferred over the MSYS usr/bin build, whose runtime can rewrite a
-    leading-slash argument via path-conversion."""
-    exe = shutil.which("openssl")
-    if exe:
-        return exe
-    if sys.platform == "win32":
-        for cand in (
-                r"C:\Program Files\Git\mingw64\bin\openssl.exe",
-                r"C:\Program Files\Git\usr\bin\openssl.exe",
-                r"C:\Program Files (x86)\Git\mingw64\bin\openssl.exe",
-                r"C:\Program Files (x86)\Git\usr\bin\openssl.exe"):
-            if os.path.exists(cand):
-                return cand
-    return None
+    """Locate the openssl CLI on PATH.  Returns the executable path or None."""
+    return shutil.which("openssl")
 
 
 def make_cert():
@@ -49,7 +30,7 @@ def make_cert():
     exe = find_openssl()
     if exe is None:
         raise RuntimeError(
-            "openssl CLI not found on PATH or under Git-for-Windows; it is "
+            "openssl CLI not found on PATH; it is "
             "needed to mint the self-signed test cert for p11_tls_swarm")
     subprocess.run(
         [exe, "req", "-x509", "-newkey", "rsa:2048", "-nodes",

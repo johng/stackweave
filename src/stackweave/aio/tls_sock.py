@@ -3,7 +3,7 @@ from ._base import *  # noqa: F401,F403  (shared foundation)
 
 class _TLSSock(object):
     """Cooperative TLS for the asyncio bridge, working on every netpoll
-    backend (epoll/kqueue/IOCP/WSAPoll/select).
+    backend (epoll/kqueue/select).
 
     Wraps the raw socket in a real ``ssl.SSLSocket`` (which owns the fd) and
     drives its non-blocking ``recv``/``send``/``do_handshake`` with stackweave's

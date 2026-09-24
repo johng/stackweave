@@ -34,24 +34,12 @@ def _spawn(fn):
 
 
 def _resolv_conf_paths():
-    """Candidate paths for resolver config, in order of preference.
-
-    POSIX: /etc/resolv.conf is universal.
-    Windows: no plain text equivalent (DNS settings live in the registry
-        via GetNetworkParams); we return empty here and let the caller
-        fall back to libc getaddrinfo via the backend pool.
-    """
-    if _IS_WINDOWS:
-        return ()
+    """Candidate paths for resolver config, in order of preference."""
     return ("/etc/resolv.conf",)
 
 
 def _hosts_file_paths():
     """Candidate paths for the static hosts file."""
-    if _IS_WINDOWS:
-        # %SystemRoot% defaults to C:\Windows; SystemDrive is the C: part.
-        sysroot = os.environ.get("SystemRoot", r"C:\Windows")
-        return (os.path.join(sysroot, "System32", "drivers", "etc", "hosts"),)
     return ("/etc/hosts",)
 
 
@@ -213,7 +201,7 @@ def _resolve_via_libc(name, qtype):
     """Fall back to the platform getaddrinfo, dispatched through the
     blocking-call backend so other fibers keep running while libc's
     blocking resolver is in flight.  Used when we have no usable
-    /etc/resolv.conf (Windows; chrooted POSIX without DNS config)."""
+    /etc/resolv.conf (e.g. a chroot without DNS config)."""
     af = socket.AF_INET if qtype == _QTYPE_A else socket.AF_INET6
     try:
         infos = _blocking_call(_orig_getaddrinfo, name, 0, af,
@@ -231,8 +219,7 @@ def _resolve_qtype(name, qtype):
     """Resolve one query type with cache + nameserver fall-through.
 
     Falls back to libc getaddrinfo (via backend pool) when no resolver
-    config is available -- the Windows case, where DNS settings live in
-    the registry rather than in /etc/resolv.conf."""
+    config is available (no usable /etc/resolv.conf)."""
     key = (name.lower(), qtype)
     now = time.monotonic()
     cached = _dns_result_cache.get(key)

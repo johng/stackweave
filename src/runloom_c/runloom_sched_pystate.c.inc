@@ -555,7 +555,7 @@ void runloom_pystate_snap_clear(runloom_pystate_snap_t *snap)
 /* 4096 chunks = ~16 MB / thread reserved when full, but matches
  * spawn-heavy peak working sets without falling back to the arena. */
 #define RUNLOOM_CHUNK_POOL_CAP 4096
-/* RUNLOOM_TLS expands to __thread on GCC/Clang, __declspec(thread) on MSVC. */
+/* RUNLOOM_TLS expands to __thread (see plat.h). */
 static RUNLOOM_TLS _PyStackChunk *runloom_chunk_pool = NULL;
 static RUNLOOM_TLS int runloom_chunk_pool_size = 0;
 

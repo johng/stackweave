@@ -90,12 +90,9 @@ stackweave_c.mn_init(2); stackweave_c.mn_fiber(main); stackweave_c.mn_run(); sta
 
 `MachineCode(blob)` maps a page **W^X** — writable while the bytes are copied in,
 then flipped to read+execute, never both at once:
-
-- **POSIX:** `mmap(PROT_READ|PROT_WRITE)` → copy → `__builtin___clear_cache`
-  (instruction-cache coherency; a no-op on x86, required on ARM/POWER) →
-  `mprotect(PROT_READ|PROT_EXEC)`.
-- **Windows:** `VirtualAlloc(PAGE_READWRITE)` → copy →
-  `VirtualProtect(PAGE_EXECUTE_READ)` → `FlushInstructionCache`.
+`mmap(PROT_READ|PROT_WRITE)` → copy → `__builtin___clear_cache`
+(instruction-cache coherency; a no-op on x86, required on ARM/POWER) →
+`mprotect(PROT_READ|PROT_EXEC)`.
 
 The call itself is a **portable C trampoline**: the page address is cast to a
 typed function pointer (`intptr_t f(intptr_t, ...)`, one cast per arity 0–6) and

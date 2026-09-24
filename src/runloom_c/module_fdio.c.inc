@@ -11,7 +11,6 @@ static int runloom_fdio_fault_armed(void)
 }
 #define RUNLOOM_FDIO_FINJ(site) (runloom_fdio_fault_armed() ? runloom_fault_inject(site) : 0)
 
-#if !defined(RUNLOOM_OS_WINDOWS)
 #include <fcntl.h>
 /* fd_read/fd_write cooperatively PARK on EAGAIN, which REQUIRES a non-blocking
  * fd: on a BLOCKING fd, read()/write() would block the whole scheduler OS thread
@@ -26,7 +25,6 @@ static void runloom_fd_set_nonblocking(int fd)
         (void)fcntl(fd, F_SETFL, fl | O_NONBLOCK);
     }
 }
-#endif
 
 static PyObject *m_fd_read(PyObject *self, PyObject *args)
 {
@@ -43,17 +41,6 @@ static PyObject *m_fd_read(PyObject *self, PyObject *args)
         return NULL;
     }
 
-#if defined(RUNLOOM_OS_WINDOWS)
-    /* No pollable file/pipe model on Win32 -- block the OS thread.
-     * Callers expecting cooperation here should route to monkey.py's
-     * thread-pool _blocking_call instead. */
-    {
-        int r = _read(fd, buf.buf, (unsigned)n_bytes);
-        PyBuffer_Release(&buf);
-        if (r < 0) return PyErr_SetFromErrno(PyExc_OSError);
-        return PyLong_FromLong(r);
-    }
-#else
     runloom_fd_set_nonblocking(fd);   /* cooperative park needs EAGAIN, not a blocked thread */
     while (1) {
         int injerr = RUNLOOM_FDIO_FINJ(RUNLOOM_FAULT_FD_READ);
@@ -84,7 +71,6 @@ static PyObject *m_fd_read(PyObject *self, PyObject *args)
     }
     PyBuffer_Release(&buf);
     return PyLong_FromSsize_t(got);
-#endif
 }
 
 static PyObject *m_fd_write(PyObject *self, PyObject *args)
@@ -96,14 +82,6 @@ static PyObject *m_fd_write(PyObject *self, PyObject *args)
 
     if (!PyArg_ParseTuple(args, "iy*", &fd, &buf)) return NULL;
 
-#if defined(RUNLOOM_OS_WINDOWS)
-    {
-        int r = _write(fd, buf.buf, (unsigned)buf.len);
-        PyBuffer_Release(&buf);
-        if (r < 0) return PyErr_SetFromErrno(PyExc_OSError);
-        return PyLong_FromLong(r);
-    }
-#else
     runloom_fd_set_nonblocking(fd);   /* cooperative park needs EAGAIN, not a blocked thread */
     while (written < buf.len) {
         int injerr = RUNLOOM_FDIO_FINJ(RUNLOOM_FAULT_FD_WRITE);
@@ -131,7 +109,6 @@ static PyObject *m_fd_write(PyObject *self, PyObject *args)
     }
     PyBuffer_Release(&buf);
     return PyLong_FromSsize_t(written);
-#endif
 }
 
 /* io_uring file I/O.  On Linux >= 5.1 these submit the read/write
@@ -191,20 +168,11 @@ static PyObject *m_file_read(PyObject *self, PyObject *args)
 #endif
     /* Fallback: plain blocking read.  Caller routed cooperatively
      * via monkey.py's thread-pool _blocking_call if needed. */
-#if defined(_WIN32)
-    {
-        int rr = _read(fd, buf.buf, (unsigned)n_bytes);
-        PyBuffer_Release(&buf);
-        if (rr < 0) return PyErr_SetFromErrno(PyExc_OSError);
-        return PyLong_FromLong(rr);
-    }
-#else
     r = (offset < 0) ? read(fd, buf.buf, (size_t)n_bytes)
                      : pread(fd, buf.buf, (size_t)n_bytes, (off_t)offset);
     PyBuffer_Release(&buf);
     if (r < 0) return PyErr_SetFromErrno(PyExc_OSError);
     return PyLong_FromSsize_t((Py_ssize_t)r);
-#endif
 }
 
 static PyObject *m_file_write(PyObject *self, PyObject *args)
@@ -232,20 +200,11 @@ static PyObject *m_file_write(PyObject *self, PyObject *args)
         return PyLong_FromSsize_t((Py_ssize_t)r);
     }
 #endif
-#if defined(_WIN32)
-    {
-        int rr = _write(fd, buf.buf, (unsigned)buf.len);
-        PyBuffer_Release(&buf);
-        if (rr < 0) return PyErr_SetFromErrno(PyExc_OSError);
-        return PyLong_FromLong(rr);
-    }
-#else
     r = (offset < 0) ? write(fd, buf.buf, (size_t)buf.len)
                      : pwrite(fd, buf.buf, (size_t)buf.len, (off_t)offset);
     PyBuffer_Release(&buf);
     if (r < 0) return PyErr_SetFromErrno(PyExc_OSError);
     return PyLong_FromSsize_t((Py_ssize_t)r);
-#endif
 }
 
 /* ---- Fast-path: C scheduler ----

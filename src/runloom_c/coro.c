@@ -1,15 +1,13 @@
 /* coro.c -- portable stackful coroutines.  See coro.h for the contract.
  *
- * Three backends, exactly one active per build:
+ * Two backends, exactly one active per build:
  *   RUNLOOM_HAVE_FCONTEXT  -- hand-rolled inline asm (x86_64 SysV).  Fast path.
- *   RUNLOOM_HAVE_FIBERS    -- Windows Fibers (XP+).
  *   RUNLOOM_HAVE_UCONTEXT  -- POSIX fallback.
  */
 
 #include "coro.h"
 #include "runloom_crash.h"
 #include "runloom_diag.h"   /* runloom_delay_inject (determinism tooling #2) */
-#include "plat_atomic.h"    /* __atomic_*/__ATOMIC_* shim for MSVC (Windows build) */
 #include "plat_compat.h"    /* runloom_mutex_t for the shared stack depot */
 #include "runloom_lockrank.h"
 #include "runloom_cover.h"   /* Sometimes() reachability counters (no-op unless -DRUNLOOM_COVER) */
@@ -47,7 +45,7 @@
  * track per-stack ids to deregister: stacks are pooled + capped (rarely
  * munmap'd), and a leaked stack registration is valgrind-only and benign -- a
  * deliberate simplicity-vs-marginal-coverage trade.  No-op where the valgrind
- * headers are absent (Windows, minimal images). */
+ * headers are absent (minimal images). */
 #if defined(__has_include)
 #  if __has_include(<valgrind/valgrind.h>) && __has_include(<valgrind/memcheck.h>)
 #    include <valgrind/valgrind.h>
@@ -75,11 +73,6 @@
 #      define MAP_ANONYMOUS MAP_ANON
 #    endif
 #  endif
-#elif defined(RUNLOOM_HAVE_FIBERS)
-#  ifndef WIN32_LEAN_AND_MEAN
-#    define WIN32_LEAN_AND_MEAN 1
-#  endif
-#  include <windows.h>
 #elif defined(RUNLOOM_HAVE_UCONTEXT)
 #  if defined(RUNLOOM_OS_MACOS) && !defined(_XOPEN_SOURCE)
 #    define _XOPEN_SOURCE 600
@@ -125,8 +118,6 @@ struct runloom_coro {
      * 1M scattered stack faults onto the H hubs, in parallel, overlapped with the
      * run.  0 for every non-bulk coro (eager asm_make_ctx). */
     int fresh;
-#elif defined(RUNLOOM_HAVE_FIBERS)
-    void *fiber;
 #elif defined(RUNLOOM_HAVE_UCONTEXT)
     ucontext_t ctx;
     ucontext_t caller_ctx;
@@ -135,44 +126,27 @@ struct runloom_coro {
 #endif
 };
 
-/* Stack size in bytes for this coro, or 0 on backends without an
- * introspectable stack (Fibers).  Used by the fiber dump. */
+/* Stack size in bytes for this coro.  Used by the fiber dump. */
 size_t runloom_coro_stack_size(const runloom_coro_t *c)
 {
     if (c == NULL) return 0;
-#if defined(RUNLOOM_HAVE_FCONTEXT) || defined(RUNLOOM_HAVE_UCONTEXT)
     return c->stack_size;
-#else
-    return 0;
-#endif
 }
 
 /* Lowest usable byte of c's stack; the PROT_NONE guard page is the page
- * immediately below this (see runloom_stack_map_guarded).  NULL on backends
- * with no introspectable stack (Windows Fibers). */
+ * immediately below this (see runloom_stack_map_guarded). */
 void *runloom_coro_stack_base(const runloom_coro_t *c)
 {
     if (c == NULL) return NULL;
-#if defined(RUNLOOM_HAVE_FCONTEXT) || defined(RUNLOOM_HAVE_UCONTEXT)
     return c->stack;
-#else
-    return NULL;
-#endif
 }
 
-/* Size in bytes of the guard page below each coro stack (0 if the backend
- * installs no guard).  Mirrors runloom_stack_guard() without depending on its
- * later definition. */
+/* Size in bytes of the guard page below each coro stack.  Mirrors
+ * runloom_stack_guard() without depending on its later definition. */
 size_t runloom_coro_guard_size(void)
 {
-#if defined(RUNLOOM_HAVE_FCONTEXT) || defined(RUNLOOM_HAVE_UCONTEXT)
-    {
-        long ps = sysconf(_SC_PAGESIZE);
-        return (ps > 0) ? (size_t)ps : (size_t)4096;
-    }
-#else
-    return 0;
-#endif
+    long ps = sysconf(_SC_PAGESIZE);
+    return (ps > 0) ? (size_t)ps : (size_t)4096;
 }
 
 /* Per-thread "currently executing" pointer.  Used by runloom_coro_yield
@@ -184,17 +158,11 @@ static RUNLOOM_TLS runloom_coro_t *runloom_tls_current = NULL;
  * guards, so every runloom_coro_resume variant can invoke it. */
 void (*runloom_coro_pre_swap)(runloom_coro_t *c) = NULL;
 
-#if defined(RUNLOOM_HAVE_FIBERS)
-static RUNLOOM_TLS void *runloom_tls_caller_fiber = NULL;
-static RUNLOOM_TLS int runloom_tls_thread_was_fiber = 0;
-#endif
 
 const char *runloom_coro_backend(void)
 {
 #if defined(RUNLOOM_HAVE_FCONTEXT)
     return "fcontext-asm";
-#elif defined(RUNLOOM_HAVE_FIBERS)
-    return "fibers";
 #elif defined(RUNLOOM_HAVE_UCONTEXT)
     return "ucontext";
 #else
@@ -218,7 +186,6 @@ static void runloom_coro_assert_idle(runloom_coro_t *c, const char *where)
 /* Stack pool (POSIX backends)                                        */
 /* ------------------------------------------------------------------ */
 
-#if defined(RUNLOOM_HAVE_FCONTEXT) || defined(RUNLOOM_HAVE_UCONTEXT)
 /* Stack pool with the next-pointer embedded INSIDE the stack at offset 0.
  *
  * The previous design allocated a tiny linked-list node per stack via
@@ -974,7 +941,6 @@ static size_t runloom_round_to_page(size_t size)
             (size_t)pagesize) * (size_t)pagesize;
 }
 
-#endif
 
 /* ------------------------------------------------------------------ */
 /* Stack painting / high-water-mark scan                              */
@@ -998,20 +964,12 @@ int  runloom_coro_paint_enabled(void)    { return runloom_stack_paint_on; }
  * gauge approximation -- a torn/stale value only mis-reports by a little). */
 long runloom_coro_stack_live(void)
 {
-#if defined(RUNLOOM_HAVE_FCONTEXT) || defined(RUNLOOM_HAVE_UCONTEXT)
     return (long)__atomic_load_n(&runloom_stack_live, __ATOMIC_RELAXED);
-#else
-    return 0;
-#endif
 }
 
 long runloom_coro_depot_pooled(void)
 {
-#if defined(RUNLOOM_HAVE_FCONTEXT) || defined(RUNLOOM_HAVE_UCONTEXT)
     return (long)__atomic_load_n(&runloom_global_stack_n, __ATOMIC_RELAXED);
-#else
-    return 0;
-#endif
 }
 
 /* Security: wipe a fiber's stack when it is recycled, so the next
@@ -1083,7 +1041,6 @@ static void runloom_stack_scrub(void *stack, size_t size)
 #endif
 }
 
-#if defined(RUNLOOM_HAVE_FCONTEXT) || defined(RUNLOOM_HAVE_UCONTEXT)
 /* No-op, retained as a spawn-path call site.  An earlier design filled the
  * unused stack body with a sentinel WORD (0x504AE6B7C9D1F2A3) so the HWM scan
  * could find the deepest overwritten slot.  That sentinel is a fake pointer,
@@ -1110,7 +1067,6 @@ static void runloom_stack_paint(void *stack, size_t size)
  * runloom_sched_datastack.c.inc).  Returns 0 where mincore is unavailable. */
 static size_t runloom_stack_hwm_scan(void *stack, size_t size)
 {
-#if !defined(_WIN32)
     long ps = sysconf(_SC_PAGESIZE);
     size_t page = (ps > 0) ? (size_t)ps : 4096;
     size_t npages = (page > 0) ? size / page : 0;
@@ -1128,31 +1084,17 @@ static size_t runloom_stack_hwm_scan(void *stack, size_t size)
         hi = lo;
     }
     return used;
-#else
-    (void)stack; (void)size;
-    return 0;
-#endif
 }
-#endif
 
 /* ------------------------------------------------------------------ */
 /* Thread init / fini                                                 */
 /* ------------------------------------------------------------------ */
 
-int runloom_coro_thread_init(void)
+void runloom_coro_thread_init(void)
 {
-#if defined(RUNLOOM_HAVE_FIBERS)
-    if (runloom_tls_caller_fiber == NULL) {
-        void *f = ConvertThreadToFiber(NULL);
-        if (f == NULL) return -1;
-        runloom_tls_caller_fiber = f;
-        runloom_tls_thread_was_fiber = 1;
-    }
-#endif
     /* Arm this OS thread's sigaltstack so the crash handler can run even when
      * the fault is a fiber stack overflow.  No-op unless installed. */
     runloom_crash_thread_arm();
-    return 0;
 }
 
 /* Flush this (exiting) hub thread's per-thread coro + stack recycle pools into
@@ -1165,31 +1107,13 @@ void runloom_coro_thread_fini(void)
 {
     runloom_coro_thread_flush();
     runloom_crash_thread_disarm();
-#if defined(RUNLOOM_HAVE_FIBERS)
-    if (runloom_tls_thread_was_fiber) {
-        ConvertFiberToThread();
-        runloom_tls_caller_fiber = NULL;
-        runloom_tls_thread_was_fiber = 0;
-    }
-#endif
 }
 
 int runloom_coro_warmup(size_t stack_size, int n)
 {
     if (n <= 0) return 0;
-#if defined(RUNLOOM_HAVE_FCONTEXT) || defined(RUNLOOM_HAVE_UCONTEXT)
-    {
-        size_t rounded = runloom_round_to_page(
-            stack_size < 4096 ? 4096 : stack_size);
-        return runloom_stack_warmup_posix(rounded, n);
-    }
-#else
-    /* Windows Fibers: CreateFiber maintains its own pool; warmup
-     * would just round-trip Create+Delete which doesn't actually
-     * pre-warm anything. */
-    (void)stack_size;
-    return 0;
-#endif
+    return runloom_stack_warmup_posix(
+        runloom_round_to_page(stack_size < 4096 ? 4096 : stack_size), n);
 }
 
 /* B (background prewarm): fill the GLOBAL depot directly with up to n stacks of
@@ -1202,7 +1126,6 @@ int runloom_coro_warmup(size_t stack_size, int n)
  * prewarm needs RUNLOOM_STACK_DEPOT_CAP raised near the target).  Freshly mmap'd
  * stacks are lazy -- 0 RSS until first touched -- so a deep prewarm costs address
  * space + VMAs, not memory.  Returns the count retained. */
-#if defined(RUNLOOM_HAVE_FCONTEXT) || defined(RUNLOOM_HAVE_UCONTEXT)
 static int runloom_stack_prewarm_global(size_t size, int n)
 {
     int cap = runloom_global_stack_cap();
@@ -1232,7 +1155,6 @@ static int runloom_stack_prewarm_global(size_t size, int n)
     }
     return made;
 }
-#if !defined(_WIN32)
 typedef struct { size_t size; int n; } runloom_prewarm_arg_t;
 static void *runloom_prewarm_thread_main(void *arg)
 {
@@ -1241,8 +1163,6 @@ static void *runloom_prewarm_thread_main(void *arg)
     free(a);
     return NULL;
 }
-#endif
-#endif
 
 /* Public: prewarm `n` stacks into the global depot.  background=1 (default for
  * the Python binding) runs it on a detached OS thread and returns 0 immediately
@@ -1252,11 +1172,9 @@ static void *runloom_prewarm_thread_main(void *arg)
 int runloom_coro_prewarm(size_t stack_size, int n, int background)
 {
     if (n <= 0) return 0;
-#if defined(RUNLOOM_HAVE_FCONTEXT) || defined(RUNLOOM_HAVE_UCONTEXT)
     {
         size_t rounded = runloom_round_to_page(stack_size < 4096 ? 4096 : stack_size);
         if (!background) return runloom_stack_prewarm_global(rounded, n);
-#if !defined(_WIN32)
         {
             runloom_prewarm_arg_t *a =
                 (runloom_prewarm_arg_t *)malloc(sizeof(*a));
@@ -1270,14 +1188,7 @@ int runloom_coro_prewarm(size_t stack_size, int n, int background)
             pthread_detach(t);                    /* fire-and-forget */
             return 0;
         }
-#else
-        return runloom_stack_prewarm_global(rounded, n);  /* no bg thread here */
-#endif
     }
-#else
-    (void)stack_size; (void)n; (void)background;
-    return 0;
-#endif
 }
 
 /* Continuous background prewarm daemon: keeps the GLOBAL depot topped to `target`
@@ -1289,7 +1200,6 @@ int runloom_coro_prewarm(size_t stack_size, int n, int background)
  * backlog is full it idles (no syscalls, no contention).  A single daemon thread
  * cannot out-pace 8 hubs draining the pool under SUSTAINED high spawn -- it tops
  * up during lulls, which is what a "ready backlog" wants. */
-#if !defined(_WIN32) && (defined(RUNLOOM_HAVE_FCONTEXT) || defined(RUNLOOM_HAVE_UCONTEXT))
 static runloom_thread_t runloom_prewarm_daemon_thread;
 static int    runloom_prewarm_daemon_running = 0;   /* atomic: a daemon exists  */
 static int    runloom_prewarm_daemon_stop    = 0;   /* atomic: asked to stop    */
@@ -1372,21 +1282,11 @@ void runloom_coro_prewarm_reset_after_fork(void)
     __atomic_store_n(&runloom_prewarm_daemon_target, 0, __ATOMIC_RELAXED);
     runloom_mutex_init(&runloom_prewarm_daemon_lock);   /* may be inherited held */
 }
-#else
-int  runloom_coro_prewarm_keep(size_t stack_size, int target) { (void)stack_size; (void)target; return 0; }
-void runloom_coro_prewarm_stop(void) { }
-void runloom_coro_prewarm_reset_after_fork(void) { }
-#endif
 
 /* ---------------- depot auto-cap: init / per-tick / reset ----------------
  * All state is file-static above; sysmon drives the tick, mn_init/_fini/_fork
  * the lifecycle.  Keeping it here (not cross-TU) avoids extern atomics: the
  * getter and the acquire/release counters all touch the same file-statics. */
-
-#if defined(RUNLOOM_HAVE_FCONTEXT) || defined(RUNLOOM_HAVE_UCONTEXT)
-/* The depot + its auto-cap state live in the POSIX stack-pool block above
- * (same #if).  The Windows Fibers backend has no such pool, so the autocap is
- * inert there -- see the no-op stubs in the #else below. */
 
 /* Resolve SAFE_MAX once: min(VMA budget, RAM budget).  Conservative -- the cap is
  * only a ceiling; the live-set squeeze in the tick is what tracks the real load. */
@@ -1459,10 +1359,7 @@ void runloom_stack_autocap_tick(void)
     runloom_stack_autocap_last_ns = now;
     {
         long cap   = hwm * 3 / 2;                    /* 1.5x slack */
-        long floor = 0;                              /* active prewarm target (POSIX only) */
-#if !defined(_WIN32) && (defined(RUNLOOM_HAVE_FCONTEXT) || defined(RUNLOOM_HAVE_UCONTEXT))
-        floor = __atomic_load_n(&runloom_prewarm_daemon_target, __ATOMIC_RELAXED);
-#endif
+        long floor = __atomic_load_n(&runloom_prewarm_daemon_target, __ATOMIC_RELAXED);
         long safe  = __atomic_load_n(&runloom_stack_safe_max, __ATOMIC_RELAXED);
         long mmc   = __atomic_load_n(&runloom_stack_max_map_count, __ATOMIC_RELAXED);
         if (floor > cap) cap = floor;               /* never below an active prewarm target */
@@ -1487,13 +1384,6 @@ void runloom_stack_autocap_reset(void)
     __atomic_store_n(&runloom_stack_cap_cached, 0, __ATOMIC_RELAXED);
     __atomic_store_n(&runloom_stack_autocap_last_ns, 0, __ATOMIC_RELAXED);
 }
-#else
-/* Windows Fibers backend: no POSIX stack depot, so the depot auto-cap is inert.
- * Stubs keep the symbols (sysmon / mn_init call them cross-TU). */
-void runloom_stack_autocap_init(void)  { }
-void runloom_stack_autocap_tick(void)  { }
-void runloom_stack_autocap_reset(void) { }
-#endif
 
 /* ================================================================== */
 /* Backend: fcontext (inline asm)                                     */
@@ -2206,7 +2096,7 @@ int runloom_coro_done(const runloom_coro_t *c)
 #if !defined(RUNLOOM_HAVE_FCONTEXT)
 /* Bulk coro arena (placement-init N coro structs in one allocation, carve every
  * stack from one mmap'd block) is an fcontext-backend optimization.  On the
- * Windows Fibers and the generic ucontext backends it is unavailable, so report
+ * generic ucontext backend it is unavailable, so report
  * "arena off" (-1): runloom_mn_fiber_n_bulk then falls back to the per-g spawn path.
  * The bulk path is opt-in via RUNLOOM_GON_BULK; the default fiber_n loop never calls
  * these.  Stubs keep the symbols that mn_sched references regardless of backend. */
@@ -2229,81 +2119,6 @@ void runloom_coro_arena_release(size_t start_slot, long n, size_t stack_size, in
     (void)start_slot; (void)n; (void)stack_size; (void)node;
 }
 #endif  /* !RUNLOOM_HAVE_FCONTEXT */
-
-/* ================================================================== */
-/* Backend: Windows Fibers                                            */
-/* ================================================================== */
-
-#if defined(RUNLOOM_HAVE_FIBERS)
-
-static VOID CALLBACK runloom_fiber_entry(LPVOID arg)
-{
-    runloom_coro_t *c = (runloom_coro_t *)arg;
-    c->entry(c->user);
-    c->done = 1;
-    SwitchToFiber(runloom_tls_caller_fiber);
-    for (;;) { SwitchToFiber(runloom_tls_caller_fiber); }
-}
-
-runloom_coro_t *runloom_coro_new(size_t stack_size,
-                           runloom_entry_fn entry,
-                           void *user)
-{
-    runloom_coro_t *c;
-    if (runloom_coro_thread_init() != 0) return NULL;
-    c = (runloom_coro_t *)calloc(1, sizeof(*c));
-    if (c == NULL) return NULL;
-    c->entry = entry;
-    c->user = user;
-    /* CreateFiberEx, not CreateFiber: CreateFiber COMMITS the whole stack_size
-     * (Windows charges committed pages against the commit limit = RAM+pagefile
-     * at commit time, and does NOT overcommit), so a generous stack_size would
-     * cost its full size per fiber even untouched -- measured 1000x1MiB =
-     * ~1017 MiB commit.  CreateFiberEx reserves stack_size but commits only a
-     * small floor, growing on demand via the stack guard page -- the same
-     * "reserve big, pay for what you touch" behaviour as the POSIX mmap path
-     * (measured: same 1000x1MiB = ~76 MiB commit).  Commit floor = min(stack,
-     * 64 KiB); a deeper stack grows committed automatically (MSVC _chkstk
-     * probes each page). */
-    {
-        SIZE_T commit = (stack_size < (64 * 1024)) ? stack_size : (64 * 1024);
-        c->fiber = CreateFiberEx(commit, stack_size, 0, runloom_fiber_entry, c);
-    }
-    if (c->fiber == NULL) { free(c); return NULL; }
-    return c;
-}
-
-void runloom_coro_destroy(runloom_coro_t *c)
-{
-    if (c == NULL) return;
-    if (c->fiber != NULL) DeleteFiber(c->fiber);
-    free(c);
-}
-
-void runloom_coro_resume(runloom_coro_t *c)
-{
-    runloom_coro_t *prev = runloom_tls_current;
-    void *prev_caller = runloom_tls_caller_fiber;
-    runloom_tls_current = c;
-    runloom_tls_caller_fiber = GetCurrentFiber();
-    if (runloom_coro_pre_swap != NULL) runloom_coro_pre_swap(c);  /* re-arm C-stack limit (3.14) */
-    SwitchToFiber(c->fiber);
-    runloom_tls_current = prev;
-    runloom_tls_caller_fiber = prev_caller;
-}
-
-void runloom_coro_yield(void)
-{
-    runloom_ctx_assert_parkable("coro_yield");
-    SwitchToFiber(runloom_tls_caller_fiber);
-}
-
-int runloom_coro_done(const runloom_coro_t *c)
-{
-    return c ? c->done : 1;
-}
-
-#endif /* RUNLOOM_HAVE_FIBERS */
 
 /* ================================================================== */
 /* Backend: POSIX ucontext                                            */
@@ -2480,14 +2295,8 @@ void runloom_coro_park(runloom_coro_t *c)
 
 size_t runloom_coro_scan_hwm(runloom_coro_t *c)
 {
-#if defined(RUNLOOM_HAVE_FCONTEXT) || defined(RUNLOOM_HAVE_UCONTEXT)
     if (c == NULL || c->stack == NULL || !runloom_stack_paint_on) return 0;
     return runloom_stack_hwm_scan(c->stack, c->stack_size);
-#else
-    /* Windows Fibers: no introspectable stack. */
-    (void)c;
-    return 0;
-#endif
 }
 
 /* After fork(): re-init the FCONTEXT coro cross-hub balance lock (a hub may have

@@ -244,9 +244,6 @@ def _unpatch_futures():
 # original os.close does not -- so a Connection closed with the unpatched
 # default leaves a stale registration, and the next Connection that reuses that
 # fd number never wakes from wait_fd (a hang).  Rebind it too.
-#
-# Windows Connection uses _multiprocessing.recv/send (overlapped I/O), a
-# separate path this does not touch.
 # ============================================================
 _orig_mp_recv_defaults  = None
 _orig_mp_send_defaults  = None

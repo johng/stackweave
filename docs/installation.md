@@ -10,8 +10,8 @@ will be plain `pip install stackweave`; until then build from source.
   snapshot uses 3.11+ tstate fields (`cframe`, `datastack_chunk`,
   `exc_state`).  Pre-3.11 used a different frame model that stackweave
   doesn't cover.
-- A C compiler.  Anything reasonably modern works: GCC 4.7+, Clang
-  3.5+, MSVC 19.20+ (VS 2019 16.0+), MinGW-w64.
+- A C compiler.  Anything reasonably modern works: GCC 4.7+ or Clang
+  3.5+.
 - Free-threaded 3.14t (and 3.13t) are fully supported and add the M:N
   work-stealing scheduler + time-sliced preemption features.
 
@@ -31,29 +31,19 @@ On free-threaded 3.14t:
 
 ## No compiler? Bootstrap helpers
 
-The `scripts/` directory contains detect-and-install wrappers that
-fetch a compiler before invoking pip:
+The `scripts/` directory contains a detect-and-install wrapper that
+fetches a compiler before invoking pip:
 
-=== "POSIX (Linux/macOS/BSD)"
+```bash
+./scripts/install.sh                # detects distro, installs gcc/clang
+./scripts/install.sh --editable     # passes -e through to pip
+```
 
-    ```bash
-    ./scripts/install.sh                # detects distro, installs gcc/clang
-    ./scripts/install.sh --editable     # passes -e through to pip
-    ```
-
-=== "Windows"
-
-    ```bat
-    scripts\install.bat                 :: auto-detects MSVC, falls back to MinGW
-    scripts\install.bat --editable
-    ```
-
-The orchestrator scripts probe for `gcc`/`clang`/`cl` on PATH and
-invoke `bootstrap_compiler.{sh,ps1,bat}` if missing.  The bootstrap
-installer knows: `apt-get`, `dnf/yum`, `pacman`, `zypper`, `apk`,
-`xbps`, FreeBSD/OpenBSD/NetBSD `pkg`, `pkgin`, Haiku `pkgman`, macOS
-Command Line Tools, MSVC Build Tools (via `vs_BuildTools.exe`), and
-MinGW-w64 (via the WinLibs zip).
+The orchestrator probes for `gcc`/`clang` on PATH and invokes
+`bootstrap_compiler.sh` if missing.  The bootstrap installer knows:
+`apt-get`, `dnf/yum`, `pacman`, `zypper`, `apk`, `xbps`,
+FreeBSD/OpenBSD/NetBSD `pkg`, `pkgin`, Haiku `pkgman`, and macOS
+Command Line Tools.
 
 ## Build-time environment knobs
 
@@ -61,11 +51,10 @@ MinGW-w64 (via the WinLibs zip).
 | --- | --- |
 | `STACKWEAVE_BACKEND=ucontext` | Force the ucontext stack-swap backend even on x86_64/aarch64. |
 | `STACKWEAVE_NO_ASM=1` | Drop the `.S` source from the build (same effect as above). |
-| `STACKWEAVE_NO_IOCP=1` | Omit the Windows IOCP-AFD backend (falls back to WSAPoll/select). |
-| `STACKWEAVE_DEBUG=1` | `-O0 -g` (POSIX) or `/Od /Zi` (MSVC). |
+| `STACKWEAVE_DEBUG=1` | `-O0 -g`. |
 | `STACKWEAVE_EXTRA_CFLAGS` | Appended to the compile command line. |
 | `STACKWEAVE_EXTRA_LDFLAGS` | Appended to the link command line. |
-| `CC` | Usual setuptools override; controls compiler selection on Windows too. |
+| `CC` | Usual setuptools override. |
 
 ## Interpreter build: the tier-2 JIT is off, TLBC is on
 
@@ -140,8 +129,7 @@ stackweave.run(1)
 ```
 
 If `backend()` returns `"fcontext-asm"`, you're on the fast path (~80
-ns per context switch).  `"fibers"` means Windows Fibers (slightly
-slower).  `"ucontext"` is the POSIX fallback.
+ns per context switch).  `"ucontext"` is the POSIX fallback.
 
 ## Platform support
 
@@ -155,13 +143,8 @@ slower).  `"ucontext"` is the POSIX fallback.
 | OpenBSD / NetBSD / DragonFly | fcontext-asm | kqueue | code review |
 | Solaris / illumos | ucontext | select | code review |
 | Android (Termux) | fcontext-asm | epoll | code review |
-| Windows 11 / 10 / Server 2022 | Fibers | WSAPoll | yes |
-| Windows 8.1 (MinGW-w64) | Fibers | select | yes |
 
-Windows backend selection happens at runtime: `WSAPoll` is probed via
-`GetProcAddress` at first netpoll init, falling back to `select()` on
-hosts where it's missing (XP/Server 2003).  One binary works across
-Windows Vista through Windows 11.
+Windows is not supported.
 
 ## Prebuilt wheels
 
@@ -170,7 +153,6 @@ Windows Vista through Windows 11.
 
 - Linux x86_64 + aarch64 (manylinux\_2\_28)
 - macOS universal2 (arm64 + x86_64)
-- Windows AMD64
 
 Run `cibuildwheel --output-dir wheels` from a CI runner (or locally
 with Docker) to populate `wheels/` for upload to PyPI.

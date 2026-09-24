@@ -35,8 +35,8 @@ Gate: **every C file ≥ 95%**; highest-bug files (netpoll, mn_sched, sched) →
 | module.c — Python module surface           | 1387 | 1322 | 95.3%  | 0  |
 | **WHOLE EXTENSION** | **8014** | **7868** | **98.2%** | **211** |
 
-`netpoll_iocp.c` (Windows IOCP) and the kqueue-only paths are `#ifdef`-out on the
-Linux epoll build and emit no gcov.
+The kqueue-only paths are `#ifdef`-out on the Linux epoll build and emit no
+gcov.
 
 ## How it's measured
 

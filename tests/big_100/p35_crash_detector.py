@@ -26,10 +26,7 @@ def worker(H, wid, rng, state):
             cmd = procutil.exit_cmd(code)
             expected = code
         else:
-            # Abnormal termination: Unix dies from SIGABRT (rc == -SIGABRT);
-            # Windows has no signals, so abort_cmd models it as a distinguished
-            # nonzero status.  Both return (argv, expected) so the classifier
-            # below stays platform-agnostic.
+            # Abnormal termination: dies from SIGABRT (rc == -SIGABRT).
             cmd, expected = procutil.abort_cmd()
         try:
             proc = procutil.popen(cmd, running=H.running)

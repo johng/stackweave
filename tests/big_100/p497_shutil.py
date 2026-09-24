@@ -192,7 +192,7 @@ def setup(H):
 
 # Benign environment / scale-limit OSErrors that are NOT the cache-corruption
 # hazard and must NEVER fail the load-bearing oracle (mirrors the harness's own
-# WSAENOBUFS scale-limit discipline + p67/p321 "report, don't fail" pattern):
+# scale-limit discipline + p67/p321 "report, don't fail" pattern):
 #   * EMFILE / ENFILE -- fd exhaustion at over-scale (100k concurrent open()s):
 #     a benign resource ceiling of the box, not a runtime bug.
 #   * ENOENT          -- the bounded temp dir was removed out from under the run

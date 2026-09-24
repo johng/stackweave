@@ -56,16 +56,15 @@ from adv_util import (
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _SRC = os.path.join(REPO, "src")
 
-POSIX = os.name == "posix"
 BACKEND = rc.backend()
 NETPOLL = rc.netpoll_backend()
-# guard-page classification + per-fiber stack address mapping only exist on the
-# POSIX swap-stack backends (Windows Fibers have no introspectable guard page).
-HAS_GUARD = POSIX and BACKEND in ("fcontext-asm", "ucontext")
+# guard-page classification + per-fiber stack address mapping exist on both
+# swap-stack backends.
+HAS_GUARD = BACKEND in ("fcontext-asm", "ucontext")
 # Single-thread blocking offload only runs CONCURRENTLY on backends with a
-# pump-wake primitive (epoll eventfd / kqueue EVFILT_USER / iocp).  Elsewhere
+# pump-wake primitive (epoll eventfd / kqueue EVFILT_USER).  Elsewhere
 # blocking() runs inline -- correctness holds, the wall-clock bound does not.
-PUMP_WAKE = NETPOLL in ("epoll", "kqueue", "iocp-afd")
+PUMP_WAKE = NETPOLL in ("epoll", "kqueue")
 
 # SIGSEGV (Linux) or SIGBUS (macOS arm64 guard-page) -- a fatal fault the crash
 # handler chained to the default disposition.
@@ -686,8 +685,6 @@ class TestCrashClassification:
 # ===========================================================================
 class TestTracebackSignal:
     def test_default_returns_sigquit(self):
-        if not POSIX:
-            pytest.skip("SIGQUIT path is POSIX-only")
         prev = signal.getsignal(signal.SIGQUIT)
         try:
             got = rc.install_traceback_signal()
@@ -696,8 +693,6 @@ class TestTracebackSignal:
             signal.signal(signal.SIGQUIT, prev)
 
     def test_explicit_signum(self):
-        if not POSIX:
-            pytest.skip("POSIX-only")
         prev = signal.getsignal(signal.SIGUSR2)
         try:
             got = rc.install_traceback_signal(int(signal.SIGUSR2))
@@ -1294,7 +1289,7 @@ class TestFaultInjectionResilience:
 
     def test_fault_count_reset_roundtrip(self):
         # _fault_count / _fault_reset are the test-only fault counters.  Reading a
-        # known site name returns a number (0 if not a Windows site); _fault_reset
+        # known site name returns a number; _fault_reset
         # clears.  Must never raise on a valid string.
         n = rc._fault_count("FD_READ")
         assert isinstance(n, int)
@@ -1707,8 +1702,6 @@ class TestDiagArgValidation:
         rc._diag_dump(2 ** 20)
 
     def test_install_traceback_signal_bad_signum_raises(self):
-        if not POSIX:
-            pytest.skip("POSIX-only")
         with pytest.raises(OSError):
             rc.install_traceback_signal(99999)   # out of range -> sigaction EINVAL
 

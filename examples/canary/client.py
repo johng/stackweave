@@ -6,7 +6,7 @@ periodic CHURN BURST (a wave of short-lived connections) that ages the
 connection create/destroy cycle -- the shape a real service sees daily.
 
 Runs its OWN stackweave scheduler (it is itself a stackweave program), so a canary
-deployment is runloom-on-both-ends.  Can also run on the Windows VMs via the
+deployment is runloom-on-both-ends.  Can also run on a remote box via the
 existing SSH tooling, or locally in a netns (tools/soak/netns_chaos.sh) for a
 lossy-path canary.
 

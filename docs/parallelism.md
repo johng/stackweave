@@ -96,7 +96,7 @@ stackweave.mn_fini()
 
 ## Network I/O on M:N
 
-netpoll uses a **single shared** epoll/kqueue/IOCP handle (created once); what is
+netpoll uses a **single shared** epoll/kqueue handle (created once); what is
 per-hub is the parker bookkeeping (the per-hub parker pool) and the per-hub
 io_uring ring.  Goroutines parked on I/O wake on the hub that submitted the
 parking call -- the parker records its origin hub and the pump routes the wake

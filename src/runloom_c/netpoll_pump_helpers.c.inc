@@ -13,7 +13,7 @@
  * don't unlink, don't wake).  The g's ARMED->PARKED commit is the only
  * competing writer, so the loop runs at most twice.  This is the single
  * source of truth for the Go-netpollblockcommit protocol; every pump
- * backend (epoll/kqueue dispatch, WSAPoll, select) routes through it so
+ * backend (epoll/kqueue dispatch, select) routes through it so
  * the exactly-one-of-{waker,g}-wins guarantee is identical everywhere. */
 static inline int runloom_pump_claim(runloom_parked_t *p)
 {
@@ -97,8 +97,8 @@ static int runloom_pump_dispatch_event(int fd, int mask, int wake_all)
                      * single (ident,filter) one-shot knote stood in for all of
                      * them and will not re-report, so a first-match-only wake
                      * strands the siblings forever (no re-arm path) -- audit
-                     * finding B2.  The level-triggered epoll/IOCP pumps pass
-                     * wake_all=0 and keep first-match: they re-report a
+                     * finding B2.  The level-triggered epoll pump passes
+                     * wake_all=0 and keeps first-match: it re-reports a
                      * still-ready fd until each waiter is served. */
                     if (!wake_all) {
                         RUNLOOM_RUNLOCK(&pool->lock, RUNLOOM_RANK_PARKER_POOL);
@@ -314,7 +314,6 @@ static long long runloom_dh_peek_deadline_global(void)
  * interpreter, so instead we log once and back off a millisecond, degrading a
  * silent CPU peg into an observable, throttled slow-loop with a logged cause.
  * Returns 1 if it handled an error (caller should not treat n as a count). */
-#if !defined(RUNLOOM_OS_WINDOWS)   /* epoll, kqueue, AND the POSIX select fallback */
 static int runloom_netpoll_wait_failed(int n)
 {
     static int warned;            /* relaxed: a few duplicate logs are harmless */
@@ -352,4 +351,3 @@ static int runloom_netpoll_wait_failed(int n)
     }
     return 1;
 }
-#endif /* !RUNLOOM_OS_WINDOWS */

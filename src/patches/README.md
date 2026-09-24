@@ -211,8 +211,8 @@ the patched headers. Every extension module in a migrating process must be rebui
 only speak for stackweave's own extension.
 
 **Known gaps:** on MSVC the thread-id reads are intrinsics (`__readgsqword`,
-`__getReg`), not asm, and are left untouched — free-threaded MSVC isn't a migration
-target today. Two other thread-locals are in the same class but not covered because
+`__getReg`), not asm, and are left untouched — stackweave does not target
+Windows. Two other thread-locals are in the same class but not covered because
 no fiber path reads them across a park: `pkgcontext` (`Python/import.c`) and
 mimalloc's `_mi_heap_default` (object allocation reaches the heap through the
 tstate — see alloc-home — not through it).

@@ -90,18 +90,12 @@ EXIT_INVARIANT = 1
 EXIT_ERROR = 2
 EXIT_HANG = 3
 EXIT_BOXLIMIT = 4   # memory guard tripped: the BOX can't sustain this N (not a bug)
-# A benign SCALE LIMIT of the platform (not a runtime bug): on Windows the kernel
-# non-paged pool caps concurrent AFD sockets ~16k regardless of RAM, so an
-# offload / socket-per-fiber run over that knee fails workers with WSAENOBUFS
-# (WinError 10055) or wedges its drain at over-scale.  We reuse EXIT_BOXLIMIT's
-# benign verdict slot (exit 4) -- both run_all.py and sweep_two_tier.sh already
-# classify exit 4 as a non-fatal box/scale artifact, distinct from FAIL/HANG.
+# A benign SCALE LIMIT of the platform (not a runtime bug) -- a kernel/platform
+# ceiling or an unavailable facility (see note_scale_limit).  We reuse
+# EXIT_BOXLIMIT's benign verdict slot (exit 4) -- both run_all.py and
+# sweep_two_tier.sh already classify exit 4 as a non-fatal box/scale artifact,
+# distinct from FAIL/HANG.
 EXIT_SCALE_LIMIT = EXIT_BOXLIMIT
-
-# WSAENOBUFS: Winsock "no buffer space available" -- the AFD non-paged-pool
-# exhaustion signal.  Python surfaces it as OSError.winerror == 10055 (and
-# usually errno == 10055 too on Windows).
-WSAENOBUFS = 10055
 
 # Hot-counter sharding.  Power of two so we can mask.  64k slots covers the
 # common "tens of thousands of workers, one shard each" case exactly (one
@@ -156,9 +150,6 @@ def phys_mem_gib():
     thread, where a monkey-patched subprocess can't run (it would hang/die and
     silently disable the guard).  macOS uses ctypes sysctlbyname (see below)."""
     try:
-        if _WIN:
-            ms = _win_memstatus()
-            return (ms[1] / (1024.0 ** 3)) if ms else 8.0
         if sys.platform == "darwin" or "bsd" in sys.platform:
             total = _mac_sysctl_u("hw.memsize", 8)
             return (total / (1024.0 ** 3)) if total else 8.0
@@ -174,7 +165,6 @@ def phys_mem_gib():
 # from a non-goroutine thread can't run.  Linux uses /proc (plain file reads);
 # macOS/*BSD use ctypes sysctlbyname (a direct syscall, thread-safe).
 _MAC = (sys.platform == "darwin" or "bsd" in sys.platform)
-_WIN = (sys.platform == "win32")
 _libc = None
 if _MAC:
     try:
@@ -182,46 +172,6 @@ if _MAC:
         _libc = _ct.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
     except Exception:
         _libc = None
-
-
-def is_win_scale_limit_err(exc):
-    """True iff `exc` is the Windows AFD non-paged-pool exhaustion error
-    (WSAENOBUFS / WinError 10055) -- a benign platform SCALE LIMIT at over-scale,
-    not a runtime bug.  Always False off Windows, so Linux/other classification is
-    byte-identical."""
-    if not _WIN:
-        return False
-    if not isinstance(exc, OSError):
-        return False
-    return (getattr(exc, "winerror", None) == WSAENOBUFS
-            or getattr(exc, "errno", None) == WSAENOBUFS)
-
-
-def _win_memstatus():
-    """(avail_phys, total_phys, avail_pagefile, total_pagefile) bytes via
-    GlobalMemoryStatusEx; None on failure.  Subprocess-free (the guard reads this
-    from the watchdog's foreign OS thread)."""
-    if not _WIN:
-        return None
-    try:
-        import ctypes as _ct
-
-        class _MSEX(_ct.Structure):
-            _fields_ = [("dwLength", _ct.c_uint32), ("dwMemoryLoad", _ct.c_uint32),
-                        ("ullTotalPhys", _ct.c_uint64), ("ullAvailPhys", _ct.c_uint64),
-                        ("ullTotalPageFile", _ct.c_uint64),
-                        ("ullAvailPageFile", _ct.c_uint64),
-                        ("ullTotalVirtual", _ct.c_uint64),
-                        ("ullAvailVirtual", _ct.c_uint64),
-                        ("ullAvailExtendedVirtual", _ct.c_uint64)]
-        m = _MSEX()
-        m.dwLength = _ct.sizeof(_MSEX)
-        if _ct.windll.kernel32.GlobalMemoryStatusEx(_ct.byref(m)) == 0:
-            return None
-        return (m.ullAvailPhys, m.ullTotalPhys,
-                m.ullAvailPageFile, m.ullTotalPageFile)
-    except Exception:
-        return None
 
 
 def _mac_sysctl_u(name, width):
@@ -265,9 +215,6 @@ def available_mem_frac():
     swapping).  1.0 if unknown -- callers must treat unknown as 'fine', never
     abort on a read failure."""
     try:
-        if _WIN:
-            ms = _win_memstatus()
-            return (ms[0] / float(ms[1])) if (ms and ms[1]) else 1.0
         if sys.platform.startswith("linux"):
             total = avail = None
             with open("/proc/meminfo") as f:
@@ -301,13 +248,6 @@ def available_mem_frac():
 def swap_used_total_bytes():
     """(used_bytes, total_bytes) of SWAP.  (0, 0) if unknown / no swap."""
     try:
-        if _WIN:
-            # Windows' pagefile "commit charge" counts RESERVED-but-not-resident
-            # virtual memory (the per-fiber stacks reserve a lot), so its growth is
-            # NOT a thrashing signal -- it would false-trip a healthy high-N run.
-            # The real Windows pressure signal is available PHYSICAL RAM
-            # (available_mem_frac via ullAvailPhys); report no swap here.
-            return (0, 0)
         if sys.platform.startswith("linux"):
             total = free = None
             with open("/proc/meminfo") as f:
@@ -353,18 +293,7 @@ def mem_safe_fd_cap():
     is protected).  Returns an ABSOLUTE worker ceiling -- harness.main() applies
     min(--funcs, cap) and logs when it bites."""
     gib = phys_mem_gib()
-    if os.name == "nt" or sys.platform == "win32":
-        # Windows caps concurrent AFD sockets via the kernel NON-PAGED POOL, which
-        # the kernel sizes from physical RAM at boot and which is FAR tighter than
-        # an fd rlimit (there is none on Windows).  Each AFD socket pins a fixed
-        # slice of non-paged pool regardless of how much user RAM is free, so a
-        # socket-per-fiber / offload program exhausts the pool (WSAENOBUFS /
-        # WinError 10055) LONG before RAM runs out -- the practical ceiling is
-        # ~16k concurrent AFD sockets on a typical box.  Mirror the mbuf-limited
-        # darwin/bsd path: ~512/GiB, but hold the absolute ceiling well under the
-        # ~16k pool knee so we clamp before exhaustion (16 GiB -> ~8k, capped).
-        cap = min(int(gib * 512), 8000)
-    elif sys.platform == "darwin" or "bsd" in sys.platform:
+    if sys.platform == "darwin" or "bsd" in sys.platform:
         cap = int(gib * 512)
         try:
             import subprocess
@@ -385,15 +314,8 @@ def raise_fd_limit(target):
     hard limit on this box defaults to 4096, far below the system ceiling
     (fs.nr_open ~8M).  We raise the hard limit via `sudo -n prlimit` on our own
     pid (uid is unchanged), then pull the soft limit up to it.  If sudo isn't
-    available we still raise soft->hard.  Returns the resulting (soft, hard).
-
-    Windows has no `resource` module and no per-process descriptor rlimit (the
-    practical socket ceiling is governed by non-paged pool / ephemeral ports,
-    not a setrlimit-style cap), so this is a no-op there."""
-    try:
-        import resource
-    except ImportError:
-        return (target, target)   # Windows: no RLIMIT_NOFILE concept
+    available we still raise soft->hard.  Returns the resulting (soft, hard)."""
+    import resource
     try:
         soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
     except Exception:
@@ -603,9 +525,10 @@ class Harness(object):
 
         # rare counters under a cooperative lock
         self.failures = 0
-        # Benign platform SCALE LIMITs that are NOT counted as failures: Windows
-        # WSAENOBUFS (AFD non-paged-pool exhaustion) workers at over-scale, and a
-        # slow-but-progressing drain past the hard deadline.  Tracked separately so
+        # Benign platform SCALE LIMITs that are NOT counted as failures (a
+        # kernel/platform ceiling or unavailable facility, noted via
+        # note_scale_limit), and a slow-but-progressing drain past the hard
+        # deadline.  Tracked separately so
         # the verdict can be SCALE_LIMIT (benign, exit 4) instead of FAIL/HANG.
         self.scale_limited = 0           # workers that hit a benign scale limit
         self.scale_limit_reason = None   # first SCALE_LIMIT reason string
@@ -882,8 +805,7 @@ class Harness(object):
 
     def note_scale_limit(self, reason):
         """Record a benign platform SCALE LIMIT (NOT a failure): the run hit a
-        kernel/platform ceiling at over-scale (e.g. Windows WSAENOBUFS), not a
-        runtime bug.  Does not set self.failed; finish() turns it into the benign
+        kernel/platform ceiling at over-scale, not a runtime bug.  Does not set self.failed; finish() turns it into the benign
         SCALE_LIMIT verdict (exit 4) only when there were no real failures."""
         if self.lock is not None:
             with self.lock:
@@ -977,16 +899,7 @@ class Harness(object):
         except StopWorkload:
             pass
         except Exception as exc:           # noqa: BLE001 - report everything
-            # Windows AFD non-paged-pool exhaustion (WSAENOBUFS / WinError 10055)
-            # is a benign platform SCALE LIMIT at over-scale, not a runtime bug:
-            # the kernel caps concurrent AFD sockets ~16k regardless of RAM.
-            # Record it as a scale limit (never a failure) and don't let it set
-            # self.failed.  Off Windows is_win_scale_limit_err() is always False,
-            # so this branch never fires and Linux behavior is byte-identical.
-            if is_win_scale_limit_err(exc):
-                self.note_scale_limit("worker {0}: {1}: {2}".format(
-                    wid, type(exc).__name__, exc))
-            elif self.running() or not isinstance(exc, OSError):
+            if self.running() or not isinstance(exc, OSError):
                 self.error(wid, exc)
         finally:
             with self._exit_lock:
@@ -1495,12 +1408,10 @@ class Harness(object):
                 self.exit_code = EXIT_INVARIANT
             elif self.scale_limited > 0:
                 # No real failure, but workers hit a benign platform SCALE LIMIT
-                # (Windows WSAENOBUFS / AFD non-paged-pool exhaustion at over-
-                # scale).  That is a box/platform ceiling, NOT a runtime bug, so
-                # report the benign scale verdict (exit 4) -- both run_all.py and
-                # sweep_two_tier.sh classify exit 4 as non-fatal, distinct from
-                # FAIL.  scale_limited is only ever nonzero on Windows, so Linux
-                # behavior is byte-identical.
+                # (noted via note_scale_limit).  That is a box/platform ceiling,
+                # NOT a runtime bug, so report the benign scale verdict (exit 4)
+                # -- both run_all.py and sweep_two_tier.sh classify exit 4 as
+                # non-fatal, distinct from FAIL.
                 self.exit_code = EXIT_SCALE_LIMIT
             else:
                 self.exit_code = EXIT_OK
@@ -1545,8 +1456,8 @@ class Harness(object):
                              self.lost_workers))
         if self.scale_limited:
             sys.stderr.write("  scale_limited : {0}  (workers hit a benign "
-                             "platform SCALE LIMIT, e.g. Windows WSAENOBUFS / "
-                             "WinError 10055 -- NOT a fault; reason: {1})\n".format(
+                             "platform SCALE LIMIT -- NOT a fault; "
+                             "reason: {1})\n".format(
                                  self.scale_limited, self.scale_limit_reason))
         if self.parked_cancelled:
             sys.stderr.write("  parked_cancelled: {0}  (netpoll parkers force-"

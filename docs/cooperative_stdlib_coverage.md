@@ -84,8 +84,8 @@ has just two:
   the 50.9 KB frame never exists there — and the fiber parks on netpoll
   like any other socket (no pool thread, scales to a million waiters), instead
   of the heavier offload.  Falls back to a pool-thread offload only on a
-  non-epollable fd (regular file) or a no-epoll platform (Windows; `*BSD`/macOS
-  could grow a kqueue path).  `select.poll` (no backing fd) stays on offload.
+  non-epollable fd (regular file) or a no-epoll platform (`*BSD`/macOS could
+  grow a kqueue path).  `select.poll` (no backing fd) stays on offload.
 * first `ssl` use is **warmed on the main thread**: `stackweave.monkey` imports
   `ssl` on the main thread and `_patch_ssl` forces OpenSSL init there (8 MB
   stack), so the fat init is pre-paid off any fiber.

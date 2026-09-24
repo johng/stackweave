@@ -100,9 +100,8 @@ RUNLOOM_INLINE void runloom_mn_pending_steal(runloom_hub_t *victim,
  * list, global runq} at a time (a fresh g goes to its hub's sub list; a woken
  * g under per-g-tstate comes here, long after it left the sub list).
  *
- * Process-lifetime lock: POSIX gets a static initialiser (usable with no
- * init/destroy, survives mn_init/mn_fini cycles); Windows can't statically
- * init a CRITICAL_SECTION, so mn_init does a one-time init there. */
+ * Process-lifetime lock: a static initialiser (usable with no init/destroy,
+ * survives mn_init/mn_fini cycles). */
 static runloom_mutex_t  runloom_global_runq_lock = RUNLOOM_MUTEX_STATIC_INIT;
 static runloom_g_t     *runloom_global_runq_head = NULL;
 static runloom_g_t     *runloom_global_runq_tail = NULL;
@@ -370,24 +369,7 @@ static int runloom_use_global_runq(void)
 RUNLOOM_INLINE int runloom_tstate_attach_state(PyThreadState *ts)
 {
     if (ts == NULL) return -1;
-#if defined(RUNLOOM_OS_WINDOWS)
-    /* This read is DELIBERATELY racy: the sysmon / hub-snapshot threads read
-     * h->tstate->state without owning the tstate (see callers).
-     * On POSIX a tstate freed under us leaves its page mapped, so the stale
-     * read returns garbage harmlessly.  On Windows the allocator (mimalloc)
-     * UNMAPS freed pages, so the same race faults with an access violation
-     * (reproduced by big_100 under M:N free-threading).  Wrap the read in SEH:
-     * a faulting read means the tstate was freed concurrently -> report -1
-     * ("unknown"), identical to the NULL case, so every attach-state gate
-     * fails closed on a dead hub. */
-    __try {
-        return __atomic_load_n(&ts->state, __ATOMIC_ACQUIRE);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return -1;
-    }
-#else
     return __atomic_load_n(&ts->state, __ATOMIC_ACQUIRE);
-#endif
 }
 #else
 RUNLOOM_INLINE int runloom_tstate_attach_state(PyThreadState *ts)

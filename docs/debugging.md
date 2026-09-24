@@ -163,10 +163,7 @@ gi.install_dump_signal()     # SIGQUIT -> fiber dump on stderr
 
 This installs a **raw C** handler, so the dump fires even when the
 interpreter is wedged (a Python `signal.signal` handler only runs at a
-bytecode boundary, which a fully-stalled process never reaches).  On
-**Windows** there is no SIGQUIT, so the trigger is **Ctrl+Break**
-(`CTRL_BREAK_EVENT`, via a console control handler) — the same dump, the same
-"keep running afterwards" behaviour.  Then, on POSIX:
+bytecode boundary, which a fully-stalled process never reaches).  Then:
 
 ```
 kill -QUIT <pid>
@@ -233,8 +230,7 @@ It survives the very overflow it reports because every stackweave OS thread (the
 main thread, each scheduler hub, the blocking-offload workers) installs its own
 `sigaltstack`, so the handler runs on a separate stack when the fiber stack
 is exhausted.  Off by default — it does not hijack process-wide signal handlers
-unless asked.  **Windows** uses a Vectored Exception Handler that dumps the
-fiber registry and continues the search (the rich path is POSIX).
+unless asked.
 
 ## Deadlock detection
 

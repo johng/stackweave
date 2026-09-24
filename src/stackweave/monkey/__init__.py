@@ -114,15 +114,7 @@ Limitations:
 
 Platform notes:
     * Linux, macOS, *BSD: fully supported by the C-side netpoll (epoll,
-      kqueue, select fallback).
-    * Windows: the Python monkey-patch layer is Windows-aware -- Parker
-      uses socket.socketpair() (the only thing Win select() will poll),
-      subprocess.Popen.wait uses portable Popen.poll(), DNS falls back
-      to libc getaddrinfo via the backend pool because Windows has no
-      /etc/resolv.conf, hosts file resolves to
-      %SystemRoot%\\System32\\drivers\\etc\\hosts.  The C extension itself
-      still needs Windows support (IOCP backend) before any of this is
-      usable end-to-end on Windows; that's separate from this module.
+      kqueue, select fallback).  Windows is not supported.
 """
 
 from ._base import *  # noqa: F401,F403  (stdlib re-exports, Parker, backend, offload)

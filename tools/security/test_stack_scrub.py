@@ -19,9 +19,7 @@ sys.path.insert(0, "src")
 import stackweave_c
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-_LIBNAME = ("stack_scrub_helper.dll" if sys.platform == "win32"
-            else "stack_scrub_helper.so")
-lib = ctypes.CDLL(os.path.join(HERE, _LIBNAME))
+lib = ctypes.CDLL(os.path.join(HERE, "stack_scrub_helper.so"))
 lib.write_sentinel.argtypes = [ctypes.c_uint64]
 lib.read_recorded.argtypes = [ctypes.c_uint64]
 lib.read_recorded.restype = ctypes.c_int

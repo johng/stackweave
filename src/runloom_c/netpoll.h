@@ -8,8 +8,6 @@
  *   Linux           -> epoll_create1 + epoll_wait
  *   BSD/macOS       -> kqueue + kevent
  *   Solaris         -> event ports (fallback to select for v0)
- *   Windows         -> select for v0 (IOCP is async-completion, harder
- *                      to slot under a "wait until ready" API)
  *   everything else -> select
  *
  * v0 caveat: this is single-threaded.  Phase C M:N scheduler will need
@@ -192,21 +190,19 @@ int runloom_netpoll_epoll_fd(void);
  * must poll THIS so a hub's own socket fds are observed in per-hub mode. */
 int runloom_netpoll_hub_epoll_fd(void);
 
-/* Test-only Windows netpoll fault-injection introspection (see netpoll.c).
- * runloom_fault_count returns how many times the named site ("WSAPOLL"/"SELECT"/
- * "IOCP_WAIT"/"IOCP_SUBMIT") injected an error (-1 for an unknown name / a
- * non-Windows build); runloom_fault_reset clears all counters + once-flags.
- * No-ops on non-Windows. */
+/* Test-only netpoll fault-injection introspection (see netpoll_init.c.inc).
+ * runloom_fault_count returns how many times the named site (e.g. "SELECT",
+ * "KQUEUE_WAIT") injected an error (-1 for an unknown name); runloom_fault_reset
+ * clears all counters + once-flags. */
 long runloom_fault_count(const char *name);
 void runloom_fault_reset(void);
 
 /* Fault-injection site indices, shared with runloom_tcp.c so the socket-surface
- * syscalls can be faulted on the kqueue/Windows backends (which have no
+ * syscalls can be faulted on the kqueue backend (which has no
  * syscall-injecting tracer; Linux uses strace).  Keep in sync with the name/
- * env tables in netpoll.c. */
+ * env tables in netpoll_init.c.inc. */
 enum {
-    RUNLOOM_FAULT_WSAPOLL = 0, RUNLOOM_FAULT_SELECT, RUNLOOM_FAULT_IOCP_WAIT,
-    RUNLOOM_FAULT_IOCP_SUBMIT, RUNLOOM_FAULT_KQUEUE_WAIT,
+    RUNLOOM_FAULT_SELECT = 0, RUNLOOM_FAULT_KQUEUE_WAIT,
     RUNLOOM_FAULT_KQUEUE_CREATE, RUNLOOM_FAULT_KQUEUE_CTL,
     RUNLOOM_FAULT_KQUEUE_PERHUB,   /* force a NON-default pool's kqueue create to fail */
     RUNLOOM_FAULT_TCP_SOCKET, RUNLOOM_FAULT_TCP_CONNECT, RUNLOOM_FAULT_TCP_ACCEPT,
@@ -216,10 +212,10 @@ enum {
     RUNLOOM_FAULT_SPAWN_G, RUNLOOM_FAULT_SPAWN_STACK, RUNLOOM_FAULT_SPAWN_TSTATE,
     RUNLOOM_FAULT_NSITES
 };
-/* Returns the errno/WSA code to inject at this site now (nonzero), or 0.
- * Defined only on the kqueue/Windows backends (Linux uses strace); runloom_tcp.c
- * calls it only there, so this prototype is harmless + unreferenced on Linux.
- * The SPAWN_* sites are injected on every platform (in-process alloc faults). */
+/* Returns the errno to inject at this site now (nonzero), or 0.  Compiled on
+ * every platform: the pump sites call it on their own backend (kqueue/select),
+ * runloom_tcp.c only on kqueue (Linux faults sockets with strace), and the
+ * SPAWN_* sites everywhere (in-process alloc faults). */
 int runloom_fault_inject(int site);
 
 /* Cached "is any RUNLOOM_FAULT_SPAWN_* env set" check, so the fiber-spawn
@@ -253,7 +249,7 @@ void runloom_netpoll_remove_iouring_ring(int eventfd_fd);
 int  runloom_netpoll_wake_pump_arm(void);
 /* hub_opaque names the hub whose pump to wake (its own kqueue, per-hub kqueue
  * backend).  NULL = default/single-thread pool.  Ignored on the shared-handle
- * backends (epoll eventfd / Windows IOCP / select self-pipe). */
+ * backends (epoll eventfd / select self-pipe). */
 void runloom_netpoll_wake_pump(void *hub_opaque);
 
 /* Deterministic sim readiness plane (RUNLOOM_SIM, Slice 3; see

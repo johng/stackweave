@@ -75,13 +75,13 @@ off stock CPython. **No runtime dependencies.**
 ## What it is
 
 - **Hand-rolled asm context switch** (x86_64 SysV, aarch64) — ~80 ns/swap, no
-  syscall; Windows Fibers / POSIX `ucontext` fallback.
+  syscall; POSIX `ucontext` fallback.
 - **M:N work-stealing scheduler** (3.13t) — Chase-Lev deque per hub, per-hub MPSC
   submission, woken goroutines routed back to their origin hub.
 - **Per-goroutine `PyThreadState` snapshot** — cframe, datastack, exc_info,
   contextvars, recursion; a million yielded goroutines share their hub threads
   with no frame-chain cliff.
-- **netpoll** — epoll / kqueue / IOCP / WSAPoll / select; goroutines park
+- **netpoll** — epoll / kqueue / select; goroutines park
   transparently on fd readiness, lost-wake-free 3-state park-commit.
 - **Go-style channels** — `Chan(capacity)`, `select`, `for v in ch`.
 - **Stall isolation + recovery** — one unanticipated blocking call stalls only
@@ -119,7 +119,6 @@ zero-rewrite port path, not a multi-core speedup (use the sync API with
 | Linux aarch64 | fcontext-asm | epoll | qemu |
 | macOS x86_64 / arm64 | fcontext-asm | kqueue | hw, 3.14t |
 | FreeBSD / GhostBSD | fcontext-asm | kqueue | hw, 3.12 |
-| Windows 10/11 / Server 2022 | Fibers | IOCP→WSAPoll→select | hw, 3.14t |
 | Solaris / Android / other BSD | ucontext / asm | select / epoll / kqueue | review |
 
 ## Docs & layout
@@ -140,7 +139,6 @@ Full guide in [docs/](https://github.com/johng/stackweave/tree/main/docs/):
 | `tests/` · `examples/` · `benchmark/` · `docs/` | tests · runnable examples · benchmarks + perf harness · docs |
 
 Build from source (contributors): `pip install -e .` from a clone on a patched
-interpreter (needs a C compiler; `scripts/install.sh` / `scripts\install.bat`
-bootstrap one). On stock CPython, build in place with
-`python setup.py build_ext --inplace` and run with `PYTHONPATH=src`, or set
-`STACKWEAVE_ALLOW_STOCK_CPYTHON=1` to let pip through.
+interpreter (needs a C compiler; `scripts/install.sh` bootstraps one). On stock
+CPython, build in place with `python setup.py build_ext --inplace` and run with
+`PYTHONPATH=src`, or set `STACKWEAVE_ALLOW_STOCK_CPYTHON=1` to let pip through.

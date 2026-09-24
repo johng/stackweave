@@ -4,9 +4,9 @@
 # `twine upload dist/*`.
 #
 # No hosted CI: this orchestrates cibuildwheel locally (this machine's platform)
-# and over SSH on your other build hosts (a Mac, a Windows box), then copies
-# their wheels back here.  cibuildwheel cannot cross-build macOS/Windows from
-# Linux, so each OS builds its own -- this just automates the shovelling.
+# and over SSH on your other build hosts (e.g. a Mac), then copies their
+# wheels back here.  cibuildwheel cannot cross-build macOS from Linux, so each
+# OS builds its own -- this just automates the shovelling.
 #
 # Every host builds from a FRESH `git clone` (of a configurable repo URL + ref)
 # in a unique throwaway dir that is deleted on exit -- wheels always come from
@@ -16,11 +16,9 @@
 # (copy scripts/release_hosts.env.example):
 #   STACKWEAVE_REPO_URL   git URL to build from   (PROMPTED if unset)
 #   STACKWEAVE_REF        branch/tag/sha to build (default: main)
-#   STACKWEAVE_WIN_PYENV  pyenv-win version that drives cibuildwheel (default 3.12.10)
-#   RELEASE_SSH_HOSTS  space-separated "<target>|<base-dir>|<kind>" entries, one
-#                      per non-Linux platform.  kind = posix (mac, default) or
-#                      windows (cmd.exe shell + pyenv).  Each host needs git, a
-#                      C toolchain, the CPython matrix, and cibuildwheel>=2.20.
+#   RELEASE_SSH_HOSTS  space-separated "<target>|<base-dir>" entries, one per
+#                      non-Linux platform.  Each host needs git, a C toolchain,
+#                      the CPython matrix, and cibuildwheel>=2.20.
 #
 # Usage:  ./scripts/collect_wheels.sh            (build + collect, twine check)
 #         ./scripts/collect_wheels.sh --upload   (...then twine upload dist/*)
@@ -48,24 +46,19 @@ ask() {   # ask VAR "prompt" "default"
 }
 ask STACKWEAVE_REPO_URL "Repo URL to build from" "https://github.com/johng/stackweave.git"
 ask STACKWEAVE_REF      "Ref to build (branch/tag/sha)" "main"
-: "${STACKWEAVE_WIN_PYENV:=3.12.10}"
 [ -z "${RELEASE_SSH_HOSTS+set}" ] && ask RELEASE_SSH_HOSTS \
-    "Remote build hosts 'target|dir|kind ...' (blank = this machine only)" ""
+    "Remote build hosts 'target|dir ...' (blank = this machine only)" ""
 : "${RELEASE_SSH_HOSTS:=}"
 
 STAMP="$(date +%Y%m%d-%H%M%S)-$$"
 LOCAL_WORK=""
-REMOTE_CLEANUP=""   # newline-separated "<target>|<dir>|<kind>"
+REMOTE_CLEANUP=""   # newline-separated "<target>|<dir>"
 
 cleanup() {
     [ -n "$LOCAL_WORK" ] && rm -rf "$LOCAL_WORK" 2>/dev/null || true
-    printf '%s\n' "$REMOTE_CLEANUP" | while IFS='|' read -r t d k; do
+    printf '%s\n' "$REMOTE_CLEANUP" | while IFS='|' read -r t d; do
         [ -z "$t" ] && continue
-        if [ "$k" = windows ]; then
-            ssh "$t" "if exist \"$d\" rmdir /s /q \"$d\"" >/dev/null 2>&1 || true
-        else
-            ssh "$t" "rm -rf '$d'" >/dev/null 2>&1 || true
-        fi
+        ssh "$t" "rm -rf '$d'" >/dev/null 2>&1 || true
     done
 }
 trap cleanup EXIT INT TERM
@@ -80,20 +73,15 @@ echo ">> [local: $(uname -s)] fresh clone + cibuildwheel ..."
 git clone --depth 1 --branch "$STACKWEAVE_REF" "$STACKWEAVE_REPO_URL" "$LOCAL_WORK/src"
 ( cd "$LOCAL_WORK/src" && "$PY" -m cibuildwheel --output-dir "$ROOT/wheelhouse" )
 
-# ---- remote platforms (Mac=posix, Windows=cmd.exe+pyenv) over SSH ---------
+# ---- remote platforms (e.g. a Mac) over SSH ------------------------------
 for entry in $RELEASE_SSH_HOSTS; do
     target=$(printf '%s' "$entry" | cut -d'|' -f1)
     base=$(printf '%s' "$entry" | cut -d'|' -f2)
-    kind=$(printf '%s' "$entry" | cut -d'|' -f3); [ -z "$kind" ] && kind=posix
     bdir="$base/runloom-build-$STAMP"
     REMOTE_CLEANUP="$REMOTE_CLEANUP
-$target|$bdir|$kind"
-    echo ">> [$target ($kind)] fresh clone $STACKWEAVE_REF + cibuildwheel ..."
-    if [ "$kind" = windows ]; then
-        ssh "$target" "(if exist \"$bdir\" rmdir /s /q \"$bdir\") & git clone --depth 1 --branch $STACKWEAVE_REF $STACKWEAVE_REPO_URL \"$bdir\" && cd /d \"$bdir\" && set PYENV_VERSION=$STACKWEAVE_WIN_PYENV&& pyenv exec python -m cibuildwheel --output-dir wheelhouse"
-    else
-        ssh "$target" "rm -rf '$bdir' && git clone --depth 1 --branch '$STACKWEAVE_REF' '$STACKWEAVE_REPO_URL' '$bdir' && cd '$bdir' && python3 -m cibuildwheel --output-dir wheelhouse"
-    fi
+$target|$bdir"
+    echo ">> [$target] fresh clone $STACKWEAVE_REF + cibuildwheel ..."
+    ssh "$target" "rm -rf '$bdir' && git clone --depth 1 --branch '$STACKWEAVE_REF' '$STACKWEAVE_REPO_URL' '$bdir' && cd '$bdir' && python3 -m cibuildwheel --output-dir wheelhouse"
     echo ">> [$target] copying wheels back ..."
     tmp_pull="$(mktemp -d)"
     scp -rq "$target:$bdir/wheelhouse" "$tmp_pull/"

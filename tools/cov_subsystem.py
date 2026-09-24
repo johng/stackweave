@@ -18,9 +18,9 @@ import sys
 SRC = "src/runloom_c"
 # One group per .c TRANSLATION UNIT: the .c plus the .c.inc fragments it
 # #includes (gcov emits a separate .gcov per fragment).  The "C file" coverable
-# target the campaign reports is the per-TU total here.  netpoll_iocp.c (IOCP)
-# and any kqueue-only paths do not compile on the Linux epoll build, so they
-# emit no .gcov and are silently skipped.
+# target the campaign reports is the per-TU total here.  kqueue-only paths do
+# not compile on the Linux epoll build, so they emit no .gcov and are silently
+# skipped.
 GROUPS = {
     "mn_sched.c -- M:N scheduler": [
         "mn_sched.c", "mn_sched_init_fini.c.inc", "mn_sched_hub_main.c.inc",
@@ -72,7 +72,6 @@ GROUPS = {
     "runloom_iframe.c -- interp-frame helpers": ["runloom_iframe.c"],
     "cldeque.c -- Chase-Lev work deque": ["cldeque.c"],
     "fcontext.c -- context-switch trampoline": ["fcontext.c"],
-    "netpoll_iocp.c -- IOCP backend (Windows; not on Linux)": ["netpoll_iocp.c"],
 }
 
 

@@ -33,17 +33,14 @@ import stackweave_c
 
 import os as _hwm_os
 import pytest as _hwm_pytest
-# Stack high-water-mark is precise only on a POSIX guard-page backend
-# (fcontext-asm / ucontext) with 4 KB pages.  Windows Fibers have no guard page,
-# and macOS 16 KB pages make the mincore-based HWM over-report (it reports the
-# whole stack resident), so these HWM/advice/sizing tests can't measure precisely
-# there -- skip them (the diagnostic itself just over-reserves, which is safe).
-_RELIABLE_HWM = (_hwm_os.name == "posix"
-                 and stackweave_c.backend() in ("fcontext-asm", "ucontext")
-                 and _hwm_os.sysconf("SC_PAGESIZE") == 4096)
+# Stack high-water-mark is precise only with 4 KB pages: macOS 16 KB pages make
+# the mincore-based HWM over-report (it reports the whole stack resident), so
+# these HWM/advice/sizing tests can't measure precisely there -- skip them (the
+# diagnostic itself just over-reserves, which is safe).
+_RELIABLE_HWM = _hwm_os.sysconf("SC_PAGESIZE") == 4096
 pytestmark = _hwm_pytest.mark.skipif(
     not _RELIABLE_HWM,
-    reason="stack HWM is reliable only on a POSIX guard-page backend with 4 KB pages")
+    reason="stack HWM is reliable only with 4 KB pages")
 
 # The static _RELIABLE_HWM gate above predicts the "reports the whole stack
 # resident" failure from the backend and page size.  Hosted CI runners hit it

@@ -69,8 +69,8 @@ esac
 CFLAGS="-std=gnu11 -fno-strict-aliasing -O2 -Wall -Wextra -Wno-unused-parameter \
         $OSDEF -I$PYINC -Isrc/runloom_c"
 
-# Core translation units; skip the Windows-only IOCP backend and the .S asm.
-FILES=$(ls src/runloom_c/*.c | grep -v netpoll_iocp)
+# Core translation units (the .S asm is skipped).
+FILES=$(ls src/runloom_c/*.c)
 NFILES=$(echo $FILES | wc -w)
 
 JOBS="${STATIC_JOBS:-$(nproc 2>/dev/null || echo 4)}"

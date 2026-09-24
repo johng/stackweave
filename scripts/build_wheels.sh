@@ -8,7 +8,6 @@
 #
 #   Linux   (needs Docker):     ./scripts/build_wheels.sh
 #   macOS   (on a Mac):         ./scripts/build_wheels.sh
-#   Windows (Git Bash / WSL):   sh scripts/build_wheels.sh
 #
 # Output:
 #   ./dist        the source distribution (.tar.gz) -- platform-independent

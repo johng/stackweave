@@ -76,4 +76,4 @@ Used resident memory (RSS, not virtual) for 1,000,000 live parked fibers/gorouti
 
 > Stackweave fibers carry real C stacks (heavier to spawn than goroutines); its loaded-yield context-switch hits the free-threaded refcount wall at high hub counts. Strength is parallel I/O throughput, not single-stream latency.[^bench]
 
-[^bench]: Full data, methodology, per-connection ladder curves, the assumed constraints, every benchmark program's source, and the zero-PyObject Cython disassembly proof: [`benchmark/report.html`](benchmark/report.html). Cross-platform backend syscall profiles (Linux/macOS/Windows) are linked from there.
+[^bench]: Full data, methodology, per-connection ladder curves, the assumed constraints, every benchmark program's source, and the zero-PyObject Cython disassembly proof: [`benchmark/report.html`](benchmark/report.html). Cross-platform backend syscall profiles (Linux/macOS) are linked from there.

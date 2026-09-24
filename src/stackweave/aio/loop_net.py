@@ -13,8 +13,8 @@ class _LoopNetMixin(object):
 
     # ---- subprocesses (thread-backed) ----
     # AbstractEventLoop.subprocess_exec/shell -- asyncio.create_subprocess_exec/
-    # _shell route through these.  stackweave's netpoll can't portably select() on
-    # child stdio pipes (esp. Windows anonymous pipes), so we drive each pipe on
+    # _shell route through these.  Rather than select() on child stdio pipes
+    # through stackweave's netpoll, we drive each pipe on
     # its own OS thread and marshal data/exit back onto the loop thread via
     # call_soon_threadsafe -- exactly how run_in_executor already bridges blocking
     # work.  Returns (SubprocessTransport, protocol) like stock asyncio.
@@ -96,7 +96,7 @@ class _LoopNetMixin(object):
             # asyncio binds EVERY address getaddrinfo returns (one socket each),
             # not just the first -- so "localhost" listens on both 127.0.0.1 and
             # ::1.  The old code break'd after the first bind, which left no IPv4
-            # socket whenever getaddrinfo sorts IPv6 first (Windows), so callers
+            # socket whenever getaddrinfo sorts IPv6 first, so callers
             # that look for an AF_INET socket (websockets' get_host_port) failed.
             if host == "" or host is None:
                 hosts = [None]
@@ -104,10 +104,9 @@ class _LoopNetMixin(object):
                 hosts = [host]
             else:
                 hosts = list(host)
-            # asyncio default: SO_REUSEADDR on POSIX only -- on Windows it lets a
-            # second bind hijack the port, so it stays off there by default.
+            # asyncio default: SO_REUSEADDR on (POSIX).
             if reuse_address is None:
-                reuse_address = (_os.name == "posix" and sys.platform != "cygwin")
+                reuse_address = True
             infos = []
             seen = set()
             for hst in hosts:

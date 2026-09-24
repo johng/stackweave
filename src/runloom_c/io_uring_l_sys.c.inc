@@ -255,8 +255,7 @@ static volatile long runloom_iouring_lock_inited = 0;
 static volatile int runloom_iouring_inflight_count = 0;
 
 /* Lazy initialise the submission mutex.  Same pattern as netpoll's
- * runloom_parked_lock_ensure_inited -- works for static-init absent
- * Windows but we always use it on Linux too for uniformity. */
+ * runloom_parker_pool_lock_ensure_inited. */
 static void runloom_iouring_lock_ensure_inited(void)
 {
     long expected;

@@ -20,7 +20,6 @@ POSIX-only where the API is POSIX-only.
 """
 import errno
 import os
-import platform
 import signal
 import subprocess
 import sys
@@ -30,8 +29,6 @@ import unittest
 import stackweave
 import stackweave.monkey
 import stackweave_c
-
-_IS_WINDOWS = platform.system() == "Windows"
 
 
 def _drive(fn):
@@ -130,7 +127,6 @@ class TestSubprocessRun(unittest.TestCase):
         self.assertEqual(_drive(body), "HELLO")
 
 
-@unittest.skipIf(_IS_WINDOWS, "POSIX os.wait* semantics")
 class TestOsWait(unittest.TestCase):
     def test_waitpid_exit_status(self):
         # Note: this child exits immediately, so the reap may complete on the
@@ -222,7 +218,6 @@ class TestOsSystem(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertGreaterEqual(ticks, 1)
 
-    @unittest.skipIf(_IS_WINDOWS, "POSIX exit-status encoding")
     def test_system_nonzero(self):
         def body():
             rc = os.system(sys.executable + " -c \"import sys; sys.exit(3)\"")

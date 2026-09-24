@@ -77,12 +77,6 @@ static runloom_parked_t *runloom_parker_pool_acquire(void)
      * fresh by every wait_fd; the flag must start clear regardless). */
     p->user_deadline_ns = -1;
     p->probe_pending = 0;
-    /* Windows IOCP-AFD weak ctx ref: NULL until this park's runloom_iocp_submit
-     * stores it (under pool->lock).  Reset on every acquire so a freelist-reused
-     * parker never inherits a stale ctx pointer from a prior lifetime -- the unlink
-     * choke point would otherwise cancel an unrelated, already-freed IRP.  NULL on
-     * non-Windows / non-IOCP parks. */
-    p->iocp_ctx = NULL;
     /* Fresh park: not yet committed, not yet woken.  Plain store is
      * safe -- the parker is not linked, so no pump can see it. */
     p->commit = RUNLOOM_PARK_ARMED;
@@ -108,10 +102,6 @@ static void runloom_parker_pool_release(runloom_parked_t *p)
     p->g           = NULL;
     p->hub         = NULL;
     p->heap_index  = -1;
-    /* Weak IOCP ctx ref already cancelled+cleared at the unlink choke point
-     * (runloom_parker_unlink) before any release reaches here; scrub anyway as
-     * defence-in-depth so a freelist entry never carries a dangling ctx pointer. */
-    p->iocp_ctx    = NULL;
     if (runloom_parker_pool_size >= RUNLOOM_PARKER_POOL_CAP) {
         free(p);
         return;
@@ -175,7 +165,7 @@ typedef struct runloom_parker_pool {
      * kernel's single per-kqueue lock -- the shared-kqueue kq_lock contention
      * that collapsed connect throughput super-linearly with hub count.  Created
      * lazily in runloom_parker_pool_lock_ensure_inited (kqueue builds only);
-     * -1 until then.  Unused on epoll/Windows/select (one shared backend handle
+     * -1 until then.  Unused on epoll/select (one shared backend handle
      * + the global self-pipe).  Load-balancing (a busy hub draining its own
      * events) is restored by hub_main's PERIODIC non-blocking self-pump. */
     int kqueue_fd;                      /* this pool's kqueue; -1 = none */
@@ -249,13 +239,11 @@ static runloom_parker_pool_t runloom_pools[RUNLOOM_PARKER_POOL_MAX];
  * recorded hub -> the same pool).
  *
  * Per-hub routing is gated on the kernel-backed by-fd backends
- * (epoll, kqueue, Windows IOCP -- all driven through
- * runloom_pump_dispatch_event which iterates every pool's by_fd).  The
- * WSAPoll / select fallbacks still walk pool->head + pool->by_fd
- * directly and would miss parkers in non-default pools; on those
- * platforms we force every parker into the default pool so the old
- * single-list semantics are preserved.  IOCP-availability on Windows
- * is detected at runtime, so the gate runs at call time as well. */
+ * (epoll, kqueue -- both driven through runloom_pump_dispatch_event which
+ * iterates every pool's by_fd).  The select fallback still walks
+ * pool->head + pool->by_fd directly and would miss parkers in non-default
+ * pools; there we force every parker into the default pool so the old
+ * single-list semantics are preserved. */
 static runloom_parker_pool_t *runloom_parker_pool_for_hub(void *hub_opaque)
 {
 #if defined(RUNLOOM_HAVE_EPOLL) || defined(RUNLOOM_HAVE_KQUEUE)
@@ -266,13 +254,9 @@ static runloom_parker_pool_t *runloom_parker_pool_for_hub(void *hub_opaque)
         }
     }
 #else
-    /* Windows WSAPoll / select POSIX fallback walk pool->head and
-     * pool->by_fd[fd] directly to build the fdset, so a parker in a
-     * non-default pool would be invisible to them.  Route everything
-     * to the default pool on those backends.  IOCP on Windows uses
-     * runloom_pump_dispatch_event (which iterates pools) and would
-     * benefit from per-hub routing, but the gate is runtime-only
-     * (runloom_win_use_iocp), kept conservative here for now. */
+    /* The select fallback walks pool->head and pool->by_fd[fd] directly
+     * to build the fdset, so a parker in a non-default pool would be
+     * invisible to it.  Route everything to the default pool. */
     (void)hub_opaque;
 #endif
     return &runloom_pools[RUNLOOM_PARKER_POOL_DEFAULT];
