@@ -1,5 +1,12 @@
 # lifefuzz — generative, replayable life-cycle fuzzer
 
+> **Seeded runs are disabled pending a TODO.** `mn_init` refuses
+> `STACKWEAVE_MN_SEED` / `STACKWEAVE_SIM_MN` until the seeded M:N scheduler is
+> re-implemented for migration. That covers `sweep` (it pins `--mn-seed`, default
+> 1), `repro` / `shrink` with `--mn-seed`, the hang-hunter's lifefuzz engines,
+> and the `simfd_mn` / `simfd_dgram_mn` program kinds. `gen`, and `run` on the
+> other kinds, still work.
+
 `lifefuzz` mass-produces structurally-diverse stackweave programs that exercise the
 **object life-cycle** operations and runs each under the **life-cycle oracles** —
 the dynamic counterpart to the `tools/verify/` life-cycle models. Where those models
@@ -70,8 +77,8 @@ Each run is checked against all of:
 2. **goroutine completion** — `mn_run()`'s completed count == goroutines spawned.
 3. **parked-leak** — `sleeping + netpoll_parked + running == 0` after the run.
 4. **scheduler self-check** — `stackweave_c._self_check()` reports 0 violations.
-5. **runtime DBG oracles** — `RUNLOOM_DBG_GSTATE` (freed-state), `STACKWEAVE_DBG_MIGRATE`
-   (per-g tstate cross-thread use); their stderr warnings are captured by the parent.
+5. **runtime DBG oracle** — `RUNLOOM_DBG_GSTATE` (freed-state); its stderr warnings
+   are captured by the parent.
 6. **hang watchdog** — a lost wakeup becomes a `TimeoutError`, not a wedge
    (programs are always-terminating by construction, so a hang is a real bug).
 7. **ASan / TSan** — if the ext was built with a sanitizer, its report is captured.
@@ -103,18 +110,10 @@ tools/lifefuzz/lifefuzz.py repro 42 --mn-seed 1
 ### Teeth check (the negative control)
 
 A fuzzer that has only ever found zero bugs is worthless until it is shown to
-catch a *planted* one. `--unsafe-migrate` flips on the gated per-g-tstate
-migration (`STACKWEAVE_PER_G_TSTATE=1 STACKWEAVE_ALLOW_UNSAFE_MIGRATION=1`) — the known
-mimalloc abandon/adopt hazard — and the migration oracle must then fire:
-
-```sh
-tools/lifefuzz/lifefuzz.py sweep 120 --unsafe-migrate --mn-seed 5000
-# -> findings: "[STACKWEAVE_DBG_MIGRATE] ... _mi_page_retire corruption is imminent"
-```
-
-If this stops producing findings, the oracle-capture pipeline has regressed —
-treat it as a tooling failure, exactly like a `tools/verify/` negative control that
-stops failing.
+catch a *planted* one. The old control, `--unsafe-migrate`, switched on the
+then-gated per-g-tstate migration so its known mimalloc hazard fired the
+migration oracle. Migration is now always on, so that control is gone and
+lifefuzz currently has no planted-bug check.
 
 ## Composing with the rest of the suite
 

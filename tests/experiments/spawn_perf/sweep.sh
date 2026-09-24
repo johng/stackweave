@@ -17,7 +17,7 @@ out="$here/results/$label.jsonl"
 mkdir -p "$here/results"
 : > "$out"
 for iss in 1 4 8; do
-    taskset -c 16-23 env PYTHON_GIL=0 STACKWEAVE_SYSMON=0 STACKWEAVE_PREEMPT=0 STACKWEAVE_HANDOFF=0 \
+    taskset -c 16-23 env PYTHON_GIL=0 STACKWEAVE_SYSMON=0 STACKWEAVE_HANDOFF=0 \
         "$py" "$here/scaling.py" --hubs 8 --issuers "$iss" --label "$label" "$@" \
         >> "$out"
 done

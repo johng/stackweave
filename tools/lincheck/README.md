@@ -1,5 +1,12 @@
 # lincheck -- linearizability checking for stackweave channels
 
+> **Seeded runs are disabled pending a TODO.** `mn_init` refuses
+> `STACKWEAVE_MN_SEED` until the seeded M:N scheduler is re-implemented for
+> migration, so `linz`'s `--seeded` mode (a replayable schedule) cannot run.
+> Everything here records real-time histories on the migrating M:N scheduler
+> instead: `record_history.py` never used a seed, and `linz/battery.py` now
+> defaults to `--wallclock` (the seed still picks the workload).
+
 A real concurrent send/recv/close history from an M:N run, checked against the
 sequential FIFO-channel spec with [Porcupine](porcupine) -- proving the channel
 API linearizes (every concurrent execution is equivalent to *some* legal

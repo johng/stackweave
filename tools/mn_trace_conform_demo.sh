@@ -9,6 +9,10 @@
 #   a Release dropped from the trace -> NON-CONFORMING (the next Grant can't fire
 #                                       with the baton still held -- the double-hold
 #                                       MutualExclusion forbids)
+#
+# DISABLED pending a TODO: mn_init refuses STACKWEAVE_MN_SEED until the seeded M:N
+# scheduler is re-implemented for migration, so the capture below yields an empty
+# trace and the demo SKIPs.
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
 PY="${STACKWEAVE_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"

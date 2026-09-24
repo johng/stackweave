@@ -7,8 +7,7 @@ triages any that hang or crash.
 
 Shipped engines that run on this box today:
   stress    -- randomized real M:N workloads (gc churn, channel storm) with random
-               hub counts / sizes and random scheduler env knobs (sysmon / preempt /
-               handoff on-off, world-yield ns).
+               hub counts / sizes and sysmon logging on or off.
   hypo      -- Hypothesis-generated always-terminating programs (so any hang is a
                real bug); shrinks to a minimal repro on assertion failures.
   lifefuzz  -- one generative life-cycle program from tools/lifefuzz (varied stacks,
@@ -35,7 +34,6 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 WL = os.path.join(HERE, "workloads")
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 LIFEFUZZ = os.path.join(ROOT, "tools", "lifefuzz", "lifefuzz.py")
-NETPOLL_BACKENDS = ["epoll", "select", "io_uring"]
 
 
 class Job(object):
@@ -48,19 +46,14 @@ class Job(object):
 
 
 def _knobs(rng):
-    """Random scheduler env knobs -- exercise the recovery machinery on and off."""
-    # Flight recorder (#1): record the scheduler event ring and install the
-    # crash handler so any crash carries its recent per-thread timeline.
+    """Random scheduler env knobs."""
+    # Flight recorder (#1): record the scheduler event ring, and have the
+    # workload install the crash handler (HH_CRASH) so any crash carries its
+    # recent per-thread timeline.
     env = {"PYTHON_GIL": "0", "STACKWEAVE_GIL": "0",
-           "STACKWEAVE_DEBUG": "ring", "STACKWEAVE_CRASH": "on"}
-    for k in ("STACKWEAVE_SYSMON", "STACKWEAVE_PREEMPT"):
-        if rng.random() < 0.3:
-            env[k] = "0"
+           "STACKWEAVE_DEBUG": "ring", "HH_CRASH": "on"}
     if rng.random() < 0.3:
-        # vary the world-yield pause but never 0 -- 0 disables the stop-the-world
-        # monopoly fix (a known deadlock), which would be a self-inflicted false
-        # finding rather than a new bug.
-        env["STACKWEAVE_WORLD_YIELD_NS"] = str(rng.choice([1000, 50000, 100000, 500000]))
+        env["STACKWEAVE_SYSMON"] = "0"
     return env
 
 
@@ -101,7 +94,7 @@ def stress_job(rng, py):
 def hypo_job(rng, py):
     sd = rng.randrange(1, 2 ** 31)
     env = {"PYTHON_GIL": "0", "STACKWEAVE_GIL": "0",
-           "STACKWEAVE_DEBUG": "ring", "STACKWEAVE_CRASH": "on",
+           "STACKWEAVE_DEBUG": "ring", "HH_CRASH": "on",
            "HH_MAX_EXAMPLES": str(rng.choice([50, 100, 150]))}
     argv = [py, os.path.join(WL, "hypo_model.py"), str(sd)]
     repro = "HH_MAX_EXAMPLES={0}  {1} {2} {3}".format(
@@ -120,8 +113,6 @@ def lifefuzz_job(rng, py):
     env = _knobs(rng)
     env["RUNLOOM_DBG_GSTATE"] = "1"                 # freed-state timer-entry oracle
     env["STACKWEAVE_MN_SEED"] = str(mn_seed)           # deterministic baton -> replay
-    if rng.random() < 0.5:
-        env["STACKWEAVE_NETPOLL"] = rng.choice(NETPOLL_BACKENDS)
     argv = [py, LIFEFUZZ, "worker", str(seed), str(mn_seed), "600"]
     repro = " ".join("{0}={1}".format(k, v) for k, v in sorted(env.items())
                      if k.startswith("STACKWEAVE_")) + \

@@ -8,8 +8,9 @@ under `rr record` so the resulting trace can be `rr replay`ed and stepped
 
 TWO HARD CONSTRAINTS, both honored here:
 
-  1. rr does NOT support io_uring.  We force the epoll netpoll backend
-     (STACKWEAVE_NETPOLL=epoll) for rr runs.
+  1. rr does NOT support io_uring.  Netpoll is epoll on Linux, and the runtime
+     only sets up its io_uring ring lazily for file_read/file_write, which the
+     hang-hunter workloads never call -- so there is nothing to force off.
 
   2. rr needs a hardware performance counter (the retired-conditional-branch
      counter).  Many VMs -- including this VMware box -- do not expose a usable
@@ -73,7 +74,7 @@ def _rr_version():
 
 
 def capture(workload, env_overlay, out_dir, py=None, timeout=180):
-    """Run `workload` under `rr record` (epoll backend).  Returns
+    """Run `workload` under `rr record`.  Returns
     (returncode, trace_path, output).  Caller decides whether to keep the
     trace (e.g. only on a crash).  Raises RuntimeError if rr is unavailable."""
     ok, reason = rr_available()
@@ -84,7 +85,6 @@ def capture(workload, env_overlay, out_dir, py=None, timeout=180):
     trace = os.path.join(out_dir, "trace_%d_%d" % (os.getpid(), int(time.time())))
     env = dict(os.environ)
     env.update(env_overlay)
-    env["STACKWEAVE_NETPOLL"] = "epoll"             # rr can't record io_uring
     env["PYTHON_GIL"] = "0"
     argv = ["rr", "record", "-o", trace, py, workload]
     try:

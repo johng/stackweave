@@ -46,10 +46,10 @@ while true; do
   if ! load_ok; then sleep 30; continue; fi          # self-throttle vs the other loops
   DATE="$(date +%F)"
   OUT="$OUTBASE/$DATE/iter${iter}"; mkdir -p "$OUT"
-  # STACKWEAVE_TLBC=1: keep TLBC ON (the GC frames anchor makes it safe -> real
-  # multi-core parallelism) AND guarantee stackweave.run() never self-re-execs (stable
-  # daemon pids); PYTHON_GIL=0 for M:N.
-  nice -n 10 env PYTHON_GIL=0 STACKWEAVE_TLBC=1 PYTHONPATH="$ROOT/src" \
+  # TLBC stays on (the GC frames anchor is always active on 3.14t), so
+  # stackweave.run() does not self-re-exec and the daemon pids stay stable;
+  # PYTHON_GIL=0 for M:N.
+  nice -n 10 env PYTHON_GIL=0 PYTHONPATH="$ROOT/src" \
       "$PY" -m tools.hang_hunter.daemon --duration "$HH_ITER" \
       --load-frac "$HH_LOAD_FRAC" --jobs "$HH_JOBS" --python "$PY" \
       --report-dir "$OUT" >"$OUT/run.log" 2>&1

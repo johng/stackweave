@@ -1,5 +1,12 @@
 # dst -- Deterministic Simulation Testing
 
+> **The M:N parts are disabled pending a TODO.** `mn_digest.py` and the
+> `simfd_mn` / `simfd_dgram_mn` programs in `simnet_fd.py` need the seeded M:N
+> scheduler, and `mn_init` refuses `STACKWEAVE_MN_SEED` / `STACKWEAVE_SIM_MN`
+> until it is re-implemented for migration (the controller is compiled out
+> behind `RUNLOOM_MN_CTRL=0`). `dst.py`, `simnet.py` and the single-thread
+> `simnet_fd.py` programs are unaffected.
+
 `dst.py` drives REAL stackweave channels / `select` on the single-thread cooperative
 scheduler (`stackweave_c.fiber` + `run`), which is deterministic: for a fixed set of
 goroutines making fixed yield decisions the run-queue order is fixed, so the whole

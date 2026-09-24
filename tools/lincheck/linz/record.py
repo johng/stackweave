@@ -1,16 +1,19 @@
 """Record a concurrent operation history for one primitive, on the REAL M:N
 scheduler, then emit it as JSON for the linearizability checker.
 
-Two timing modes:
+Two timing modes (the workload itself is always a function of the seed):
   * --seeded S : run under STACKWEAVE_MN_SEED=S (DST Plane 1 -- the seeded baton
       serialises fiber segments into one deterministic grant order) and timestamp
       events with a LOGICAL clock (a shared monotonic counter, safe to bump under
       the baton exactly as the mn-sim determinism suite bumps a shared completion
       list).  The whole history is then a pure function of S, so a non-linearizable
       finding reduces to a single integer -- replay it with the same S.
-  * --wallclock : no seed; genuine real-time overlap across hub OS threads,
-      timestamped with time.monotonic_ns().  This is the original
-      record_history.py regime, kept for real-overlap stress.
+      Disabled for now: mn_init refuses a seeded run until the seeded M:N
+      scheduler is re-implemented for migration.
+  * --wallclock [--seed S] (the default) : no schedule seed; genuine real-time
+      overlap across hub OS threads, timestamped with time.monotonic_ns().  S
+      (default 0) still picks the workload and hub count.  This is the original
+      record_history.py regime.
 
 Every goroutine appends only to its OWN event list (never shared-mutated); only
 the logical clock counter is shared, and only touched at cooperative points under
@@ -18,8 +21,8 @@ the baton.  Observables are ints only (contract #9: object ids / addresses are
 not seed-stable).
 
 Usage:
-  record.py <primitive> [--seeded S | --wallclock] [--hubs H] [--procs K]
-            [--ops M] [--cap C] [--out FILE]
+  record.py <primitive> [--seeded S | --wallclock [--seed S]] [--hubs H]
+            [--procs K] [--ops M] [--cap C] [--out FILE]
   primitive in: chan mutex rwmutex semaphore waitgroup event
 """
 import json
@@ -105,7 +108,7 @@ def record(primitive, seed, seeded, hubs, procs, ops, cap, out_path):
 def main(argv):
     primitive = argv[1] if len(argv) > 1 else "chan"
     seed = 0
-    seeded = True
+    seeded = False
     hubs = None
     procs = None
     ops = None
@@ -121,6 +124,9 @@ def main(argv):
         elif a == "--wallclock":
             seeded = False
             i += 1
+        elif a == "--seed":
+            seed = int(argv[i + 1])
+            i += 2
         elif a == "--hubs":
             hubs = int(argv[i + 1])
             i += 2
