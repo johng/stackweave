@@ -59,7 +59,7 @@ Off by default (it costs one clock read per park).  Turn it on to populate
 `age` and spot a wedged fiber:
 
 ```python
-gi.enable_timestamps()       # or env STACKWEAVE_INTROSPECT_TIME=1
+gi.enable_timestamps()
 ```
 
 ### Leak watchdog
@@ -130,8 +130,6 @@ Each dict has:
 | `running_g` | goid being resumed, or `None` when idle |
 | `dwell_ms` | how long the **current resume** has run; a large value with `detached` is a hub wedged in a blocking call |
 | `pending` | fibers owned + queued on this hub |
-| `preempt_requested` | sysmon has asked this hub to yield (a CPU wedge) |
-| `instrumented` | whether sysmon resume-tracking is live (it is by default; `running_g`/`dwell_ms`/`blocked_at` need it) |
 | `blocked_at` | best-effort Python call site of a **DETACHED-wedged** hub's blocking call, e.g. `cursor.execute (db.py:88)`, else `None` |
 | `stack_cmd` | a ready-to-run `py-spy dump --pid <PID>` for **this** process — the always-safe, out-of-process full C+Python stack of every thread |
 
@@ -254,8 +252,7 @@ gi.set_deadlock_mode("raise")   # raise RuntimeError out of run()
 gi.set_deadlock_mode("off")     # do nothing
 ```
 
-Also via env `STACKWEAVE_DEADLOCK=off|warn|raise`.  This applies to the
-single-thread scheduler (which `stackweave.aio` uses).  A clean `stackweave.aio` shutdown
+This applies to the single-thread scheduler (which `stackweave.aio` uses).  A clean `stackweave.aio` shutdown
 goes through `sched_stop`, which is **excluded**, so a normal loop teardown
 with pending background tasks never trips the detector — only a genuine
 "everyone is blocked, nothing can make progress" quiescence does.

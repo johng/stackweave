@@ -3,14 +3,24 @@
 Full derivations for the invariants below: [docs/dev/RUNTIME_GOTCHAS.md](docs/dev/RUNTIME_GOTCHAS.md).
 
 ## Build & test
+- **Migration-only tree.** Cross-hub fiber migration is always on and there
+  are no env vars that switch features on or off (numeric knobs and
+  debug/fault/sim hooks remain). Migration is only sound on a free-threaded
+  CPython built with BOTH `src/patches/` halves (alloc-home + exec-home), and
+  nothing checks for them at runtime — on a stock interpreter it crashes under
+  churn at H≥2 (mimalloc `_mi_page_retire`).
 - **Free-threaded CPython 3.14+ only** (M:N is only real with the GIL off):
-  `~/.pyenv/versions/3.14.4t/bin/python3.14`, `PYTHON_GIL=0`. `setup.py` refuses GIL
-  builds and anything older, and the C sources have no other code paths
-  (`#error` in `runloom_sched.h`). Every fiber stack is >= 256 KB there, with an
-  overflow raising `RecursionError`, not crashing.
-- Build `python setup.py build_ext --inplace`; run with `PYTHONPATH=src`.
+  `setup.py` refuses GIL builds and anything older, and the C sources have no
+  other code paths (`#error` in `runloom_sched.h`). Every fiber stack is >= 256 KB
+  there, with an overflow raising `RecursionError`, not crashing. Target the
+  patched **3.14t**: `~/.pyenv/versions/3.14.4t-mig/bin/python3.14`, `PYTHON_GIL=0`
+  (`3.14.4t` is stock: fine for building, crashes as above under migration).
+- Build `STACKWEAVE_EXTRA_CFLAGS="-DPy_TSTATE_ALLOC_HOME -DPy_TSTATE_EXEC_HOME"
+  python setup.py build_ext --inplace` (add `--force` when switching
+  interpreters; the flags are not picked up from the interpreter, and without
+  them the alloc-home borrow compiles out); run with `PYTHONPATH=src`.
 - `pip install` / `pip install -e` refuse any interpreter without both migration
-  patches (setup.py install gate), so they refuse the stock 3.14t above.
+  patches (setup.py install gate), so they refuse a stock 3.14t.
   `build_ext --inplace` is ungated; set
   `STACKWEAVE_ALLOW_STOCK_CPYTHON=1` to let pip through. Guard: `tests/test_install_gate.py`.
 - Run the suite via `tests/run_isolated.py` (one file/subprocess — in-process
@@ -67,7 +77,9 @@ Full derivations for the invariants below: [docs/dev/RUNTIME_GOTCHAS.md](docs/de
   same-thread fast-path (ready-ring push), detected by PEEKing `runloom_tls_sched`
   — never `runloom_sched_get()` (mallocs on a foreign waker). Guard:
   `tests/test_differential_asyncio.py` (sc_call_soon_fifo).
-- **Preemption never yields mid object-destruction.** Both yield sites gate on
+- **Preemption never yields mid object-destruction.** Both yield sites (the
+  `preempt_init` time-slicer, and the seeded controller's frame-count hook,
+  compiled only with `RUNLOOM_MN_CTRL`) gate on
   `runloom_tstate_in_destruction` and defer (trigger stays armed); yielding inside
   a `tp_dealloc` freezes a half-dead object across a GC-safe point → UAF. Don't
   reroute via the eval-breaker.
@@ -85,7 +97,7 @@ Full derivations for the invariants below: [docs/dev/RUNTIME_GOTCHAS.md](docs/de
   base-snap registry and visits every parked chain (greenlet-PR#511 visit set,
   transcribed in `runloom_iframe.c`). Consequences that are now memory-safety
   load-bearing: (1) the fiber registry (`runloom_greg`) must reach the anchor —
-  `STACKWEAVE_GREG_OFF` loses (the anchor refuses to activate blind), and ANY new
+  the registry is unconditional, and ANY new
   spawn path that bypasses `runloom_greg_link` reopens the blind spot; (2) the
   single-thread drain's caller frames must stay registered via the base-snap
   registry (`runloom_base_snap_register`, one node per drain, paired at the single
@@ -104,36 +116,31 @@ Full derivations for the invariants below: [docs/dev/RUNTIME_GOTCHAS.md](docs/de
   user thread. Guard: `tests/test_tlbc_parked_frame_gc.py` (+ p565/p524 as the
   TLBC-on ground-truth oracle).
 
-- **Offload hubs must stay invisible to general work.** `STACKWEAVE_OFFLOAD_HUBS=K`
+- **Offload hubs must stay invisible to general work.** `mn_init(offload_hubs=K)`
   (default 0 = off) reserves K hubs at the **tail** of `runloom_hubs[]` to run
   blocking calls as ordinary fibers, so `offload` can reuse the scheduler
   instead of the bespoke thread pool + self-pipe + result-box in
-  `monkey/_base.py`. It needs no CPython tstate patch **because nothing
-  migrates**: the offload fiber is born and dies on its hub, and the caller
-  parks on a normal channel on its own hub. The whole design rests on one
-  invariant — *no general work ever lands on an offload hub*, or it strands
-  there exactly as it would on any blocked hub. **Four** exclusions enforce it
-  and all must hold together (`runloom_general_hub_count()` bounds each; it
-  equals `runloom_hub_count` when off, so every path is unchanged by default):
-  (1) spawn placement in `runloom_mn_fiber_core`; (2) steal rotation in
-  `hub_main` — an offload hub never steals, and general hubs never take it as a
-  victim, which fail differently; (3) `sysmon` preempt dispatch — it blocks on
-  purpose, and CPU-bound offloads run ATTACHED so the `tss` test alone would not
-  spare them; (4) **`world_yield_if_monopolizing`** — it arms on DETACHED with
-  `pending>0`, which is an offload hub's *steady state*, so leaving it in the
-  scan pauses every general hub 100µs on a loop for the duration of every
-  offload (a slowdown, not a failure — the easiest one to reintroduce).
-  `any_stealable_work` / `wakep_one` are bounded for the same reason. New spawn
-  paths must route through `runloom_mn_fiber_core(..., force_hub)`, never a
-  second path, or the parked-frame GC blind spot below reopens. The ONE
-  sanctioned breach is `mn_fiber(hub=N)`, bounded by `runloom_hub_count` not
+  `monkey/_base.py`. The design rests on one invariant — *no general work
+  lands on an offload hub*, or it waits behind a blocking call. Two exclusions
+  enforce it (`runloom_general_hub_count()` bounds each; it equals
+  `runloom_hub_count` when off): (1) spawn placement in `runloom_mn_fiber_core`;
+  (2) steal rotation in `hub_main` — an offload hub never steals, and general
+  hubs never take it as a victim, which fail differently. `any_stealable_work`
+  / `wakep_one` are bounded for the same reason. Offload spawns are PINNED to
+  their hub (`pin_hub1`, honoured by the global run-queue pull and by
+  `runloom_mn_woken_enqueue`), so a woken offload fiber never resumes on a
+  general hub. KNOWN GAP: the pull is `p1 == 0 || p1 == want`, so an idle
+  offload hub can still take an UNPINNED general fiber from the global
+  run-queue and strand it behind its next blocking call. New spawn paths must
+  route through `runloom_mn_fiber_core(..., force_hub)`, never a second path, or
+  the parked-frame GC blind spot above reopens. The ONE sanctioned breach is
+  `mn_fiber(hub=N)`, bounded by `runloom_hub_count` not
   `runloom_general_hub_count()`, so a test can force general work onto an
   offload hub and assert the exclusions from the inside. Liveness only — pinned
-  to a BUSY offload hub the fiber strands; nothing migrates, so never a
-  soundness hazard. Guard: `tests/test_offload_hubs.py`.
+  to a BUSY offload hub the fiber strands. Guard: `tests/test_offload_hubs.py`.
 
-- **Under migration, a hub-thread wake lands on the waker's OWN deque
-  (Go-style local wake), not the global run-queue.** `runloom_mn_woken_enqueue`
+- **A hub-thread wake lands on the waker's OWN deque (Go-style local
+  wake), not the global run-queue.** `runloom_mn_woken_enqueue`
   is the single routing point: general-hub waker + unpinned g + not replay +
   deque not full -> owner push onto `cur->deque`; anything else -> global
   run-queue. Two consequences are load-bearing: (1) a deque can now hold a
@@ -141,11 +148,16 @@ Full derivations for the invariants below: [docs/dev/RUNTIME_GOTCHAS.md](docs/de
   flags it (`from_runq = 1`) and the per-g resume block runs the same
   QUEUED->RUNNING claim + queue-ref drop as for a global pull -- any new
   deque/steal consumer must do the same or leak the ref and skip the claim;
-  (2) `runloom_mn_any_stealable_work` counts a deque of ONE as surplus under
-  migration, because the owner may be mid-fiber and never reach its pick
-  step -- restoring the default `>1` there reopens a lost-wake vs
-  park_enter. Default mode is byte-unchanged (nothing reaches QUEUED).
+  (2) `runloom_mn_any_stealable_work` counts a deque of ONE as surplus,
+  because the owner may be mid-fiber and never reach its pick step --
+  restoring the old `>1` there reopens a lost-wake vs park_enter.
   Guard: `tests/test_local_wake.py`.
+- **The seeded M:N scheduler is disabled (TODO).** `STACKWEAVE_MN_SEED` /
+  `STACKWEAVE_SIM_MN` runs are refused by `mn_init`: woken fibers run from the
+  global run-queue, which the seeded baton does not order, so replay would not
+  be deterministic. The controller is compiled in behind `RUNLOOM_MN_CTRL`
+  (default 0) until it is re-implemented; its tests are skipped via
+  `_SEEDED_MN_TODO` in `tests/conftest.py`.
 
 ## aio bridge invariants (src/stackweave/aio/)
 - Layout: `_base.py` is the foundation (`_go_io`, `_wait_fd`, `_CURRENT_TASKS`);

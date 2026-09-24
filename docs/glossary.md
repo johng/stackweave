@@ -89,14 +89,10 @@ hub tstate's attach state:
   work-stealing already drains its fresh fibers.
 - *SUSPENDED* — parked by a stop-the-world (GC).
 
-**preemption** — sysmon sets `preempt_requested`; the eval-frame wrapper yields
-the running fiber at its next Python frame boundary. A single-frame `while:
-pass` enters no frame, so an eval-breaker pending call is posted as a
-backstop.
-
-**monopoly yield** (`world_yield_if_monopolizing`) — a hub pauses ~100 µs when
-a sibling is SUSPENDED, or DETACHED with work owed, so a lone fiber can't
-monopolise the interpreter across a stop-the-world boundary.
+**preemption** — the explicit time-slicer, `preempt_init(quantum_us)`, posts a
+pending call every quantum that yields the running fiber. The M:N scheduler
+has no wall-clock preemption: migration mode stands it down, so a fiber that
+never yields keeps its hub until it does.
 
 **strand** — work that can never run because the only thing that would schedule
 it is itself blocked. The failure mode this codebase worries about most.
@@ -155,11 +151,9 @@ syscalls); the inmem parker uses none (faster, but off the netpoll). Chosen
 adaptively by queue backlog.
 
 **offload hub** — a hub reserved to run blocking calls as *ordinary fibers*
-(`offload_hubs=K` / `STACKWEAVE_OFFLOAD_HUBS`). Excluded from general placement,
-work-stealing (both directions), sysmon preemption, and the monopoly-yield
-scan, so no general work can land on one and stall. Needs no patched CPython,
-because nothing migrates: the offload fiber is born and dies on its hub and the
-caller parks on a normal channel on its own hub.
+(`offload_hubs=K`). Excluded from general placement and work-stealing (both
+directions), so no general work can land on one and stall. The offload fiber is
+spawned on its hub and the caller parks on a normal channel.
 
 ---
 
