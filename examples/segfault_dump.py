@@ -5,9 +5,9 @@ A fiber runs on a small, fixed C stack.  Deep C-level recursion -- a big
 off the end of it and segfault.  Normally that's an opaque ``Segmentation
 fault`` with no clue which fiber or why.
 
-``stackweave.inspect.install_crash_handler()`` (or the ``STACKWEAVE_CRASH=on`` env var)
-installs a fatal-signal handler that turns it into a *classified* dump: it names
-the overflowing fiber and its stack size and tells you what to do about it.
+``stackweave.inspect.install_crash_handler()`` installs a fatal-signal handler
+that turns it into a *classified* dump: it names the overflowing fiber and its
+stack size and tells you what to do about it.
 The fault is unrecoverable -- a SIGSEGV can't be turned into a catchable Python
 exception, so the process still dies -- but now it dies *informatively*, instead
 of leaving you staring at a bare "Segmentation fault".

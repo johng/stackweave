@@ -318,7 +318,7 @@ static void crash_emit_snapshot(void)
 }
 
 /* ---------------------------------------------------------------- *
- *  R5 self-hang watchdog (RUNLOOM_WATCHDOG=secs)                    *
+ *  R5 self-hang watchdog                                           *
  * ---------------------------------------------------------------- *
  * A detached native thread that snapshots the SAME artifact -- WITHOUT aborting
  * -- when the runtime stops making progress for N seconds while work is still
@@ -334,8 +334,8 @@ static void crash_emit_snapshot(void)
  *
  * SCOPE: tuned for continuously-active workloads (the soak/canary that R5-R6
  * run).  A workload whose fibers are long-lived by design (a pure keepalive
- * server that rarely completes a fiber) can look stalled while healthy -- set
- * RUNLOOM_WATCHDOG high, or leave it off, for such a service.  One snapshot per
+ * server that rarely completes a fiber) can look stalled while healthy -- use a
+ * generous `secs`, or leave it off, for such a service.  One snapshot per
  * hang episode (re-arms only after progress resumes), so a persistent wedge
  * does not spam. */
 static volatile int  runloom_watchdog_secs = 0;
@@ -411,20 +411,26 @@ static void *runloom_watchdog_main(void *arg)
     }
 }
 
-/* Start the watchdog (idempotent).  secs<=0 disables.  Called from
- * install_crash_handler when RUNLOOM_WATCHDOG is set, or explicitly. */
-void runloom_watchdog_start(int secs)
+/* Start the watchdog (idempotent: a second call while it runs keeps the first
+ * `secs`).  secs<=0 disables.  It reuses the crash report fd + goroutine-dump
+ * flag set by runloom_crash_install.  Returns 0, or -1 with errno set if the
+ * thread could not be created. */
+int runloom_watchdog_start(int secs)
 {
     pthread_t th;
-    if (secs <= 0) { runloom_watchdog_on = 0; return; }
+    int rc;
+    if (secs <= 0) { runloom_watchdog_on = 0; return 0; }
     if (__atomic_exchange_n(&runloom_watchdog_on, 1, __ATOMIC_ACQ_REL) != 0)
-        return;   /* already running */
+        return 0;   /* already running */
     runloom_watchdog_secs = secs;
-    if (pthread_create(&th, NULL, runloom_watchdog_main, NULL) != 0) {
+    rc = pthread_create(&th, NULL, runloom_watchdog_main, NULL);
+    if (rc != 0) {
         runloom_watchdog_on = 0;
-        return;
+        errno = rc;
+        return -1;
     }
     pthread_detach(th);
+    return 0;
 }
 
 static void crash_handler(int sig, siginfo_t *si, void *uctx)
@@ -558,15 +564,14 @@ static void crash_handler(int sig, siginfo_t *si, void *uctx)
 int runloom_crash_install(int flags, const char *report_path)
 {
     int i;
-    /* Idempotent re-install: a second runloom_crash_install (e.g. runloom's
-     * package __init__ auto-installs from $RUNLOOM_CRASH, then the app calls
-     * install_crash_handler() to set a level/file) must NOT re-capture the
-     * "previous" dispositions -- doing so saves OUR OWN crash_handler as the
-     * chain-out target, so on a real fault the handler restores itself and
-     * re-faults straight back into its re-entrancy pause() guard: the process
-     * wedges (a stranded hub, no core) instead of coring + dying.  Keep the
-     * dispositions captured by the FIRST install (the true originals, normally
-     * SIG_DFL / faulthandler). */
+    /* Idempotent re-install: a second runloom_crash_install (e.g. the app calls
+     * install_crash_handler() again to change the level/file) must NOT
+     * re-capture the "previous" dispositions -- doing so saves OUR OWN
+     * crash_handler as the chain-out target, so on a real fault the handler
+     * restores itself and re-faults straight back into its re-entrancy pause()
+     * guard: the process wedges (a stranded hub, no core) instead of coring +
+     * dying.  Keep the dispositions captured by the FIRST install (the true
+     * originals, normally SIG_DFL / faulthandler). */
     int already = __atomic_load_n(&runloom_crash_on, __ATOMIC_ACQUIRE);
     if (flags == 0) flags = RUNLOOM_CRASH_DEFAULT;
 
@@ -647,15 +652,6 @@ int runloom_crash_install(int flags, const char *report_path)
 
     __atomic_store_n(&runloom_crash_on, 1, __ATOMIC_RELEASE);
     runloom_crash_thread_arm();   /* arm the installing (main) thread now */
-    /* R5: auto-start the self-hang watchdog if RUNLOOM_WATCHDOG=<secs> is set.
-     * It reuses the crash report fd + goroutine-dump flag installed here. */
-    {
-        const char *wd = getenv("STACKWEAVE_WATCHDOG");
-        if (wd != NULL && wd[0] != '\0') {
-            int secs = atoi(wd);
-            if (secs > 0) runloom_watchdog_start(secs);
-        }
-    }
     return 0;
 }
 

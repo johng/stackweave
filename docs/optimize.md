@@ -12,15 +12,15 @@ by **the trade-off you're making** — not by memorizing knobs:
 import stackweave
 
 stackweave.optimize()                          # auto — the default; nothing to set
-stackweave.optimize("throughput")              # max req/s
-stackweave.optimize("memory")                  # tight RSS
+stackweave.optimize("throughput")              # max spawn rate
+stackweave.optimize("memory")                  # right-sized stacks
 stackweave.optimize("latency")                 # sharp tail
 stackweave.optimize("secure")                  # hardened
 stackweave.optimize("throughput", "latency")   # compose — pass the trades you want
 stackweave.optimize("memory", max_fibers=200_000)
 ```
 
-Call it **before `stackweave.run()`** — the settings are read as the runtime starts.
+Call it **before `stackweave.run()`** — some settings are read as the runtime starts.
 
 ## The four trades
 
@@ -29,17 +29,17 @@ model:
 
 | goal | buys you | spends |
 |---|---|---|
-| **`"throughput"`** | max req/s — io_uring engages early, bigger offload pool, bulk spawn (the stack pool already self-sizes) | a little RAM |
-| **`"memory"`** | tightest RSS — eager page reclaim, and idle parked-fiber stack pages handed back now | some throughput (more reclaim syscalls) |
-| **`"latency"`** | sharp tail — tighter stall detection so a wedged hub recovers faster | a little CPU (extra watchdog wakeups) |
+| **`"throughput"`** | max spawn rate — `stackweave.fiber` spawns like `fiber_fast` (fixed default stack, no grow-down sampling), and a bigger blocking-offload pool (16 workers) | a little RAM |
+| **`"memory"`** | right-sized stacks — `stackweave.fiber` keeps the grow-down auto-sizer (the default; re-enabled if you turned it off) | some spawn rate |
+| **`"latency"`** | sharp tail — tighter stall detection (25 ms) so a wedged hub recovers faster | a little CPU (extra watchdog wakeups) |
 | **`"secure"`** | hardened — recycled stacks are wiped before reuse (no leftover TLS keys / request bodies) | a little speed |
 
 `max_fibers=N` is the one genuine number with no sane automatic value: a hard
-backpressure ceiling on concurrent fibers.
+backpressure ceiling on concurrent fibers (the same as
+`stackweave.inspect.set_max_fibers(N)`).
 
 These trades are deliberately **safe** — none flips an experimental lever or a
-setting that can OOM-kill a RAM-tight host. The sharpest expert tricks stay raw
-env vars with their own warnings; a friendly name should never hide a footgun.
+setting that can OOM-kill a RAM-tight host.
 
 > **The stack pool sizes itself.** Out of the box (any preset, or none) the depot
 > auto-caps to ~1.5× your live-fiber high-water-mark — clamped by `vm.max_map_count`
@@ -57,18 +57,20 @@ disagree, the higher-precedence one wins:
 secure  >  memory  >  latency  >  throughput
 ```
 
-So `optimize("throughput", "memory")` gives you throughput's io_uring/bulk-spawn
-*and* memory's eager reclaim. Where two goals ever set the same knob, the
-higher-precedence one wins. It returns the dict of **effective** settings (an
-explicit shell env var shows through, since it overrides optimize()).
+The only knob two goals share is the spawn path, so `optimize("throughput",
+"memory")` gives you throughput's bigger offload pool *and* memory's right-sized
+stacks. It returns the dict of **effective** settings: the env-var knobs it set
+(an explicit shell env var shows through, since it overrides optimize()), plus
+`"spawn"`, `"stack_scrub"` and `"max_fibers"` for the settings it applied live.
 
 ## Power users
 
-The trades are just a friendly layer over the runtime's `STACKWEAVE_*` env vars (see
-[Resource limits & internals](resource-limits.md)). An **explicit env var still
-wins** over `optimize()` — so if you export `STACKWEAVE_STACK_DEPOT_CAP=200000`
-yourself, that sticks. You never *need* the raw vars; they're the escape hatch under the
-hood.
+`"throughput"` and `"latency"` set two numeric tuning env vars,
+`STACKWEAVE_BLOCKPOOL_WORKERS` and `STACKWEAVE_SYSMON_MS` (see
+[Resource limits & internals](resource-limits.md)), and only if they are not
+already set — so if you export `STACKWEAVE_SYSMON_MS=40` yourself, that sticks.
+The rest map onto live APIs: `stackweave.set_grow_down()`,
+`stackweave_c.set_stack_scrub()` and `stackweave.inspect.set_max_fibers()`.
 
 ## Examples
 
@@ -85,8 +87,8 @@ stackweave.optimize(max_fibers=200_000)
 
 ## Hot handlers: scaling a shared handler across cores
 
-> Full reference: **[Hot handlers](hot-handlers.md)** (`@stackweave.hot`, auto mode,
-> the rules, and why it works). Short version below.
+> Full reference: **[Hot handlers](hot-handlers.md)** (`@stackweave.hot`, the
+> rules, and why it works). Short version below.
 
 A plain module-level handler already scales across every core — there's nothing
 shared for the cores to fight over:
@@ -125,10 +127,6 @@ def handle(conn):
 - It stays correct: it only kicks in when the handler *reads* its captures. If it
   *rebinds* one (`nonlocal x; x = ...`), stackweave leaves it shared.
 - Stacking decorators? Put `@stackweave.hot` closest to your `def`.
-
-`optimize("throughput")` turns this on automatically for the busiest closures (no
-decorator, under a memory budget — it tells you if the budget is hit);
-`optimize("memory")` turns it all off to reclaim the RAM.
 
 **Fastest path first:** if a handler is hot enough to want this, *compiling* it
 (a Cython `cdef` handler) beats it outright — that removes the interpreter cost

@@ -62,8 +62,7 @@ stackweave.set_grow_down(False)     # reserve the fixed default for every fiber
 stackweave.grow_down_enabled()      # -> current state
 ```
 
-or set `STACKWEAVE_GROW_DOWN=0` in the environment before `import stackweave`. A
-per-call `stackweave.fiber(fn, stack_size=N)` pin always wins regardless -- use it to
+A per-call `stackweave.fiber(fn, stack_size=N)` pin always wins regardless -- use it to
 opt a single function out and choose its exact size. The grow-down also steps
 aside automatically when you explicitly enable the opt-in C auto-sizer
 ([below](#letting-runloom-size-them-for-you)) -- the sizer you turned on by hand
@@ -330,7 +329,7 @@ protection the main thread gets, scaled to the fiber's smaller stack:
 - **Every stack has a guard page.** A `PROT_NONE` page sits just below each
   fiber stack. An overflow faults *immediately and cleanly* at the guard
   rather than silently scribbling over a neighbouring stack. With the crash reporter installed
-  (`stackweave.inspect.install_crash_handler()` or `STACKWEAVE_CRASH=on`) that fault
+  (`stackweave.inspect.install_crash_handler()`) that fault
   is turned into a classified message that *names the overflowing fiber and
   its stack size* instead of a bare segfault -- see
   [Crash reporting](debugging.md#crash-reporting-sigsegv--sigbus).
@@ -410,7 +409,7 @@ If you'd rather not read the table and apply sizes by hand, turn on the
 **adaptive auto-sizer**, which does it automatically:
 
 ```python
-stackweave.inspect.enable_stack_autosize()    # or STACKWEAVE_STACK_AUTOSIZE=1
+stackweave.inspect.enable_stack_autosize()
 ```
 
 It works by **starting large and learning down**: the first time a fiber
@@ -442,7 +441,7 @@ it. The standout offender is `Decimal` arithmetic -- a single
 the fattest single frame in the whole 3.13 stdlib.
 
 ```python
-stackweave.inspect.enable_stack_autosize(prescan=True)   # or STACKWEAVE_STACK_AUTOSIZE=prescan
+stackweave.inspect.enable_stack_autosize(prescan=True)
 ```
 
 With `prescan` on, an unseen kind's bytecode is loosely scanned for symbols whose

@@ -216,8 +216,8 @@ def install_crash_handler(level=None, file=None):
     native backtrace and the Python traceback, and finally chains to the default
     handler so a core dump / correct exit code still follow.
 
-    `level` selects behaviour (comma/space separated; default from the
-    STACKWEAVE_CRASH env var, else just the fiber dump):
+    `level` selects behaviour (comma/space separated; default: just the fiber
+    dump):
 
         on / fibers  dump the fiber registry (the default)
         all              fibers + native backtrace + Python traceback
@@ -228,7 +228,7 @@ def install_crash_handler(level=None, file=None):
         gdb              fork+exec `gdb -batch -ex 'thread apply all bt'` on self
         off              uninstall
 
-    `file` (or STACKWEAVE_CRASH_FILE) also appends the report to that path.
+    `file` also appends the report to that path.
 
     For full per-thread coverage call this BEFORE starting the runtime, so the
     scheduler hubs are armed as they spawn.  Returns the installed flag bitmask
@@ -244,6 +244,27 @@ def uninstall_crash_handler():
 def crash_handler_installed():
     """True if install_crash_handler() is currently active."""
     return _core.crash_handler_installed()
+
+
+def start_watchdog(secs):
+    """Start the self-hang watchdog.
+
+    A detached native thread that writes a hang report -- the same build +
+    runtime snapshot and flight recorder as a crash dump -- WITHOUT aborting,
+    when no fiber has completed for `secs` seconds while work is still
+    outstanding (a deadlock, a lost wake, or a hub frozen off the scheduler).
+    It re-arms once progress resumes, so a persistent wedge reports once per
+    episode.
+
+    The report reuses the crash reporter's settings: the fiber dump and the copy
+    to its report file appear only once install_crash_handler() has set a level
+    and `file`, so call that first.  Without it the report still goes to stderr.
+
+    The progress signal is fiber completion, so it suits a continuously-active
+    service; a server whose fibers are long-lived by design can look stalled
+    while healthy -- use a generous `secs` there.  Idempotent (a second call
+    keeps the first `secs`).  ValueError if secs <= 0.  POSIX only."""
+    _core.start_watchdog(secs)
 
 
 def enable_stack_advice(on=True):
@@ -285,9 +306,9 @@ def enable_stack_autosize(on=True, prescan=False):
     Enabling autosize implies `enable_stack_advice()` (so `stack_advice()` keeps
     reporting) and turns on park-time idle-page reclaim. An explicit
     `stackweave.fiber(fn, stack_size=...)` always overrides the auto-sizer. Off by
-    default; also enable via `STACKWEAVE_STACK_AUTOSIZE=1` (start size via
-    `STACKWEAVE_STACK_AUTOSIZE_START`, default 256 KiB). Best enabled before the
-    runtime starts so kinds are sized from their first spawn.
+    default; the start size comes from `STACKWEAVE_STACK_AUTOSIZE_START` (default
+    256 KiB). Best enabled before the runtime starts so kinds are sized from
+    their first spawn.
 
     `prescan=True` additionally runs the cold-start optimizer: before an unseen
     kind has been measured, its bytecode is loosely scanned for symbols whose C

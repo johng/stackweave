@@ -83,12 +83,9 @@ class StackweaveTask(_RunloomFutureMixin, asyncio.Task):
         # cleared the instant the fiber is spawned (see _pg_spawn_driver /
         # _pg_settle_c), the same refcycle break _g/_self_g get.
         self._g = None
-        if _PG_MODULE_ROOT_ON:
-            _modname = _pg_capture_module_name()
-            _driver = self._driver
-            self._body = lambda: _pg_run_with_module_root(_driver, _modname)
-        else:
-            self._body = self._driver
+        _modname = _pg_capture_module_name()
+        _driver = self._driver
+        self._body = lambda: _pg_run_with_module_root(_driver, _modname)
         # defer_spawn (DESIGN_loop_run_prerun_scheduling.md R7 item 2): a foreign
         # thread's PRE-RUN create_task builds the task here (registrations +
         # module-root capture on the creator's stack) but defers the fiber spawn

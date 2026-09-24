@@ -2,30 +2,24 @@
 
 stackweave writes a **self-contained diagnostic artifact** on a fatal fault, and
 (optionally) on a self-detected hang. Pasting that artifact into an issue is
-usually enough to locate the problem **without a reproduction** — which is the
-whole point: field failures are rare and hard to reproduce, so the report has
-to carry everything.
+usually enough to locate the problem
+**without a reproduction** — which is the whole point: field failures are rare
+and hard to reproduce, so the report has to carry everything.
 
 ## Turn it on
 
 ```python
 import stackweave
 # writes the report to ./runloom_crash.txt (append) as well as stderr:
-stackweave.install_crash_handler("goroutines,backtrace", file="runloom_crash.txt")
+stackweave.inspect.install_crash_handler("goroutines,backtrace", file="runloom_crash.txt")
+stackweave.inspect.start_watchdog(60)    # optional: report a 60 s hang too
 ```
 
-or via environment (no code change):
-
-```sh
-STACKWEAVE_CRASH=goroutines,backtrace STACKWEAVE_CRASH_FILE=runloom_crash.txt \
-STACKWEAVE_WATCHDOG=60 \
-python your_server.py
-```
-
-- `STACKWEAVE_CRASH` — what to dump: `goroutines`, `backtrace`, `gdb`, `wait` (or
-  `all`, `off`).
-- `STACKWEAVE_CRASH_FILE` — a file to append the report to (also always on stderr).
-- `STACKWEAVE_WATCHDOG=<secs>` — arm the self-hang watchdog (see below).
+- `level` — what to dump: `goroutines`, `backtrace`, `gdb`, `wait` (or `all`,
+  `off`).
+- `file` — a file to append the report to (also always on stderr).
+- `start_watchdog(secs)` — arm the self-hang watchdog (see below). Call it after
+  `install_crash_handler()`: the hang report reuses that level and file.
 
 ## What the artifact contains
 
@@ -52,7 +46,7 @@ counter, frozen at the instant of the fault. `pending` / `completed` /
 > 0 means the app leaked sockets to the GC; a huge `fd_armed` or `parked` points
 at a registration/parker leak.
 
-## The self-hang watchdog (`STACKWEAVE_WATCHDOG=secs`)
+## The self-hang watchdog (`start_watchdog(secs)`)
 
 A silent hang — the server "just stops responding" — is the hardest field
 failure to diagnose. The watchdog is a detached native thread that emits the
@@ -62,19 +56,24 @@ work is still outstanding* (a deadlock, a lost wake, or a hub frozen off the
 scheduler). It re-arms once progress resumes, so a persistent wedge produces
 one report per episode, not a flood.
 
+The fiber dump and the copy to the report file follow `install_crash_handler()`'s
+level and `file`; without that call the hang report still goes to stderr, minus
+the fiber dump. A second `start_watchdog()` call while it runs keeps the first
+`secs`.
+
 **Scope.** The progress signal is fiber *completion*, so the watchdog fits a
 continuously-active service (the soak/canary workloads it was built for). A
 service whose fibers are long-lived by design (a pure keepalive server that
-rarely completes a fiber) can look stalled while perfectly healthy — set
-`STACKWEAVE_WATCHDOG` generously, or leave it off, for that shape.
+rarely completes a fiber) can look stalled while perfectly healthy — give it a
+generous `secs`, or leave it off, for that shape.
 
 ## What it does NOT contain
 
 No request payloads, no user data, no environment variables, no memory
 contents beyond the fault address and stack classification. It is a snapshot of
 stackweave's own scheduler state and the faulting backtrace — safe to paste into a
-public issue. (If you built with `gdb` in `STACKWEAVE_CRASH`, the optional gdb dump
-may include more; omit it for a public report.)
+public issue. (If you asked for `gdb` in the level, the optional gdb dump may
+include more; omit it for a public report.)
 
 ## Filing
 

@@ -50,7 +50,6 @@ contention.
   `buf.append(...)`), is fully supported — every copy points at the same object.
 - **No-op on anything that isn't a plain Python function** (a builtin, a class
   instance, an already-wrapped C callable) — returned unchanged.
-- **No-op at runtime under `optimize("memory")`** — spends the memory back.
 
 ## Cost
 
@@ -58,23 +57,6 @@ One copy of the **captured variables** per core — **not per fiber**. A million
 fibers over one `@hot` handler still cost one copy per core. The copies share the
 same captured *values* (only the per-core cell wrappers differ), so it is cheap;
 RSS is bounded by your core count, not your fiber count.
-
-## Automatic mode (no decorator)
-
-`stackweave.optimize("throughput")` turns on **auto** hot-handlers: stackweave watches
-which closures get spawned a lot and gives the busiest few the `@hot` treatment
-automatically, under a hard budget so it can never clone its way through your RAM.
-It emits a warning if the budget is hit (no silent truncation).
-`optimize("memory")` turns both the decorator and auto mode off.
-
-Rarely-needed knobs:
-
-| env var | meaning | default |
-|---|---|--:|
-| `STACKWEAVE_HOT_HANDLERS` | master on/off for `@hot` | on |
-| `STACKWEAVE_HOT_AUTO` | auto-promotion on/off (set by `optimize`) | off |
-| `STACKWEAVE_HOT_AUTO_AFTER` | spawns of a closure before it's promoted | 64 |
-| `STACKWEAVE_HOT_AUTO_BUDGET` | max distinct handlers to clone | 32 |
 
 ## Stacking with other decorators
 

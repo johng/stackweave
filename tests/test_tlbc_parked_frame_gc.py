@@ -70,9 +70,8 @@ def test_gc_freeze_keeps_anchor_thawed_and_collect_clean():
         gc.unfreeze()
 
 
-def _run_big100(prog, extra_env, hubs, duration, timeout):
+def _run_big100(prog, hubs, duration, timeout):
     env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH=_SRC)
-    env.update(extra_env)
     p = subprocess.run(
         [sys.executable, os.path.join(_REPO, "tests", "big_100", prog),
          "--hubs", str(hubs), "--duration", str(duration)],
@@ -86,6 +85,5 @@ def test_p565_passes_tlbc_on_with_anchor():
     # compileall churn that used to crash now runs clean.  If the anchor ever
     # regresses, this SIGSEGVs (rc != 0) within ~2s.
     rc0, out = _run_big100(
-        "p565_compileall_bytecode_purity.py", {},
-        hubs=8, duration=8, timeout=90)
+        "p565_compileall_bytecode_purity.py", hubs=8, duration=8, timeout=90)
     assert rc0 == 0 and "VERDICT       : PASS" in out, out[-2500:]

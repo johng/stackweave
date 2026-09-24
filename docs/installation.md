@@ -108,8 +108,7 @@ parked fiber frames visible to the collector, and TLBC stays **on** whenever
 that anchor is active — the default. Only when the anchor is
 unavailable (e.g. `STACKWEAVE_GC_FRAMES=0`) does stackweave re-exec with `PYTHON_TLBC=0`, which
 keeps the crashy combination unreachable. Opt out entirely with
-`PYTHON_TLBC=0` / `-X tlbc=0`; force it on regardless with `STACKWEAVE_TLBC=1`
-(dev/debug only).
+`PYTHON_TLBC=0` / `-X tlbc=0`.
 
 ## Verifying the install
 

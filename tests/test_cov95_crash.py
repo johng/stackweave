@@ -97,18 +97,14 @@ import stackweave_c as rc
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PY = sys.executable
 
-def _run_child(body, timeout=200, extra_env=None):
+def _run_child(body, timeout=200):
     """Run `body` in a fresh clean-exit child (so gcov flushes its counters).
 
-    The child starts with NO STACKWEAVE_CRASH* env unless `extra_env` sets it, so a
-    parent's env never skews which install path the child takes.
+    The child starts with NO STACKWEAVE_CRASH_WAIT_SECS, so a parent's env never
+    skews how long a "wait" install blocks.
     """
     env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
-    env.pop("STACKWEAVE_CRASH", None)
-    env.pop("STACKWEAVE_CRASH_FILE", None)
     env.pop("STACKWEAVE_CRASH_WAIT_SECS", None)
-    if extra_env:
-        env.update(extra_env)
     src = "import os, signal, time\nimport stackweave, stackweave_c as rc\n" + body
     return subprocess.run([PY, "-c", src], cwd=REPO, env=env,
                           capture_output=True, text=True, timeout=timeout)

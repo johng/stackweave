@@ -28,7 +28,7 @@ CSV="$OUT/canary.csv"
 sudo -n prlimit --pid $$ --nofile=1048576:1048576 2>/dev/null || true
 
 echo "[canary] soak ${SECS}s -> $OUT"
-CANARY_CRASH_FILE="$OUT/canary_crash.txt" STACKWEAVE_WATCHDOG=120 \
+CANARY_CRASH_FILE="$OUT/canary_crash.txt" \
   PYTHON_GIL=0 "$PY" examples/canary/server.py \
     --csv "$CSV" --interval "$INTERVAL" --seconds "$SECS" >"$OUT/server.log" 2>&1 &
 SRV=$!

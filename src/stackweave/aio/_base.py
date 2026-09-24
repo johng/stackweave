@@ -110,8 +110,7 @@ def _fiber_io(fn):
 # concurrent, not on the fiber's call stack).  Only task-driver
 # fibers are wrapped; raw stackweave_c.fiber() fibers (netpoll pump,
 # keepalive, timers) are untouched, so the per-fiber cost stays off the
-# scale-out path.  Disable with STACKWEAVE_AIO_MODULE_ROOT=0.
-_PG_MODULE_ROOT_ON = _os.environ.get("STACKWEAVE_AIO_MODULE_ROOT", "1") != "0"
+# scale-out path.
 _PG_ROOT_CODE = compile("__runloom_body__()", "<runloom-task-root>", "exec")
 
 

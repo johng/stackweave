@@ -93,7 +93,7 @@ def arm_diagnostics():
     # See site.py arm_diagnostics: no faulthandler, level without py/wait/gdb,
     # so a fault chains to SIG_DFL -> core + die (no wedge under M:N).
     stackweave_c.set_introspect_timestamps(True)
-    level = os.environ.get("STACKWEAVE_CRASH", "goroutine,backtrace")
+    level = os.environ.get("DEMO_CRASH_LEVEL", "goroutine,backtrace")
     stackweave_c.install_crash_handler(level, CRASH_REPORT)
     stackweave_c.install_traceback_signal()
 
