@@ -106,9 +106,9 @@ static void *waker_state(void *arg)
 }
 
 /* ---- idle-stack sweeper: a THIRD concurrent claimer of a PARKED g.
- * runloom_mn_sweep_try_claim (mn_sched_mn_api.c.inc:435-440) CASes PARKED->
- * SWEEPING (exclusive, like QUEUED->RUNNING for a resumer); runloom_mn_sweep_end
- * (:454-464) then CASes SWEEPING->PARKED if no wake landed, or -- if wake_g
+ * runloom_mn_sweep_try_claim (mn_sched_mn_api.c.inc:337-346) CASes PARKED->
+ * SWEEPING (exclusive, like QUEUED->RUNNING for a resumer);
+ * runloom_mn_sweep_claim_release (:354-369) then CASes SWEEPING->PARKED if no wake landed, or -- if wake_g
  * flipped it to SWEEPING_WOKEN meanwhile -- stores QUEUED and re-enqueues the
  * deferred wake exactly once.  A wake that lands during the sweep MUST NOT be
  * dropped (that is a lost wake); -DBUG_SWEEP_DROP_WOKEN models exactly that. */

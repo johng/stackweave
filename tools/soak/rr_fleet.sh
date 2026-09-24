@@ -65,10 +65,10 @@ worker() {                                       # $1 = worker id
     # "$PY" DIRECTLY -- do NOT put `env ...` inside `rr record`.  Under --chaos,
     # a recorded `env -> execve(python3)` occasionally wedges in the exec (glibc
     # ENOEXEC -> shell-script retry) for the whole run and gets SIGTERM'd at the
-    # outer timeout: a false rr-chaos-HANG that never reaches pygo.  STACKWEAVE_TLBC=1
-    # keeps TLBC ON (safe via the GC frames anchor) while guaranteeing stackweave.run()
-    # never self-re-execs (os.execv), which would wedge the recording the same way.
-    _RR_TRACE_DIR="$TR" PYTHON_GIL=0 PYTHONPATH="$ROOT/src" STACKWEAVE_TLBC=1 \
+    # outer timeout: a false rr-chaos-HANG that never reaches pygo.  stackweave.run()
+    # self-re-execs (os.execv) -- which would wedge the recording the same way --
+    # only when the GC frames anchor is inactive, never on a 3.14t build.
+    _RR_TRACE_DIR="$TR" PYTHON_GIL=0 PYTHONPATH="$ROOT/src" \
         timeout -k 5 "$TMO" \
         rr record --chaos \
         "$PY" tools/lifefuzz/lifefuzz.py run "$seed" --timeout "$INNER" \

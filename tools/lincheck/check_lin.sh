@@ -102,7 +102,7 @@ run_optional_pytest() {
 echo "== 4. stateful Hypothesis model of the channel API =="
 PYTHONPATH="$ROOT/src" run_optional_pytest "$HERE/stateful_chan.py"
 
-echo "== 5. generative linearizability battery (all primitives, seeded DST) =="
+echo "== 5. generative linearizability battery (all primitives, real-time M:N) =="
 # The abstract generalization of big_100: record a real concurrent history per
 # (primitive, seed) on the M:N scheduler and check it against the sequential
 # reference spec with the pure-Python WGL checker.  Bounded sweep here; the

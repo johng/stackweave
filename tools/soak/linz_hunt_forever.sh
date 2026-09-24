@@ -3,14 +3,14 @@
 #
 # Loops the linearizability battery (tools/lincheck/linz/battery.py) over
 # ever-advancing seed ranges across every primitive (chan/mutex/rwmutex/
-# semaphore/waitgroup/event).  Each seeded run records a real concurrent history
-# on the M:N scheduler and checks it against the sequential reference spec with
+# semaphore/waitgroup/event).  Each run records a real concurrent history on
+# the M:N scheduler and checks it against the sequential reference spec with
 # the pure-Python WGL checker.  Any NOT-LINEARIZABLE verdict is a genuine
-# correctness bug in the primitive, reproducible from ONE integer:
+# correctness bug in the primitive; its workload replays from ONE integer:
 #   python tools/lincheck/linz/battery.py <primitive> --seeds S S+1 -v
-# A same-seed observable divergence in a native family (chan/rwmutex/semaphore/
-# waitgroup) is a determinism regression; the Co* family (mutex/event) is
-# linearizability-only (wake order not seed-governed -- see battery.py).
+# The battery records real-time (--wallclock) histories by default, so the
+# schedule itself does not replay; --seeded pins it, but mn_init refuses a
+# seeded run until the seeded M:N scheduler is re-implemented for migration.
 #
 # Niced to 19 (alongside the rr fleet / simfd hunt) so it never starves
 # big100/cserve.  Log: ${STACKWEAVE_SOAK_DIR:-$HOME/runloom-soak}/linz_hunt/.

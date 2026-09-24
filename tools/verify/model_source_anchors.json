@@ -11,13 +11,13 @@
   "runloom_fiber_release": "027d72c0f10990fc"
  },
  "tools/verify/cbmc/g_slab_recycle_cbmc.c": {
-  "runloom_g_slab_alloc": "a0a8819471671b7f",
+  "runloom_g_slab_alloc": "8d4288887504a8ab",
   "runloom_g_slab_free": "f14de014afcb6732"
  },
  "tools/verify/cbmc/preempt_defer_cbmc.c": {
-  "runloom_hub_resume_begin": "cdb57c23c3c63b06",
-  "runloom_hub_resume_end": "24d122499852c8a0",
-  "runloom_preempt_eval_frame": "7db2c5a36cade726"
+  "runloom_hub_resume_begin": "bdc7c645a6e1755b",
+  "runloom_hub_resume_end": "faf5e4e61459a786",
+  "runloom_preempt_eval_frame": "820557a1cd3d42c6"
  },
  "tools/verify/cbmc/rl_handle_cbmc.c": {
   "rl_handle_deref": "1651a25d1be94be5",
@@ -32,7 +32,7 @@
  },
  "tools/verify/cbmc/sched_qref_cbmc.c": {
   "runloom_g_try_incref": "98e9b193d7b659be",
-  "runloom_mn_hub_submit": "d4aa3eac6ac287a3"
+  "runloom_mn_hub_submit": "e106acacd44a0a8b"
  },
  "tools/verify/cbmc/sched_readyring_cbmc.c": {
   "runloom_ready_grow": "f2e0e608608f6fc4",
@@ -41,7 +41,7 @@
  },
  "tools/verify/cbmc/sched_steal_cbmc.c": {
   "runloom_cldeque_steal": "0f490f9c3f355330",
-  "runloom_mn_hub_submit": "d4aa3eac6ac287a3"
+  "runloom_mn_hub_submit": "e106acacd44a0a8b"
  },
  "tools/verify/cbmc/snap_refown_cbmc.c": {
   "runloom_pystate_load": "4e9c973ec1d62e7f",

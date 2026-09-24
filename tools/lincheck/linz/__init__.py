@@ -13,10 +13,12 @@ hand-written programs).  Instead of enumerating programs, `linz` is built from:
                     Event).  Coverage is UNBOUNDED from these tiny specs.
   * workloads.py -- random concurrent op-sequence generators (seed -> program).
   * record.py    -- runs a workload on the REAL M:N scheduler and records the
-                    call/return history.  Two modes: wall-clock (genuine real-time
-                    overlap) and DST-seeded (STACKWEAVE_MN_SEED -> deterministic
-                    logical-clock history, so every non-linearizable finding
-                    reduces to a single reproducible integer seed).
+                    call/return history.  Two modes: wall-clock (the default;
+                    genuine real-time overlap) and DST-seeded (STACKWEAVE_MN_SEED
+                    -> deterministic logical-clock history, so every
+                    non-linearizable finding reduces to a single reproducible
+                    integer seed; refused by mn_init until the seeded M:N
+                    scheduler is re-implemented for migration).
   * battery.py   -- the driver: sweep seeds x primitives, record, check, and on a
                     NOT-LINEARIZABLE verdict print the seed + the minimal history.
 

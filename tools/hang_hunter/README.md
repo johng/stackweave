@@ -44,8 +44,7 @@ Shipped (run on this box today):
 - **stress** — randomized real workloads: `gc_churn` (the stop-the-world churn
   that exposed the monopoly deadlock — kept as a permanent regression hunter) and
   `chan_storm` (parallel producer/consumer over buffered channels). Random hub
-  counts / sizes and random scheduler env knobs (sysmon / preempt / handoff on
-  and off, world-yield ns — never 0, which would disable a fix).
+  counts / sizes, with sysmon logging randomly on or off.
 - **hypo** — Hypothesis-generated *always-terminating* programs (random op
   sequences across random hub counts); any hang is therefore a real bug, and
   Hypothesis shrinks assertion failures to a minimal repro.
@@ -55,11 +54,15 @@ Shipped (run on this box today):
   wakeup; a nonzero exit (crash / life-cycle-oracle violation) is a bug. Each job
   pins a `STACKWEAVE_MN_SEED` so the daemon's repro replays the exact execution, and
   the worker's internal watchdog is set high so a true wedge reaches the daemon's
-  gdb-on-live-process triage.
+  gdb-on-live-process triage. **Disabled pending a TODO:** `mn_init` refuses a
+  seeded run until the seeded M:N scheduler is re-implemented for migration, so
+  every lifefuzz job currently fails at start-up. Run with `--engines stress,hypo`
+  until then.
 
 Auto-selected when the ext is **TSan-built**:
 
-- **lifefuzz-tsan** — the same generative programs under the gold-standard TSan ext
+- **lifefuzz-tsan** — the same generative programs (and the same seeded-run TODO)
+  under the gold-standard TSan ext
   (`setarch -R` + `LD_PRELOAD=libtsan` + the stackweave suppressions); a non-suppressed
   data race exits 86 → CRASH triage. This is the engine that found the deadlock-
   census race cluster (`tools/README.md` Finding D). Because a TSan-linked ext can

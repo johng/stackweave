@@ -50,7 +50,8 @@ race:os_readv_impl
 # --- CPython non-atomic eval-frame hook setter (Python/pystate.c) ---
 # _PyInterpreterState_SetEvalFrameFunc stores interp->eval_frame with a plain
 # (non-atomic) write, and _PyEval_EvalFrame reads it with a plain load + indirect
-# call.  stackweave installs its STACKWEAVE_PREEMPT eval-frame wrapper EXACTLY ONCE for
+# call.  stackweave installs the seeded controller's frame-count eval-frame wrapper
+# (STACKWEAVE_MN_PREEMPT_FRAMES; compiled only with RUNLOOM_MN_CTRL) EXACTLY ONCE for
 # the process lifetime (runloom_preempt_install; it used to toggle per
 # mn_init/mn_fini, which raced a foreign thread's frame dispatch into a NULL
 # call -> SIGSEGV; that toggle is gone).  The lone remaining NULL->hook publish

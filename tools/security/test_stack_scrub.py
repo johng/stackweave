@@ -7,7 +7,7 @@ the next goroutine to reuse that stack can read the previous one's leftovers
 Only reachable via a C extension reading uninitialised stack (Python objects
 live on the heap), but real defense-in-depth.
 
-This verifies set_stack_scrub(True) / STACKWEAVE_STACK_SCRUB=1 closes it: goroutine A
+This verifies set_stack_scrub(True) closes it: goroutine A
 writes a sentinel across its stack and records the exact addresses; goroutine B
 reuses the stack and reads those addresses back.
 """

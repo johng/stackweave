@@ -53,8 +53,7 @@ GROUPS = {
     ],
     "io_uring.c -- io_uring backend": [
         "io_uring.c", "io_uring_l_sys.c.inc", "io_uring_l_buf.c.inc",
-        "io_uring_l_do.c.inc", "io_uring_l_msclose.c.inc", "io_uring_l_ring.c.inc",
-        "io_uring_l_loop.c.inc",
+        "io_uring_l_do.c.inc",
     ],
     "chan.c -- channels + select": [
         "chan.c", "chan_waiters.c.inc", "chan_ops.c.inc",

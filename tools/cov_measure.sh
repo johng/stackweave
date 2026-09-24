@@ -83,13 +83,6 @@ PYTHON_GIL=0 "$PYTHON" tools/fault_sweep_counted.py $SWEEP_SITES \
     >> "$COVOUT/workloads.log" 2>&1
 echo "[cov]   fault sweep rc=$?"
 
-# NB: a global STACKWEAVE_TCPCONN_IOURING=1 / STACKWEAVE_IOURING_LOOP=1 re-drive was
-# tried to light up the io_uring eventfd/ring/pump lines, but forcing io_uring
-# recv DEADLOCKS a backpressured loopback transfer (see
-# tests/regressions/iouring_recv_backpressure_deadlock.py) -- so those lines
-# cannot be driven by a clean-exit test today. They are handled as BLOCKED
-# exclusions in the manifest instead (see tests/COVERAGE.md).
-
 echo "[cov] collecting gcov (from repo root so .c.inc fragment paths resolve) ..."
 ( cd "$ROOT"
   for src in src/runloom_c/*.c; do

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # matrix.sh -- the soak MATRIX (docs/dev/RELIABILITY_PROGRAM.md R2):
-# duration x sanitizer x scheduler-mode.  Drives the R1 soak (tools/soak/soak.py)
-# under each build/mode so the slope oracle AND a sanitizer see hours of real
+# duration x sanitizer.  Drives the R1 soak (tools/soak/soak.py)
+# under each build so the slope oracle AND a sanitizer see hours of real
 # interleavings -- the regime that catches "passes the tests, dies at hour 30".
 #
 # TSan is the tool for that class: it flags a racy access PATTERN statistically,
@@ -15,8 +15,6 @@
 #   normal-72h   72h mixed, full workers
 #   asan-24h     24h mixed under ASan, N/4 (ASan ~2x)
 #   tsan-24h     24h mixed under TSan, N/8 (TSan ~5-10x; needs the TSan ext)
-#   iouring-24h  24h mixed, STACKWEAVE_IOURING_LOOP=1
-#   perhub-24h   24h mixed, STACKWEAVE_PERHUB_EPOLL=1
 #
 # Sanitizer reports are captured via ASAN_OPTIONS/TSAN_OPTIONS log_path=<dir>/<tag>
 # (one file per pid); tools/soak/triage_san.py scans + dedups them and the ledger
@@ -52,9 +50,7 @@ case "$PRESET" in
   tsan-24h)     DUR="--hours 24"    BUILD=tsan   WORKERS=1 ENVS=() ;;
   tsan-gold-smoke) DUR="--seconds 60" BUILD=tsan-gold WORKERS=1 ENVS=() ;;
   tsan-gold-24h)   DUR="--hours 24"   BUILD=tsan-gold WORKERS=1 ENVS=() ;;
-  iouring-24h)  DUR="--hours 24"    BUILD=normal WORKERS=4 ENVS=(--env STACKWEAVE_IOURING_LOOP=1) ;;
-  perhub-24h)   DUR="--hours 24"    BUILD=normal WORKERS=4 ENVS=(--env STACKWEAVE_PERHUB_EPOLL=1) ;;
-  *) echo "unknown preset: $PRESET"; echo "presets: smoke asan-smoke tsan-smoke normal-72h asan-24h tsan-24h tsan-gold-smoke tsan-gold-24h iouring-24h perhub-24h"; exit 2 ;;
+  *) echo "unknown preset: $PRESET"; echo "presets: smoke asan-smoke tsan-smoke normal-72h asan-24h tsan-24h tsan-gold-smoke tsan-gold-24h"; exit 2 ;;
 esac
 # tsan-gold runs everything UNDER the TSan-instrumented interpreter, not stock $PY.
 [ "$BUILD" = "tsan-gold" ] && PY="$GOLD_PY"
