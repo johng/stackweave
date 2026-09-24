@@ -7,9 +7,6 @@
 #   A: ADD(R) -> EEXIST -> MOD(R)          [narrows kernel set to R]
 # leaving the kernel registered for READ only while the arm cache says RW.
 # The WRITE parker never gets its event -> spurious timeout / infinite hang.
-#
-# Run with STACKWEAVE_PERHUB_EPOLL=0 to isolate from the (separate) cross-pool
-# migration bug.
 import os, socket, sys, time, threading
 import stackweave
 import stackweave_c as rc

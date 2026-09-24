@@ -1,6 +1,6 @@
 """Verify: concurrent netpoll_register on one fd from two hubs races the
 out-of-lock epoll_ctl -> spurious EEXIST from wait_fd, or kernel-set narrowing
-(lost WRITE wakeup).  Run with STACKWEAVE_PERHUB_EPOLL=0."""
+(lost WRITE wakeup)."""
 import os, sys, socket, time
 import stackweave
 import stackweave_c as rc

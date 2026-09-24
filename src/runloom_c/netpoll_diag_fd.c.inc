@@ -214,12 +214,12 @@ static size_t         runloom_fd_pending_wake_cap = 0;
  * Accessed only under runloom_pool.lock, like the registration bitmap. */
 static unsigned char *runloom_fd_armed = NULL;
 
-/* Per-fd owning parker-pool INDEX for the per-hub epoll backend
- * (RUNLOOM_PERHUB_EPOLL): which pool's epoll_fd this fd is registered in, so
- * release_if_idle DELs from the right epoll and a cross-hub re-park MODs the
- * OWNING epoll (where the fd physically lives), not the current hub's.  0xFF =
- * none.  Shares the pending-wake fd index space + cap; accessed under
- * runloom_pool.lock like runloom_fd_armed.  NULL/unused on the shared path. */
+/* Per-fd owning parker-pool INDEX for the per-hub epoll backend: which pool's
+ * epoll_fd this fd is registered in, so release_if_idle DELs from the right
+ * epoll and a cross-hub re-park MODs the OWNING epoll (where the fd physically
+ * lives), not the current hub's.  0xFF = none (the shared epoll).  Shares the
+ * pending-wake fd index space + cap; accessed under runloom_pool.lock like
+ * runloom_fd_armed. */
 static unsigned char *runloom_fd_epoll_pool = NULL;
 
 /* Upper/lower bounds on the preallocated fd capacity.  4M fds = 4MB
@@ -459,7 +459,7 @@ static int runloom_fd_armed_set(int fd, int mask)
     return 0;
 }
 
-/* Per-fd owning-pool accessors (RUNLOOM_PERHUB_EPOLL).  Caller MUST hold
+/* Per-fd owning-pool accessors (per-hub epoll).  Caller MUST hold
  * runloom_pool.lock, like the arm-mask accessors.  get returns -1 for "none". */
 static int runloom_fd_epoll_pool_get(int fd)
 {
