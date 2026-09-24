@@ -491,20 +491,6 @@ static int runloom_iouring_eventfd_in_epoll = -1;
  * (unlike the busy-polling hubs) blocks in epoll_wait with no timeout.
  * On fire the pump just drains it -- it carries no parker. */
 static int runloom_pump_wake_fd = -1;
-
-/* Per-hub iouring rings registered via runloom_netpoll_add_iouring_ring.
- * The dispatch path matches epoll evs[i].data.fd against the eventfd
- * column and calls runloom_iouring_ring_drain on the corresponding ring.
- * Sized for typical CPU counts (one hub == one ring); 64 is comfortable
- * for any host we run on.  Protected by runloom_pool.lock.
- *
- * Parallel arrays instead of array-of-struct: small (one cache line each
- * at 64 entries) + lets us scan the fd column tightly.
- */
-#define RUNLOOM_IOURING_RINGS_MAX 64
-static int                       runloom_iouring_ring_efds[RUNLOOM_IOURING_RINGS_MAX];
-static struct runloom_iouring_ring *runloom_iouring_ring_ptrs[RUNLOOM_IOURING_RINGS_MAX];
-static int                       runloom_iouring_ring_count = 0;
 #elif defined(RUNLOOM_HAVE_KQUEUE)
 /* Per-hub kqueue: there is NO process-wide kqueue handle or self-pipe.  Each
  * parker pool owns its own kqueue + pump-wake self-pipe

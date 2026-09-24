@@ -1,11 +1,10 @@
 """Coverage-driven adversarial tests for netpoll_wake_iouring.c.inc.
 
 This fragment holds the *direct* (in-process, syscall-free) wake/cancel paths
-for fibers parked in runloom_netpoll_wait_fd, plus the io_uring eventfd/ring
-registration glue that bridges a hub's io_uring CQ into the shared epoll pump.
-The normal corpus exercises only the single-thread, single-pool variants of the
-cancel/unpark paths and the *first-64* ring registrations; this file drives the
-M:N (multi-pool) variants and the over-capacity ring path.
+for fibers parked in runloom_netpoll_wait_fd, plus the io_uring eventfd
+registration glue that bridges the global io_uring CQ into the shared epoll
+pump.  The normal corpus exercises only the single-thread, single-pool variants
+of the cancel/unpark paths; this file drives the M:N (multi-pool) variants.
 
 Each test names the uncovered line(s) it targets and HOW it makes the gate true.
 
@@ -24,21 +23,16 @@ docstring of the central report, not contorted into tests here.
     AND the per-g claim loop, batched, under M:N.
   * runloom_netpoll_cancel_fd (L218)            -- the per-fd-bucket walk's
     claim loop, under M:N (one parker per pool).
-  * runloom_netpoll_add_iouring_ring ENOSPC (L419-422) -- >64 hubs each
-    register a per-hub io_uring ring; the 65th+ overflow RUNLOOM_IOURING_RINGS_MAX
-    and must fall back to the epoll pump without losing I/O correctness.
 """
 import os
 import socket
 import sys
-import tempfile
 import time
 
 import pytest
 
 import stackweave
 import stackweave_c as rc
-from stackweave.sync import WaitGroup
 from adv_util import hang_guard, needs_free_threading
 
 READ = 1
@@ -232,51 +226,6 @@ def test_mn_cancel_fd_negative_fd_is_noop():
     with hang_guard(15, "mn cancel_fd neg"):
         stackweave.run(2, main)
     assert res.get("ok") is True
-
-
-# --------------------------------------------------------------------------
-# add_iouring_ring ENOSPC overflow (L419-422).  Each M:N hub creates its own
-# per-hub io_uring ring and registers its eventfd via add_iouring_ring; the
-# table is capped at RUNLOOM_IOURING_RINGS_MAX (64).  With 100 hubs, hubs
-# 65-100 overflow the table -> add_iouring_ring sets errno=ENOSPC and returns
-# -1, and hub_main DISCARDS that hub's ring and falls back to the epoll pump
-# for its file I/O.  We run real io_uring file I/O on every hub: correctness
-# (all reads return the written bytes) proves the ENOSPC-discarded hubs
-# degraded gracefully instead of losing CQE delivery.  This is the ONLY
-# realistic trigger for the over-capacity branch (you cannot register the same
-# eventfd twice -- distinct hubs hold distinct fds -- so the idempotent-update
-# branch is not reachable, but the table-full branch is, by simply exceeding 64
-# concurrent hub rings).
-# --------------------------------------------------------------------------
-@pytest.mark.skipif(not rc.iouring_available(), reason="io_uring not available")
-def test_iouring_ring_table_overflow_falls_back_gracefully():
-    HUBS = 100                                 # > RUNLOOM_IOURING_RINGS_MAX (64)
-    N = 200
-    res = {}
-    payload = b"runloom-cov-" + b"q" * 500
-    def main():
-        wg = WaitGroup(); wg.add(N)
-        ok = bytearray(N)
-        def w(i):
-            try:
-                fd, path = tempfile.mkstemp()
-                rc.file_write(fd, payload, 0)
-                buf = bytearray(len(payload))
-                if (rc.file_read(fd, buf, len(payload), 0) == len(payload)
-                        and bytes(buf) == payload):
-                    ok[i] = 1
-                os.close(fd); os.unlink(path)
-            finally:
-                wg.done()
-        for i in range(N):
-            rc.mn_fiber(lambda i=i: w(i))
-        wg.wait()
-        res["ok"] = sum(ok)
-    with hang_guard(90, "iouring ring overflow"):
-        stackweave.run(HUBS, main)
-    assert res.get("ok") == N, (
-        "%d/%d file ops lost -- a ring-table-overflow hub failed to fall back "
-        "to the epoll pump" % (N - (res.get("ok") or 0), N))
 
 
 # --------------------------------------------------------------------------

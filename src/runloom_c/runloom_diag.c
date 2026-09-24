@@ -523,15 +523,14 @@ void runloom_mnwake_trace_event(const char *action, unsigned long g, int cap)
 }
 
 /* ---- io_uring CQE wake protocol trace (TLA+ trace conformance, RUNLOOM_IOUWAKE_TRACE) ----
- * Sibling of runloom_wake_trace_event for the io_uring CQE drain route: SUBMIT (an
- * SQE submitted + the fiber about to park) on the submitter; DRAIN_FLUSH (the
- * GETEVENTS overflow flush -- the CQ-overflow heal fired), DRAIN_CONSUME (a CQE
- * walked + its fiber readied), DRAIN_BLOCK / DRAIN_UNBLOCK (the pump block while an
- * iouring op is inflight) and RESUME (the woken submitter returns from park) on the
- * drainer/owner -- replayed against RunloomIouringWake.tla by
- * tools/iouwake_trace_conform.py.  `cap` is meaningful only on DRAIN_BLOCK (1 == the
- * drain-first overflow flush is armed while inflight>0, the model's Heal arm).  All
- * emit sites are cold (submit / overflow-flush / CQE-consume / pump-block / resume),
+ * Sibling of runloom_wake_trace_event for the io_uring CQE drain route:
+ * DRAIN_FLUSH (the GETEVENTS overflow flush -- the CQ-overflow heal fired) and
+ * DRAIN_BLOCK / DRAIN_UNBLOCK (the pump block while an iouring op is inflight),
+ * on the drainer.  The SUBMIT / DRAIN_CONSUME / RESUME events and the
+ * RunloomIouringWake.tla trace checker went with the TCPConn multishot path.
+ * `cap` is meaningful only on DRAIN_BLOCK (1 == the drain-first overflow flush is
+ * armed while inflight>0, the model's Heal arm).  All
+ * emit sites are cold (overflow-flush / pump-block),
  * never a same-thread fast path; a NULL fp is one predictable-not-taken load so
  * production is unperturbed. */
 static FILE           *runloom_iouwake_trace_fp = NULL;

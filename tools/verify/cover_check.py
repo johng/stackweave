@@ -26,7 +26,8 @@ import stackweave_c as rc
 # Reached by the workloads below in any real multi-hub run.
 REQUIRED = ["steal_hit", "deque_full_fallback", "g_slab_spill",
             "g_slab_refill", "coro_pool_miss"]
-# Config-gated: only fires under STACKWEAVE_STEAL_WOKEN / STACKWEAVE_PER_G_TSTATE.
+# Reported, not required: every M:N wake goes through the global run-queue, but
+# the spawn-only workloads below never park, so nothing is woken.
 OPTIONAL = ["global_runq_pull"]
 
 

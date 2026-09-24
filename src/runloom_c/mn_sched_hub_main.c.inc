@@ -148,7 +148,7 @@ static long long runloom_idle_backoff_ceiling_ns(void)
  * stall an imbalanced workload (the hang every adversarial design-review found).
  *
  * WAKEP closes it with the SAME Dekker handshake as hub_submit's
- * ring_waiting<->sub_head (GenMC-proven, tools/verify/genmc/sched_parkwake.c):
+ * idle_waiting<->sub_head (GenMC-proven, tools/verify/genmc/sched_parkwake.c):
  *   park side  : set idle_parked=1 ; SEQ_CST fence ; re-scan for stealable work
  *   producer   : publish work to its deque ; SEQ_CST fence ; read nidle/parked
  * Either the parking hub sees the surplus on its re-scan (and does NOT park) or
@@ -205,8 +205,6 @@ static int runloom_mn_wakep_kick(runloom_hub_t *h)
                                      __ATOMIC_ACQ_REL, __ATOMIC_RELAXED)) return 0;
     __atomic_sub_fetch(&runloom_mn_nidle, 1, __ATOMIC_ACQ_REL);
     /* Kick every wait mode (one hub; mirrors runloom_mn_kick_all_hubs). */
-    if (h->loop_wake_fd >= 0)
-        runloom_iouring_loop_wake(h->loop_wake_fd);
     RUNLOOM_RLOCK(&h->idle_lock, RUNLOOM_RANK_HUB_IDLE);
     runloom_cond_signal(&h->idle_cond);
     RUNLOOM_RUNLOCK(&h->idle_lock, RUNLOOM_RANK_HUB_IDLE);
@@ -321,64 +319,15 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
     runloom_coro_thread_init();
     runloom_tls_hub = h;
 
-    /* Create the hub's per-thread io_uring ring.  Try
-     * SINGLE_ISSUER (Linux 5.18+) + DEFER_TASKRUN (6.1+); the create
-     * call downgrades gracefully on older kernels.  With
-     * DEFER_TASKRUN the kernel only posts CQEs + fires the eventfd
-     * when this thread next calls io_uring_enter(GETEVENTS); the
-     * idle path below issues that call before pumping so the
-     * deferred work flushes in time. */
-    /* Skip the ring entirely unless an io_uring feature is opted in: with all
-     * of them off (the default) the ring carries no ops and only costs an
-     * io_uring_setup + register per hub plus a periodic GETEVENTS flush. */
-    h->iouring_ring = runloom_iouring_any_enabled()
-                      ? runloom_iouring_ring_create(1 /*defer_taskrun*/) : NULL;
-    if (h->iouring_ring != NULL) {
-        if (runloom_iouring_loop_enabled()) {
-            /* io_uring-as-loop: the hub will block DIRECTLY in this ring (see
-             * the idle path below).  Arm the per-hub wake eventfd + a multishot
-             * poll on the shared epoll fd ON the ring, instead of registering
-             * the ring's eventfd into the epoll pump -- there is no bridge in
-             * loop mode.  On arm failure, discard the ring and fall back to the
-             * epoll pump (loop_wake_fd stays -1 so the idle path won't loop). */
-            int wfd = runloom_iouring_loop_hub_arm(h->iouring_ring,
-                                                   runloom_netpoll_hub_epoll_fd());
-            if (wfd >= 0) {
-                h->loop_wake_fd    = wfd;
-                h->iouring_eventfd = -1;
-            } else {
-                runloom_iouring_ring_destroy(h->iouring_ring);
-                h->iouring_ring    = NULL;
-                h->iouring_eventfd = -1;
-            }
-        } else {
-            h->iouring_eventfd = runloom_iouring_ring_eventfd(h->iouring_ring);
-            if (runloom_netpoll_add_iouring_ring(h->iouring_eventfd,
-                                              h->iouring_ring) != 0) {
-                /* Registration failed (most likely no epoll backend, but
-                 * this build path is Linux-only so it'd be unusual).
-                 * Discard the ring; hub-bound iouring calls fall through. */
-                runloom_iouring_ring_destroy(h->iouring_ring);
-                h->iouring_ring     = NULL;
-                h->iouring_eventfd  = -1;
-            }
-        }
-    } else {
-        h->iouring_eventfd = -1;
-    }
 
     /* Warm this hub's parker-pool wake infrastructure (per-hub epoll + wake
-     * eventfd) eagerly at thread start, independent of io_uring.  The hub WILL
-     * need it the instant a fiber parks; creating it now (a) avoids an
-     * epoll_create + eventfd + epoll_ctl hiccup on the first park under load,
-     * and (b) keeps fd accounting honest -- the per-hub wake fds belong to hub
-     * startup, not to whichever fiber happens to park first.  Idempotent (the
-     * pool's once-init CAS), and a no-op return without per-hub epoll (there all
-     * parkers share the default pool, already inited by netpoll_init).  Until
-     * the io_uring ring was gated off in the default config, registering the
-     * ring eventfd warmed this implicitly; gating the ring moved the per-hub
-     * wake fds from hub startup into the first park -- this makes the warm
-     * explicit and unconditional so it no longer rides on io_uring. */
+     * eventfd) eagerly at thread start.  The hub WILL need it the instant a
+     * fiber parks; creating it now (a) avoids an epoll_create + eventfd +
+     * epoll_ctl hiccup on the first park under load, and (b) keeps fd
+     * accounting honest -- the per-hub wake fds belong to hub startup, not to
+     * whichever fiber happens to park first.  Idempotent (the pool's once-init
+     * CAS), and a no-op return without per-hub epoll (there all parkers share
+     * the default pool, already inited by netpoll_init). */
     (void)runloom_netpoll_hub_epoll_fd();
 
     /* sched_yield fairness (see the pick block below).  ready_streak counts
@@ -425,46 +374,6 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
          * this a no-op. */
         if (__atomic_load_n(&h->idle_parked, __ATOMIC_RELAXED))
             runloom_mn_park_exit(h);
-        /* Drain the io_uring single-op cancel mailbox: a foreign task.cancel
-         * deposited an op targeting THIS hub's SINGLE_ISSUER ring; submit the
-         * ASYNC_CANCEL here, where we are the ring's sole issuer. */
-        {
-            /* Cheap relaxed PEEK first: the mailbox is empty almost every turn
-             * (and ALWAYS when io_uring is off, the default), so skip the per-turn
-             * locked xchg and only claim with the ACQ_REL exchange when a foreign
-             * task.cancel actually deposited an op.  A deposit racing the peek is
-             * caught next turn (<=1-turn cancel latency, fine for a cancel). */
-            if (__atomic_load_n((intptr_t *)&h->iouring_cancel_op,
-                                __ATOMIC_RELAXED) != 0) {
-                intptr_t cop = __atomic_exchange_n((intptr_t *)&h->iouring_cancel_op, 0,
-                                                  __ATOMIC_ACQ_REL);
-                if (cop != 0) runloom_iouring_submit_cancel_for_op((void *)cop);
-            }
-        }
-        /* Drain the cancel-by-fd mailbox (R7 item 1): TCPConn.close() deposited
-         * dup'd fds targeting THIS hub's ring; submit an ASYNC_CANCEL_FD for each
-         * here, where we are the ring's SINGLE issuer.  Cheap relaxed peek first
-         * (empty almost every turn); the dup's ownership passes to the cancel op
-         * (closed when its CQE drains) on successful submit, else closed here. */
-        if (__atomic_load_n((intptr_t *)&h->cancel_fd_head, __ATOMIC_RELAXED) != 0
-                && h->iouring_ring != NULL) {
-            runloom_cancel_fd_node_t *cn;
-            runloom_mutex_lock(&h->cancel_fd_lock);
-            cn = h->cancel_fd_head;
-            /* RELAXED-atomic clear: pairs with the lock-free peek above (and the
-             * cross-thread deposit's atomic store), same as sub_head's clear. */
-            __atomic_store_n(&h->cancel_fd_head, (runloom_cancel_fd_node_t *)NULL,
-                             __ATOMIC_RELAXED);
-            runloom_mutex_unlock(&h->cancel_fd_lock);
-            while (cn != NULL) {
-                runloom_cancel_fd_node_t *nx = cn->next;
-                if (runloom_iouring_ring_submit_cancel_fd(h->iouring_ring,
-                                                          cn->dup_fd) != 0)
-                    close(cn->dup_fd);   /* submit failed -> we still own the dup */
-                free(cn);
-                cn = nx;
-            }
-        }
         /* Set when g came from the global run-queue: it then carries a queue
          * ref this iteration must release, and its resume must claim it with the
          * QUEUED->RUNNING CAS.  Gs from the local FIFO / own deque / a neighbour
@@ -490,8 +399,6 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
         if ((++self_pump_ctr & 0x3fu) == 0 &&
             (runloom_netpoll_parked_count() > 0 || runloom_iouring_inflight() > 0)) {
             (void)runloom_netpoll_pump(0);
-            if (h->iouring_ring != NULL)
-                runloom_iouring_ring_get_events(h->iouring_ring);
         }
         /* Drain the submission list into the deque first.  Pushing to
          * the deque is owner-only, so we (the hub) move fresh gs from
@@ -930,90 +837,12 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                         }
                     }
                 }
-                /* io_uring-as-loop idle path (RUNLOOM_IOURING_LOOP=1).  The hub
-                 * blocks DIRECTLY in its ring -- which multiplexes ALL wake
-                 * sources: io_uring op completions (Stage-2 proactor), the
-                 * shared epoll fd (poll-added -> F_EPOLL -> pump(0) drains the
-                 * ready fds into their parkers), the per-hub wake eventfd
-                 * (cross-hub submit -> F_WAKE; the sub list is re-drained at the
-                 * loop top regardless), and the idle-tick timeout (idle_ns,
-                 * which already accounts for the next local sleeper/timer).
-                 * ring_waiting is the lock-free hint hub_submit reads to write
-                 * the wake eventfd; the announce + sub_head re-check below close
-                 * the announce/submit race, and the TIMED wait makes a (rare)
-                 * lost wake degrade to one idle_ns of latency, never a hang --
-                 * the same guarantee the idle-condvar path gives.  loop_wait's
-                 * io_uring_enter(GETEVENTS) also flushes this ring's
-                 * DEFER_TASKRUN task work, so completions materialise here (no
-                 * separate ring_get_events needed).  GIL released across the
-                 * blocking enter, then re-held for pump(0). */
-                if (runloom_iouring_loop_enabled() && h->iouring_ring != NULL) {
-                    int lflags = 0;
-                    int have_sub;
-                    __atomic_store_n(&h->ring_waiting, 1, __ATOMIC_RELEASE);
-                    /* SEQ_CST so the ring_waiting store is ordered before the
-                     * sub_head load against hub_submit's push-then-read-
-                     * ring_waiting (a Dekker handshake); without the fence the
-                     * store/load could reorder and lose the wake for one tick
-                     * (the timeout still bounds it, but the fence keeps the
-                     * common path latency-free). */
-                    __atomic_thread_fence(__ATOMIC_SEQ_CST);
-                    RUNLOOM_RLOCK(&h->sub_lock, RUNLOOM_RANK_HUB_SUB);
-                    have_sub = (h->sub_head != NULL);
-                    RUNLOOM_RUNLOCK(&h->sub_lock, RUNLOOM_RANK_HUB_SUB);
-                    if (!have_sub) {
-                        if (idle_ns <= 0) idle_ns = 1;
-                        saved = PyEval_SaveThread();
-                        runloom_iouring_loop_wait(h->iouring_ring, idle_ns,
-                                                  &lflags);
-                        PyEval_RestoreThread(saved);
-                    }
-                    __atomic_store_n(&h->ring_waiting, 0, __ATOMIC_RELEASE);
-                    /* Drain the per-hub epoll when the ring's F_EPOLL poll fired.
-                     * ROOT-CAUSED + FIXED: the poll-on-the-epoll-fd bridge used to
-                     * MISS a socket-readable edge because a STANDING MULTISHOT poll
-                     * on the epoll fd never re-samples its LEVEL between interior
-                     * transitions -- a socket left level-readable with no fresh
-                     * transition (partial recv + re-park, >64-event pump truncation,
-                     * a late-linked parker) was invisible -> no F_EPOLL -> the parked
-                     * reader hung forever (reproduced: cov_workload --hubs 4,
-                     * ~45% of runs).  Fixed at source: the epoll poll is now ONE-SHOT
-                     * and re-armed every cycle (io_uring_l_loop.c.inc), whose arm-time
-                     * vfs_poll re-derives the fd's level exactly like plain
-                     * epoll_wait -- so F_EPOLL is reliable and pumping only on it is
-                     * correct (verified: 0/25 loop-backend hangs with the fix vs
-                     * ~45% without).  The old every-idle-tick pump that symptom-
-                     * guarded this is kept behind RUNLOOM_IOURING_LOOP_PUMP_ALWAYS
-                     * for soak burn-in. */
-                    if (!have_sub && ((lflags & RUNLOOM_LOOP_F_EPOLL)
-                                      || runloom_iouring_loop_pump_always())) {
-                        runloom_netpoll_pump(0);
-                    }
-                    (void)lflags;
-                    /* Reap GLOBAL-ring completions.  Cooperative file I/O
-                     * (runloom_iouring_pread/pwrite via runloom_iouring_do) lives on
-                     * the process-global ring, NOT this hub ring.  Its eventfd
-                     * is in the shared epoll with EPOLLEXCLUSIVE, whose readiness
-                     * does NOT reliably propagate to a poll-on-the-epoll-fd (the
-                     * UD_EPOLL bridge) -- so F_EPOLL can miss it and a fiber
-                     * parked in file_read would hang.  Drain the global ring
-                     * directly here: a cheap no-op when it is uninitialised (the
-                     * pure-network serve path never touches it) or its CQ is
-                     * empty; otherwise it reaps the CQEs and wakes the reader via
-                     * the op->wait handshake.  The idle_ns timeout bounds the
-                     * latency on the (rare) ticks where UD_EPOLL didn't fire. */
-                    runloom_iouring_drain();
-                    (void)saved;
-                    continue;
-                }
                 {
-                    /* Also drive the pump when ANY iouring ring (this
-                     * hub's, the global, or another hub's) has inflight
-                     * ops: the shared netpoll's epoll set holds every
-                     * registered iouring eventfd, so any hub's pump call
-                     * drains everyone's CQEs.  Without this, a hub that
-                     * parks all its gs on iouring would idle-sleep
-                     * while completions sit unread.
+                    /* Also drive the pump when the global iouring ring has
+                     * inflight ops: the shared netpoll's epoll set holds its
+                     * eventfd, so any hub's pump call drains its CQEs.
+                     * Without this, a hub that parks all its gs on iouring
+                     * would idle-sleep while completions sit unread.
                      *
                      * GIL handling: pump internally does
                      * Py_BEGIN_ALLOW_THREADS for the epoll_wait syscall,
@@ -1045,18 +874,6 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                             idle_ns < pump_ns) {
                             pump_ns = idle_ns;      /* idle_ns already timer-bounded */
                         }
-                        /* DEFER_TASKRUN heartbeat: if this hub's ring
-                         * was created with that flag, completions on
-                         * its own SQEs are queued in the kernel but
-                         * NOT posted to the CQ (or the eventfd) until
-                         * THIS thread next calls
-                         * io_uring_enter(GETEVENTS).  Trigger that
-                         * flush now so the upcoming epoll_wait sees a
-                         * fresh eventfd hit if there's work pending.
-                         * No-op for non-DEFER rings.  We only do this
-                         * on OUR own ring -- under SINGLE_ISSUER each
-                         * ring's GETEVENTS must come from its owner. */
-                        runloom_iouring_ring_get_events(h->iouring_ring);
                         /* Ensure the shared pump-wake eventfd is registered in
                          * the epoll set BEFORE we block here, so a cross-hub
                          * runloom_mn_hub_submit/wake_g can break this epoll_wait
@@ -1064,20 +881,17 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                          * timeout -- the ~1ms cross-hub handoff latency).
                          * Idempotent + atomic-guarded: a no-op once armed. */
                         runloom_netpoll_wake_pump_arm();
-                        /* GLOBAL-ring CQ-OVERFLOW safety.  TCPConn io_uring recv
-                         * (multishot) and file I/O live on the process-global
-                         * ring, not this hub ring.  When that ring's CQ fills
-                         * under backpressure, excess completions go to the
-                         * kernel's overflow backlog and do NOT re-signal the
-                         * global eventfd -- so the pump below (even bounded to
-                         * pump_ns) would never observe the edge that drains them,
-                         * and the recv fiber whose completion is stranded in
-                         * overflow hangs forever (the only thing that frees CQ
-                         * space is that same fiber).  ring_get_events above only
-                         * flushes THIS hub's ring; drain the global ring here so
-                         * the overflow backlog is flushed + its CQEs processed +
-                         * the waiter woken (cross-hub via mn_wake_g).  Cheap no-op
-                         * when the global ring is uninitialised or its CQ empty. */
+                        /* GLOBAL-ring CQ-OVERFLOW safety.  File I/O lives on the
+                         * process-global ring.  When that ring's CQ fills under
+                         * backpressure, excess completions go to the kernel's
+                         * overflow backlog and do NOT re-signal the global
+                         * eventfd -- so the pump below (even bounded to pump_ns)
+                         * would never observe the edge that drains them, and the
+                         * fiber whose completion is stranded in overflow hangs
+                         * forever.  Drain the global ring here so the overflow
+                         * backlog is flushed + its CQEs processed + the waiter
+                         * woken (cross-hub via mn_wake_g).  Cheap no-op when the
+                         * global ring is uninitialised or its CQ empty. */
                         runloom_iouring_drain();
                         /* MNWAKE-TRACE: idle hub blocks in the netpoll pump, a
                          * BOUNDED timed wait (pump_ns, ~1ms base) -- model
@@ -1393,43 +1207,6 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
         }
     }
     runloom_tls_hub = NULL;
-    /* Tear down the hub's iouring ring.  Unregister from netpoll FIRST
-     * so the pump can't dispatch a CQE to a freed ring; THEN destroy.
-     * Hubs only exit when the scheduler is shutting down + all gs have
-     * completed, so inflight==0 here is the expected case; if a ring
-     * still had inflight ops we'd leak the underlying CQEs (kernel
-     * frees them on close). */
-    if (h->iouring_ring != NULL) {
-        /* Final reap before teardown: a fire-and-forget cancel-by-fd op (R7 item
-         * 1) OWNS a dup'd fd (cancel_dup_fd) that is closed only when its CQE is
-         * reaped in ring_drain's OP_CANCEL branch.  A non-owning hub's cancel
-         * completes -ENOENT and, if this hub exits its loop (stopping set) before
-         * next idling, that CQE can still be pending -> the dup (a live process
-         * fd) and the op record would leak on ring_destroy, accruing across
-         * mn_init/mn_fini cycles toward EMFILE.  We are the ring's sole issuer +
-         * drainer and all hubs are stopping, so drain to quiescence here:
-         * GETEVENTS (flush DEFER_TASKRUN task work) then drain, bounded so a
-         * (never-observed) stuck completion can't spin us forever. */
-        {
-            int reap;
-            for (reap = 0; reap < 64 &&
-                           runloom_iouring_ring_inflight(h->iouring_ring) > 0; reap++) {
-                runloom_iouring_ring_get_events(h->iouring_ring);
-                runloom_iouring_ring_drain(h->iouring_ring);
-            }
-        }
-        if (h->loop_wake_fd >= 0) {
-            /* Loop backend: no eventfd was registered in the epoll pump; just
-             * close the wake eventfd (the multishot polls die with the ring). */
-            runloom_iouring_loop_hub_disarm(h->iouring_ring);
-            h->loop_wake_fd = -1;
-        } else {
-            runloom_netpoll_remove_iouring_ring(h->iouring_eventfd);
-        }
-        runloom_iouring_ring_destroy(h->iouring_ring);
-        h->iouring_ring    = NULL;
-        h->iouring_eventfd = -1;
-    }
     /* Reverse runloom_coro_thread_init (flush this thread's coro/stack pools,
      * disarm the sigaltstack). */
     runloom_coro_thread_fini();

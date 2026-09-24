@@ -148,8 +148,6 @@ static void runloom_parker_pool_release(runloom_parked_t *p)
  *                                  parker was visible" bitmap; needs
  *                                  to be readable by any pump
  *   runloom_epoll_fd / runloom_kqueue  - single shared backend handle
- *   runloom_iouring_ring_*          - per-ring eventfd routing in the
- *                                  shared epoll
  *
  * The registration bitmap's read-then-set sequence runs under the
  * default pool's lock (runloom_pool.lock); the pending-wake bitmap is
@@ -216,7 +214,7 @@ typedef struct runloom_parker_pool {
 } runloom_parker_pool_t;
 
 /* One parker pool per M:N hub plus one for the single-thread sched.
- * Capped at 64 hubs (matches RUNLOOM_IOURING_RINGS_MAX) -- machines with
+ * Capped at 64 hubs -- machines with
  * more cores than that fall back to the default pool for the overflow
  * hubs, which is correct but loses the per-hub locality benefit for
  * those hubs.  RUNLOOM_PARKER_POOL_DEFAULT is the index for parkers

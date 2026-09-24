@@ -94,14 +94,12 @@ registered eventfd, so the scheduler slept forever in `epoll_wait` waiting for a
 edge that never came (CQ empty + `IORING_SQ_CQ_OVERFLOW` set), stranding the
 receiver whose completion was in overflow. **Fixed**: the single-thread and M:N
 idle paths now drain io_uring (which flushes the CQ-overflow backlog) before
-blocking — `runloom_sched_drain.c.inc` + `mn_sched_hub_main.c.inc`. Regression
-guards: `tests/test_iouring_recv_backpressure.py` (single-thread + M:N) and the
-standalone repro `tests/regressions/iouring_recv_backpressure_deadlock.py`. The
+blocking — `runloom_sched_drain.c.inc` + `mn_sched_hub_main.c.inc`. The
 default epoll backend was never affected.
 
-Separate, still-open: io_uring multishot recv across MANY concurrent connections
-under M:N loses data (not a hang) — the shared global provided-buffer ring across
-hubs. The single-connection io_uring path (the common one) is correct.
+The opt-in TCPConn io_uring backend (and with it the multishot recv and its
+regression guards) has since been removed; the CQ-overflow drain stays because
+cooperative file I/O still runs on the global ring.
 
 ## Notes
 

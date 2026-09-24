@@ -47,60 +47,6 @@ int runloom_iouring_inflight(void)
     return __atomic_load_n(&runloom_iouring_inflight_count, __ATOMIC_ACQUIRE);
 }
 
-int runloom_iouring_pbuf_available(void)
-{
-    if (!runloom_iouring_available()) return 0;
-    return runloom_iouring_state.pool_base != NULL;
-}
-
-unsigned runloom_iouring_pbuf_size(void)
-{
-    return runloom_iouring_state.pool_buf_size;
-}
-
-unsigned runloom_iouring_pbuf_count(void)
-{
-    return runloom_iouring_state.pool_n;
-}
-
-void *runloom_iouring_pbuf_addr(unsigned bid)
-{
-    runloom_iouring_state_t *s = &runloom_iouring_state;
-    if (s->pool_base == NULL) return NULL;
-    if (bid >= s->pool_n) return NULL;
-    return (char *)s->pool_base + (size_t)bid * s->pool_buf_size;
-}
-
-void runloom_iouring_pbuf_return(unsigned bid)
-{
-    runloom_iouring_state_t *s = &runloom_iouring_state;
-    struct runloom_iouring_buf *bufs;
-    uint16_t tail, idx;
-    if (s->pool_base == NULL) return;
-    if (bid >= s->pool_n) return;
-    bufs = (struct runloom_iouring_buf *)s->bring_mem;
-
-    RUNLOOM_RLOCK(&s->bring_lock, RUNLOOM_RANK_IOURING_BRING);
-    /* The kernel's tail is overlaid on bufs[0].resv.  Load with
-     * acquire so we observe consumer-side advancement (the kernel
-     * advances head as it takes buffers, but tail is purely producer-
-     * side; we're the only producer, so the load is mostly for
-     * ordering against the store below). */
-    tail = __atomic_load_n(&bufs[0].resv, __ATOMIC_ACQUIRE);
-    idx  = tail & s->bring_mask;
-    bufs[idx].addr = (uintptr_t)((char *)s->pool_base +
-                     (size_t)bid * s->pool_buf_size);
-    bufs[idx].len  = s->pool_buf_size;
-    bufs[idx].bid  = (uint16_t)bid;
-    /* idx==0 means we just overwrote bufs[0].addr/len/bid; the resv
-     * field (kernel tail) is the same memory location as our local
-     * `tail` variable, but we're about to bump tail by 1 in the store
-     * below so the kernel sees the new entry. */
-    __atomic_store_n(&bufs[0].resv,
-                     (uint16_t)(tail + 1), __ATOMIC_RELEASE);
-    RUNLOOM_RUNLOCK(&s->bring_lock, RUNLOOM_RANK_IOURING_BRING);
-}
-
 /* Submit one SQE.  Caller has filled sqe_template (opcode/fd/addr/len/
  * off); we set user_data to the op pointer and submit without waiting.
  * Returns 0 on success, -1 with errno on failure. */
@@ -164,27 +110,20 @@ void runloom_iouring_drain(void)
     /* SINGLE-DRAINER.  Many threads call this without any external mutex -- the
      * netpoll pump on whichever hub goes idle, the inline drain after submit,
      * the SQ-full spin-drain, and the sched/hub idle CQ-overflow flush -- and on
-     * free-threaded Python (3.13t) they run truly in parallel.  The previous
-     * per-CQE CAS-claim let two threads claim CONSECUTIVE CQEs and process them
-     * concurrently.  That is harmless for single-shot ops (each result is
-     * independent), but WRONG for MULTISHOT recv, whose CQEs carry a byte
-     * STREAM: an out-of-order ms_on_cqe append reorders the per-handle ready
-     * queue and corrupts the stream (right length, wrong bytes -- a real
-     * many-concurrent-connection bug).  So exactly ONE thread walks the CQ at a
-     * time and appends in head order: win `draining` or return.  After clearing
-     * the flag the winner RE-CHECKS the CQ -- a completion posted after our last
-     * head==ct but before we cleared would be skipped by a concurrent caller
-     * that saw draining==1 and returned, so re-acquire and loop to catch it.
-     * (Exactly-once is now structural: a single walker advances head once per
-     * CQE, so the old double-wake / double-free / double-decrement races are
-     * gone without the CAS.) */
+     * free-threaded Python (3.13t) they run truly in parallel.  So exactly ONE
+     * thread walks the CQ at a time, in head order: win `draining` or return.
+     * After clearing the flag the winner RE-CHECKS the CQ -- a completion posted
+     * after our last head==ct but before we cleared would be skipped by a
+     * concurrent caller that saw draining==1 and returned, so re-acquire and
+     * loop to catch it.  (Exactly-once is structural: a single walker advances
+     * head once per CQE, so there is no double-wake / double-free / double-
+     * decrement race to guard with a per-CQE CAS.) */
     if (__atomic_exchange_n(&s->draining, 1, __ATOMIC_ACQ_REL) != 0)
         return;   /* another thread owns the drain; it processes every CQE */
 
     for (;;) {
         /* Pull any kernel-side overflowed completions back into the ring first
-         * -- multishot recv can post more CQEs than the ring holds, and a
-         * dropped completion would permanently strand the parked fiber. */
+         * -- a dropped completion would permanently strand the parked fiber. */
         runloom_iouring_flush_cq_overflow(s->sq_flags, s->ring_fd);
         for (;;) {
             unsigned head = __atomic_load_n(s->cq_head, __ATOMIC_ACQUIRE);
@@ -192,24 +131,17 @@ void runloom_iouring_drain(void)
             struct io_uring_cqe *cqe;
             runloom_iouring_op_t *op;
             int32_t  res;
-            uint32_t flags;
-            int      type;
-            int      cqe_final;
             if (head == ct) break;
             cqe   = &s->cqes[head & s->cq_mask];
             res   = cqe->res;
-            flags = cqe->flags;
             op    = (runloom_iouring_op_t *)(uintptr_t)cqe->user_data;
-            type      = (op != NULL) ? op->type : RUNLOOM_IOURING_OP_SINGLE;
-            cqe_final = (type != RUNLOOM_IOURING_OP_MULTISHOT) ||
-                        !(flags & IORING_CQE_F_MORE);
             /* Single walker: consume the slot by advancing head in order (no
-             * CAS).  Done after copying res/flags/op out, so the kernel may
-             * reuse the slot while we process from the locals. */
+             * CAS).  Done after copying res/op out, so the kernel may reuse
+             * the slot while we process from the locals. */
             __atomic_store_n(s->cq_head, head + 1, __ATOMIC_RELEASE);
 
             if (op != NULL) {
-                switch (type) {
+                switch (op->type) {
                 case RUNLOOM_IOURING_OP_SINGLE:
                     /* Publish the result BEFORE the wake handshake so a woken
                      * (or self-recovering) submitter sees it. */
@@ -233,9 +165,6 @@ void runloom_iouring_drain(void)
                         runloom_sched_wake_safe(op->g);
                     }
                     break;
-                case RUNLOOM_IOURING_OP_MULTISHOT:
-                    runloom_iouring_ms_on_cqe((runloom_iouring_ms_t *)op, res, flags);
-                    break;
                 case RUNLOOM_IOURING_OP_CANCEL:
                     /* Fire-and-forget: the cancel op record came from the CANCEL
                      * pool (or heap fallback); once the CQE arrives it is no
@@ -244,10 +173,8 @@ void runloom_iouring_drain(void)
                     break;
                 }
             }
-            if (cqe_final) {
-                __atomic_sub_fetch(&runloom_iouring_inflight_count, 1,
-                                   __ATOMIC_ACQ_REL);
-            }
+            __atomic_sub_fetch(&runloom_iouring_inflight_count, 1,
+                               __ATOMIC_ACQ_REL);
         }
         __atomic_store_n(&s->draining, 0, __ATOMIC_RELEASE);
         /* Re-check (see header): catch a completion that raced in just as we

@@ -38,7 +38,7 @@
 #
 # Usage:
 #   sweep_two_tier.sh [prog ...]           # default: all pNN_*.py, both tiers
-#   DESIGN=50000 SURVIVAL=1000000 sweep_two_tier.sh p223 p225 p36
+#   DESIGN=50000 SURVIVAL=1000000 sweep_two_tier.sh p224 p225 p36
 #   TIERS=survival sweep_two_tier.sh p01   # one tier only (survival|design|both)
 set +e
 HERE="$(cd "$(dirname "$0")" && pwd)"

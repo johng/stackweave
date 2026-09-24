@@ -4,7 +4,7 @@
  * Motivation: a Python (or plain Cython) handler that calls conn.recv_into() /
  * conn.send_all() still pays Python method dispatch (PyObject_Call... ), a
  * Py_buffer fill, and a PyLong result box on EVERY round trip.  These two
- * functions run the SAME epoll / io_uring core the methods run, but operate on
+ * functions run the SAME netpoll core the methods run, but operate on
  * a raw buffer and return a C Py_ssize_t -- so a Cython handler that cimports
  * them compiles to a hot loop with NO PyObject traffic (verifiable in the
  * disassembly: no calls to any Py_ or _Py_ symbol between recv and send).
@@ -18,9 +18,7 @@
  *   send_all(conn, buf, n)  -> n on success, or -1 on error (errno set).
  *
  * Both park the calling fiber on the netpoll on EAGAIN and therefore MUST be
- * called from inside a fiber (i.e. from a serve() handler).  They honour the
- * active loop backend (epoll or RUNLOOM_IOURING_LOOP) exactly as the methods
- * do, and the per-conn RUNLOOM_TCPCONN_IOURING multishot choice.
+ * called from inside a fiber (i.e. from a serve() handler).
  *
  * Symbol export: these have default visibility in runloom_c.so.  A separately
  * compiled Cython module resolves them either (a) by importing runloom_c with
@@ -38,10 +36,9 @@ Py_ssize_t runloom_tcpconn_c_send_all(PyObject *conn, const void *buf, Py_ssize_
 
 /* Raw-fd, tstate-free cooperative I/O -- the all-C echo's fast path, reusable by
  * a custom c_entry handler (e.g. a Cython cdef function).  No PyObject, no
- * TCPConn, no tstate.  Uses the Stage-2 io_uring proactor (loop_recv/send) when
- * the loop backend + a hub ring are active, else the readiness recv/send +
- * wait_fd path.  recv: bytes read (0 = EOF), -1 on error.  send_all: n, or -1.
- * close: clear the netpoll arm + close (avoids the fd-reuse deadlock). */
+ * TCPConn, no tstate.  Readiness recv/send + wait_fd.  recv: bytes read
+ * (0 = EOF), -1 on error.  send_all: n, or -1.  close: clear the netpoll arm +
+ * close (avoids the fd-reuse deadlock). */
 Py_ssize_t runloom_tcp_c_fd_recv(int fd, void *buf, Py_ssize_t n);
 Py_ssize_t runloom_tcp_c_fd_send_all(int fd, const void *buf, Py_ssize_t n);
 void       runloom_tcp_c_fd_close(int fd);

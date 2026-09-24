@@ -216,23 +216,6 @@ class TestForeignWakeTripwire:
         assert p.returncode == 0, (p.stdout, p.stderr[-800:])
 
 
-class TestIoUringGate:
-    def test_rings_off_and_digest_stable_under_loop_env(self):
-        """gate [2] + I3 acceptance: STACKWEAVE_IOURING_LOOP=1 under sim must
-        neither create hub rings (no blocking loop_wait -- bounded wall time)
-        nor perturb the digest -- proving the GATE, not the default."""
-        extra = {"STACKWEAVE_IOURING_LOOP": "1"}
-        base = [mn_digest.run_digest("cpu_yield", 2, 12345,
-                                     extra_env=dict(SIM_ENV))
-                for i in range(2)]
-        withloop = [mn_digest.run_digest("cpu_yield", 2, 12345,
-                                         extra_env=dict(SIM_ENV, **extra))
-                    for i in range(2)]
-        assert len(set(base)) == 1 and len(set(withloop)) == 1
-        assert base[0] == withloop[0], \
-            "STACKWEAVE_IOURING_LOOP=1 changed the seeded schedule under sim"
-
-
 class TestFinalizerTorture:
     def test_finalizer_chan_ops_complete(self):
         """contract #24 torture: __del__ doing stackweave ops runs ON a hub

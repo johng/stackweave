@@ -4,7 +4,7 @@
  * runloom_c.serve(): a reusable C server scaffold.  Opens N SO_REUSEPORT
  * listeners, runs N accept-loop fibers in C, and spawns one handler
  * fiber per accepted connection -- the handler receives a TCPConn (the
- * all-C socket type, with C recv/recv_into/send_all + io_uring fast paths), so
+ * all-C socket type, with C recv/recv_into/send_all fast paths), so
  * the per-request I/O path is C and only the user's handler logic is Python.
  *
  * The accept loop runs as a *callable* fiber (so it has a proper tstate +
@@ -233,13 +233,13 @@ static int runloom_io_listener_port(PyObject *listener)
  * already use).  This is the "written + integrated the right way" fast path:
  * zero PyObjects in the hot loop, zero tstate juggle per round-trip. */
 /* Close a connection fd from the all-C path, clearing its netpoll arm cache
- * first.  The readiness fallback parks via runloom_netpoll_wait_fd, which leaves
- * a process-global per-fd LEVEL arm; a bare close() does NOT clear it, so when
+ * first.  The echo parks via runloom_netpoll_wait_fd, which leaves a
+ * process-global per-fd LEVEL arm; a bare close() does NOT clear it, so when
  * the OS reuses this fd NUMBER for the next connection, netpoll_register's
  * already-armed skip sees the stale mask and never re-ADDs it -> the new
  * fiber's wait_fd parks forever (the all-C echo deadlock under concurrent
- * connect/close churn).  release_if_idle is a no-op if anything is still parked
- * and harmless for the io_uring paths (the fd was never netpoll-registered). */
+ * connect/close churn).  release_if_idle is a no-op if anything is still
+ * parked. */
 static void runloom_io_c_close(int fd)
 {
     runloom_netpoll_release_if_idle(fd);
@@ -250,56 +250,24 @@ static void runloom_io_c_echo(void *arg)
 {
     int fd = (int)(intptr_t)arg;
     char buf[64];
-    /* Under the io_uring-as-loop backend, drive recv/send as proactor ring ops
-     * (IORING_OP_RECV/SEND on the owning hub's ring): the data op runs in the
-     * kernel and the fiber parks until the CQE arrives, drained inline by the
-     * hub's loop_wait -- no readiness round trip, no epoll bridge.  Off the loop
-     * backend (or with no hub ring), fall back to the readiness path (raw
-     * recv/send + cooperative wait_fd). */
-    runloom_iouring_ring_t *ring = runloom_iouring_loop_enabled()
-                                       ? runloom_mn_current_iouring_ring()
-                                       : NULL;
-    /* Stage-3: one persistent multishot recv per connection on the hub ring
-     * (RUNLOOM_IOURING_MS=1).  Falls back to single-shot proactor recv when the
-     * pool isn't available (ms==NULL).  Send stays single-shot proactor. */
-    void *ms = (ring != NULL && runloom_iouring_loop_ms_enabled())
-                   ? runloom_iouring_loop_ms_open(ring, fd)
-                   : NULL;
     for (;;) {
         ssize_t n;
-        if (ms != NULL) {
-            n = runloom_iouring_loop_ms_recv(ms, buf, 8);
-            if (n < 0) { runloom_iouring_loop_ms_close(ms); runloom_io_c_close(fd); return; }
-        } else if (ring != NULL) {
-            n = runloom_iouring_loop_recv(ring, fd, buf, 8, 0);
-            if (n < 0) { runloom_io_c_close(fd); return; }    /* errno set; hard error */
-        } else {
-            for (;;) {
-                n = recv(fd, buf, 8, 0);
-                RUNLOOM_IO_NOTE(RUNLOOM_IO_RECV,
-                                runloom_io_classify(RUNLOOM_IO_RECV, (long long)n, errno));
-                if (n >= 0) break;
-                if (errno == EINTR) continue;
-                if (errno != EAGAIN && errno != EWOULDBLOCK) { runloom_io_c_close(fd); return; }
-                if (runloom_netpoll_wait_fd_coop(fd, RUNLOOM_NETPOLL_READ, -1LL) < 0) { runloom_io_c_close(fd); return; }
-            }
+        for (;;) {
+            n = recv(fd, buf, 8, 0);
+            RUNLOOM_IO_NOTE(RUNLOOM_IO_RECV,
+                            runloom_io_classify(RUNLOOM_IO_RECV, (long long)n, errno));
+            if (n >= 0) break;
+            if (errno == EINTR) continue;
+            if (errno != EAGAIN && errno != EWOULDBLOCK) { runloom_io_c_close(fd); return; }
+            if (runloom_netpoll_wait_fd_coop(fd, RUNLOOM_NETPOLL_READ, -1LL) < 0) { runloom_io_c_close(fd); return; }
         }
         if (n == 0) {                           /* peer closed */
-            if (ms != NULL) runloom_iouring_loop_ms_close(ms);
             runloom_io_c_close(fd); return;
         }
         {
             ssize_t sent = 0;
             while (sent < n) {
-                ssize_t s;
-                if (ring != NULL) {
-                    s = runloom_iouring_loop_send(ring, fd, buf + sent,
-                                                  (size_t)(n - sent), 0);
-                    if (s > 0) { sent += s; continue; }
-                    if (ms != NULL) runloom_iouring_loop_ms_close(ms);
-                    runloom_io_c_close(fd); return;  /* EOF/error on a proactor send */
-                }
-                s = send(fd, buf + sent, (size_t)(n - sent), 0);
+                ssize_t s = send(fd, buf + sent, (size_t)(n - sent), 0);
                 RUNLOOM_IO_NOTE(RUNLOOM_IO_SEND,
                                 runloom_io_classify(RUNLOOM_IO_SEND, (long long)s, errno));
                 if (s > 0) { sent += s; continue; }

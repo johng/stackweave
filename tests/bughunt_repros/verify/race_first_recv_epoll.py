@@ -1,13 +1,12 @@
 """Claim (b): two fibers on different hubs race the FIRST recv() on a shared
-TCPConn in iouring multishot mode.  Unsynchronized lazy init of self->ms can
-arm TWO kernel multishot recvs on one fd; bytes delivered to the leaked
-handle's queue are unreachable -> data loss / hung recv.
+TCPConn.  (Originally the control for the removed io_uring multishot TCPConn
+mode, whose unsynchronized lazy init of self->ms could arm TWO kernel
+multishot recvs on one fd; it still stresses the readiness path.)
 
 Detection: per iteration, peer sends a known byte total; all reader fibers
 count what they get.  Shortfall after deadline => lost bytes.
 """
 import os
-os.environ["STACKWEAVE_TCPCONN_IOURING"] = "0"
 import socket
 import sys
 import threading

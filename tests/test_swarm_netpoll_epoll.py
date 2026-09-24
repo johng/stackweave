@@ -30,8 +30,8 @@ actually break a lock-free netpoll under free-threaded 3.13t:
   - a signal (SIGALRM) delivered INTO a fiber parked in wait_fd / tcp_recv,
     which must raise out of the cooperative call through that fiber's stack;
   - slow-return: a never-ready park must not starve siblings (assert_faster_than);
-  - the io_uring global-ring eventfd drain under CONCURRENT file I/O and under
-    STACKWEAVE_IOURING_LOOP=1 (subprocess);
+  - the io_uring global-ring eventfd drain under CONCURRENT file I/O, single-
+    thread and M:N (subprocess);
   - TCPConn connection-refused / EOF / large framed transfer / many concurrent
     connections, single-thread AND M:N; serve() M:N echo + its single-thread
     refusal.
@@ -970,12 +970,11 @@ def test_iouring_concurrent_file_io_drains_eventfd():
 
 
 @pytest.mark.skipif(not (FT and rc.iouring_available()),
-                    reason="io_uring loop mode needs M:N + io_uring")
-def test_iouring_loop_mode_file_io_subprocess():
-    # STACKWEAVE_IOURING_LOOP=1: file_read parks on the global ring whose eventfd is
-    # EPOLLEXCLUSIVE in the shared epoll (the documented hang hazard -- the loop
-    # idle path must drain the global ring after loop_wait).  Bounded; assert it
-    # completes, no hang.
+                    reason="M:N io_uring file I/O needs M:N + io_uring")
+def test_iouring_mn_file_io_subprocess():
+    # M:N: file_read parks on the global ring whose eventfd is EPOLLEXCLUSIVE in
+    # the shared epoll (nested in each hub's own epoll), so an idle hub must
+    # still drain it.  Bounded; assert it completes, no hang.
     # NB: ok is a per-fiber bytearray, NOT a shared `ok[0] += 1` -- with the GIL
     # off the read-modify-write of a shared counter from 12 M:N fibers LOSES
     # increments (a lost update under load made this assert LOOP_OK 11 != 12 even
@@ -1002,10 +1001,10 @@ def main():
 stackweave.run(3, main)
 sys.stdout.write("LOOP_OK %d\n" % sum(ok))
 '''
-    p = _subproc(script, env_extra={"STACKWEAVE_IOURING_LOOP": "1"}, timeout=40)
-    _assert_no_signal_crash(p, "iouring loop")
+    p = _subproc(script, timeout=40)
+    _assert_no_signal_crash(p, "iouring mn")
     assert "LOOP_OK 12" in p.stdout, (
-        "io_uring loop mode lost a file completion / hung: %r / %r"
+        "M:N io_uring file I/O lost a file completion / hung: %r / %r"
         % (p.stdout, p.stderr[-1000:]))
 
 

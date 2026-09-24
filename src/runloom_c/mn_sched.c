@@ -53,14 +53,6 @@
 #include "runloom_sched.h"
 #include "netpoll.h"
 #include "io_uring.h"
-#if defined(__linux__)
-/* UAPI header for IORING_ASYNC_CANCEL_FD/ALL: the cancel-by-fd broadcast
- * (runloom_iouring_cancel_fd_all_hubs, mn_sched_mn_api.c.inc) gates on that
- * macro, and the project io_uring.h does NOT pull it in -- without this the
- * broadcast silently compiles to its no-op #else stub and a hub-ring single-
- * shot recv can never be cancelled by close(). */
-#  include <linux/io_uring.h>
-#endif
 #include "coro.h"
 #include "cldeque.h"
 #include "runloom_diag.h"
@@ -142,16 +134,6 @@ RUNLOOM_FSM_ASSERT_TABLE(runloom_ws_table, RUNLOOM_WS_STATE_COUNT,
  * within each hub -- the cross-hub submission mailbox (producers write it on
  * every cross-hub submit) and the sysmon/cancel signals -- off the
  * owner-private deque/sched line. */
-/* Per-hub cancel-by-fd mailbox node (R7 item 1 / DESIGN_mn_iouring_cancel_fd.md).
- * TCPConn.close() deposits a dup'd fd here for each live hub; the owning hub
- * (the ring's single issuer) drains it at its loop top and submits an
- * ASYNC_CANCEL_FD on its own ring.  dup_fd is closed after the cancel CQE drains
- * (carried on the cancel op's cancel_dup_fd). */
-typedef struct runloom_cancel_fd_node {
-    int dup_fd;
-    struct runloom_cancel_fd_node *next;
-} runloom_cancel_fd_node_t;
-
 typedef struct runloom_hub {
     alignas(RUNLOOM_CACHELINE) int id;
     runloom_thread_t thread;
@@ -207,25 +189,6 @@ typedef struct runloom_hub {
     runloom_g_t **stage_head;
     runloom_g_t **stage_tail;
     long          stage_pending;   /* staged gs awaiting release-flush; 0 = skip */
-    /* Per-hub io_uring ring.  Created at hub_main entry with
-     * IORING_SETUP_SINGLE_ISSUER (and DEFER_TASKRUN if the kernel
-     * supports it).  Eventfd registered with the shared netpoll pump.
-     * Used by hub-bound recv/send to bypass the global ring's
-     * submission mutex and the legacy spin-drain.  NULL if the
-     * kernel doesn't have io_uring (5.0 or older) or ring create
-     * failed -- callers fall back to the global ring path. */
-    runloom_iouring_ring_t *iouring_ring;
-    int                  iouring_eventfd;  /* cached for unregister at fini */
-    /* io_uring-as-loop backend (RUNLOOM_IOURING_LOOP=1, default off).  When
-     * the loop backend is active the hub blocks DIRECTLY in its ring via
-     * io_uring_submit_and_wait_timeout instead of epoll_wait, so cross-hub
-     * submits (and foreign wakes) must interrupt the ring wait rather than the
-     * idle condvar.  loop_wake_fd is a per-hub eventfd poll-added (multishot)
-     * into the ring; ring_waiting is the lock-free hint (set only while blocked
-     * in the ring wait) that lets a submit skip the eventfd write when the hub
-     * is busy.  Both are -1/0 and untouched unless the loop backend is on. */
-    int                  loop_wake_fd;
-    volatile int         ring_waiting;
     /* Last time this hub ran the idle stack-reclaim sweep (seconds, 0 at
      * init -> first idle sweep fires immediately).  Rate-limits the
      * sweep's O(parked) walk. */
@@ -244,36 +207,19 @@ typedef struct runloom_hub {
     alignas(RUNLOOM_CACHELINE) volatile long long   resume_start_ns;
     volatile long        resume_seq;
     runloom_g_t            *resume_g;
-    /* The thread state the current resume RUNS ON: the fiber's own under
-     * migration (per-g tstate), else this hub's.  Published by
-     * runloom_hub_resume_begin, cleared by runloom_hub_resume_end, read by the
-     * sysmon watchdog through a hazard pointer (runloom_sysmon_hub_attach_state)
-     * because a per-g tstate is freed when its fiber completes.  NULL = idle. */
+    /* The thread state the current resume RUNS ON: the fiber's own (per-g
+     * tstate).  Published by runloom_hub_resume_begin, cleared by
+     * runloom_hub_resume_end, read by the sysmon watchdog through a hazard
+     * pointer (runloom_sysmon_hub_attach_state) because a per-g tstate is freed
+     * when its fiber completes.  NULL = idle. */
     void *volatile       resume_tstate;
-    /* RUNLOOM_PREEMPT: set by the sysmon watchdog when this hub is ATTACHED-wedged
-     * (a CPU-bound / non-yielding fiber, which work-stealing can't drain).
-     * runloom's installed eval-frame wrapper reads it at the next Python frame
-     * boundary on THIS hub's owner thread and yields the running g back to the
-     * scheduler -- Go pre-1.14 cooperative preemption.  Written rarely (only
-     * while wedged); read every frame only when RUNLOOM_PREEMPT installed the
-     * wrapper (opt-in, so default mode never touches it). */
+    /* Set by the sysmon watchdog when this hub is ATTACHED-wedged (a CPU-bound /
+     * non-yielding fiber, which work-stealing can't drain).  The installed
+     * eval-frame wrapper reads it at the next Python frame boundary on THIS
+     * hub's owner thread and yields the running g back to the scheduler -- Go
+     * pre-1.14 cooperative preemption.  Written rarely (only while wedged);
+     * read every frame. */
     volatile int         preempt_requested;
-    /* Cross-thread io_uring single-op cancel mailbox.  A hub ring is
-     * SINGLE_ISSUER, so a foreign task.cancel cannot submit the ASYNC_CANCEL
-     * itself -- it deposits the target op here (CAS NULL->op) and signals
-     * idle_cond; THIS hub (the ring's sole issuer) drains it at its loop top
-     * and submits the cancel on its own ring.  Single slot: a second concurrent
-     * cancel for the same hub is dropped (best-effort -- that fiber still
-     * unblocks when its op completes).  See runloom_iouring_cancel_g. */
-    void                *iouring_cancel_op;
-    /* Cross-thread cancel-by-fd mailbox (R7 item 1).  A foreign TCPConn.close()
-     * pushes dup'd fds here (one per live hub) under cancel_fd_lock; THIS hub
-     * drains them at its loop top and submits an ASYNC_CANCEL_FD on its own ring
-     * (SINGLE_ISSUER).  A proper MPSC list (not a single slot like
-     * iouring_cancel_op) so concurrent closes never drop a cancel.  See
-     * runloom_iouring_cancel_fd_all_hubs / DESIGN_mn_iouring_cancel_fd.md. */
-    runloom_mutex_t           cancel_fd_lock;
-    runloom_cancel_fd_node_t *cancel_fd_head;
     /* WAKEP (work-stealing wake registry).  1 while THIS hub is registered as a
      * DEEP idle sleeper that a producer may kick to come steal.  Set in
      * runloom_mn_park_enter just before a deep idle wait; cleared (CAS 1->0) by

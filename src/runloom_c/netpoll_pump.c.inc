@@ -4,8 +4,8 @@
 
 
 #if defined(RUNLOOM_HAVE_EPOLL)
-/* Handle one ready epoll event: io_uring global/per-ring eventfds drain their
- * rings, the legacy generic pump-wake eventfd is drained, and a socket fd is
+/* Handle one ready epoll event: the io_uring global eventfd drains its ring,
+ * the legacy generic pump-wake eventfd is drained, and a socket fd is
  * dispatched to its parker (or stashed in the pending-wake bitmap if none is
  * linked yet).  Shared by the shared-epoll pump and, under RUNLOOM_PERHUB_EPOLL,
  * by each hub draining its NESTED shared epoll.  Bumps *woke per parker woken. */
@@ -25,21 +25,6 @@ static void runloom_epoll_handle_event(int fd, unsigned int events, int *woke)
         ssize_t r = read(fd, &v, sizeof v);
         (void)r;
         return;
-    }
-    /* Per-hub iouring rings: dispatch to the matching ring's drain. */
-    {
-        int ri;
-        struct runloom_iouring_ring *match = NULL;
-        for (ri = 0; ri < runloom_iouring_ring_count; ri++) {
-            if (runloom_iouring_ring_efds[ri] == fd) {
-                match = runloom_iouring_ring_ptrs[ri];
-                break;
-            }
-        }
-        if (match != NULL) {
-            runloom_iouring_ring_drain(match);
-            return;
-        }
     }
     /* Fold error/hangup into BOTH directions (EPOLLERR/HUP/RDHUP can carry no
      * IN/OUT bit -- a bare RST / half-close); waking both makes every waiter
@@ -229,7 +214,7 @@ int runloom_netpoll_pump(long long timeout_ns)
                             __atomic_store_n(&epool->wake_pending, 0, __ATOMIC_SEQ_CST);
                         continue;
                     }
-                    /* The NESTED shared epoll fired (io_uring ring eventfds + the
+                    /* The NESTED shared epoll fired (the io_uring eventfd + the
                      * legacy generic wake live in runloom_epoll_fd).  Drain it
                      * NON-BLOCKING and run each event through the same handler;
                      * the shared set never contains itself, so no recursion. */

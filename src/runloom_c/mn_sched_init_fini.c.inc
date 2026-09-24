@@ -220,13 +220,6 @@ int runloom_mn_init(int n_threads, int offload_hubs)
         runloom_mutex_init(&h->idle_lock);
         runloom_cond_init(&h->idle_cond);
         h->idle_waiting = 0;
-        /* Cancel-by-fd mailbox (R7 item 1). */
-        runloom_mutex_init(&h->cancel_fd_lock);
-        h->cancel_fd_head = NULL;
-        /* io_uring-as-loop: the wake eventfd is created by the hub thread in
-         * runloom_hub_main only when the loop backend is on; -1 = absent. */
-        h->loop_wake_fd = -1;
-        h->ring_waiting = 0;
         /* Controlled-replay deferred-publish staging (barrier mode only): one
          * per-target list so a segment's cross-hub submits flush atomically at
          * release.  PyMem_Calloc zeroes; OOM -> NULL -> hub_submit falls back to
@@ -291,22 +284,6 @@ int runloom_mn_init(int n_threads, int offload_hubs)
                 runloom_mutex_destroy(&runloom_hubs[j].sub_lock);
                 runloom_mutex_destroy(&runloom_hubs[j].idle_lock);
                 runloom_cond_destroy(&runloom_hubs[j].idle_cond);
-                /* Drain any cancel-by-fd nodes a concurrent foreign close()
-                 * deposited on this spawned hub before destroying its lock --
-                 * mirror mn_fini's per-hub cleanup so this failure path upholds
-                 * the same "every mailbox node is drained + its dup closed"
-                 * invariant (the hub joined above, so no concurrent depositor). */
-                {
-                    runloom_cancel_fd_node_t *cn = runloom_hubs[j].cancel_fd_head;
-                    runloom_hubs[j].cancel_fd_head = NULL;
-                    while (cn != NULL) {
-                        runloom_cancel_fd_node_t *nx = cn->next;
-                        if (cn->dup_fd >= 0) close(cn->dup_fd);
-                        free(cn);
-                        cn = nx;
-                    }
-                }
-                runloom_mutex_destroy(&runloom_hubs[j].cancel_fd_lock);
             }
             PyMem_Free(runloom_hubs);
             runloom_hubs = NULL;
@@ -411,10 +388,8 @@ void runloom_mn_fini(void)
          * so it can't slip between the hub's stopping re-check and its wait.
          * With the idle backoff the wait can be a deep one in ANY mode, so kick
          * every mode (mirrors runloom_mn_kick_all_hubs) -- else a hub deep in its
-         * io_uring loop_wait / epoll pump would stall the join below up to the
-         * full cap (seconds at a large RUNLOOM_IDLE_BACKOFF_MS). */
-        if (runloom_hubs[i].loop_wake_fd >= 0)
-            runloom_iouring_loop_wake(runloom_hubs[i].loop_wake_fd);
+         * epoll pump would stall the join below up to the full cap (seconds at a
+         * large RUNLOOM_IDLE_BACKOFF_MS). */
         runloom_mutex_lock(&runloom_hubs[i].idle_lock);
         runloom_cond_signal(&runloom_hubs[i].idle_cond);
         runloom_mutex_unlock(&runloom_hubs[i].idle_lock);
@@ -478,26 +453,9 @@ void runloom_mn_fini(void)
             PyThreadState_Clear(hts);
             PyThreadState_Delete(hts);
         }
-        /* Drain any cancel-by-fd nodes never claimed by the (now stopped) hub;
-         * close their dup'd fds so they don't leak.  Runs after the hub joined,
-         * so no concurrent depositor -- but hold the lock for TSan cleanliness. */
-        {
-            runloom_cancel_fd_node_t *cn;
-            runloom_mutex_lock(&runloom_hubs[i].cancel_fd_lock);
-            cn = runloom_hubs[i].cancel_fd_head;
-            runloom_hubs[i].cancel_fd_head = NULL;
-            runloom_mutex_unlock(&runloom_hubs[i].cancel_fd_lock);
-            while (cn != NULL) {
-                runloom_cancel_fd_node_t *nx = cn->next;
-                if (cn->dup_fd >= 0) close(cn->dup_fd);
-                free(cn);
-                cn = nx;
-            }
-        }
         runloom_mutex_destroy(&runloom_hubs[i].sub_lock);
         runloom_mutex_destroy(&runloom_hubs[i].idle_lock);
         runloom_cond_destroy(&runloom_hubs[i].idle_cond);
-        runloom_mutex_destroy(&runloom_hubs[i].cancel_fd_lock);
         /* Release the g-refs held by this hub's still-pending timer entries
          * (future-deadline timed parks that never fired) so they don't leak,
          * then free the timer-heap buffer (otherwise leaked -- it was never
@@ -1036,21 +994,14 @@ static int runloom_mn_stalled_with_runnable(void)
  * + neighbours.  A recovery nudge for a fiber made runnable whose hub missed the
  * wakeup; harmless when there is nothing to find (the hub re-checks and re-parks).
  * It MUST mirror the full wake routing in runloom_mn_hub_submit, because a hub can
- * be blocked three different ways and the idle condvar reaches only one: the
- * iouring-loop backend blocks in its RING (woken by the per-hub loop_wake_fd
- * eventfd), a netpoll hub blocks in epoll_wait / the pump (woken by the pump
- * eventfd), and only a bare idle hub waits on idle_cond.  The old version signalled
- * idle_cond ONLY -- so a hub stranded in its ring (RUNLOOM_IOURING_LOOP) could not
- * be recovered at all, and a runnable fiber pinned to it hung forever (the
- * cov_workload --hubs 4 loop-backend hang; the deadlock census never even fired
- * because the I/O-parked fibers keep has_wakeable_work() true). */
+ * be blocked two different ways and the idle condvar reaches only one: a netpoll
+ * hub blocks in epoll_wait / the pump (woken by the pump eventfd), and only a bare
+ * idle hub waits on idle_cond. */
 static void runloom_mn_kick_all_hubs(void)
 {
     int i;
     for (i = 0; i < runloom_hub_count; i++) {
         runloom_hub_t *h = &runloom_hubs[i];
-        if (h->loop_wake_fd >= 0)
-            runloom_iouring_loop_wake(h->loop_wake_fd);   /* ring-blocked hub */
         RUNLOOM_RLOCK(&h->idle_lock, RUNLOOM_RANK_HUB_IDLE);
         runloom_cond_signal(&h->idle_cond);               /* idle-condvar hub */
         RUNLOOM_RUNLOCK(&h->idle_lock, RUNLOOM_RANK_HUB_IDLE);

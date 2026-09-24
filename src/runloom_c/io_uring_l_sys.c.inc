@@ -57,9 +57,9 @@ static int sys_io_uring_submit_eintr(int ring_fd, unsigned to_submit)
  *
  * Go never adopted io_uring, so there is no upstream reference for this -- it is
  * a runloom-native-backend invariant: a completion must never be silently
- * dropped.  This is structurally avoided for SINGLE-shot ops (submit_sqe
- * spin-drains the CQ when the SQ is full) but multishot recv can post many CQEs
- * the submitter is not synchronously draining, which is where overflow bites. */
+ * dropped.  submit_sqe spin-drains the CQ when the SQ is full, but the SQ slot
+ * frees when the kernel CONSUMES an SQE, not when it completes, so more ops can
+ * be in flight than the CQ holds -- which is where overflow bites. */
 #ifndef IORING_SQ_CQ_OVERFLOW
 #define IORING_SQ_CQ_OVERFLOW (1U << 1)
 #endif
@@ -82,11 +82,9 @@ static void runloom_iouring_flush_cq_overflow(unsigned *sq_flags, int ring_fd)
 /* Per-op record.  user_data on the SQE points to one of these so
  * drain can route the completion back to the right waiter.  For
  * "single" ops the record lives on the submitter's C stack across
- * the park; for "multishot" ops it lives as the first field of a
- * runloom_iouring_ms_t handle (heap-allocated, longer-lived). */
+ * the park; a CANCEL op comes from the pool below. */
 typedef enum {
     RUNLOOM_IOURING_OP_SINGLE    = 0,
-    RUNLOOM_IOURING_OP_MULTISHOT = 1,
     RUNLOOM_IOURING_OP_CANCEL    = 2,    /* fire-and-forget */
 } runloom_iouring_op_type_t;
 
@@ -115,16 +113,6 @@ typedef struct runloom_iouring_op {
     void     *hub;           /* opaque hub_t* or NULL for global sched */
     int32_t   result;        /* SINGLE: CQE res field; valid after wake */
     int       wait;          /* SINGLE hub op: park/wake commit (see above) */
-    void     *ring;          /* SINGLE: the runloom_iouring_ring_t* this op was
-                              * submitted to, or NULL for the global ring; lets
-                              * runloom_iouring_cancel_g submit the ASYNC_CANCEL
-                              * to the SAME ring the op lives in. */
-    int       cancel_dup_fd; /* CANCEL only: an fd this cancel-by-fd op OWNS (a
-                              * dup made by TCPConn.close for the per-hub cancel
-                              * broadcast), close()d when the cancel's CQE drains;
-                              * -1 when the cancel carries no fd.  MUST be set at
-                              * EVERY OP_CANCEL alloc site (calloc's 0 is a live
-                              * fd -- stdin). */
 } runloom_iouring_op_t;
 
 /* CANCEL-op pool (fault-sweep lead, io_uring_l_do.c.inc:80/:104).  A CANCEL op is
@@ -188,11 +176,6 @@ static void rl_cancel_op_free(runloom_iouring_op_t *op)
     }
 }
 
-/* Forward-declare for the drain handler. */
-typedef struct runloom_iouring_ms runloom_iouring_ms_t;
-static void runloom_iouring_ms_on_cqe(runloom_iouring_ms_t *h,
-                                   int32_t res, uint32_t flags);
-
 /* Per-process ring state.  Initialised lazily on first use; once set
  * up it lives for the process lifetime. */
 typedef struct {
@@ -216,33 +199,14 @@ typedef struct {
     unsigned  cq_mask;     unsigned  cq_entries;
     struct io_uring_cqe *cqes;
 
-    /* Single-drainer flag.  CQEs (especially MULTISHOT recv stream buffers,
-     * which MUST be appended to the per-handle ready queue in CQ order) are
-     * processed by exactly one thread at a time: concurrent hubs all call
-     * runloom_iouring_drain, but only the one that wins this flag walks the CQ;
-     * the rest return immediately (the winner's post-clear re-check catches any
-     * completion that raced in).  A per-CQE CAS-claim drain would let two hubs
-     * append consecutive multishot buffers out of order -> stream corruption. */
+    /* Single-drainer flag.  CQEs are processed by exactly one thread at a
+     * time: concurrent hubs all call runloom_iouring_drain, but only the one
+     * that wins this flag walks the CQ; the rest return immediately (the
+     * winner's post-clear re-check catches any completion that raced in). */
     int draining;
 
     /* Serialises SQE writes + io_uring_enter calls across threads. */
     runloom_mutex_t sub_lock;
-
-    /* Provided-buffer ring for multishot recv.  Registered with bgid=0
-     * once the ring is up + the kernel reports >= 5.19.  pool_base is
-     * a contiguous N_BUFS * BUF_SIZE allocation; the kernel writes
-     * incoming data into one of these buffers per CQE.  ring_mem
-     * holds the io_uring_buf_ring structure shared with the kernel.
-     * Zero pool_base means "buffer ring unavailable" (older kernel
-     * or registration failed); multishot callers fall back. */
-    void   *pool_base;
-    size_t  pool_total;            /* N_BUFS * BUF_SIZE */
-    unsigned pool_n;               /* number of buffers in the ring */
-    unsigned pool_buf_size;        /* per-buffer size */
-    void   *bring_mem;             /* io_uring_buf_ring + entries */
-    size_t  bring_size;
-    uint16_t bring_mask;           /* pool_n - 1, pool_n must be pow2 */
-    runloom_mutex_t bring_lock;       /* serialises producer-side tail writes */
 } runloom_iouring_state_t;
 
 static runloom_iouring_state_t runloom_iouring_state = {0};
@@ -274,7 +238,7 @@ static void runloom_iouring_lock_ensure_inited(void)
 
 /* CQ/SQ ring depth.  Default 64.  RUNLOOM_IOURING_ENTRIES overrides it so the
  * CQ-overflow trace-conformance harness can make the ring TINY (4..8) and force
- * IORING_SQ_CQ_OVERFLOW with a multishot recv burst -- the only way to drive the
+ * IORING_SQ_CQ_OVERFLOW with a completion burst -- the only way to drive the
  * DrainFlushFirst overflow heal RunloomIouringWake.tla models.  Read once per
  * setup; clamped to a sane pow2-friendly band and only honoured when set, so
  * production (env unset) is byte-for-byte unchanged.  The kernel rounds the SQ up
@@ -394,69 +358,6 @@ static int runloom_iouring_lazy_init(void)
     /* initialised is published (atomic-release) only at the very END of init,
      * after the eventfd is hooked into the pump -- so a lock-free fast-path
      * reader in runloom_iouring_available() never observes a half-built ring. */
-
-    /* Best-effort provided-buffer-ring setup for multishot recv.
-     * Linux 5.19+; older kernels just leave pool_base = NULL and
-     * callers fall back to single-shot recv.  Failure here is not a
-     * hard error -- only the multishot path is affected. */
-    {
-        struct runloom_iouring_buf_reg reg;
-        size_t pool_total = (size_t)RUNLOOM_IOURING_PBUF_COUNT *
-                            RUNLOOM_IOURING_PBUF_SIZE;
-        size_t bring_size = sizeof(struct runloom_iouring_buf) *
-                            RUNLOOM_IOURING_PBUF_COUNT;
-        long page = sysconf(_SC_PAGESIZE);
-        void *pool = NULL, *bring = NULL;
-        if (page <= 0) page = 4096;
-        if (posix_memalign(&pool, (size_t)page, pool_total) != 0)
-            pool = NULL;
-        if (posix_memalign(&bring, (size_t)page, bring_size) != 0)
-            bring = NULL;
-        if (pool != NULL && bring != NULL) {
-            unsigned i;
-            struct runloom_iouring_buf *bufs;
-            memset(bring, 0, bring_size);
-            bufs = (struct runloom_iouring_buf *)bring;
-            memset(&reg, 0, sizeof(reg));
-            reg.ring_addr    = (uintptr_t)bring;
-            reg.ring_entries = RUNLOOM_IOURING_PBUF_COUNT;
-            reg.bgid         = RUNLOOM_IOURING_PBUF_BGID;
-            reg.flags        = 0;
-            if (sys_io_uring_register(fd, IORING_REGISTER_PBUF_RING,
-                                      &reg, 1) == 0) {
-                /* Populate the ring: each buffer at index i refers to
-                 * pool_base + i*BUF_SIZE with bid=i.  After we fill the
-                 * descriptors, bump the tail by N so the kernel sees N
-                 * usable buffers immediately. */
-                for (i = 0; i < RUNLOOM_IOURING_PBUF_COUNT; i++) {
-                    bufs[i].addr = (uintptr_t)((char *)pool +
-                                   (size_t)i * RUNLOOM_IOURING_PBUF_SIZE);
-                    bufs[i].len  = RUNLOOM_IOURING_PBUF_SIZE;
-                    bufs[i].bid  = (uint16_t)i;
-                    bufs[i].resv = 0;
-                }
-                /* The kernel tail lives in bufs[0].resv (per the
-                 * io_uring_buf_ring union).  Atomic store-release so
-                 * the kernel observes a consistent view of all
-                 * descriptors before the new tail. */
-                __atomic_store_n(&bufs[0].resv,
-                                 (uint16_t)RUNLOOM_IOURING_PBUF_COUNT,
-                                 __ATOMIC_RELEASE);
-                runloom_iouring_state.pool_base     = pool;
-                runloom_iouring_state.pool_total    = pool_total;
-                runloom_iouring_state.pool_n        = RUNLOOM_IOURING_PBUF_COUNT;
-                runloom_iouring_state.pool_buf_size = RUNLOOM_IOURING_PBUF_SIZE;
-                runloom_iouring_state.bring_mem     = bring;
-                runloom_iouring_state.bring_size    = bring_size;
-                runloom_iouring_state.bring_mask    = RUNLOOM_IOURING_PBUF_COUNT - 1;
-                runloom_mutex_init(&runloom_iouring_state.bring_lock);
-            } else {
-                free(pool);  free(bring);
-            }
-        } else {
-            free(pool);  free(bring);
-        }
-    }
 
     /* Hook the eventfd into the netpoll pump so CQEs cause the pump
      * to wake up + drain.  If this fails (epoll not on this OS, or

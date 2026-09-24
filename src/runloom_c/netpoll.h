@@ -181,13 +181,10 @@ void runloom_netpoll_reset_after_fork(void);
 /* Backend name for diagnostics: "epoll" / "kqueue" / "select". */
 const char *runloom_netpoll_backend(void);
 
-/* The shared epoll fd (Linux), for the io_uring-as-loop backend to poll-add
- * into a hub ring.  -1 on non-epoll backends.  Forces netpoll init. */
-int runloom_netpoll_epoll_fd(void);
-
-/* The epoll fd the CURRENT hub waits on: per-hub (pool->epoll_fd) under
- * RUNLOOM_PERHUB_EPOLL, else the shared one.  The io_uring-as-loop F_EPOLL bridge
- * must poll THIS so a hub's own socket fds are observed in per-hub mode. */
+/* The epoll fd the CURRENT hub waits on: its per-hub pool->epoll_fd, else the
+ * shared one.  -1 on non-epoll backends.  Forces netpoll init and the calling
+ * hub's pool backend (hub_main calls it at startup to warm the per-hub wake
+ * infrastructure). */
 int runloom_netpoll_hub_epoll_fd(void);
 
 /* Test-only netpoll fault-injection introspection (see netpoll_init.c.inc).
@@ -230,16 +227,6 @@ int runloom_spawn_fault_armed(void);
  * its completion eventfd into the global pump.  Caller retains
  * ownership of the fd. */
 int runloom_netpoll_add_iouring_eventfd(int fd);
-
-/* Like above but registers a per-hub ring instead of the global ring.
- * The pump dispatches the eventfd hit to runloom_iouring_ring_drain(ring).
- * Up to RUNLOOM_NETPOLL_MAX_IOURING_RINGS hub rings may be registered at
- * once (sized for typical CPU counts).  Returns 0 on success, -1 on
- * "too many registered" or non-epoll backend. */
-struct runloom_iouring_ring;
-int runloom_netpoll_add_iouring_ring(int eventfd_fd,
-                                  struct runloom_iouring_ring *ring);
-void runloom_netpoll_remove_iouring_ring(int eventfd_fd);
 
 /* Generic cross-thread pump interrupt.  Arm once (idempotent); returns 0
  * if the backend supports it (epoll today), -1 otherwise.  Any thread may

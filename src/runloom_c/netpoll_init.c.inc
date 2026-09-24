@@ -121,27 +121,11 @@ const char *runloom_netpoll_backend(void)
 #endif
 }
 
-/* The shared epoll fd, for the io_uring-as-loop backend to poll-add into a hub
- * ring so existing wait_fd readiness still works while the hub blocks in the
- * ring.  -1 on non-epoll backends or before init.  Forces init so the fd is
- * live for the caller (the hub arms its loop at startup). */
-int runloom_netpoll_epoll_fd(void)
-{
-#if defined(RUNLOOM_HAVE_EPOLL)
-    if (runloom_netpoll_init() != 0) return -1;
-    return runloom_epoll_fd;
-#else
-    return -1;
-#endif
-}
-
-/* The epoll fd the CURRENT hub waits on for the io_uring-as-loop F_EPOLL bridge.
- * Under RUNLOOM_PERHUB_EPOLL the hub's socket fds live in its OWN pool->epoll_fd
- * (which also NESTS the shared epoll, so io_uring eventfds still reach it), so the
- * LOOP ring must poll THAT, not the shared runloom_epoll_fd -- polling the shared
- * one would never see this hub's socket readiness and stall I/O (the LOOP+MS echo
- * server only accepted/echoed its first connection).  Falls back to the shared
- * epoll when per-hub is off or the pool epoll didn't come up. */
+/* The epoll fd the CURRENT hub waits on.  The hub's socket fds live in its OWN
+ * pool->epoll_fd (which also NESTS the shared epoll, so the io_uring eventfd
+ * still reaches it).  Resolving it lazily creates the pool backend, which is why
+ * hub_main calls this at startup.  Falls back to the shared epoll when the pool
+ * epoll didn't come up. */
 int runloom_netpoll_hub_epoll_fd(void)
 {
 #if defined(RUNLOOM_HAVE_EPOLL)
@@ -282,9 +266,9 @@ int runloom_netpoll_init(void)
      *
      * The old code checked `inited` unlocked, then created the backend
      * OUTSIDE the lock.  Under M:N every hub calls this concurrently at
-     * startup (each registers its io_uring eventfd via
-     * runloom_netpoll_add_iouring_ring -> runloom_netpoll_init), so N racing
-     * first-callers each ran epoll_create1 and stored runloom_epoll_fd.
+     * startup (each warms its parker pool via runloom_netpoll_hub_epoll_fd ->
+     * runloom_netpoll_init), so N racing first-callers each ran epoll_create1
+     * and stored runloom_epoll_fd.
      * runloom_epoll_fd ended at the last writer's value and the others
      * leaked -- but worse, while it churned, registers on other threads
      * read intermediate runloom_epoll_fd values and EPOLL_CTL_ADD'd client
@@ -478,11 +462,7 @@ void runloom_netpoll_reset_after_fork(void)
         if (runloom_fd_epoll_pool != NULL) memset(runloom_fd_epoll_pool, 0xFF, cap);
     }
 #if defined(RUNLOOM_HAVE_EPOLL)
-    /* The per-hub io_uring ring registry names the PARENT hubs' rings (dead in
-     * the child).  The child's fresh hubs re-register their own; if we keep the
-     * stale entries the pump dispatches CQEs to freed rings -> hang/crash.  The
-     * epoll/eventfd/pump-wake fds were closed with the epoll fd above. */
-    runloom_iouring_ring_count = 0;
+    /* The epoll/eventfd/pump-wake fds were closed with the epoll fd above. */
     runloom_iouring_eventfd_in_epoll = -1;
     runloom_pump_wake_fd = -1;
 #endif

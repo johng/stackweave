@@ -84,10 +84,6 @@
 
 #include "runloom_sched.h"   /* for runloom_g_t forward */
 
-/* Forward-decl avoids pulling io_uring.h into every translation unit
- * that includes mn_sched.h. */
-struct runloom_iouring_ring;
-
 /* offload_hubs: how many EXTRA hubs to reserve for blocking offload (<= 0 =
  * none).  See runloom_mn_offload_fiber. */
 int runloom_mn_init(int n_threads, int offload_hubs);
@@ -241,13 +237,6 @@ void *runloom_mn_current_hub_opaque(void);
 PyThreadState *runloom_mn_worker_tstate_new(void);
 void runloom_mn_worker_tstate_delete(PyThreadState *ts);
 
-/* Deposit an io_uring single-op cancel request (the target op, a void* across
- * the TU boundary) into the owning hub's mailbox + wake it, so the hub -- the
- * SINGLE_ISSUER of its ring -- submits the ASYNC_CANCEL at its loop top.
- * Returns 1 if accepted, 0 if the slot is busy (best-effort, dropped). */
-int runloom_mn_hub_request_iouring_cancel(void *hub_opaque, void *op);
-int runloom_mn_hub_retract_iouring_cancel(void *hub_opaque, void *op);
-
 /* Map a hub_opaque (as returned by runloom_mn_current_hub_opaque, or
  * stashed on a parker/g) to the dense 0..hub_count-1 hub id.  Returns
  * -1 for NULL (single-thread sched).  Used by netpoll's per-hub
@@ -297,13 +286,6 @@ void runloom_mn_wake_g(void *hub_opaque, runloom_g_t *g);
  * never lost).  See the wake_state field comment in runloom_sched.h. */
 int  runloom_mn_sweep_try_claim(runloom_g_t *g);
 void runloom_mn_sweep_claim_release(runloom_g_t *g);
-
-/* The current hub's per-thread io_uring ring (NULL if not in a hub,
- * or the hub failed to create its ring at startup -- callers should
- * fall back to the global ring path).  Used by runloom_iouring_recv /
- * _send to dispatch to the hub's SINGLE_ISSUER ring instead of the
- * global ring's mutex-protected submit + legacy spin-drain. */
-struct runloom_iouring_ring *runloom_mn_current_iouring_ring(void);
 
 /* Halt the M:N sysmon watchdog + disable preemption from inside the
  * fatal-signal crash handler.  Async-signal-safe: only atomic/plain stores to

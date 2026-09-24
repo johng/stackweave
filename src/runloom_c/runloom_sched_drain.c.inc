@@ -247,12 +247,12 @@ Py_ssize_t runloom_sched_drain(runloom_sched_t *s)
                 }
             }
             /* io_uring CQ-OVERFLOW safety -- before any blocking pump.
-             * When the kernel CQ ring fills (multishot recv under backpressure,
-             * or many concurrent single-shot completions), excess completions go
-             * to the kernel's overflow backlog and do NOT re-signal the
-             * registered eventfd.  A blocking epoll_wait below would then sleep
-             * forever waiting for an eventfd edge that never comes, stranding the
-             * fiber whose completion is in overflow -- and the only thing that
+             * When the kernel CQ ring fills (many concurrent completions under
+             * backpressure), excess completions go to the kernel's overflow
+             * backlog and do NOT re-signal the registered eventfd.  A blocking
+             * epoll_wait below would then sleep forever waiting for an eventfd
+             * edge that never comes, stranding the fiber whose completion is in
+             * overflow -- and the only thing that
              * would free CQ space is that same stranded fiber (a real
              * backpressure deadlock; observed: CQ empty + IORING_SQ_CQ_OVERFLOW
              * set + asleep in epoll_wait(-1)).  Drain here first:

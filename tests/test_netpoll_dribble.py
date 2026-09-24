@@ -1,27 +1,22 @@
-"""Byte-dribble epoll-vs-io_uring differential (QA-steal-V2 #7, Toxiproxy slicer).
+"""Byte-dribble netpoll test (QA-steal-V2 #7, Toxiproxy slicer).
 
 A cooperative echo server echoes the client's payload back in ONE-byte slices
 with a sched_yield between each, so every slice lands while the client's recv is
 parked on the netpoll readiness edge -- exactly the disarm/re-arm window of the
-disarm_out lost-wake lineage (529c0186) and, on io_uring, the multishot
-partial-CQE / provided-buffer-ring recycle window that benign bulk LAN reads
-never touch.  The client reassembles the dribble and reports a CRC + byte count.
+disarm_out lost-wake lineage (529c0186) that benign bulk LAN reads never touch.
+The client reassembles the dribble and reports a CRC + byte count.
 
-The test runs the SAME workload as a subprocess under BOTH netpoll backends
-(STACKWEAVE_TCPCONN_IOURING 0 vs 1) and asserts:
-  * each reassembles the payload byte-exact (CRC + length match the input), and
-  * the two backends agree byte-for-byte (any divergence is a bug), and
-  * neither hangs -- a dropped edge-triggered readiness on a 1-byte slice would
-    strand the client recv, which the subprocess timeout turns into a failure.
+The test runs the workload as a subprocess and asserts:
+  * it reassembles the payload byte-exact (CRC + length match the input), and
+  * it does not hang -- a dropped edge-triggered readiness on a 1-byte slice
+    would strand the client recv, which the subprocess timeout turns into a
+    failure.
 """
 import os
 import subprocess
 import sys
 import unittest
 import zlib
-
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
-import stackweave_c
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -103,11 +98,10 @@ print("OK", out.get("crc"), out.get("n"))
 '''
 
 
-def _run_backend(iouring, nbytes, slice_):
+def _run_backend(nbytes, slice_):
     env = dict(os.environ,
                PYTHON_GIL="0", PYTHON_TLBC="0",
                PYTHONPATH=os.path.join(REPO, "src"),
-               STACKWEAVE_TCPCONN_IOURING=("1" if iouring else "0"),
                DRIBBLE_NBYTES=str(nbytes), DRIBBLE_SLICE=str(slice_))
     return subprocess.run([sys.executable, "-c", WORKLOAD], env=env,
                           capture_output=True, text=True, timeout=90)
@@ -133,20 +127,8 @@ class TestNetpollDribble(unittest.TestCase):
         return p.stdout
 
     def test_dribble_epoll_bytewise(self):
-        p = _run_backend(iouring=False, nbytes=self.NBYTES, slice_=self.SLICE)
+        p = _run_backend(nbytes=self.NBYTES, slice_=self.SLICE)
         self._assert_ok(p, "epoll")
-
-    def test_dribble_epoll_vs_iouring_agree(self):
-        ep = _run_backend(iouring=False, nbytes=self.NBYTES, slice_=self.SLICE)
-        epout = self._assert_ok(ep, "epoll")
-        if not stackweave_c.iouring_available():
-            self.skipTest("io_uring not available on this kernel")
-        io = _run_backend(iouring=True, nbytes=self.NBYTES, slice_=self.SLICE)
-        ioout = self._assert_ok(io, "io_uring")
-        self.assertEqual(epout.split(), ioout.split(),
-                         "epoll vs io_uring diverged on the dribbled echo "
-                         "(byte-for-byte differential): {0!r} vs {1!r}".format(
-                             epout, ioout))
 
 
 if __name__ == "__main__":

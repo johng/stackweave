@@ -17,16 +17,6 @@ static PyObject *RunloomTCPConn_send(RunloomTCPConn *self, PyObject *args)
     if (!PyArg_ParseTuple(args, "y*|i", &buf, &flags)) return NULL;
     fd = self->fd;
 
-#if defined(__linux__)
-    if (runloom_tcpconn_use_iouring(self)) {
-        runloom_iouring_ssize_t r = runloom_iouring_send(fd, buf.buf,
-                                                  (size_t)buf.len, flags);
-        PyBuffer_Release(&buf);
-        if (r < 0) return PyErr_Occurred() ? NULL : PyErr_SetFromErrno(PyExc_OSError);
-        return PyLong_FromSsize_t((Py_ssize_t)r);
-    }
-#endif
-
     while (1) {
         /* Classify through the total I/O FSM; send emits only PROGRESS (>=0,
          * possibly partial) / WOULDBLOCK_W / INTR / ERROR. */
@@ -68,9 +58,6 @@ static PyObject *RunloomTCPConn_send_all(RunloomTCPConn *self, PyObject *args)
     int flags = 0;
     Py_ssize_t sent = 0;
     int fd;
-#if defined(__linux__)
-    int use_iouring;
-#endif
 
     if (self->closed || self->fd < 0) {
         PyErr_SetString(PyExc_OSError, "TCPConn is closed");
@@ -78,30 +65,6 @@ static PyObject *RunloomTCPConn_send_all(RunloomTCPConn *self, PyObject *args)
     }
     if (!PyArg_ParseTuple(args, "y*|i", &buf, &flags)) return NULL;
     fd = self->fd;
-
-#if defined(__linux__)
-    use_iouring = runloom_tcpconn_use_iouring(self);
-    if (use_iouring) {
-        /* IORING_OP_SEND already handles short writes inside the
-         * kernel for stream sockets -- the kernel buffers what it
-         * can.  We still loop here because a single SEND op returns
-         * what was accepted; if buf.len > SO_SNDBUF the kernel may
-         * return partial and we must resubmit the remainder. */
-        while (sent < buf.len) {
-            runloom_iouring_ssize_t r =
-                runloom_iouring_send(fd, (const char *)buf.buf + sent,
-                                  (size_t)(buf.len - sent), flags);
-            if (r < 0) {
-                PyBuffer_Release(&buf);
-                return PyErr_Occurred() ? NULL : PyErr_SetFromErrno(PyExc_OSError);
-            }
-            sent += (Py_ssize_t)r;
-            if (r == 0) break;     /* defensive: avoid infinite loop */
-        }
-        PyBuffer_Release(&buf);
-        return PyLong_FromSsize_t(sent);
-    }
-#endif
 
     while (sent < buf.len) {
         /* Same total-FSM classification; PROGRESS advances `sent` and the loop

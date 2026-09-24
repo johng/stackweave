@@ -330,65 +330,6 @@ def test_drain_expired_timeout_claim():
 
 
 # ---------------------------------------------------------------------------
-# netpoll_pump.c.inc L82-89: the per-hub io_uring ring eventfd match in the
-# shared epoll pump.  In DEFAULT (non-loop) io_uring mode each M:N hub creates
-# its own ring and registers its CQE eventfd into the shared epoll set
-# (mn_sched_hub_main add_iouring_ring).  When a hub is idle in
-# runloom_netpoll_pump and a hub-bound io_uring recv/send op completes, that
-# ring's eventfd fires in epoll_wait; the pump scans runloom_iouring_ring_efds,
-# matches (L82->L83 match=ptrs[ri]; L84 break), and L88 runloom_iouring_ring_drain
-# / L89 continue.  Drive a real TCPConn echo (TCPConn uses io_uring on this box)
-# with deliberate idle gaps between client sends so the server hub is parked in
-# the pump when the recv CQE eventfd fires.  io_uring availability is asserted so
-# the test self-skips if a kernel ever lacks it.
-# ---------------------------------------------------------------------------
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
-@pytest.mark.skipif(not rc.iouring_available(), reason="needs io_uring")
-def test_pump_iouring_ring_eventfd_match():
-    p = _run_py(r"""
-        import sys
-        import stackweave, stackweave_c as rc
-        from stackweave.sync import WaitGroup
-        assert rc.iouring_available()
-        def main():
-            def handler(conn):
-                while True:
-                    d = conn.recv(64)
-                    if not d: break
-                    conn.send_all(d)
-                conn.close()
-            port, listeners = rc.serve("127.0.0.1", 0, handler, 2, 128)
-            res = {}
-            N = 12
-            wg = WaitGroup(); wg.add(N)
-            def client(cid):
-                try:
-                    c = rc.TCPConn.connect("127.0.0.1", port)
-                    for i in range(15):
-                        msg = b"m%02d-%03d" % (cid, i)
-                        c.send_all(msg)
-                        got = c.recv(64)
-                        assert got == msg, (got, msg)
-                        # idle gap: lets the server hub fall into the epoll pump
-                        # so the NEXT recv CQE eventfd fires while it's parked.
-                        stackweave.sleep(0.003)
-                    c.close()
-                    res[cid] = 1
-                finally:
-                    wg.done()
-            for cid in range(N):
-                rc.mn_fiber(lambda cid=cid: client(cid))
-            wg.wait()
-            for L in listeners: L.close()
-            assert sum(res.values()) == N, res
-        stackweave.run(4, main)
-        sys.stdout.write("IOURING_ECHO_OK\n")
-    """, timeout=60)
-    assert p.returncode == 0, p.stderr[-1500:]
-    assert "IOURING_ECHO_OK" in p.stdout, (p.stdout, p.stderr[-800:])
-
-
-# ---------------------------------------------------------------------------
 # netpoll_parker_link.c.inc L31-38: the ghost self-reference detach
 #   if (pool->head == p) { pool->head = NULL; EVT(...) }
 #   if (pool->by_fd[p->fd] == p) { pool->by_fd[p->fd] = NULL; EVT(...) }

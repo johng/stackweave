@@ -118,16 +118,14 @@ static volatile long runloom_global_runq_len  = 0;
 /* Entries with pin_hub1 == 0: the part of the queue any hub may pull. */
 static volatile long runloom_global_runq_unpinned_len = 0;
 
-/* Kick hub `h` out of whichever idle wait it is in -- the same three deliveries
- * runloom_mn_hub_submit makes for a sub_list push: the io_uring loop eventfd,
- * the idle condvar (only when the hub announced idle_waiting; the SEQ_CST fence
- * in the caller pairs with the hub's announce + re-check), and its netpoll
- * pump self-pipe.  All three are edge-safe: a kick that finds nobody waiting
- * is a wasted syscall, never a lost wake. */
+/* Kick hub `h` out of whichever idle wait it is in -- the same two deliveries
+ * runloom_mn_hub_submit makes for a sub_list push: the idle condvar (only when
+ * the hub announced idle_waiting; the SEQ_CST fence in the caller pairs with
+ * the hub's announce + re-check), and its netpoll pump self-pipe.  Both are
+ * edge-safe: a kick that finds nobody waiting is a wasted syscall, never a
+ * lost wake. */
 static void runloom_mn_kick_hub_waits(runloom_hub_t *h)
 {
-    if (__atomic_load_n(&h->ring_waiting, __ATOMIC_ACQUIRE) && h->loop_wake_fd >= 0)
-        runloom_iouring_loop_wake(h->loop_wake_fd);
     if (__atomic_load_n(&h->idle_waiting, __ATOMIC_ACQUIRE)) {
         RUNLOOM_RLOCK(&h->idle_lock, RUNLOOM_RANK_HUB_IDLE);
         runloom_cond_signal(&h->idle_cond);

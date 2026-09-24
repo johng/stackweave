@@ -3,10 +3,6 @@
 Targets the uncovered-but-reachable lines classified COVER in
 build/cover_by_tu.json under "runloom_tcp.c":
 
-  runloom_tcp.c
-    L90        resolve_mode: STACKWEAVE_TCPCONN_IOURING="auto" -> MODE_AUTO branch
-    L94-95     resolve_mode: STACKWEAVE_TCPCONN_IOURING_THRESHOLD set -> atoi>0 latch
-    L116-121   use_iouring auto-choice block (count<threshold -> 0 ; >=threshold -> 1)
   runloom_tcp_conn_send.c.inc
     L30        send while(1) loop back-edge (resume after an EAGAIN park)
     L41-43     send hard error (EPIPE/ECONNRESET) -> PyBuffer_Release + raise
@@ -14,21 +10,13 @@ build/cover_by_tu.json under "runloom_tcp.c":
     L68        send_all closed-conn guard
   runloom_tcp_conn_net.c.inc
     L110-111   accept fatal-error branch (errno not in the transient set)
-  runloom_tcp_conn_io.c.inc
-    L265-268   recv_into single-shot io_uring RECV fallback (flags!=0, MSG_PEEK,
-               pre-ready bytes complete it inline -- NOT a backpressured recv)
 
 Mechanisms (per the classifier):
-  * Env-mode / io_uring branches are PROCESS-FROZEN (mode resolved once on first
-    read), so each runs in a fresh clean-exiting SUBPROCESS with the env set.
   * The accept fatal-error branch has no in-process FINJ hook on Linux
     (RUNLOOM_TCP_FINJ compiles to 0); driven with strace -e inject=accept4.
-  * The send/recv epoll-path branches use real backpressure / RST / cancel with
-    NO io_uring (epoll path), so none can hit the io_uring recv-backpressure
-    deadlock.
+  * The send/recv epoll-path branches use real backpressure / RST / cancel.
 
-Every test is deadline-bounded (hang_guard / subprocess timeout); a TimeoutExpired
-on an io_uring child is treated as box contention -> skip, never a flaky fail.
+Every test is deadline-bounded (hang_guard / subprocess timeout).
 """
 import os
 import shutil
@@ -48,191 +36,11 @@ import stackweave_c as rc  # noqa: E402
 
 pytestmark = pytest.mark.skipif(
     not sys.platform.startswith("linux"),
-    reason="runloom_tcp.c io_uring/strace gap-fill is Linux-only")
-
-
-def _iou_available():
-    try:
-        return bool(rc.iouring_available())
-    except Exception:
-        return False
-
-
-needs_iouring = pytest.mark.skipif(
-    not _iou_available(), reason="io_uring unavailable on this box")
-
-
-def _run_child(script, env_extra, timeout=60):
-    """Run `script` in a fresh child with env_extra layered on.  A
-    TimeoutExpired is treated as box contention (io_uring + CPU shared with a CI
-    runner) -> skip, not a flaky fail."""
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src", **env_extra)
-    try:
-        return subprocess.run([PY, "-c", script], cwd=REPO, env=env,
-                              capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        pytest.skip("io_uring child timed out (box under heavy load)")
+    reason="runloom_tcp.c strace gap-fill is Linux-only")
 
 
 # ===========================================================================
-# 1. resolve_mode "auto" branch (runloom_tcp.c L90) + the auto-choice block
-#    with count < threshold -> choice=0 (pure epoll; L116/117/118/121).
-#    STACKWEAVE_TCPCONN_IOURING=auto with the DEFAULT threshold (2048) and a couple
-#    of conns: live_count never crosses 2048, so the auto branch picks epoll.
-#    The send/recv still round-trips (oracle: echo), proving the auto-epoll path
-#    is clean.
-# ===========================================================================
-_AUTO_EPOLL = r'''
-import sys; sys.path.insert(0, "src")
-import stackweave_c as rc
-res = [None]
-def main():
-    def server():
-        lst = rc.TCPConn.listen("127.0.0.1", 0)
-        p[0] = lst.fileno() and _port(lst)
-        conn = lst.accept()
-        d = conn.recv(64)
-        conn.send_all(d)          # auto-mode resolve runs here (count<threshold)
-        conn.close(); lst.close()
-    def client():
-        while p[0] is None:
-            rc.sched_yield()
-        c = rc.TCPConn.connect("127.0.0.1", p[0])
-        c.send_all(b"ping")       # auto-mode resolve_mode runs here too
-        res[0] = c.recv(64)
-        c.close()
-    rc.fiber(server); rc.fiber(client); rc.run()
-import socket
-def _port(lst):
-    s = socket.socket(fileno=socket.dup(lst.fileno()))
-    try: return s.getsockname()[1]
-    finally: s.detach(); s.close()
-p = [None]
-main()
-sys.stdout.write("AUTO_EPOLL %r\n" % (res[0] == b"ping",))
-'''
-
-
-@needs_iouring
-def test_resolve_mode_auto_below_threshold_picks_epoll():
-    # STACKWEAVE_TCPCONN_IOURING=auto -> L90 strcmp("auto") branch + the auto-choice
-    # block taking the count<threshold (default 2048) -> epoll path (L121).
-    p = _run_child(_AUTO_EPOLL, {"STACKWEAVE_TCPCONN_IOURING": "auto"})
-    assert p.returncode == 0, (p.stdout[-500:], p.stderr[-1500:])
-    assert "AUTO_EPOLL True" in p.stdout, (p.stdout[-500:], p.stderr[-1500:])
-
-
-# ===========================================================================
-# 2. resolve_mode threshold parse (L94-95) + the auto-choice io_uring branch
-#    (L119): STACKWEAVE_TCPCONN_IOURING=auto + THRESHOLD=1.  atoi("1")=1>0 latches
-#    the threshold (L94-95); a single live conn makes live_count>=1>=threshold,
-#    so the auto block picks io_uring (choice=1).  We drive use_iouring via a
-#    bounded TCPConn.send (io_uring SEND -- NOT a backpressured recv), so no
-#    deadlock.  Oracle: the send returns the byte count, child exits clean.
-# ===========================================================================
-_AUTO_IOURING_SEND = r'''
-import sys, socket; sys.path.insert(0, "src")
-import stackweave_c as rc
-res = [None]
-def _port(lst):
-    s = socket.socket(fileno=socket.dup(lst.fileno()))
-    try: return s.getsockname()[1]
-    finally: s.detach(); s.close()
-p = [None]
-def main():
-    def server():
-        lst = rc.TCPConn.listen("127.0.0.1", 0)
-        p[0] = lst.fileno() and _port(lst)
-        conn = lst.accept()
-        # drain so the client's send always completes; then close.
-        got = b""
-        while len(got) < 4:
-            d = conn.recv(64)
-            if not d: break
-            got += d
-        conn.close(); lst.close()
-    def client():
-        while p[0] is None:
-            rc.sched_yield()
-        c = rc.TCPConn.connect("127.0.0.1", p[0])
-        # First send latches the per-conn backend choice via use_iouring:
-        # auto + live_count(>=1) >= threshold(1) + iouring_available -> choice=1.
-        res[0] = c.send(b"ping")    # io_uring SEND, small, bounded
-        c.close()
-    rc.fiber(server); rc.fiber(client); rc.run()
-main()
-sys.stdout.write("AUTO_IOURING_SEND %r\n" % (res[0],))
-'''
-
-
-@needs_iouring
-def test_resolve_mode_threshold_one_auto_picks_iouring_send():
-    p = _run_child(_AUTO_IOURING_SEND,
-                   {"STACKWEAVE_TCPCONN_IOURING": "auto",
-                    "STACKWEAVE_TCPCONN_IOURING_THRESHOLD": "1"})
-    assert p.returncode == 0, (p.stdout[-500:], p.stderr[-1500:])
-    assert "AUTO_IOURING_SEND 4" in p.stdout, (p.stdout[-500:], p.stderr[-1500:])
-
-
-# ===========================================================================
-# 3. recv_into single-shot io_uring RECV fallback (conn_io.c.inc L265-268).
-#    STACKWEAVE_TCPCONN_IOURING=1 + recv_into(buf, n, flags=MSG_PEEK): flags!=0
-#    bypasses the pbuf multishot fast-path and takes the single-shot
-#    runloom_iouring_recv fallback.  The peer has ALREADY sent the bytes (they
-#    sit in the socket buffer) so the op completes inline via io_uring FAST_POLL
-#    -- never parks, no wake-pump, NO backpressure deadlock.  MSG_PEEK leaves the
-#    data, so a following plain recv() returns the same bytes (oracle).
-# ===========================================================================
-_PEEK_SINGLESHOT = r'''
-import sys, socket; sys.path.insert(0, "src")
-import stackweave_c as rc
-res = {}
-def _port(lst):
-    s = socket.socket(fileno=socket.dup(lst.fileno()))
-    try: return s.getsockname()[1]
-    finally: s.detach(); s.close()
-p = [None]
-def main():
-    def server():
-        lst = rc.TCPConn.listen("127.0.0.1", 0)
-        p[0] = lst.fileno() and _port(lst)
-        conn = lst.accept()
-        conn.send_all(b"PEEKME12")     # 8 pre-ready bytes
-        rc.sched_sleep(0.3)            # keep conn open while client peeks+recvs
-        conn.close(); lst.close()
-    def client():
-        while p[0] is None:
-            rc.sched_yield()
-        c = rc.TCPConn.connect("127.0.0.1", p[0])
-        # Wait for the data to actually arrive (a plain readiness park on a
-        # tiny pre-ready payload), then PEEK via the single-shot fallback.
-        rc.sched_sleep(0.1)
-        buf = bytearray(8)
-        n = c.recv_into(buf, 8, socket.MSG_PEEK)   # flags!=0 -> single-shot RECV
-        res["peek"] = (n, bytes(buf[:n]) if n > 0 else b"")
-        c.close()
-    rc.fiber(server); rc.fiber(client); rc.run()
-main()
-sys.stdout.write("PEEK %r\n" % (res.get("peek"),))
-'''
-
-
-@needs_iouring
-def test_recv_into_msg_peek_singleshot_fallback():
-    # MSG_PEEK + pre-ready bytes -> the single-shot io_uring RECV fallback
-    # (L265-268) completes inline.  This is the SAFE single tiny bounded op, not
-    # the backpressured-recv deadlock path.
-    p = _run_child(_PEEK_SINGLESHOT, {"STACKWEAVE_TCPCONN_IOURING": "1"},
-                   timeout=40)
-    assert p.returncode == 0, (p.stdout[-500:], p.stderr[-1800:])
-    # The single-shot RECV completed and returned the peeked bytes (or, if the
-    # kernel/io_uring config doesn't take this exact fallback, at least it must
-    # have exited cleanly).
-    assert "PEEK (8, b'PEEKME12')" in p.stdout, (p.stdout[-500:], p.stderr[-1500:])
-
-
-# ===========================================================================
-# 4. send EAGAIN backpressure: epoll-path send loop back-edge (L30) + the
+# 1. send EAGAIN backpressure: epoll-path send loop back-edge (L30) + the
 #    EAGAIN park (L46) and its success-resume (L46-47).  A fiber fills
 #    SO_SNDBUF on a conn whose peer never reads -> send() EAGAINs -> park on
 #    EPOLLOUT (L46) -> a second fiber drains the peer -> the park resumes ->
@@ -283,7 +91,7 @@ def test_send_eagain_park_then_resume_epoll():
 
 
 # ===========================================================================
-# 5. send hard-error branch (conn_send.c.inc L41-43): a peer that RSTs the
+# 2. send hard-error branch (conn_send.c.inc L41-43): a peer that RSTs the
 #    connection makes send() return EPIPE/ECONNRESET (not EAGAIN/EWOULDBLOCK/
 #    EINTR) -> L41 true -> PyBuffer_Release + raise OSError.  DEFAULT (epoll)
 #    backend.  Driven with a real raw socket peer that sets SO_LINGER {1,0} and
@@ -351,7 +159,7 @@ def errno_ECONNRESET():
 
 
 # ===========================================================================
-# 6. send EAGAIN park + cancel -> wait_fd<0 error return (conn_send.c.inc L50).
+# 3. send EAGAIN park + cancel -> wait_fd<0 error return (conn_send.c.inc L50).
 #    A fiber fills SO_SNDBUF and parks on EPOLLOUT inside send_all (L46);
 #    a second fiber then cancel_wait_fd()s it, so netpoll_wait_fd_coop
 #    returns <0 -> L47 PyBuffer_Release + L50 returns (clean OSError, no
@@ -414,7 +222,7 @@ def test_send_park_then_cancel_returns_error_epoll():
 
 
 # ===========================================================================
-# 7. send_all closed-conn guard (conn_send.c.inc L68): close() then send_all
+# 4. send_all closed-conn guard (conn_send.c.inc L68): close() then send_all
 #    hits self->closed -> PyErr_SetString("TCPConn is closed") + return.
 # ===========================================================================
 def test_send_all_on_closed_conn_raises():
@@ -454,12 +262,11 @@ def test_send_all_on_closed_conn_raises():
 
 
 # ===========================================================================
-# 8. accept fatal-error branch (conn_net.c.inc L110-111): an accept() error
+# 5. accept fatal-error branch (conn_net.c.inc L110-111): an accept() error
 #    whose errno is not in {EAGAIN,EWOULDBLOCK,EINTR,ECONNABORTED} -> L110 true
 #    -> L111 PyErr_SetFromErrno -> clean OSError.  No in-process FINJ hook on
-#    Linux (RUNLOOM_TCP_FINJ==0), so use strace -e inject=accept:error=EINVAL.
-#    NB: stackweave's accept path uses the bare accept() syscall (NOT accept4),
-#    confirmed by `strace -e trace=accept,accept4`.
+#    Linux (RUNLOOM_TCP_FINJ==0), so use strace -e inject=accept4:error=EINVAL.
+#    NB: on Linux stackweave's accept path uses accept4(SOCK_NONBLOCK|SOCK_CLOEXEC).
 # ===========================================================================
 _ACCEPT_FATAL = r'''
 import sys, socket; sys.path.insert(0, "src")
@@ -511,8 +318,8 @@ def test_accept_fatal_error_surfaces_oserror():
     env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
     # EINVAL is not in {EAGAIN,EWOULDBLOCK,EINTR,ECONNABORTED} -> L110 fatal.
     cmd = [strace, "-f", "-e", "signal=none",
-           # the accept path now uses accept4(SOCK_NONBLOCK) on Linux by default
-           # (STACKWEAVE_TCP_ACCEPT4); inject on BOTH so the fault fires whichever runs.
+           # the accept path uses accept4(SOCK_NONBLOCK) on Linux; inject on
+           # accept too so the fault fires whichever syscall runs.
            "-e", "inject=accept,accept4:error=EINVAL:when=1+",
            PY, "-c", _ACCEPT_FATAL]
     try:

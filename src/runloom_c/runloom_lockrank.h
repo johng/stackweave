@@ -61,7 +61,6 @@ typedef enum runloom_lock_rank {
                                        * around link/unlink/walk, with the wake
                                        * issued after it is dropped, so it nests
                                        * under nothing. */
-    RUNLOOM_RANK_IOURING_BRING= 88,   /* s->bring_lock (io_uring provided-buffer ring) */
     RUNLOOM_RANK_BLOCKPOOL    = 90,   /* bp_lock (offload blockpool) */
     RUNLOOM_RANK_RING_LIST    = 100,  /* runloom_ring_list_lock (io_uring rings) */
     RUNLOOM_RANK_GLOBAL_STACK = 110,  /* runloom_global_stack_lock (stack depot) */

@@ -2,11 +2,11 @@
 
 Targets the uncovered (#####) lines in three fragments of runloom_tcp.c:
 
-  src/runloom_c/runloom_tcp_conn_io.c.inc    -- recv / recv_into (+ iouring)
-  src/runloom_c/runloom_tcp_conn_send.c.inc  -- send / send_all  (+ iouring)
+  src/runloom_c/runloom_tcp_conn_io.c.inc    -- recv / recv_into
+  src/runloom_c/runloom_tcp_conn_send.c.inc  -- send / send_all
   src/runloom_c/runloom_tcp_conn_net.c.inc   -- listen / accept / connect / setsockopt
 
-The uncovered lines split into four reachability classes, and the tests are
+The uncovered lines split into three reachability classes, and the tests are
 grouped accordingly. Each test names the source lines it drives and the gate it
 makes true.
 
@@ -29,14 +29,6 @@ makes true.
     strace -e inject= in a subprocess (Linux-only, same mechanism as
     tests/test_tcp_faultinject.py).
 
- 4. IO_URING TCPConn backend paths (recv multishot + single-shot, recv_into,
-    send, send_all, the ms-handle close, and their r<0 error arms). Reached only
-    with STACKWEAVE_TCPCONN_IOURING=1 under the io_uring-as-loop backend, which the
-    runtime resolves ONCE at first run(); so these run in a SUBPROCESS with the
-    env set and EXIT CLEANLY so gcov counters flush. A peer RST drives the
-    iouring r<0 error arms (ECONNRESET on recv, EPIPE on send) with a real
-    condition (no fault hook exists for an io_uring op completion).
-
 Excluded (see the structured report): the RunloomTCPConn_alloc()==NULL cleanup
 arms (listen L70-71, accept L126-127, connect L247-248) -- a tp_alloc OOM with
 no fault hook in the TCPConn path; and the _PyBytes_Resize(<0) arms -- likewise
@@ -46,18 +38,16 @@ import os
 import shutil
 import signal
 import socket
-import struct
 import subprocess
 import sys
 
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from adv_util import hang_guard, needs_free_threading  # noqa: E402
+from adv_util import hang_guard  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PY = sys.executable
-FT = needs_free_threading()
 
 import stackweave  # noqa: E402
 import stackweave_c as rc  # noqa: E402
@@ -520,145 +510,6 @@ def test_recv_into_synchronous_econnreset():
     p = _run_strace(_RECVINTO_HARD, "recvfrom:error=ECONNRESET:when=1")
     assert p.returncode == 42, (p.returncode, p.stdout[-300:], p.stderr[-600:])
     assert ("errno=%d" % _errno.ECONNRESET) in p.stdout, p.stdout[-300:]
-
-
-# ===========================================================================
-# Class 4: the io_uring TCPConn backend (STACKWEAVE_TCPCONN_IOURING=1 under the
-# io_uring-as-loop backend). Drives the iouring recv/recv_into/send/send_all
-# paths, the multishot ms-handle open+close, and the r<0 error arms.
-# ===========================================================================
-
-def _iou_available():
-    try:
-        return bool(rc.iouring_available())
-    except Exception:
-        return False
-
-
-needs_iouring = pytest.mark.skipif(
-    not (FT and _iou_available()),
-    reason="io_uring TCPConn backend needs a GIL-disabled build + io_uring")
-
-_IOU_ENV = {"STACKWEAVE_IOURING_LOOP": "1", "STACKWEAVE_IOURING_MS": "1",
-            "STACKWEAVE_TCPCONN_IOURING": "1"}
-
-# Exercises every iouring success arm: multishot recv (flags=0, opens self->ms),
-# single-shot recv via MSG_PEEK (flags!=0 bypasses multishot), recv_into both
-# ways, send (single), send_all (loop), and an explicit close() of a conn whose
-# multishot ms handle is open + a conn GC'd with ms open (the dealloc ms-close).
-_IOU_OK = r'''
-import sys, struct, socket, gc
-sys.path.insert(0, "src")
-import stackweave, stackweave_c as rc
-from stackweave.sync import WaitGroup
-MSG_PEEK = socket.MSG_PEEK
-N = 24
-got = [None] * N
-peek = [None] * N
-def main():
-    def handler(conn):
-        try:
-            d = conn.recv(8)            # iouring multishot recv -> opens self->ms
-            if d: conn.send_all(d)      # iouring send_all loop
-        finally:
-            conn.close()                # iouring close with self->ms != NULL
-    port, lst = rc.serve("127.0.0.1", 0, handler, 2)
-    wg = WaitGroup(); wg.add(N)
-    def client(i):
-        try:
-            c = rc.TCPConn.connect("127.0.0.1", port)
-            c.send(struct.pack(">Q", i))               # iouring single send
-            peek[i] = c.recv(8, MSG_PEEK)              # iouring single-shot recv (flags!=0)
-            if i % 2 == 0:
-                buf = bytearray(64)
-                n = c.recv_into(buf)                   # iouring recv_into multishot (partial: 8<64)
-                got[i] = bytes(buf[:n])
-            else:
-                got[i] = c.recv(64)                    # iouring multishot recv (partial: 8<64)
-            c.close()
-        finally:
-            wg.done()
-    for i in range(N):
-        rc.mn_fiber(lambda i=i: client(i))
-    wg.wait()
-    # leave one conn with an OPEN multishot ms handle to be GC'd (dealloc ms-close):
-    leak = rc.TCPConn.connect("127.0.0.1", port)
-    leak.send(struct.pack(">Q", 0))
-    leak.recv(8)                                       # opens its ms; then drop without close
-    del leak
-    gc.collect()
-    for ln in lst: ln.close()
-stackweave.run(4, main)
-ok = sum(1 for i in range(N) if got[i] == struct.pack(">Q", i) and peek[i] == struct.pack(">Q", i))
-sys.stdout.write("IOU_OK %d\n" % ok)
-'''
-
-# A peer RST drives the iouring r<0 error arms with a real condition (no fault
-# hook exists for an io_uring SQE completion): server-side iouring recv sees
-# ECONNRESET, iouring send/send_all see EPIPE.
-_IOU_ERR = r'''
-import sys, struct, socket, os
-sys.path.insert(0, "src")
-import stackweave, stackweave_c as rc
-from stackweave.sync import WaitGroup
-res = {}
-def main():
-    L = rc.TCPConn.listen("127.0.0.1", 0)
-    s = socket.socket(fileno=os.dup(L.fileno())); port = s.getsockname()[1]; s.detach()
-    holder = {}; wg = WaitGroup(); wg.add(1)
-    def acc():
-        try: holder["sc"] = L.accept()
-        finally: wg.done()
-    rc.mn_fiber(acc)
-    raw = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    raw.connect(("127.0.0.1", port))
-    wg.wait()
-    sc = holder["sc"]                                  # server-side TCPConn (iouring)
-    raw.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
-    raw.close()                                        # hard RST from the peer
-    stackweave.sleep(0.1)
-    try: sc.recv(64)                                   # iouring recv r<0 (io ms_recv / single-shot)
-    except OSError as e: res["recv_errno"] = e.errno
-    try: sc.recv_into(bytearray(64))                   # iouring recv_into r<0
-    except OSError as e: res["recvinto_errno"] = e.errno
-    try: sc.send(b"x" * 64)                            # iouring send r<0 (send.c.inc L25)
-    except OSError as e: res["send_errno"] = e.errno
-    try: sc.send_all(b"y" * 64)                        # iouring send_all r<0 (send.c.inc L86-88)
-    except OSError as e: res["sendall_errno"] = e.errno
-    sc.close(); L.close()
-stackweave.run(2, main)
-sys.stdout.write("IOU_ERR recv=%r recvinto=%r send=%r sendall=%r\n" %
-                 (res.get("recv_errno"), res.get("recvinto_errno"),
-                  res.get("send_errno"), res.get("sendall_errno")))
-'''
-
-
-@needs_iouring
-def test_iouring_tcpconn_success_paths():
-    """io.c.inc L160-193 (recv multishot+single-shot), L249-268 (recv_into),
-    L64-65/L89-90 (ms close in dealloc/close); send.c.inc L20-26 (send),
-    L74-94 (send_all). Exact-once echo oracle proves the iouring path round-trips."""
-    p = _run_child(_IOU_OK, timeout=200, env_extra=_IOU_ENV)
-    assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1500:])
-    assert "IOU_OK 24" in p.stdout, (
-        "io_uring TCPConn echo did not round-trip exactly-once\n"
-        "stdout=%s\nstderr=%s" % (p.stdout, p.stderr[-1000:]))
-
-
-@needs_iouring
-def test_iouring_tcpconn_error_paths():
-    """io.c.inc recv/recv_into r<0 arms; send.c.inc L25 + L86-88: a peer RST makes
-    the iouring recv complete -ECONNRESET and the iouring send complete -EPIPE,
-    each surfaced as a clean OSError (not a crash / hang / swallow)."""
-    import errno as _errno
-    p = _run_child(_IOU_ERR, timeout=200, env_extra=_IOU_ENV)
-    assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1500:])
-    assert ("recv=%d" % _errno.ECONNRESET) in p.stdout, (p.stdout, p.stderr[-1000:])
-    # send to a reset peer surfaces EPIPE (32); accept either EPIPE or ECONNRESET.
-    assert ("send=%d" % _errno.EPIPE) in p.stdout or \
-           ("send=%d" % _errno.ECONNRESET) in p.stdout, (p.stdout, p.stderr[-1000:])
-    assert ("sendall=%d" % _errno.EPIPE) in p.stdout or \
-           ("sendall=%d" % _errno.ECONNRESET) in p.stdout, (p.stdout, p.stderr[-1000:])
 
 
 if __name__ == "__main__":

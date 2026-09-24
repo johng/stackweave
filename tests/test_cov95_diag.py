@@ -296,11 +296,11 @@ def test_ring_dump_covers_cal_freeze_arm():
 
 
 # --------------------------------------------------------------------------
-# L184 (op_name PARKER_FORCE) + the iouring force-unlink emit it labels.
+# L184 (op_name PARKER_FORCE) + the force-unlink emit it labels.
 #
-# Under the io_uring loop backend, cancelling a parked fiber's fd
-# (netpoll_cancel_fd) force-unlinks its parker via the iouring wake path, which
-# emits RUNLOOM_EVT_PARKER_FORCE.  The dump must carry PARK_FORCE.
+# Cancelling a parked fiber's fd (netpoll_cancel_fd) force-unlinks its parker
+# (netpoll_wake_iouring.c.inc), which emits RUNLOOM_EVT_PARKER_FORCE.  The dump
+# must carry PARK_FORCE.
 # --------------------------------------------------------------------------
 _PARKER_FORCE_CHILD = r"""
 import os, sys, socket, tempfile
@@ -329,19 +329,15 @@ rc.fiber(main); rc.run()
 fd, path = tempfile.mkstemp()
 rc._diag_dump(fd); os.close(fd)
 data = open(path).read(); os.unlink(path)
-assert "PARK_FORCE" in data, "PARK_FORCE label absent after iouring cancel"
+assert "PARK_FORCE" in data, "PARK_FORCE label absent after netpoll_cancel_fd"
 sys.stdout.write("PARK_FORCE_OK\n")
 """
 
 
 def test_ring_dump_covers_parker_force_arm():
-    env = _child_env(STACKWEAVE_DEBUG_DIAG="ring", STACKWEAVE_IOURING_LOOP="1")
+    env = _child_env(STACKWEAVE_DEBUG_DIAG="ring")
     p = _run_child(_PARKER_FORCE_CHILD, env)
-    if p.returncode != 0:
-        # iouring loop backend can be unavailable on some kernels/configs.
-        if "PARK_FORCE_OK" not in p.stdout:
-            pytest.skip("iouring force-unlink path unavailable here: rc=%d %s"
-                        % (p.returncode, p.stderr[-400:]))
+    assert p.returncode == 0, "parker-force child rc=%d\n%s" % (p.returncode, p.stderr[-2000:])
     assert "PARK_FORCE_OK" in p.stdout, (p.stdout, p.stderr[-1000:])
 
 

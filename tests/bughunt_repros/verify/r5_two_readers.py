@@ -1,4 +1,4 @@
-# run: STACKWEAVE_TCPCONN_IOURING=1 timeout 25 .venv/bin/python r5_two_readers.py
+# run: timeout 25 .venv/bin/python r5_two_readers.py
 import socket, time
 import stackweave, stackweave_c as rc
 def _port(lst):

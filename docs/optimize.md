@@ -1,9 +1,9 @@
 # Tuning: `stackweave.optimize()`
 
 stackweave is correct and fast **with zero configuration** — call nothing and the
-runtime tunes itself (best netpoll backend, stall-recovery on free-threaded
-builds, calibrating stacks, an auto-sized stack pool, io_uring that engages as
-connections climb, …). You should never need to learn a tuning flag.
+runtime tunes itself (best netpoll backend, cross-hub migration of woken fibers,
+calibrating stacks, an auto-sized stack pool, …). You should never need to learn
+a tuning flag.
 
 When you *do* want to lean one way, there is **one function**, and you ask for it
 by **the trade-off you're making** — not by memorizing knobs:

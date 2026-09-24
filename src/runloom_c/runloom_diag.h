@@ -220,11 +220,11 @@ int  runloom_mnwake_trace_active(void);   /* fp != NULL: gate advisory reads off
 
 /* ---- io_uring CQE wake trace (TLA+ trace conformance, RUNLOOM_IOUWAKE_TRACE) ----
  * Sibling of the wake/mnwake emitters for the io_uring CQE drain route: one
- * ndjson line per transition ({"a":<SUBMIT|DRAIN_FLUSH|DRAIN_CONSUME|RESUME|
- * DRAIN_BLOCK|DRAIN_UNBLOCK>,"g":<op-pointer token>,"cap":<0|1, DRAIN_BLOCK
- * only>}); tools/iouwake_trace_conform.py lowers it to RunloomIouringWake.tla's
- * OWN actions and TLC checks the binary is a SAFETY refinement (ResumeIsTerminal
- * + NoStrandedCompletion).  DRAIN_FLUSH is emitted ONLY on the GETEVENTS branch
+ * ndjson line per transition ({"a":<DRAIN_FLUSH|DRAIN_BLOCK|DRAIN_UNBLOCK>,
+ * "g":<op-pointer token>,"cap":<0|1, DRAIN_BLOCK only>}).  The SUBMIT /
+ * DRAIN_CONSUME / RESUME events, and the checker that replayed a trace against
+ * RunloomIouringWake.tla, went with the TCPConn multishot path; nothing
+ * consumes this trace now.  DRAIN_FLUSH is emitted ONLY on the GETEVENTS branch
  * of runloom_iouring_flush_cq_overflow (the CQ-overflow heal actually fired), so
  * its presence is the witness that overflow was induced.  Off (zero-cost -- one
  * predictable-NULL load) unless RUNLOOM_IOUWAKE_TRACE is set. */
