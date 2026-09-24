@@ -4,13 +4,11 @@
 Unlike scaling.py (spawn N up front, then drain = a one-shot burst), this keeps a
 roughly fixed live-set churning: `conc` chains, each fiber spawning its successor
 right before it returns, `depth = n/conc` deep.  At any instant ~conc fibers are
-live and the arena slots cycle spawn->complete->reuse -- the regime where Go's
-warm-stack free-list pays off and a fresh-VA bump cursor keeps re-faulting.  This is
-the realistic server shape (handle req -> spawn handler -> complete -> next).
+live and the pooled stacks cycle spawn->complete->reuse -- the regime where Go's
+warm-stack free-list pays off.  This is the realistic server shape (handle req ->
+spawn handler -> complete -> next).
 
-Measures total completions / wall.  Run it with STACKWEAVE_STACK_SCRUB=0 so the Exp-D
-scrub cost is out of the way and this isolates the fault/reuse cost.  Toggle the
-arena free-list with STACKWEAVE_STACK_ARENA_FREELIST."""
+Measures total completions / wall."""
 import argparse
 import json
 import os
@@ -50,9 +48,7 @@ def main():
 
     rate = total / best
     rec = {"label": args.label, "hubs": args.hubs, "conc": args.conc, "n": total,
-           "reps": args.reps, "seconds": best, "churn_per_s": rate,
-           "freelist": os.environ.get("STACKWEAVE_STACK_ARENA_FREELIST", ""),
-           "arena": os.environ.get("STACKWEAVE_STACK_ARENA", "")}
+           "reps": args.reps, "seconds": best, "churn_per_s": rate}
     print("%-20s conc=%-6d %9.0f churn/s  (%.3fs / %d)" %
           (args.label, args.conc, rate, best, total), file=sys.stderr)
     print(json.dumps(rec))

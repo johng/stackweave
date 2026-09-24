@@ -6,8 +6,8 @@ completion count (so they can't interact with each other's runtime state):
   2. optimize("throughput") wires the validated warm-stack arena + bulk + FRESH, and
      optimize("memory") (higher precedence) turns the RAM-spending parts back off.
 
-The bulk batch *lifecycle* at scale is exercised separately in
-tests/test_spawn_bulk_lifecycle.py (own subprocess), and scrub-under-churn
+The fiber_n spawn/drain *lifecycle* at scale is exercised separately in
+tests/test_fiber_n_lifecycle.py (own subprocess), and scrub-under-churn
 correctness is covered by the existing swarm/coro/stack tests now running the
 resident-scrub default.
 """
@@ -19,8 +19,8 @@ import stackweave_c  # noqa: E402
 
 
 def test_resident_scrub_contract():
-    # The secure resident wipe is the default (STACKWEAVE_STACK_SCRUB_RESIDENT, opt-out =0);
-    # the toggle surface exists for the "secure"/"memory" profiles to drive.
+    # The resident-page wipe is the only scrub mode; the toggle surface exists for
+    # the "secure" profile to drive.
     assert callable(stackweave_c.get_stack_scrub)
     assert callable(stackweave_c.set_stack_scrub)
 

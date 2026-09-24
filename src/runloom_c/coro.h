@@ -30,30 +30,6 @@ runloom_coro_t *runloom_coro_new(size_t stack_size,
 
 void runloom_coro_destroy(runloom_coro_t *c);
 
-/* ---- bulk/arena fast path (fiber_n) ----
- * Placement coro init in caller-provided memory (>= runloom_coro_struct_size())
- * on a caller-provided stack: no malloc, no stack-acquire, no lock.  Do NOT
- * runloom_coro_destroy a placement coro -- the arena is reclaimed wholesale. */
-runloom_coro_t *runloom_coro_init_at(void *mem, size_t stack_size, void *stack,
-                                     runloom_entry_fn entry, void *user);
-size_t runloom_coro_struct_size(void);
-/* Carve one stack from the bulk arena (NULL if off/exhausted/size-mismatch). */
-void *runloom_coro_arena_stack(size_t stack_size);
-/* Release a bulk stack block (n slots from start_slot, carved at `stack_size`):
- * MADV_DONTNEED the pages (keeps the virtual reservation) AND return the slots to
- * the allocator for reuse.  stack_size identifies the per-size arena class the
- * block came from.  Called by the fiber_n batch teardown.  No-op off-POSIX. */
-void runloom_coro_arena_release(size_t start_slot, long n, size_t stack_size, int node);
-/* Fill an entire coro arena (n structs) inline, one stack each from one reserved
- * arena block, and set each g's coro pointer (g_arena[i] + g_coro_off).  One
- * call for all N: zero per-g calls into the coro layer.  0 ok, -1 on arena
- * unavailable/exhausted (caller falls back to the per-g path).  *node_out gets the
- * NUMA node the block was carved on (for the batch teardown's per-node free). */
-int runloom_coro_bulk_init(void *coro_arena, size_t coro_stride,
-                           void *g_arena, size_t g_stride, size_t g_coro_off,
-                           size_t stack_size, long n, runloom_entry_fn entry,
-                           size_t *start_slot_out, int *node_out);
-
 /* Switch into the coroutine.  Must be called from the same OS thread on
  * which runloom_coro_new was called.  Returns when the coroutine yields or
  * returns.  Calling resume on a done coroutine is undefined. */
@@ -87,9 +63,8 @@ void *runloom_coro_stack_base(const runloom_coro_t *c);
 /* Size in bytes of the guard page below each coro stack. */
 size_t runloom_coro_guard_size(void);
 
-/* Force park-time idle-page reclaim on/off programmatically (in addition to the
- * RUNLOOM_STACK_PARK_DONTNEED env).  The stack auto-sizer enables it so that
- * starting fibers large stays RSS-free. */
+/* Turn park-time idle-page reclaim (runloom_coro_park) on/off.  Off by default;
+ * the stack auto-sizer enables it so that starting fibers large stays RSS-free. */
 void runloom_coro_park_reclaim_set(int on);
 
 /* Backend identifier ("fcontext-asm", "ucontext"); useful for tests. */
@@ -142,9 +117,9 @@ void runloom_stack_autocap_reset(void);
  * fiber.  The scheduler calls this when a g parks on a waiter
  * (netpoll/chan/sleep/park_safe); the next resume re-faults the few
  * touched pages (~one page fault).  MUST be called only while c is
- * SUSPENDED (so its saved stack pointer is valid).  No-op unless
- * RUNLOOM_STACK_PARK_DONTNEED=1, and on backends without an inspectable
- * saved SP (ucontext).
+ * SUSPENDED (so its saved stack pointer is valid).  No-op unless the
+ * auto-sizer enabled it (runloom_coro_park_reclaim_set), and on backends
+ * without an inspectable saved SP (ucontext).
  *
  * M:N SAFETY: race-free against a concurrent resume even though a netpoll
  * parker is wakeable (commit==PARKED) before its yield returns control
@@ -155,16 +130,15 @@ void runloom_stack_autocap_reset(void);
  * deque is stealable -- mn_sched.c:248-286).  So the sole thread that
  * resumes g is the same hub that runs this madvise at its post-resume
  * site: madvise happens-before the next resume on one thread, and no
- * other hub ever touches the stack.  RUNLOOM_STACK_PARK_DONTNEED stays
- * default-OFF only for the throughput cost (madvise+refault per park
- * hurts short-park churn), not for safety; the path to default-ON is a
- * long-park heuristic that skips short parks.  See HANDOFF. */
+ * other hub ever touches the stack.  It stays off outside autosize only
+ * for the throughput cost (madvise+refault per park hurts short-park
+ * churn), not for safety.  See HANDOFF. */
 void runloom_coro_park(runloom_coro_t *c);
 
-/* Unconditional variant: madvise c's below-SP idle pages with no env
- * gate.  Used by the hub-idle dwell-based sweep (RUNLOOM_STACK_PARK_SWEEP),
- * which does its own gating + threshold.  Same SUSPENDED + owning-hub
- * safety contract as runloom_coro_park. */
+/* Unconditional variant: madvise c's below-SP idle pages with no reclaim
+ * gate.  Used by the hub-idle dwell-based sweep, which does its own gating
+ * + threshold.  Same SUSPENDED + owning-hub safety contract as
+ * runloom_coro_park. */
 void runloom_coro_madvise_idle(runloom_coro_t *c);
 
 /* ------------------------------------------------------------------ */

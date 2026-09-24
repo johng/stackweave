@@ -64,10 +64,7 @@
 #  include "fcontext.h"
 #  include <sys/mman.h>
 #  include <unistd.h>
-#  include <pthread.h>                /* Pass-B parallel builders (spawn_above_1m) */
-#  if defined(__linux__)
-#    include <sys/syscall.h>          /* SYS_getcpu for the NUMA-aware arena (Exp C) */
-#  endif
+#  include <pthread.h>                /* coro global-pool lock, prewarm threads */
 #  ifndef MAP_ANONYMOUS
 #    ifdef MAP_ANON
 #      define MAP_ANONYMOUS MAP_ANON
@@ -111,13 +108,6 @@ struct runloom_coro {
     void *stack;
     size_t stack_size;
     int grown;             /* 1 if copy-grow enlarged this stack */
-    /* Bulk fresh-flag (fiber_n): 1 if the initial fcontext frame has NOT yet been
-     * written to the stack top.  bulk_init can defer that write (the per-g page
-     * fault) off the single spawner thread; runloom_coro_resume materializes it
-     * lazily on the OWNING hub at first resume, then clears the flag.  Moves the
-     * 1M scattered stack faults onto the H hubs, in parallel, overlapped with the
-     * run.  0 for every non-bulk coro (eager asm_make_ctx). */
-    int fresh;
 #elif defined(RUNLOOM_HAVE_UCONTEXT)
     ucontext_t ctx;
     ucontext_t caller_ctx;
@@ -243,9 +233,8 @@ static int    runloom_global_stack_n = 0;
  * HONEST BOUND: this caps the depot's VMA (mapping) count to ~1.5x the live-stack
  * high-water, clamped to SAFE_MAX = min(VMA budget, RAM budget) and squeezed so
  * live + pool VMAs stay under vm.max_map_count.  It does NOT bound RSS directly --
- * idle entries hold MADV_FREE'd (reclaimable-under-pressure) pages; only
- * RUNLOOM_STACK_MADV=off keeps them resident.  An explicit RUNLOOM_STACK_DEPOT_CAP
- * forces a static cap (override wins). */
+ * idle entries keep their touched pages resident (see runloom_stack_madv_reclaim).
+ * An explicit RUNLOOM_STACK_DEPOT_CAP forces a static cap (override wins). */
 static int  runloom_stack_cap_mode      = -1;  /* -1 unresolved, 0 static(env), 1 auto */
 static int  runloom_stack_cap_static    = 0;   /* the env value, when mode==static */
 static int  runloom_stack_cap_cached    = 0;   /* AUTO: recomputed per tick (0 = no tick yet) */
@@ -418,266 +407,8 @@ static void runloom_stack_flush_to_global(int keep)
     }
 }
 
-/* TEST (RUNLOOM_STACK_ARENA=1): carve every stack as a slice of ONE big
- * pre-mmap'd arena -- lock-free (a single atomic bump), no per-stack mmap, no
- * global depot lock.  Each fiber still gets a DISTINCT stack (its own
- * slice), so nothing corrupts and nothing crashes; this isolates whether the
- * stack-acquire path (mmap + depot lock) is the spawn bottleneck.  Test-only:
- * no per-slice guard page, and arena slices are never reclaimed.  Slices match
- * the existing layout: a guard prefix then the usable region; we return the
- * usable base.  Size-mismatched requests / arena exhaustion fall back. */
-#ifndef MAP_NORESERVE
-#define MAP_NORESERVE 0
-#endif
-/* Per-size-CLASS arenas.  Each distinct (rounded) stack size gets its OWN big
- * MAP_NORESERVE mapping, carved lock-free by a bump cursor.  The single-size
- * predecessor locked the whole arena to the FIRST size carved and fell back to
- * per-stack map_guarded (mmap + guard mprotect) for every other size -- which is
- * every real workload (run()'s main fiber + handlers differ in size), so the
- * arena never engaged and spawn paid the full mmap/mprotect/madvise syscall
- * storm (see docs/dev/spawn_cost.md).  A small fixed set of classes covers the
- * handful of sizes a workload uses; past the cap, carve falls back to
- * map_guarded (rare). */
-#define RUNLOOM_ARENA_CLASSES 8
-#define RUNLOOM_ARENA_NODES   8            /* max NUMA nodes we shard arenas across */
-/* With NUMA sharding (Exp C) the class key is (slot, node): each node gets its own
- * set of size-class mappings, so a hub carves stacks from its LOCAL node's arena
- * and Linux's first-touch policy places the pages on that node.  Without sharding
- * everything keys to node 0 (the prior single-set behaviour). */
-#define RUNLOOM_ARENA_TABLE   (RUNLOOM_ARENA_CLASSES * RUNLOOM_ARENA_NODES)
-typedef struct {
-    char  *base;   /* mmap base; NULL = unused class slot */
-    size_t slot;   /* guard + rounded stack size (the class key) */
-    size_t cap;    /* slots reserved */
-    size_t next;   /* bump cursor (slots); guarded by runloom_arena_init_lock */
-    size_t live;   /* live slots; guarded */
-    int    node;   /* NUMA node this class is bound to (0 when sharding off) */
-} runloom_arena_class_t;
-static runloom_arena_class_t runloom_arena_cls[RUNLOOM_ARENA_TABLE];
-static runloom_mutex_t runloom_arena_init_lock = RUNLOOM_MUTEX_STATIC_INIT;
-
-static int runloom_arena_numa_on(void)
-{
-    static int v = -1;
-    int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
-    if (cur < 0) {
-        const char *e = getenv("STACKWEAVE_STACK_ARENA_NUMA");
-        cur = (e != NULL && *e != '0' && *e != '\0') ? 1 : 0;
-        __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
-    }
-    return cur;
-}
-
-/* The NUMA node of the calling thread (the carving hub), or 0 if sharding is off /
- * getcpu is unavailable.  getcpu() is a vDSO call (no real syscall cost). */
-static int runloom_current_node(void)
-{
-    if (!runloom_arena_numa_on()) return 0;
-#ifdef SYS_getcpu
-    {
-        unsigned cpu = 0, node = 0;
-        if (syscall(SYS_getcpu, &cpu, &node, (void *)0) == 0 &&
-            node < RUNLOOM_ARENA_NODES)
-            return (int)node;
-    }
-#endif
-    return 0;
-}
-
-static int runloom_stack_arena_on(void)
-{
-    static int v = -1;
-    int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
-    if (cur < 0) {
-        const char *e = getenv("STACKWEAVE_STACK_ARENA");
-        cur = (e != NULL && *e != '0' && *e != '\0') ? 1 : 0;
-        __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
-    }
-    return cur;
-}
-
-/* EXPERIMENT (docs/dev/spawn_experiments.md, Exp A): back the stack arena with
- * 2MB huge pages.  A 4KB-page arena faults in ~128 pages per 512KB stack and
- * burns a TLB entry per 4KB; at the spawn burst those minor faults + the TLB
- * footprint serialize on the shared mm.  2MB pages cut both ~512x.
- *   RUNLOOM_STACK_ARENA_HUGE = 0/unset : off (plain 4KB arena)
- *                              1 | thp  : THP -- mmap 2MB-aligned + MADV_HUGEPAGE
- *                              2 | hugetlb : explicit MAP_HUGETLB (needs a reserved
- *                                        pool; falls back to THP if the pool is empty) */
-#ifndef MADV_HUGEPAGE
-#define MADV_HUGEPAGE 14
-#endif
-#ifndef MAP_HUGETLB
-#define MAP_HUGETLB 0x40000
-#endif
-#define RUNLOOM_HP_2MB ((size_t)(2UL * 1024 * 1024))
-
-static int runloom_arena_huge_mode(void)
-{
-    static int v = -1;
-    int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
-    if (cur < 0) {
-        const char *e = getenv("STACKWEAVE_STACK_ARENA_HUGE");
-        if (e == NULL || *e == '\0' || *e == '0') cur = 0;
-        else if (strcmp(e, "hugetlb") == 0 || *e == '2') cur = 2;
-        else cur = 1;                       /* "1" / "thp" / anything else -> THP */
-        __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
-    }
-    return cur;
-}
-
-/* Map one arena class of `bytes`.  *base_out is the carve base (2MB-aligned in THP
- * mode so the very first 2MB chunk is already eligible).  Returns 0 / -1. */
-static int runloom_arena_map(size_t bytes, char **base_out)
-{
-    int mode = runloom_arena_huge_mode();
-    if (mode == 2) {
-        size_t hb = (bytes + RUNLOOM_HP_2MB - 1) & ~(RUNLOOM_HP_2MB - 1);
-        void *b = mmap(NULL, hb, PROT_READ | PROT_WRITE,
-                       MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_HUGETLB, -1, 0);
-        if (b != MAP_FAILED) { *base_out = (char *)b; return 0; }
-        mode = 1;                           /* empty hugetlb pool -> THP */
-    }
-    if (mode == 1) {
-        size_t padded = bytes + RUNLOOM_HP_2MB;
-        void *raw = mmap(NULL, padded, PROT_READ | PROT_WRITE,
-                         MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
-        if (raw == MAP_FAILED) return -1;
-        size_t off = (RUNLOOM_HP_2MB - ((uintptr_t)raw & (RUNLOOM_HP_2MB - 1)))
-                     & (RUNLOOM_HP_2MB - 1);
-        char *base = (char *)raw + off;
-        (void)madvise(base, bytes, MADV_HUGEPAGE);
-        *base_out = base;
-        return 0;
-    }
-    {
-        void *b = mmap(NULL, bytes, PROT_READ | PROT_WRITE,
-                       MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
-        if (b == MAP_FAILED) return -1;
-        *base_out = (char *)b;
-        return 0;
-    }
-}
-
-/* Find the class for `slot`, lazily mmap'ing a new one if needed.  Caller holds
- * runloom_arena_init_lock.  Returns the class index, or -1 if every class is
- * taken by other sizes / mmap failed (caller then falls back to map_guarded). */
-static int runloom_arena_class_for_locked(size_t slot, int node)
-{
-    int i, freecls = -1;
-    for (i = 0; i < RUNLOOM_ARENA_TABLE; i++) {
-        if (runloom_arena_cls[i].base != NULL) {
-            if (runloom_arena_cls[i].slot == slot && runloom_arena_cls[i].node == node)
-                return i;
-        } else if (freecls < 0) {
-            freecls = i;
-        }
-    }
-    if (freecls < 0) return -1;                 /* no free class for a new (size,node) */
-    {
-        const char *n = getenv("STACKWEAVE_STACK_ARENA_N");
-        size_t cap = (n != NULL && *n) ? (size_t)strtoull(n, NULL, 0) : 1200000;
-        char *base = NULL;
-        if (runloom_arena_map(cap * slot, &base) != 0) return -1;
-        runloom_arena_cls[freecls].slot = slot;
-        runloom_arena_cls[freecls].cap  = cap;
-        runloom_arena_cls[freecls].next = 0;
-        runloom_arena_cls[freecls].live = 0;
-        runloom_arena_cls[freecls].node = node;
-        /* base written LAST with release: a non-NULL base (read acquire) implies
-         * slot/cap/next/live/node are already published. */
-        __atomic_store_n(&runloom_arena_cls[freecls].base, (char *)base, __ATOMIC_RELEASE);
-    }
-    return freecls;
-}
-
-/* Reserve n contiguous slots in the class for `slot`; 0 + *start_out + *base_out
- * (the class mapping base) on success, -1 on exhaustion / no class.  LOCKED, but
- * called once per fiber_n / per single carve -- NEVER per fiber -- so off the hot
- * path.  Each class's bump cursor rewinds on free (full reset when it drains to
- * empty), so spawn->drain->spawn cycles reuse the same address space. */
-static int runloom_arena_alloc(long n, size_t slot, size_t *start_out, char **base_out,
-                               int *node_out)
-{
-    int rc = -1;
-    int node = runloom_current_node();          /* the carving hub's NUMA node */
-    if (node_out) *node_out = node;             /* report it so free() targets the right class */
-    RUNLOOM_RLOCK(&runloom_arena_init_lock, RUNLOOM_RANK_ARENA_INIT);
-    {
-        int cls = runloom_arena_class_for_locked(slot, node);
-        if (cls >= 0 &&
-            runloom_arena_cls[cls].next + (size_t)n <= runloom_arena_cls[cls].cap) {
-            *start_out = runloom_arena_cls[cls].next;
-            *base_out  = runloom_arena_cls[cls].base;
-            runloom_arena_cls[cls].next += (size_t)n;
-            runloom_arena_cls[cls].live += (size_t)n;
-            rc = 0;
-        }
-    }
-    RUNLOOM_RUNLOCK(&runloom_arena_init_lock, RUNLOOM_RANK_ARENA_INIT);
-    return rc;
-}
-
-/* Return n slots (at `start`) to the class for `slot`.  Full-reset that class's
- * cursor when it drains to empty (the batch-spawn/drain/respawn pattern -> total
- * reuse), else rewind if the range sits at the very top (LIFO).  An out-of-order
- * partial range is reclaimed at the next full drain (no free-list yet). */
-static void runloom_arena_free(size_t start, long n, size_t slot, int node)
-{
-    int i;
-    RUNLOOM_RLOCK(&runloom_arena_init_lock, RUNLOOM_RANK_ARENA_INIT);
-    for (i = 0; i < RUNLOOM_ARENA_TABLE; i++) {
-        if (runloom_arena_cls[i].base != NULL && runloom_arena_cls[i].slot == slot &&
-            runloom_arena_cls[i].node == node) {
-            if (runloom_arena_cls[i].live >= (size_t)n)
-                runloom_arena_cls[i].live -= (size_t)n;
-            if (runloom_arena_cls[i].live == 0)
-                runloom_arena_cls[i].next = 0;
-            else if (start + (size_t)n == runloom_arena_cls[i].next)
-                runloom_arena_cls[i].next = start;
-            break;
-        }
-    }
-    RUNLOOM_RUNLOCK(&runloom_arena_init_lock, RUNLOOM_RANK_ARENA_INIT);
-}
-
-static void *runloom_stack_arena_carve(size_t size)
-{
-    size_t guard = runloom_stack_guard();
-    size_t slot  = guard + size;
-    size_t start;
-    char  *base;
-    if (runloom_arena_alloc(1, slot, &start, &base, NULL) != 0) return NULL;
-    return base + start * slot + guard;
-}
-
-/* If `usable` is a slice of some arena class, return 1 and the (base, slot, node)
- * of that class -- lets release locate the class for a stack pointer.  Reads each
- * class's base with acquire; non-NULL implies cap/slot/node are published. */
-static int runloom_arena_class_of_ptr(void *usable, char **base_out, size_t *slot_out,
-                                      int *node_out)
-{
-    char *p = (char *)usable;
-    int i;
-    for (i = 0; i < RUNLOOM_ARENA_TABLE; i++) {
-        char *base = __atomic_load_n(&runloom_arena_cls[i].base, __ATOMIC_ACQUIRE);
-        if (base != NULL && p >= base &&
-            p < base + runloom_arena_cls[i].cap * runloom_arena_cls[i].slot) {
-            *base_out = base;
-            *slot_out = runloom_arena_cls[i].slot;
-            *node_out = runloom_arena_cls[i].node;
-            return 1;
-        }
-    }
-    return 0;
-}
-
 static void *runloom_stack_acquire(size_t size)
 {
-    if (runloom_stack_arena_on()) {
-        void *a = runloom_stack_arena_carve(size);
-        if (a != NULL) return a;                 /* arena stacks are NOT depot-backed */
-    }
     /* Count this depot-backed stack as live and bump the watermark the auto-cap
      * sizes to.  Racy max is fine (a missed update is caught next sysmon tick). */
     {
@@ -694,100 +425,34 @@ static void *runloom_stack_acquire(size_t size)
     return runloom_stack_map_guarded(size);       /* truly out of stock */
 }
 
-/* RSS reclaim of a POOLED (about-to-be-reused) stack body.  Prefer MADV_FREE
- * (Linux 4.5+), Go's scavenger choice (sysUnused).
+/* Page reclaim of a POOLED (about-to-be-reused) stack body, and of a parked
+ * fiber's below-SP idle pages (runloom_coro_madvise_idle).  Normally a no-op:
+ * pooled stacks stay RESIDENT, so a release pays no madvise and no per-release
+ * TLB-shootdown IPI.  MEASURED ~17% of naked-spawn self-time at 8 hubs, and it
+ * SCALES WITH HUB COUNT (each stack release IPIs every hub thread sharing the mm
+ * to flush TLBs).  Trades pool RSS (bounded by the depot cap x stack_size) for
+ * spawn throughput, like Go keeping freed g-stacks warm.
  *
- * MEASURED, not assumed: MADV_FREE is ~2.3x cheaper per call than MADV_DONTNEED
- * on a multi-hub process (25us vs 59us / 256KB).  The win is NOT fewer TLB
- * shootdowns -- both flush the range's TLB on a multi-thread mm, and the
- * shootdown sample count was flat in profiling.  The win is that MADV_FREE skips
- * the EAGER page reclaim AND, if the stack is reacquired before the kernel
- * reclaims under pressure, the pages revalidate with NO re-fault (MADV_DONTNEED
- * zaps the pages, forcing a zero-fill fault on the next touch).  On a stack-churn
- * workload (1M bare fibers spawned+completed) this cut wall ~1.8x and sys-time
- * ~26%.  On a socket-I/O-bound workload (p01) it is negligible -- stack reclaim
- * is a rounding error against the socket syscalls there.  So this helps mass
- * fiber spawn/complete, not request/response servers.
+ * MEASUREMENT OVERRIDE.  While any HWM consumer is live -- the startup
+ * calibration window, stack-advice profiling, autosize (all gate on paint_on;
+ * runloom_coro_paint_enabled) -- the resident-page scan (mincore,
+ * runloom_stack_hwm_scan) IS the measurement, so a pooled stack's pages must
+ * ACTUALLY drop at release.  Kept resident, a recycled stack carries the
+ * PREVIOUS occupant's residency, which the next occupant's scan then reports as
+ * its own HWM: a shallow fiber on a previously-deep stack over-reports, autosize
+ * can never learn DOWN past the pool's high water, and the per-kind ordering
+ * assertions flip when one kind draws a deeper-residency stack than the other
+ * sampled (test_autosize_learns_down flake).  This also keeps autosize's
+ * park-time reclaim promise ("large starts stay RSS-free").  DONTNEED only while
+ * measuring; steady state (calibration frozen, autosize off) pays nothing.
  *
- * Probed lazily: under GIL-off the first few concurrent hubs may each probe
- * MADV_FREE on their OWN region and store the flag (RELAXED) -- harmless, they
- * converge on the same value.  Falls back to MADV_DONTNEED where MADV_FREE is
- * unsupported.  Env RUNLOOM_STACK_MADV forces it: "free" (default), an
- * unrecognized value also taking the default; "dontneed" (eager reclaim /
- * tighter RSS / the old behaviour), or "off" (no reclaim -- keep pages resident).
- * Used for BOTH the pool release path AND the park idle-sweep
- * (runloom_coro_madvise_idle).  The only cost vs DONTNEED is lazy RSS: pages stay
- * counted until pressure -- set RUNLOOM_STACK_MADV=dontneed if RSS metrics matter
- * more than the spawn/complete CPU.
- *
- * Unlike MADV_DONTNEED, MADV_FREE does NOT zero the pages -- a pooled stack keeps
- * the prior fiber's bytes until overwritten.  Same trust domain, and the security
- * scrub (RUNLOOM_STACK_SCRUB) is a SEPARATE path that deliberately stays on
- * MADV_DONTNEED for its zero-on-next-touch guarantee. */
-static int runloom_stack_madv_flag = -1;      /* -1 unknown; 0 = off; else flag */
+ * The security scrub (runloom_stack_scrub) is a SEPARATE path with its own
+ * zero-every-touched-byte guarantee. */
 static void runloom_stack_madv_reclaim(void *addr, size_t len)
 {
-#if defined(__linux__)
-    int flag = __atomic_load_n(&runloom_stack_madv_flag, __ATOMIC_RELAXED);
-    /* MEASUREMENT OVERRIDE.  While any HWM consumer is live -- the startup
-     * calibration window, stack-advice profiling, autosize (all gate on
-     * paint_on; runloom_coro_paint_enabled) -- the resident-page scan
-     * (mincore, runloom_stack_hwm_scan) IS the measurement, so a pooled
-     * stack's pages must ACTUALLY drop at release.  Under the flag=0
-     * spawn-throughput default (and under MADV_FREE, whose pages stay
-     * mincore-resident until memory pressure), a recycled stack keeps the
-     * PREVIOUS occupant's residency, which the next occupant's scan then
-     * reports as its own HWM: a shallow fiber on a previously-deep stack
-     * over-reports, autosize can never learn DOWN past the pool's high
-     * water, and the per-kind ordering assertions flip when one kind draws
-     * a deeper-residency stack than the other sampled
-     * (test_autosize_learns_down flake).  This also restores autosize's
-     * park-time reclaim promise ("large starts stay RSS-free"), which the
-     * flag=0 default had silently gutted.  DONTNEED only while measuring;
-     * steady state (calibration frozen, autosize off) keeps the configured
-     * fast path untouched. */
-#if defined(MADV_DONTNEED)
-    if (runloom_coro_paint_enabled()) {
+#if defined(__linux__) && defined(MADV_DONTNEED)
+    if (runloom_coro_paint_enabled())
         (void)madvise(addr, len, MADV_DONTNEED);
-        return;
-    }
-#endif
-    if (flag == -1) {
-        const char *e = getenv("STACKWEAVE_STACK_MADV");
-        if (e != NULL && strcmp(e, "dontneed") == 0) {
-#if defined(MADV_DONTNEED)
-            flag = MADV_DONTNEED;
-#else
-            flag = 0;
-#endif
-        } else if (e != NULL && strcmp(e, "free") == 0) {
-#if defined(MADV_FREE)
-            /* Explicit opt-in to lazy reclaim: probe MADV_FREE on this first call
-             * (EINVAL => kernel too old).  On success the region is already
-             * reclaimed -> remember + return. */
-            if (madvise(addr, len, MADV_FREE) == 0) {
-                __atomic_store_n(&runloom_stack_madv_flag, MADV_FREE, __ATOMIC_RELAXED);
-                return;
-            }
-#endif
-#if defined(MADV_DONTNEED)
-            flag = MADV_DONTNEED;
-#else
-            flag = 0;
-#endif
-        } else {
-            /* DEFAULT (and explicit "off"): keep pooled stacks RESIDENT -- no
-             * madvise, so no per-release TLB-shootdown IPI.  MEASURED ~17% of
-             * naked-spawn self-time at 8 hubs, and it SCALES WITH HUB COUNT (each
-             * stack release IPIs every hub thread sharing the mm to flush TLBs).
-             * Trades pool RSS (bounded by the depot cap x stack_size) for spawn
-             * throughput -- the spawn-freely default.  RUNLOOM_STACK_MADV=free
-             * (lazy, reclaim-under-pressure) or =dontneed (eager) re-enables it. */
-            flag = 0;
-        }
-        __atomic_store_n(&runloom_stack_madv_flag, flag, __ATOMIC_RELAXED);
-    }
-    if (flag != 0) (void)madvise(addr, len, flag);
 #else
     (void)addr; (void)len;
 #endif
@@ -798,8 +463,7 @@ static void runloom_stack_madv_reclaim(void *addr, size_t len)
  * so a use-after-release reads unmapped VA and hard-faults (SIGSEGV) with a
  * backtrace via the crash handler -- instead of silently reading a pooled page.
  * Near-native (only 1/K stacks leave the pool), so it runs at the 1M-goroutine
- * scale full ASan cannot.  0/unset = off.  Applies to depot (non-arena) stacks
- * only -- an arena slice can't be individually unmapped.  (The g-slab and
+ * scale full ASan cannot.  0/unset = off.  (The g-slab and
  * rl_handle allocators are NOT valid GWP targets: their blocks are retained /
  * fixed and read-after-free by design -- unmapping would fault a legitimate stale
  * wake / stale pin; see poison_lifecycle_analysis.md.) */
@@ -834,37 +498,6 @@ static int runloom_gwp_stack_sample(void)
 static void runloom_stack_release(void *stack, size_t size)
 {
     void **hdr;
-    /* TEST arena slices are never reclaimed/pooled (they belong to the one big
-     * arena mapping); just drop them.  No-op when the arena is off. */
-    {
-        char *abase; size_t aslot; int anode = 0;
-        if (runloom_stack_arena_on() &&
-            runloom_arena_class_of_ptr(stack, &abase, &aslot, &anode)) {
-            size_t guard = runloom_stack_guard();
-            size_t start = ((size_t)((char *)stack - guard - abase)) / aslot;
-            /* Arena stacks are a RESIDENT pool: the freed slot is reused by the
-             * very next carve (bump cursor), so reclaiming its pages here just
-             * forces a re-fault on reuse -- exactly the per-completion madvise
-             * TLB-shootdown storm that dominated spawn (docs/dev/spawn_cost.md).
-             * Keep warm by default (Go keeps freed g-stacks warm); trim back to
-             * the OS only when RUNLOOM_STACK_ARENA_TRIM=1 (burst-then-idle RSS).
-             * RSS is otherwise bounded by the class's high-water -- the cursor
-             * fully resets when the class drains to empty. */
-            static int atrim = -1;
-            if (__atomic_load_n(&atrim, __ATOMIC_RELAXED) < 0) {
-                const char *e = getenv("STACKWEAVE_STACK_ARENA_TRIM");
-                __atomic_store_n(&atrim, (e && *e == '1') ? 1 : 0, __ATOMIC_RELAXED);
-            }
-            if (__atomic_load_n(&atrim, __ATOMIC_RELAXED) == 1) {
-                long ps = sysconf(_SC_PAGESIZE);
-                size_t page = (ps > 0) ? (size_t)ps : (size_t)4096;
-                if (size > page)
-                    runloom_stack_madv_reclaim((char *)stack + page, size - page);
-            }
-            runloom_arena_free(start, 1, aslot, anode); /* return the slot for reuse */
-            return;                                /* arena: not in runloom_stack_live */
-        }
-    }
     /* This depot-backed stack is no longer live (balances the acquire fetch_add). */
     __atomic_fetch_sub(&runloom_stack_live, 1, __ATOMIC_RELAXED);
     /* GWP-ASan sampled guard release: unmap ~1/K stacks instead of pooling so a
@@ -873,25 +506,10 @@ static void runloom_stack_release(void *stack, size_t size)
         runloom_stack_unmap_guarded(stack, size);
         return;
     }
-    /* Drop physical pages back to the OS *before* writing the header.
-     * MADV_DONTNEED keeps the VA reservation but lets the kernel reclaim
-     * the page frames; next touch re-faults a fresh zero page.  We have
-     * to skip the first page so the pool linkage survives -- the header
-     * lives in the first 16 bytes of the stack.
-     *
-     * Net effect with MADV_DONTNEED: pool entries hold 4 KB resident each
-     * instead of the full stack_size.  With RUNLOOM_STACK_MADV=free the reclaim
-     * is LAZY (pages stay counted until pressure, then drop); the DEFAULT is no
-     * madvise at all (keep pooled stacks warm -- see runloom_stack_madv_reclaim,
-     * which also documents the measurement-mode DONTNEED override) -- we trade
-     * pool RSS for killing the per-release synchronous TLB shootdown, exactly
-     * like Go.  Either way the deepest-used pages re-fault/re-validate on reuse,
-     * so steady-state RSS still tracks active gs, not capacity.
-     *
-     * (Tried "optimization A" -- mincore the resident depth and madvise only the
-     * touched range -- but MEASURED it as a net LOSS: with MADV_FREE the madvise
-     * of never-resident pages is already nearly free, so the per-release mincore
-     * cost +6s sys / 1M fibers for no wall win.  Reverted; left as a warning.) */
+    /* Pooled stacks stay resident (see runloom_stack_madv_reclaim); only the
+     * measurement window drops their pages, *before* the header is written.
+     * Skip the first page so the pool linkage survives -- the header lives in
+     * the first 16 bytes of the stack. */
     {
         long ps = sysconf(_SC_PAGESIZE);
         size_t page = (ps > 0) ? (size_t)ps : (size_t)4096;
@@ -978,50 +596,28 @@ long runloom_coro_depot_pooled(void)
  * default: it costs one stack-sized memset per fiber completion, and the
  * leftover is only reachable via a C extension reading uninitialised stack
  * (Python objects live on the heap, not the fiber C stack). Enable for
- * security-sensitive workloads via RUNLOOM_STACK_SCRUB=1 or set_stack_scrub(True).
+ * security-sensitive workloads via set_stack_scrub(True).
  * (Painting would also overwrite the data, but it is calibrated off for
  * performance after the first few spawns -- so it can't be relied on.) */
 static int runloom_stack_scrub_on = 0;
 void runloom_coro_scrub_set(int enabled) { runloom_stack_scrub_on = enabled ? 1 : 0; }
 int  runloom_coro_scrub_enabled(void)    { return runloom_stack_scrub_on; }
 
-/* Wipe a whole fiber stack.  On Linux, MADV_DONTNEED frees the page
- * frames and the next touch re-faults a zero page -- a complete scrub that
- * costs an O(1) syscall instead of a stack-sized memset (a 512 KB memset
- * was ~60x the spawn cost in measurement; this is ~flat).  Elsewhere
- * MADV_DONTNEED is only advisory (may not zero), so fall back to memset for
- * a guaranteed wipe.  stack is page-aligned and size page-rounded.
- *
- * EXPERIMENT (Exp D, docs/dev/spawn_experiments.md): the default MADV_DONTNEED
- * scrub is the per-fiber-completion cost the keep_resident shim was suppressing
- * (NOT a CPython purge) -- it fires a cross-hub TLB-shootdown IPI per fiber AND
- * drops the arena slot's pages, forcing a re-fault on reuse (defeats keep-warm).
- * RUNLOOM_STACK_SCRUB_RESIDENT=1 keeps the SAME security guarantee (every byte the
- * fiber wrote is zeroed) but does it in userspace: mincore() finds the resident
- * (touched) pages -- only a handful for a shallow fiber -- and memset()s just those.
- * No IPI, no page drop, no re-fault.  Wipes a touched-then-swapped page only if it
- * is still resident (same swap caveat the DONTNEED path silently has). */
-static int runloom_scrub_resident_mode(void)
-{
-    static int v = -1;
-    int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
-    if (cur < 0) {
-        /* DEFAULT ON (Exp D): the resident memset wipe is secure AND ~1.5x faster
-         * than the madvise(DONTNEED) wipe (no cross-hub TLB-shootdown IPI, no
-         * page-drop/re-fault).  Opt out with RUNLOOM_STACK_SCRUB_RESIDENT=0 to get
-         * the old DONTNEED wipe -- which ALSO reclaims RSS, so the "memory" trade
-         * (optimize("memory")) sets =0 for tight-RSS hosts. */
-        const char *e = getenv("STACKWEAVE_STACK_SCRUB_RESIDENT");
-        cur = (e != NULL && e[0] == '0') ? 0 : 1;
-        __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
-    }
-    return cur;
-}
-
+/* Wipe a whole fiber stack.  On Linux the wipe is done in userspace:
+ * mincore() finds the resident (touched) pages -- only a handful for a shallow
+ * fiber -- and memset()s just those, so every byte the fiber wrote is zeroed
+ * with no cross-hub TLB-shootdown IPI, no page drop and no re-fault on reuse
+ * (~1.5x faster than a madvise(MADV_DONTNEED) wipe; Exp D,
+ * docs/dev/spawn_experiments.md).  A touched-then-swapped page is wiped only if
+ * it is still resident.  If the stack is too large for the mincore vector or
+ * mincore fails, MADV_DONTNEED frees the page frames instead (next touch
+ * re-faults a zero page).  Elsewhere MADV_DONTNEED is only advisory (may not
+ * zero), so fall back to memset for a guaranteed wipe.  stack is page-aligned
+ * and size page-rounded. */
 static void runloom_stack_scrub(void *stack, size_t size)
 {
 #if defined(__linux__) && defined(MADV_DONTNEED)
-    if (runloom_scrub_resident_mode()) {
+    {
         long ps = sysconf(_SC_PAGESIZE);
         size_t page = (ps > 0) ? (size_t)ps : 4096;
         size_t npages = (size + page - 1) / page;
@@ -1326,7 +922,7 @@ void runloom_stack_autocap_init(void)
  * Design rationale (validated against jemalloc/Go prior art -- read before "fixing"):
  *  - TAU controls how long a recent burst's pool stays warm, i.e. it trades
  *    re-mmap/fault churn on the NEXT burst against idle VMA headroom.  It is NOT a
- *    purge pacer: we MADV_FREE once at release and the tick issues ZERO syscalls,
+ *    purge pacer: pooled stacks are never madvised and the tick issues ZERO syscalls,
  *    so jemalloc's dirty_decay_ms=10s (which paces madvise volume) is the wrong
  *    axis -- do not anchor TAU to it, and never re-set a jemalloc decay_ms per tick
  *    (that forces a synchronous bulk-purge storm).
@@ -1337,8 +933,8 @@ void runloom_stack_autocap_init(void)
  *    burst when the cap is high.  An idle trough is silent, so the decaying cap is
  *    naturally immune to the cap-chatter a down-side hysteresis band would guard
  *    (measured: a 1s-period 3k sawtooth -> 53 munmaps vs 12,980 at a static cap).
- *  - Posture = jemalloc `muzzy`/`-1`-decay / Go pre-1.16: front-load MADV_FREE, no
- *    timed escalation; "idle RSS looks high until pressure" is EXPECTED.  If a
+ *  - Posture = keep-warm, no timed escalation; "idle RSS stays at the pool's
+ *    high-water" is EXPECTED.  If a
  *    cgroup memory.max / observability requirement ever appears, the prior-art
  *    escape hatch is an OPTIONAL watchdog-driven MADV_DONTNEED 2nd stage (Go 1.16's
  *    default) -- not a shorter TAU, not a pacer. */
@@ -1442,7 +1038,7 @@ static RUNLOOM_TLS int runloom_coro_pool_size = 0;
  * pool, in practice the M:N default).  Coros of any other size never enter the
  * global -- they take the old release+free over-cap path.  Without this a
  * mixed-size spawn could fill the global with coros that never match a refill
- * request, so they never recycle and (with stacks resident under madv=off) grow
+ * request, so they never recycle and (with pooled stacks resident) grow
  * without bound -> OOM.  One class keeps the global homogeneous: every refilled
  * coro matches the requesting size, so it always recycles and the occupancy is
  * bounded by live fibers of that size.  Lock amortized (once per batch). */
@@ -1593,7 +1189,6 @@ runloom_coro_t *runloom_coro_new(size_t stack_size,
         c->entry = entry;
         c->user = user;
         c->done = 0;
-        c->fresh = 0;
         c->asm_coro.entry = runloom_fcontext_entry;
         c->asm_coro.user = c;
         c->asm_coro.done = 0;
@@ -1619,259 +1214,6 @@ runloom_coro_t *runloom_coro_new(size_t stack_size,
     runloom_asm_make_ctx(&c->asm_coro, stack_top);
 
     return c;
-}
-
-/* ---- bulk/arena fast path (fiber_n) ---------------------------------------- *
- * Placement coro: initialise a coroutine in CALLER-PROVIDED memory `mem`
- * (>= runloom_coro_struct_size() bytes) on a CALLER-PROVIDED `stack` (lowest
- * usable byte, `stack_size` usable bytes).  No malloc, no stack-acquire, no
- * pool, no lock -- a straight-line set of stores + asm_make_ctx.  Used by the
- * bulk-spawn path where g-structs, coro-structs and stacks all come from
- * pre-allocated arenas.  The caller owns `mem` and `stack`; do NOT call
- * runloom_coro_destroy on a placement coro (it would pool/free arena memory)
- * -- the arena is reclaimed wholesale. */
-runloom_coro_t *runloom_coro_init_at(void *mem, size_t stack_size, void *stack,
-                                     runloom_entry_fn entry, void *user)
-{
-    runloom_coro_t *c = (runloom_coro_t *)mem;
-    size_t rounded;
-    if (stack_size < 4096) stack_size = 4096;
-    rounded = runloom_round_to_page(stack_size);
-    c->entry = entry;
-    c->user = user;
-    c->done = 0;
-    c->dbg_running = 0;
-    c->pool_next = NULL;
-    c->stack = stack;
-    c->stack_size = rounded;
-    c->grown = 0;
-    c->fresh = 0;
-    c->asm_coro.entry = runloom_fcontext_entry;
-    c->asm_coro.user = c;
-    c->asm_coro.done = 0;
-    runloom_fibersan_zero(&c->asm_coro);   /* caller-provided mem: not calloc'd */
-    runloom_asm_make_ctx(&c->asm_coro, (void *)((uintptr_t)stack + rounded));
-    return c;
-}
-
-/* Bytes a placement coro needs. */
-size_t runloom_coro_struct_size(void) { return sizeof(runloom_coro_t); }
-
-/* EXPERIMENT (docs/dev/spawn_above_1m.md, lever parallelize_passB): the coro-fill
- * loop (Pass B of bulk create) is cold-write bound like Pass A and is serial; split
- * it across builder threads over disjoint [lo,hi) slices to lift create further (run
- * then stays the binding constraint).  RUNLOOM_GON_PCREATE_B=P; off by default. */
-typedef struct {
-    char *coro_arena; size_t coro_stride;
-    char *g_arena; size_t g_stride, g_coro_off;
-    char *sbase; size_t slot, rounded;
-    runloom_entry_fn entry; int defer;
-    long lo, hi;
-} runloom_bulkfill_arg_t;
-
-static void runloom_bulkfill_range(const runloom_bulkfill_arg_t *a)
-{
-    long i;
-    for (i = a->lo; i < a->hi; i++) {
-        runloom_coro_t *c = (runloom_coro_t *)(a->coro_arena + (size_t)i * a->coro_stride);
-        char *g = a->g_arena + (size_t)i * a->g_stride;
-        char *stk = a->sbase + (size_t)i * a->slot;
-        c->entry = a->entry;
-        c->user = g;
-        c->done = 0;
-        c->dbg_running = 0;
-        c->pool_next = NULL;
-        c->stack = stk;
-        c->stack_size = a->rounded;
-        c->grown = 0;
-        c->asm_coro.entry = runloom_fcontext_entry;
-        c->asm_coro.user = c;
-        c->asm_coro.done = 0;
-        runloom_fibersan_zero(&c->asm_coro);   /* arena mem: not calloc'd */
-        c->fresh = a->defer;
-        if (!a->defer)
-            runloom_asm_make_ctx(&c->asm_coro, (void *)((uintptr_t)stk + a->rounded));
-        *(void **)(g + a->g_coro_off) = c;          /* g->coro = c (disjoint slice) */
-    }
-}
-static void *runloom_bulkfill_worker(void *p)
-{
-    runloom_bulkfill_range((const runloom_bulkfill_arg_t *)p);
-    return NULL;
-}
-extern int runloom_mn_hub_count(void); /* mn_sched.c accessor; for PCREATE_B="auto" */
-static int runloom_pcreate_b_threads(void)
-{
-    static int mode = -2;              /* -2 unread; -1 auto; >=0 fixed */
-    int m = __atomic_load_n(&mode, __ATOMIC_RELAXED);
-    if (m == -2) {
-        const char *e = getenv("STACKWEAVE_GON_PCREATE_B");
-        if (e == NULL || !*e || e[0] == '0') m = 0;
-        else if (strcmp(e, "auto") == 0)     m = -1;
-        else { m = atoi(e); if (m < 0) m = 0; if (m > 64) m = 64; }
-        __atomic_store_n(&mode, m, __ATOMIC_RELAXED);
-    }
-    if (m == -1) {                     /* auto: one builder per hub, bandwidth-capped */
-        int p = runloom_mn_hub_count();
-        if (p > 16) p = 16;
-        if (p < 1)  p = 1;
-        return p;
-    }
-    return m;
-}
-
-/* Bulk coro init: fill an ENTIRE coro arena (n structs) inline, each on its own
- * stack carved from one reserved arena block, and write each g's coro pointer.
- * ONE call for all N -- the per-coro work (field stores + asm_make_ctx) is
- * inlined here (same TU), so the caller's spawn loop makes ZERO per-g function
- * calls into the coro layer.  The only irreducible per-g cost left is the
- * asm_make_ctx stack write (the page fault).  g_arena/g_stride/g_coro_off
- * locate each g and its `coro` field so we can set g->coro = &coro_arena[i].
- * Returns 0, or -1 if the stack arena is off/exhausted/size-mismatched (caller
- * falls back to the per-g path).  fcontext backend only. */
-int runloom_coro_bulk_init(void *coro_arena, size_t coro_stride,
-                           void *g_arena, size_t g_stride, size_t g_coro_off,
-                           size_t stack_size, long n, runloom_entry_fn entry,
-                           size_t *start_slot_out, int *node_out)
-{
-    size_t guard, rounded, slot, start;
-    char *sbase;
-    long i;
-    /* Fresh-flag deferral gate (RUNLOOM_GON_FRESH=1): skip the per-g
-     * asm_make_ctx stack write here and mark each coro `fresh`, so the owning
-     * hub materializes the frame at first resume (faults move off the spawner,
-     * onto the H hubs in parallel).  Read once, cached. */
-    static int fresh_defer = -1;
-    int defer = __atomic_load_n(&fresh_defer, __ATOMIC_RELAXED);
-    if (defer < 0) {
-        const char *e = getenv("STACKWEAVE_GON_FRESH");
-        defer = (e != NULL && *e == '1') ? 1 : 0;
-        __atomic_store_n(&fresh_defer, defer, __ATOMIC_RELAXED);
-    }
-    if (stack_size < 4096) stack_size = 4096;
-    rounded = runloom_round_to_page(stack_size);
-    guard = runloom_stack_guard();
-    slot = guard + rounded;
-    /* Reserve a contiguous block of n slots via the locked allocator (lazy-inits
-     * the arena, reuses freed space).  Report the start slot so the caller's
-     * batch teardown can MADV + return the whole block when the last g finishes. */
-    {
-        char *abase;
-        int anode = 0;
-        if (runloom_arena_alloc(n, slot, &start, &abase, &anode) != 0)
-            return -1;                              /* off/exhausted -> fallback */
-        sbase = abase + start * slot + guard;       /* usable base of slot 0 */
-        if (node_out) *node_out = anode;            /* batch teardown frees on this node */
-    }
-    if (start_slot_out) *start_slot_out = start;
-    {
-        runloom_bulkfill_arg_t base;
-        int P = runloom_pcreate_b_threads();
-        int did_parallel = 0;
-        base.coro_arena = (char *)coro_arena; base.coro_stride = coro_stride;
-        base.g_arena = (char *)g_arena; base.g_stride = g_stride; base.g_coro_off = g_coro_off;
-        base.sbase = sbase; base.slot = slot; base.rounded = rounded;
-        base.entry = entry; base.defer = defer;
-        if (P > 1 && n >= 4096) {               /* parallel Pass B over disjoint slices */
-            runloom_bulkfill_arg_t *args =
-                (runloom_bulkfill_arg_t *)malloc((size_t)P * sizeof *args);
-            pthread_t th[64];
-            int b, started = 0;
-            if (args != NULL) {
-                for (b = 0; b < P; b++) {
-                    args[b] = base;
-                    args[b].lo = (long)((long long)b * n / P);
-                    args[b].hi = (long)((long long)(b + 1) * n / P);
-                    if (pthread_create(&th[b], NULL, runloom_bulkfill_worker, &args[b]) != 0)
-                        break;
-                    started++;
-                }
-                for (b = 0; b < started; b++) pthread_join(th[b], NULL);
-                if (started == P) did_parallel = 1;
-                free(args);
-            }
-        }
-        if (!did_parallel) {                    /* serial (default / fallback) */
-            base.lo = 0; base.hi = n;
-            runloom_bulkfill_range(&base);
-        }
-    }
-    /* EXPERIMENT (Exp B): RUNLOOM_GON_POPULATE=1 pre-faults the TOP page of every
-     * slot here on the spawner, in one contiguous pass, instead of letting each
-     * hub fault it at first resume.  The whole batch is one contiguous block, so
-     * this is the closest analogue to MAP_POPULATE over exactly the used pages.
-     * (Full-slot pre-fault is pathological -- n*512KB of untouched stack -- so we
-     * touch only the page resume will land on.) */
-    {
-        static int populate = -1;
-        if (__atomic_load_n(&populate, __ATOMIC_RELAXED) < 0) {
-            const char *e = getenv("STACKWEAVE_GON_POPULATE");
-            __atomic_store_n(&populate, (e && *e == '1') ? 1 : 0, __ATOMIC_RELAXED);
-        }
-        if (__atomic_load_n(&populate, __ATOMIC_RELAXED) == 1) {
-            long ps = sysconf(_SC_PAGESIZE);
-            size_t page = (ps > 0) ? (size_t)ps : 4096;
-            for (i = 0; i < n; i++) {
-                volatile char *top = (volatile char *)(sbase + (size_t)i * slot + rounded - 1);
-                *top = 0;                            /* fault in the resume page */
-                (void)page;
-            }
-        }
-    }
-    return 0;
-}
-
-/* Release a bulk stack block (n slots from start_slot): drop its physical pages
- * back to the OS (MADV_DONTNEED -- the virtual reservation stays) AND return the
- * slots to the allocator for reuse.  Called by the fiber_n batch teardown when the
- * last fiber in a batch finishes.  The block stays PROT_READ|WRITE; the next
- * fault into it gets a fresh zero page -- exactly what the fresh-flag path wants
- * (a zero stack reads back as a not-yet-materialised frame). */
-void runloom_coro_arena_release(size_t start_slot, long n, size_t stack_size, int node)
-{
-    /* (stack_size, node) identify the CLASS this batch was carved from (per-size,
-     * per-NUMA-node arenas).  slot = guard + rounded, matching coro_bulk_init's carve. */
-    size_t guard = runloom_stack_guard();
-    size_t slot;
-    if (n <= 0) return;
-    if (stack_size < 4096) stack_size = 4096;
-    slot = guard + runloom_round_to_page(stack_size);
-#if defined(MADV_DONTNEED)
-    /* MADV is OPT-IN (RUNLOOM_GON_TRIM=1).  By default we KEEP the pages warm:
-     * the fresh-flag WRITES each stack frame at resume (never reads-as-zero), so
-     * zeroing buys no correctness, and since reset-when-empty reuses the SAME
-     * address range, the next batch would just re-fault every page we dropped --
-     * pure waste (madvise of a 1M-slot block is a ~2s page-table walk).  RSS is
-     * already bounded by the live working set via the cursor reset.  Trim is for
-     * the spawn-a-burst-then-go-idle case where returning RSS matters more. */
-    static int trim = -1;
-    if (trim < 0) {
-        const char *e = getenv("STACKWEAVE_GON_TRIM");
-        __atomic_store_n(&trim, (e && *e == '1') ? 1 : 0, __ATOMIC_RELAXED);
-    }
-    if (trim) {
-        int i;
-        for (i = 0; i < RUNLOOM_ARENA_TABLE; i++) {
-            char *base = __atomic_load_n(&runloom_arena_cls[i].base, __ATOMIC_ACQUIRE);
-            if (base != NULL && runloom_arena_cls[i].slot == slot &&
-                runloom_arena_cls[i].node == node) {
-                madvise(base + start_slot * slot, (size_t)n * slot, MADV_DONTNEED);
-                break;
-            }
-        }
-    }
-#endif
-    runloom_arena_free(start_slot, n, slot, node);
-}
-
-/* Carve one stack (lowest usable byte) from the bulk arena, NULL if the arena
- * is off/exhausted/size-mismatched.  Rounds like coro_new so sizes match. */
-void *runloom_coro_arena_stack(size_t stack_size)
-{
-    size_t rounded;
-    if (stack_size < 4096) stack_size = 4096;
-    rounded = runloom_round_to_page(stack_size);
-    return runloom_stack_arena_carve(rounded);
 }
 
 void runloom_coro_destroy(runloom_coro_t *c)
@@ -1968,28 +1310,14 @@ static int runloom_coro_grow(runloom_coro_t *c, size_t new_usable)
     {
         void *old_stack = c->stack;
         size_t old_sz   = c->stack_size;
-        char  *abase; size_t aslot; int anode = 0;
         c->stack      = new_stack;
         c->stack_size = new_usable;
         c->grown      = 1;
-        /* Drop the old stack.  When it is a slice of the shared arena mapping
-         * (RUNLOOM_STACK_ARENA / RUNLOOM_GON_BULK) it MUST be returned to its
-         * class via arena_free: munmapping it (as we used to, unconditionally)
-         * punches an unmapped hole out of the middle of the one big
-         * MAP_NORESERVE arena and leaks the slot -- its class `live` count
-         * never drains to 0, the bump cursor `next` never resets, and the VA
-         * is lost.  runloom_stack_release does the right thing per case: for an
-         * arena slice it arena_free's the slot and returns WITHOUT touching
-         * runloom_stack_live; a standalone (depot/map_guarded) stack is
-         * unmapped below instead -- it was never counted on this path and the
-         * grown replacement is released on destroy, so the depot live counter
-         * stays balanced. */
-        if (runloom_stack_arena_on() &&
-            runloom_arena_class_of_ptr(old_stack, &abase, &aslot, &anode)) {
-            runloom_stack_release(old_stack, old_sz);
-        } else {
-            runloom_stack_unmap_guarded(old_stack, old_sz);
-        }
+        /* Unmap the old stack directly rather than runloom_stack_release: its
+         * live-count slot passes to the grown replacement, which is released
+         * (and uncounted) on destroy, so the depot live counter stays
+         * balanced. */
+        runloom_stack_unmap_guarded(old_stack, old_sz);
     }
     return 0;
 }
@@ -2002,20 +1330,12 @@ static int runloom_coro_grow(runloom_coro_t *c, size_t new_usable)
  * default stack.  It cannot rescue a deep NON-yielding burst between
  * two yields -- that overflows into the guard page (clean SIGSEGV, not
  * silent corruption); such code must set a larger stack explicitly or
- * (for known deep stdlib paths) be pre-warmed.  Env RUNLOOM_STACK_GROW=0
- * disables. */
+ * (for known deep stdlib paths) be pre-warmed. */
 #define RUNLOOM_STACK_GROW_MAX (8u << 20)   /* 8 MB ceiling (matches MAX_STACK) */
 static int runloom_coro_maybe_grow(runloom_coro_t *c)
 {
-    static int grow_on = -1;
-    int on = __atomic_load_n(&grow_on, __ATOMIC_RELAXED);
     uintptr_t sp, lo, headroom, quarter;
-    if (on < 0) {
-        const char *e = getenv("STACKWEAVE_STACK_GROW");
-        on = (e != NULL && *e == '0') ? 0 : 1;     /* default ON */
-        __atomic_store_n(&grow_on, on, __ATOMIC_RELAXED);
-    }
-    if (!on || c == NULL || c->stack == NULL || c->done) return 0;
+    if (c == NULL || c->stack == NULL || c->done) return 0;
     if (c->stack_size >= RUNLOOM_STACK_GROW_MAX) return 0;
 #if defined(RUNLOOM_FORCE_STACKGROW)
     /* Force-the-rare-path (PostgreSQL CLOBBER_CACHE_ALWAYS / Go maymorestack):
@@ -2023,7 +1343,7 @@ static int runloom_coro_maybe_grow(runloom_coro_t *c)
      * runloom_coro_grow pointer-rewrite runs every single time.  A latent
      * mis-rewritten interior pointer becomes a deterministic first-run crash
      * instead of a once-in-millions Heisenbug.  Bounded by STACK_GROW_MAX;
-     * grow() bails safely if self.sp is out of range (fresh/overflowed coro). */
+     * grow() bails safely if self.sp is out of range (overflowed coro). */
     {
         size_t pg = runloom_round_to_page(1);
         size_t ftarget = c->stack_size + pg;
@@ -2047,19 +1367,6 @@ static int runloom_coro_maybe_grow(runloom_coro_t *c)
 void runloom_coro_resume(runloom_coro_t *c)
 {
     runloom_coro_t *prev = runloom_tls_current;
-    if (c->fresh) {
-        /* Deferred bulk init (fiber_n fresh-flag): bulk_init skipped the initial
-         * fcontext frame write at spawn to keep the 1M scattered stack-top page
-         * faults OFF the single spawner thread.  Materialize it now, on the
-         * OWNING hub, just before the first swap -- so those faults land on the
-         * H hubs in parallel, overlapped with the run.  First resume only; the
-         * flag self-clears.  asm_make_ctx (re)sets self.sp/caller.sp/done; the
-         * calloc'd arena left them zero, which maybe_grow below treats as
-         * "no headroom info" (no-op) -- but we run before it anyway. */
-        runloom_asm_make_ctx(&c->asm_coro,
-                             (void *)((uintptr_t)c->stack + c->stack_size));
-        c->fresh = 0;
-    }
     runloom_coro_maybe_grow(c);     /* Path-A copy-grow at the resume boundary */
     if (runloom_coro_pre_swap != NULL) runloom_coro_pre_swap(c);  /* re-arm C-stack limit (3.14) */
     runloom_tls_current = c;
@@ -2093,32 +1400,6 @@ int runloom_coro_done(const runloom_coro_t *c)
 
 #endif  /* RUNLOOM_HAVE_FCONTEXT */
 
-#if !defined(RUNLOOM_HAVE_FCONTEXT)
-/* Bulk coro arena (placement-init N coro structs in one allocation, carve every
- * stack from one mmap'd block) is an fcontext-backend optimization.  On the
- * generic ucontext backend it is unavailable, so report
- * "arena off" (-1): runloom_mn_fiber_n_bulk then falls back to the per-g spawn path.
- * The bulk path is opt-in via RUNLOOM_GON_BULK; the default fiber_n loop never calls
- * these.  Stubs keep the symbols that mn_sched references regardless of backend. */
-size_t runloom_coro_struct_size(void) { return sizeof(runloom_coro_t); }
-
-int runloom_coro_bulk_init(void *coro_arena, size_t coro_stride,
-                           void *g_arena, size_t g_stride, size_t g_coro_off,
-                           size_t stack_size, long n, runloom_entry_fn entry,
-                           size_t *start_slot_out, int *node_out)
-{
-    (void)coro_arena; (void)coro_stride; (void)g_arena; (void)g_stride;
-    (void)g_coro_off; (void)stack_size; (void)n; (void)entry;
-    if (start_slot_out != NULL) *start_slot_out = 0;
-    if (node_out != NULL) *node_out = 0;
-    return -1;   /* arena unavailable -> caller uses the per-g path */
-}
-
-void runloom_coro_arena_release(size_t start_slot, long n, size_t stack_size, int node)
-{
-    (void)start_slot; (void)n; (void)stack_size; (void)node;
-}
-#endif  /* !RUNLOOM_HAVE_FCONTEXT */
 
 /* ================================================================== */
 /* Backend: POSIX ucontext                                            */
@@ -2228,8 +1509,8 @@ int runloom_coro_done(const runloom_coro_t *c)
 /* ------------------------------------------------------------------ */
 
 /* Unconditional madvise of c's below-SP idle stack pages.  Caller owns
- * the gating (the per-park env flag below, or the hub-idle sweep) and
- * the M:N safety contract (only the owning hub may run this, and only
+ * the gating (the autosize-forced park reclaim below, or the hub-idle sweep)
+ * and the M:N safety contract (only the owning hub may run this, and only
  * while c is suspended -- see the runloom_coro_park doc in coro.h). */
 void runloom_coro_madvise_idle(runloom_coro_t *c)
 {
@@ -2249,9 +1530,8 @@ void runloom_coro_madvise_idle(runloom_coro_t *c)
         lo = base + page;                       /* keep first page (pool hdr) */
         hi = sp & ~(uintptr_t)(page - 1);       /* page-align DOWN below sp */
         if (hi > lo) {
-            /* MADV_FREE (default): ~2.3x cheaper than DONTNEED and no re-fault if
-             * this parked fiber resumes before reclaim -- the request/response
-             * recv-park case.  Env RUNLOOM_STACK_MADV=dontneed forces eager. */
+            /* Same policy as a pooled-stack release: pages stay resident
+             * outside the HWM measurement window. */
             runloom_stack_madv_reclaim((void *)lo, (size_t)(hi - lo));
         }
     }
@@ -2260,10 +1540,9 @@ void runloom_coro_madvise_idle(runloom_coro_t *c)
 #endif
 }
 
-/* Programmatic override for park-time idle-page reclaim, in addition to the
- * RUNLOOM_STACK_PARK_DONTNEED env.  The stack auto-sizer turns this on when it
- * starts fibers large (so the large idle pages are returned on park),
- * making "start large, learn down" RSS-free without a global env flip. */
+/* Park-time idle-page reclaim, off until the stack auto-sizer turns it on
+ * (it starts fibers large, so the large idle pages are returned on park),
+ * making "start large, learn down" RSS-free. */
 static int runloom_park_reclaim_forced = 0;
 void runloom_coro_park_reclaim_set(int on)
 {
@@ -2273,16 +1552,7 @@ void runloom_coro_park_reclaim_set(int on)
 void runloom_coro_park(runloom_coro_t *c)
 {
 #if defined(RUNLOOM_HAVE_FCONTEXT) && defined(MADV_DONTNEED)
-    /* Opt-in, evaluated once.  getenv reads are safe to race here --
-     * every thread computes the same value. */
-    static int park_dontneed = -1;
-    int on = __atomic_load_n(&park_dontneed, __ATOMIC_RELAXED);
-    if (on < 0) {
-        const char *e = getenv("STACKWEAVE_STACK_PARK_DONTNEED");
-        on = (e != NULL && *e == '1') ? 1 : 0;
-        __atomic_store_n(&park_dontneed, on, __ATOMIC_RELAXED);
-    }
-    if (!on && !__atomic_load_n(&runloom_park_reclaim_forced, __ATOMIC_RELAXED)) return;
+    if (!__atomic_load_n(&runloom_park_reclaim_forced, __ATOMIC_RELAXED)) return;
     runloom_coro_madvise_idle(c);
 #else
     (void)c;

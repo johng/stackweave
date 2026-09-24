@@ -1,10 +1,8 @@
 """Adversarial coverage suite for src/runloom_c/coro.c.
 
 coro.c is the portable stackful-coroutine backend (fcontext on x86_64 here):
-the guarded-stack map/unmap, the per-thread + global stack depot, the test
-stack ARENA, the madvise RSS-reclaim policy, the bulk/fiber_n placement-init +
-fresh-flag deferred-materialize fast path, the prewarm one-shot + daemon, the
-copy-on-grow path, and the invariant sanitizer.
+the guarded-stack map/unmap, the per-thread + global stack depot, the prewarm
+one-shot + daemon, the copy-on-grow path, and the invariant sanitizer.
 
 Almost every uncovered region lives behind an env-gated MODE or an error
 branch the normal corpus never trips.  An env mode is resolved ONCE (first
@@ -20,22 +18,6 @@ Regions driven (uncovered coro.c line -> how):
   L266-269  STACKWEAVE_STACK_DEPOT_CAP=<n> static-override of the AUTO depot cap
             -> set it + churn >TLS_CAP fibers so a cache flush consults
             runloom_global_stack_cap() and resolves mode=static.
-  L490,494-509,515-516  test stack ARENA carve / in-arena / acquire
-            -> STACKWEAVE_STACK_ARENA=1: mn_fiber fibers carve their stacks as slices
-            of the one big arena (lock-free bump) instead of mmap+depot.
-  L608-618  ARENA stack release path -> the same fibers COMPLETE, so their
-            arena slices are madvise'd + returned to the bump allocator;
-            churn rounds force the cursor-reset-on-empty reuse.
-  L572,594  STACKWEAVE_STACK_MADV=off -> the reclaim flag resolves to 0 (no
-            madvise) and is cached.
-  L575,594  STACKWEAVE_STACK_MADV=dontneed -> flag resolves to MADV_DONTNEED and
-            every pooled-stack release madvise's the body.
-  L1500-1502 fiber_n fresh-flag DEFERRED materialize -> STACKWEAVE_GON_BULK=1 +
-            STACKWEAVE_GON_FRESH=1 + STACKWEAVE_STACK_ARENA=1: bulk_init skips the
-            per-g asm_make_ctx and marks each coro `fresh`; the first
-            runloom_coro_resume on the owning hub materializes the frame.
-            Oracle: all N indexed fibers run -> the deferred frame write is
-            correct.
   L181,1507,1510  invariant sanitizer -> STACKWEAVE_DEBUG_DIAG=invariants arms
             RUNLOOM_DBG_INVARIANTS, so coro_resume sets/clears c->dbg_running
             (1507/1510) and assert_idle reads it on destroy (181).  Oracle: a
@@ -62,11 +44,6 @@ Lines with NO safe Python trigger are classified in the structured report:
   * hwm-scan batch continuation (L773): needs >512 contiguous resident pages
     (>2 MiB of live C stack) from the top, which exceeds CPython's own C
     recursion guard -- unreachable before RecursionError.
-  * MADV_DONTNEED fallback after MADV_FREE fails (L589): needs a pre-4.5 kernel
-    where madvise(MADV_FREE) EINVALs; this box's kernel supports MADV_FREE.
-  * runloom_coro_init_at (L1227-1247) and runloom_coro_arena_stack (L1347-1352):
-    declared in coro.h but have NO caller anywhere in the extension (dead API;
-    the live bulk path is runloom_coro_bulk_init).
 """
 import os
 import subprocess
@@ -82,7 +59,7 @@ FT = needs_free_threading()
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PY = sys.executable
 
-# coro.c's POSIX stack pool / arena / madvise / grow all live behind
+# coro.c's POSIX stack pool / madvise / grow all live behind
 # RUNLOOM_HAVE_FCONTEXT|UCONTEXT (the guard-page backends).  The Coro-driven
 # bits work without the GIL off, but the fiber_n/mn_fiber workloads need the M:N
 # scheduler -> skip the whole file on a GIL build (matches the other cov suites).
@@ -157,86 +134,6 @@ def test_depot_cap_static_override():
     body = _CHURN.format(rounds=5, per=300, hubs=3, marker="DEPOTCAP_OK")
     p = _run_worker(body, {"STACKWEAVE_STACK_DEPOT_CAP": "2000"})
     _assert_clean(p, "DEPOTCAP_OK 1500")
-
-
-# --------------------------------------------------------------------------
-# L490, L494-509, L515-516 : test stack ARENA carve / in-arena / acquire.
-# L608-618 : ARENA stack release (madvise + return slot + cursor reset).
-# --------------------------------------------------------------------------
-def test_stack_arena_carve_and_release_churn():
-    """STACKWEAVE_STACK_ARENA=1 makes every mn_fiber fiber carve its stack as a slice
-    of ONE pre-mmap'd arena (runloom_stack_arena_carve, L494-500) via a lock-free
-    bump (runloom_arena_alloc), instead of mmap + the depot.  On completion the
-    slice is recognised by runloom_stack_in_arena (L504-509), madvise-reclaimed,
-    and returned to the bump allocator (runloom_stack_release arena branch,
-    L608-618, and runloom_arena_free top-of-range rewind L490).  5 churn rounds
-    drain the arena to empty between rounds -> the cursor resets and the SAME
-    address space is reused.  Oracle: all 1000 fibers ran, distinct stacks, no
-    corruption / crash."""
-    body = _CHURN.format(rounds=5, per=200, hubs=3, marker="ARENA_OK")
-    p = _run_worker(body, {"STACKWEAVE_STACK_ARENA": "1",
-                           "STACKWEAVE_STACK_ARENA_N": "8192"})
-    _assert_clean(p, "ARENA_OK 1000")
-
-
-# --------------------------------------------------------------------------
-# L572, L594 : STACKWEAVE_STACK_MADV=off -> reclaim flag resolves to 0 (no madvise).
-# --------------------------------------------------------------------------
-def test_stack_madv_off_no_reclaim():
-    """STACKWEAVE_STACK_MADV=off makes runloom_stack_madv_reclaim resolve its cached
-    flag to 0 (L571-572) and store it (L594); every subsequent pooled-stack
-    release then skips madvise (L596 guard `flag != 0` is false).  Reached on the
-    FIRST stack release in the run.  Drives L571-572 + L594.  Churn so many
-    stacks are released; oracle is the clean churn count."""
-    body = _CHURN.format(rounds=4, per=250, hubs=3, marker="MADVOFF_OK")
-    p = _run_worker(body, {"STACKWEAVE_STACK_MADV": "off"})
-    _assert_clean(p, "MADVOFF_OK 1000")
-
-
-# --------------------------------------------------------------------------
-# L575, L594 : STACKWEAVE_STACK_MADV=dontneed -> flag = MADV_DONTNEED (eager reclaim).
-# --------------------------------------------------------------------------
-def test_stack_madv_dontneed_eager_reclaim():
-    """STACKWEAVE_STACK_MADV=dontneed makes the reclaim flag resolve to MADV_DONTNEED
-    (L573-575) and store it (L594); every pooled-stack release then madvise's the
-    stack body (L596).  This is the OLD/tight-RSS behaviour vs the default lazy
-    MADV_FREE.  Drives L573-575 + L594 + L596.  Oracle: the eager per-release
-    reclaim does not corrupt a reused stack -> all fibers run."""
-    body = _CHURN.format(rounds=4, per=250, hubs=3, marker="MADVDN_OK")
-    p = _run_worker(body, {"STACKWEAVE_STACK_MADV": "dontneed"})
-    _assert_clean(p, "MADVDN_OK 1000")
-
-
-# --------------------------------------------------------------------------
-# L1500-1502 : fiber_n fresh-flag DEFERRED materialize at first resume.
-# --------------------------------------------------------------------------
-def test_fiber_n_fresh_flag_deferred_materialize():
-    """STACKWEAVE_GON_BULK=1 takes fiber_n's bulk-arena fast path; STACKWEAVE_GON_FRESH=1
-    makes runloom_coro_bulk_init SKIP the per-g asm_make_ctx (the scattered
-    stack-top page fault) and mark each coro `fresh`, leaving self.sp/caller.sp
-    zero.  The first runloom_coro_resume on the OWNING hub then materializes the
-    fcontext frame just before the swap (coro.c L1491-1502) and clears the flag.
-    STACKWEAVE_STACK_ARENA=1 supplies the arena the bulk path needs.  Oracle: all N
-    indexed fibers run their body exactly once -> the deferred frame write lands
-    correctly on every hub (a wrong sp would crash or skip the body)."""
-    body = r'''
-import stackweave
-N = 600
-ran = bytearray(N)            # one writer per slot -> race-free under M:N
-def main():
-    # fiber_n(fn, n, stack_size, indexed=True) -> fn(i) per fiber
-    rc.fiber_n(lambda i: ran.__setitem__(i, 1), N, 0, True)
-    for _ in range(150):
-        rc.sched_yield()      # let every hub resume its bulk fibers
-stackweave.run(2, main)
-assert sum(ran) == N, "only %d/%d fresh-deferred fibers ran" % (sum(ran), N)
-print("FRESH_OK %d" % sum(ran))
-'''
-    p = _run_worker(body, {"STACKWEAVE_GON_BULK": "1",
-                           "STACKWEAVE_GON_FRESH": "1",
-                           "STACKWEAVE_STACK_ARENA": "1",
-                           "STACKWEAVE_STACK_ARENA_N": "8192"})
-    _assert_clean(p, "FRESH_OK 600")
 
 
 # --------------------------------------------------------------------------
@@ -336,11 +233,11 @@ print("PREWARM_SPAWNFAIL_OK")
 
 
 # --------------------------------------------------------------------------
-# Cross-check: the depot/arena/madvise modes are NOT silently no-ops -- a
-# wrong-size reuse or a corrupted arena slice would surface as a wrong oracle.
-# This in-process control proves the DEFAULT (non-arena, MADV_FREE) churn path
-# the corpus already covers still works alongside the new modes, so a mode
-# test's failure is attributable to that mode, not a flaky baseline.
+# Cross-check: the depot modes are NOT silently no-ops -- a wrong-size reuse
+# would surface as a wrong oracle.  This in-process control proves the DEFAULT
+# churn path the corpus already covers still works alongside the env-driven
+# modes, so a mode test's failure is attributable to that mode, not a flaky
+# baseline.
 # --------------------------------------------------------------------------
 def test_default_churn_baseline_in_process():
     """A small default-mode churn IN the parent process (no env override): the

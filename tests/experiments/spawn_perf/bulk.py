@@ -1,14 +1,10 @@
 #!/usr/bin/env python3
 """Bulk "launch a fleet" harness (Exp B).  Unlike scaling.py (issuer fibers each
 calling stackweave.fiber in a loop), this drives the BULK path directly:
-stackweave_c.fiber_n(noop, N) builds the g/coro/stack arenas in ONE locked op, then
-mn_run() drains all N on the hubs.  This is the idiom for spawning a large fixed
-fleet at once, and the place MAP_POPULATE / pre-fault / huge pages can act on a
-single contiguous block.
+stackweave_c.fiber_n(noop, N) spawns all N in one C loop, then mn_run() drains
+all N on the hubs.  This is the idiom for spawning a large fixed fleet at once.
 
-Reports best-of-reps spawn/s (create), run/s (drain), total/s.  Toggle the path
-with env: STACKWEAVE_GON_BULK=1 (else fiber_n loops = per-g spawn), STACKWEAVE_GON_FRESH,
-STACKWEAVE_STACK_ARENA[_HUGE], STACKWEAVE_GON_POPULATE (Exp B pre-fault)."""
+Reports best-of-reps spawn/s (create), run/s (drain), total/s."""
 import argparse
 import json
 import os
@@ -61,11 +57,6 @@ def main():
            "spawn_s": b_spawn, "run_s": b_run, "total_s": b_total,
            "spawn_per_s": args.n / b_spawn, "run_per_s": args.n / b_run,
            "total_per_s": args.n / b_total,
-           "bulk": os.environ.get("STACKWEAVE_GON_BULK", ""),
-           "fresh": os.environ.get("STACKWEAVE_GON_FRESH", ""),
-           "arena": os.environ.get("STACKWEAVE_STACK_ARENA", ""),
-           "huge": os.environ.get("STACKWEAVE_STACK_ARENA_HUGE", ""),
-           "populate": os.environ.get("STACKWEAVE_GON_POPULATE", ""),
            "ld_preload": "keep_resident" if "keep_resident" in os.environ.get("LD_PRELOAD", "") else ""}
     print("%-20s create=%8.0f/s  run=%8.0f/s  total=%8.0f/s  (ss=%d)" %
           (args.label, rec["spawn_per_s"], rec["run_per_s"], rec["total_per_s"],

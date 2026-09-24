@@ -193,7 +193,7 @@ typedef struct runloom_parker_pool {
     int             dh_size;
     int             dh_cap;
 
-    /* Stack-reclaim sweep cursor (RUNLOOM_STACK_PARK_SWEEP).  Persists
+    /* Stack-reclaim sweep cursor (hub-idle dwell sweep).  Persists
      * across sweeps so each sweep examines a bounded window of the
      * (head-insert, newest-first) list instead of walking it whole
      * under the lock; over successive sweeps the cursor covers the

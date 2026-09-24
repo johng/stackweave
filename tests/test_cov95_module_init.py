@@ -1,8 +1,7 @@
 """Adversarial coverage suite for two small module fragments:
 
   * src/runloom_c/module_init.c.inc -- the module method table, PyInit, and
-    the two env-gated PyInit branches
-    (STACKWEAVE_STACK_SCRUB, STACKWEAVE_TRACEBACK).
+    the env-gated PyInit branch (STACKWEAVE_TRACEBACK).
   * src/runloom_c/module_g.c.inc    -- the RunloomG (fiber handle) type:
     RunloomG_stack() (the watchdog state probe) and RunloomG_richcompare's
     NOT-IMPLEMENTED / RETURN_FALSE arms.
@@ -39,10 +38,6 @@ module_g.c.inc -- RunloomG_richcompare (L169, L174):
        genuinely by wrapped-pointer, not object identity.
 
 module_init.c.inc -- PyInit env branches (read ONCE at import -> subprocess):
-  L491 (runloom_coro_scrub_set(1))  gated by STACKWEAVE_STACK_SCRUB.  Subprocess
-       asserts get_stack_scrub() is True (the line ran) -- and a negative
-       control subprocess WITHOUT the env asserts it is False, so the branch is
-       exercised on both sides.
   L500-504 (SIGQUIT sigaction install)  gated by STACKWEAVE_TRACEBACK.  A RAW C
        sigaction handler that does NOT go through Python's signal module, so it
        is invisible to signal.getsignal().  The only honest detector is
@@ -234,16 +229,17 @@ def test_g_richcompare_notimplemented_and_false_arms():
 
 
 # ==========================================================================
-# module_init.c.inc :: STACKWEAVE_STACK_SCRUB -> runloom_coro_scrub_set(1) (L491)
+# module_init.c.inc :: recycled-stack scrub starts OFF; set_stack_scrub toggles it
 # ==========================================================================
 _SCRUB_CHILD = r"""
 import sys
 sys.path.insert(0, 'src')
 import stackweave_c as rc
-want = {want}
 got = rc.get_stack_scrub()
-assert got is want, "STACKWEAVE_STACK_SCRUB={env!r}: get_stack_scrub()=%r want %r" % (got, want)
-# And the setting is a live toggle, not a frozen read: turning it off works.
+assert got is False, "get_stack_scrub() at import = %r, want False" % (got,)
+# And the setting is a live toggle, not a frozen read.
+rc.set_stack_scrub(True)
+assert rc.get_stack_scrub() is True
 rc.set_stack_scrub(False)
 assert rc.get_stack_scrub() is False
 sys.stdout.write("SCRUB_OK\n")
@@ -253,33 +249,20 @@ sys.stdout.write("SCRUB_OK\n")
 def _run_child(src, env_extra, timeout=200):
     env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src", **env_extra)
     # Keep sibling cov env vars from a parent run from skewing this child.
-    for k in ("STACKWEAVE_STACK_SCRUB", "STACKWEAVE_TRACEBACK"):
+    for k in ("STACKWEAVE_TRACEBACK",):
         if k not in env_extra:
             env.pop(k, None)
     return subprocess.run([PY, "-c", src], cwd=REPO, env=env,
                           capture_output=True, text=True, timeout=timeout)
 
 
-def test_stack_scrub_env_enables_scrub():
-    """STACKWEAVE_STACK_SCRUB at import runs runloom_coro_scrub_set(1) (L491);
-    get_stack_scrub() observes it.  Asserts the enabled side."""
+def test_stack_scrub_default_off_and_live_toggle():
+    """A fresh import starts with the recycled-stack scrub OFF, and
+    set_stack_scrub() flips it both ways."""
     try:
-        p = _run_child(_SCRUB_CHILD.format(want=True, env="1"),
-                       {"STACKWEAVE_STACK_SCRUB": "1"})
+        p = _run_child(_SCRUB_CHILD, {})
     except subprocess.TimeoutExpired:
-        pytest.skip("STACKWEAVE_STACK_SCRUB subprocess timed out (shared-box contention)")
-    assert p.returncode == 0, "scrub child failed rc=%d\n%s" % (p.returncode, p.stderr[-1500:])
-    assert "SCRUB_OK" in p.stdout, (p.stdout, p.stderr[-800:])
-
-
-def test_stack_scrub_env_absent_is_off():
-    """Negative control for L490 guard: without the env (or '0'), the line does
-    NOT run and scrub stays off -- so the env branch is exercised both ways."""
-    try:
-        p = _run_child(_SCRUB_CHILD.format(want=False, env="0"),
-                       {"STACKWEAVE_STACK_SCRUB": "0"})
-    except subprocess.TimeoutExpired:
-        pytest.skip("STACKWEAVE_STACK_SCRUB=0 subprocess timed out (shared-box contention)")
+        pytest.skip("stack-scrub subprocess timed out (shared-box contention)")
     assert p.returncode == 0, "scrub-off child failed rc=%d\n%s" % (p.returncode, p.stderr[-1500:])
     assert "SCRUB_OK" in p.stdout, (p.stdout, p.stderr[-800:])
 

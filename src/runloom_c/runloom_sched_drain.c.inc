@@ -642,7 +642,7 @@ Py_ssize_t runloom_sched_drain(runloom_sched_t *s)
             } else if (runloom_g_state_in(g, RUNLOOM_GST_MASK_PARKED)) {
                 /* Parked on a waiter (netpoll/chan/sleep/park_safe):
                  * drop the g's now-idle stack pages until it's woken.
-                 * No-op unless RUNLOOM_STACK_PARK_DONTNEED=1.  Cooperative
+                 * No-op unless autosize enabled park reclaim.  Cooperative
                  * sched_yield gs are RUNNABLE (already re-queued), not
                  * PARKED, so they skip this and avoid a re-fault. */
                 runloom_coro_park(g->coro);

@@ -886,40 +886,31 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                  * deque-publish via the SEQ_CST fences in park_enter/wakep_one. */
                 if (idle_ns > 2000000LL && runloom_mn_park_enter(h))
                     idle_ns = 0;
-                /* Hub-idle dwell-based stack reclaim (opt-in,
-                 * RUNLOOM_STACK_PARK_SWEEP=1; threshold ms via
-                 * RUNLOOM_STACK_PARK_SWEEP_MS, default 5).  This hub is idle
-                 * and is the sole resumer of its own parkers, so madvising
-                 * their long-idle stacks here is race-free (see
-                 * runloom_netpoll_sweep_idle).  Rate-limited to ~half the
-                 * threshold so the O(parked) walk stays cheap. */
+                /* Hub-idle dwell-based stack reclaim (threshold ms via
+                 * RUNLOOM_STACK_PARK_SWEEP_MS, default 100).  Always on: it
+                 * delivers -32% idle RSS at no robustly-measurable p99 cost
+                 * (the churn cost proved within run-to-run noise), and the
+                 * churn throttle (RUNLOOM_SWEEP_MAX_CHURN, see netpoll.c)
+                 * degrades it to a no-op on active-churn workloads as
+                 * insurance.  Rate-limited to ~half the threshold so the
+                 * O(parked) walk stays cheap. */
                 {
-                    static int sweep_on = -1;
+                    static int sweep_cfg = 0;
                     /* 100 ms default: high enough that active round-trip
                      * parks (ms-scale, even with some queuing) are left
                      * alone, low enough to reclaim genuinely idle
                      * keepalive parks (seconds).  A saturated all-active
                      * bench inflates round-trip dwell, so it still pays
                      * some cost there; the N=1M target (5% active) does
-                     * not.  Tunable via RUNLOOM_STACK_PARK_SWEEP_MS. */
+                     * not. */
                     static long long sweep_thresh_ns = 100000000LL;
-                    int on = __atomic_load_n(&sweep_on, __ATOMIC_RELAXED);
-                    if (on < 0) {
-                        const char *e = getenv("STACKWEAVE_STACK_PARK_SWEEP");
+                    if (!__atomic_load_n(&sweep_cfg, __ATOMIC_RELAXED)) {
                         const char *ms = getenv("STACKWEAVE_STACK_PARK_SWEEP_MS");
                         if (ms != NULL) {
                             long long v = atoll(ms);
                             if (v > 0) sweep_thresh_ns = v * 1000000LL;
                         }
-                        /* Default ON (2026-05-29): the dwell sweep delivers
-                         * -32% idle RSS at no robustly-measurable p99 cost
-                         * (the churn cost proved within run-to-run noise),
-                         * and the churn throttle (RUNLOOM_SWEEP_MAX_CHURN, see
-                         * netpoll.c) degrades it to a no-op on active-churn
-                         * workloads as insurance.  RUNLOOM_STACK_PARK_SWEEP=0
-                         * disables; =1 (or any non-"0") forces on. */
-                        on = (e != NULL && *e == '0') ? 0 : 1;
-                        __atomic_store_n(&sweep_on, on, __ATOMIC_RELAXED);
+                        __atomic_store_n(&sweep_cfg, 1, __ATOMIC_RELAXED);
                     }
                     /* Runs in BOTH modes now: under per-g-tstate the sweep's
                      * sole-resumer safety is supplied by the per-g claim
@@ -928,7 +919,7 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                     /* mn-sim: forced off (I3 gate [10], hygiene) -- the dwell
                      * is wall-clock; per-g-tstate (where SWEEPING is
                      * schedule-visible) is fenced out entirely under sim. */
-                    if (on && parked > 0 &&
+                    if (parked > 0 &&
                         !(runloom_sim_enabled() && runloom_mn_ctrl_armed())) {
                         double now_s = runloom_sched_monotonic_seconds();
                         double interval_s = (double)sweep_thresh_ns / 2e9;
@@ -1353,11 +1344,9 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                 runloom_netpoll_force_unlink_g_parker(g);
                 runloom_g_decref(g);                  /* scheduler ref */
                 if (from_runq) runloom_g_decref(g);   /* queue ref */
-                /* pending_complete LAST: the final decref may run a fiber_n
-                 * batch teardown (arena cursor reset).  mn_run returns when
-                 * global pending hits 0, so only mark complete AFTER teardown
-                 * -- else the next fiber_n's arena alloc races a not-yet-reset
-                 * cursor and falls back to the slow per-g path. */
+                /* pending_complete LAST: mn_run returns when global pending
+                 * hits 0, so only mark complete after the g's final decref
+                 * has run. */
                 runloom_mn_pending_complete(h);
             } else if (parked_offqueue) {
                 /* Parked off-queue (netpoll/chan/sleep): a wake_g will route

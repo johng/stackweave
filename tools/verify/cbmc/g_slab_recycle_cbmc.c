@@ -10,8 +10,8 @@
  *
  *   memset(g, 0, offsetof(runloom_g_t, state));                 // part 1: [0, state)
  *   atomic_store(&g->state, RUNLOOM_GST_INIT);                  // the state byte
- *   memset((char*)g + offsetof(runloom_g_t, arena), 0,         // part 2: [arena, id)
- *          offsetof(runloom_g_t, id) - offsetof(runloom_g_t, arena));
+ *   memset((char*)g + offsetof(runloom_g_t, pass_index), 0,    // part 2: [pass_index, id)
+ *          offsetof(runloom_g_t, id) - offsetof(runloom_g_t, pass_index));
  *
  * LIFE-CYCLE invariant being proved (the recycled-g field-clear contract that
  * runloom_sched.h documents): EVERY byte in [0, offsetof(id)) is zeroed-or-
@@ -19,9 +19,9 @@
  * pre-introspection region.  This already produced one real wrong-result bug
  * (a recycled g kept a stale `pass_index` from a prior fiber_n(indexed=True) and
  * mis-called fn(stale_index) instead of fn()).  The contract holds IFF part 2's
- * start (offsetof(arena)) is immediately after the state byte -- i.e. ANY field
- * inserted in the [state, arena) gap leaks: part 1 stops at `state`, part 2
- * starts at `arena`, and the gap is never cleared.  This harness is the
+ * start (offsetof(pass_index)) is immediately after the state byte -- i.e. ANY
+ * field inserted in the [state, pass_index) gap leaks: part 1 stops at `state`,
+ * part 2 starts at `pass_index`, and the gap is never cleared.  This harness is the
  * DRIFT-GUARD for that gap as fields are added to the struct.
  *
  * The field SEQUENCE from `state` through `id` is reproduced verbatim from
@@ -30,7 +30,7 @@
  * Keep in sync with runloom_sched.h -- the run script drift-guards the field list.
  *
  * Negative control (must FAIL = CBMC finds the leak):
- *   -DBUG_GAP_AFTER_STATE : insert a field between `state` and `arena` -> a gap
+ *   -DBUG_GAP_AFTER_STATE : insert a field between `state` and `pass_index` -> a gap
  *                           the two memsets miss -> a stale (sentinel) byte
  *                           survives in [0, offsetof(id)).
  */
@@ -41,8 +41,6 @@
 #define SENTINEL    0xAAu     /* pre-fill: any non-zero, != GST_INIT */
 #define GST_INIT    1u        /* runloom_gstate.h: RUNLOOM_GST_INIT */
 
-struct gon_batch;             /* opaque (only its pointer's size matters) */
-
 /* Faithful slice of runloom_g_t from `state` through the introspection block.
  * prefix[] stands for every field before `state` (part 1 clears them en masse). */
 typedef struct {
@@ -51,16 +49,14 @@ typedef struct {
     unsigned char state;              /* load-bearing atomic byte (between the memsets) */
 
 #ifdef BUG_GAP_AFTER_STATE
-    int inserted_field;               /* a NEW field dropped into the [state,arena) gap */
+    int inserted_field;               /* a NEW field dropped into the [state,pass_index) gap */
 #endif
 
-    /* ---- part-2 region: [arena, id), cleared by the second memset ---- */
-    unsigned char arena;
-    struct gon_batch *batch;
+    /* ---- part-2 region: [pass_index, id), cleared by the second memset ---- */
     unsigned char pass_index;
     unsigned char wait_reason;
     unsigned char wait_reason_hint;
-    unsigned long tstate_owner_tid;   /* runloom_sched.h:436; in [arena,id), scrubbed by part-2 */
+    unsigned long tstate_owner_tid;   /* in [pass_index,id), scrubbed by part-2 */
 
     /* ---- introspection block: PRESERVED across recycle (NOT cleared) ---- */
     long long id;
@@ -77,8 +73,8 @@ static void slab_recycle_scrub(unsigned char *g)
 {
     memset(g, 0, offsetof(g_t, state));                       /* part 1: [0, state) */
     g[offsetof(g_t, state)] = (unsigned char)GST_INIT;        /* the state byte */
-    memset(g + offsetof(g_t, arena), 0,                       /* part 2: [arena, id) */
-           offsetof(g_t, id) - offsetof(g_t, arena));
+    memset(g + offsetof(g_t, pass_index), 0,                  /* part 2: [pass_index, id) */
+           offsetof(g_t, id) - offsetof(g_t, pass_index));
 }
 
 int main(void)
@@ -95,8 +91,8 @@ int main(void)
 
     /* Diagnostic: part 2's start must sit immediately after the state byte, or
      * there is a gap the scrub cannot reach. */
-    __CPROVER_assert(offsetof(g_t, arena) == offsetof(g_t, state) + 1,
-                     "part-2 start (arena) immediately follows the state byte -- no gap");
+    __CPROVER_assert(offsetof(g_t, pass_index) == offsetof(g_t, state) + 1,
+                     "part-2 start (pass_index) immediately follows the state byte -- no gap");
 
     /* The contract: every byte before the (preserved) introspection block is
      * cleared or overwritten -- no stale byte survives recycling. */

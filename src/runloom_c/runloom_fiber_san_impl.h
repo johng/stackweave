@@ -10,13 +10,6 @@
 
 #if defined(RUNLOOM_FIBERSAN)
 
-#include <string.h>   /* memset for _zero */
-
-static inline void runloom_fibersan_zero(struct runloom_asm_coro *a)
-{
-    memset(&a->fibersan, 0, sizeof(a->fibersan));
-}
-
 static inline void runloom_fibersan_destroy(struct runloom_asm_coro *a)
 {
 #if defined(RUNLOOM_FIBERSAN_TSAN)

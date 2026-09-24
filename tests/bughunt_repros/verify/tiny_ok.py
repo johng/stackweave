@@ -1,5 +1,3 @@
-import os
-os.environ["STACKWEAVE_STACK_ARENA"] = "0"
 import stackweave, stackweave_c as rc
 res=[]
 def worker():

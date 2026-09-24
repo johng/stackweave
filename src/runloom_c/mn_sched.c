@@ -228,7 +228,7 @@ typedef struct runloom_hub {
     volatile int         ring_waiting;
     /* Last time this hub ran the idle stack-reclaim sweep (seconds, 0 at
      * init -> first idle sweep fires immediately).  Rate-limits the
-     * O(parked) walk under RUNLOOM_STACK_PARK_SWEEP. */
+     * sweep's O(parked) walk. */
     double               last_sweep_s;
     /* ---- sysmon (Group B) progress instrumentation ----
      * resume_start_ns: monotonic-ns when this hub entered its current

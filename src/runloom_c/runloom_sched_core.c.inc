@@ -595,7 +595,7 @@ runloom_g_t *runloom_g_slab_alloc(void)
          * never race a non-atomic memset of it.
          *   part 1: clear everything BEFORE `state`.
          *   part 2: clear the fields AFTER `state` up to the introspection
-         *           block (arena/batch/pass_index).  These are NOT preserved
+         *           block (pass_index onward).  These are NOT preserved
          *           on purpose and are NOT all reset at spawn -- pass_index is
          *           set only on the indexed fiber_n path, so without this clear a
          *           recycled g carries a stale pass_index and mis-calls
@@ -612,8 +612,8 @@ runloom_g_t *runloom_g_slab_alloc(void)
         memset(g, 0, offsetof(runloom_g_t, state));
         __atomic_store_n(&g->state, (unsigned char)RUNLOOM_GST_INIT,
                          __ATOMIC_RELEASE);
-        memset((char *)g + offsetof(runloom_g_t, arena), 0,
-               offsetof(runloom_g_t, id) - offsetof(runloom_g_t, arena));
+        memset((char *)g + offsetof(runloom_g_t, pass_index), 0,
+               offsetof(runloom_g_t, id) - offsetof(runloom_g_t, pass_index));
 #ifdef RUNLOOM_DBG_BADCORO
         g->magic = 0x600DC0DEu;   /* source-hunt: live-g canary (reuse path) */
 #endif
@@ -681,11 +681,10 @@ void runloom_g_slab_free(runloom_g_t *g)
  * mn_init/mn_fini cycles every fiber ever completed leaks its struct forever --
  * repeated runloom.run(n>1) grows RSS without bound.
  *
- * The reclaim below is sound for the SAME reason mn_fini already frees the
- * bulk-arena g structs (runloom_garena_quar_drain) to the OS at teardown: by the
- * time it runs every hub thread is joined and no wake_g can be in flight, so no
- * try_incref can reach these structs -- the grace period that makes returning
- * them to the OS safe.  Two halves:
+ * The reclaim below is sound because by the time it runs every hub thread is
+ * joined and no wake_g can be in flight, so no try_incref can reach these
+ * structs -- the grace period that makes returning them to the OS safe.  Two
+ * halves:
  *   runloom_g_slab_thread_flush() -- an EXITING hub thread splices its OWN TLS
  *       slab into the shared global pool BEFORE it dies (call it from hub_main),
  *       so its cached structs survive the thread and become reachable from the
@@ -825,23 +824,6 @@ void runloom_g_decref(runloom_g_t *g)
                 PyThreadState_Delete(g->tstate);
                 g->tstate = NULL;
             }
-        }
-        if (g->arena) {
-            /* Bulk-arena g: the g, its coro and its stack are slices of a batch
-             * (one calloc / one mmap), NOT individually allocated.  Do NOT
-             * runloom_coro_destroy (it would pool/free an arena coro) nor
-             * runloom_g_slab_free (it would free an arena g) -- either corrupts
-             * the heap.  Drop the Python refs (g_entry already Py_CLEAR'd
-             * callable; result/error are normally NULL for fiber_n workers), then
-             * decrement the batch; the last finisher reclaims the whole batch.
-             * Bulk gs are never admitted under the max-fibers limit, so
-             * limit_counted is 0 -- nothing to release. */
-            Py_XDECREF(g->callable);
-            Py_XDECREF(g->result);
-            Py_XDECREF(g->error);
-            runloom_g_state_set(g, RUNLOOM_GST_FREED);
-            runloom_fibern_batch_finish_one(g->batch);
-            return;
         }
         if (g->coro != NULL) {
             runloom_coro_destroy(g->coro);

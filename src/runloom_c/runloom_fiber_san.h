@@ -124,10 +124,6 @@ typedef struct runloom_fiber_san {
 /* forward decl -- the real struct is in fcontext.h */
 struct runloom_asm_coro;
 
-/* Zero the state (fresh coro).  MUST run before the first enter() on any coro
- * whose backing memory is not calloc'd (placement/arena coros). */
-static inline void runloom_fibersan_zero(struct runloom_asm_coro *a);
-
 /* Free the TSan fiber (true coro free, NOT pool recycle). */
 static inline void runloom_fibersan_destroy(struct runloom_asm_coro *a);
 
@@ -150,7 +146,6 @@ static inline void runloom_fibersan_reentered(struct runloom_asm_coro *a);
 #else  /* !RUNLOOM_FIBERSAN -- every helper is a no-op; no fields, no cost. */
 
 struct runloom_asm_coro;
-static inline void runloom_fibersan_zero(struct runloom_asm_coro *a)    { (void)a; }
 static inline void runloom_fibersan_destroy(struct runloom_asm_coro *a) { (void)a; }
 static inline void runloom_fibersan_enter(struct runloom_asm_coro *a,
                                           const void *lo, size_t n)

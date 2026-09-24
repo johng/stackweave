@@ -88,11 +88,11 @@ launch want_bug snap_refown_cbmc.c "-DBUG_LOAD_FORGETS_EXC_OWNER"  "load's non-d
 launch want_bug snap_refown_cbmc.c "-DBUG_SNAP_PINS_WITHOUT_CHAIN" "snap pins an exc_owner but leaves exc_info NULL -> load's default path zeroes the count without releasing it -> leak"
 
 # g slab recycle field-clear: every pre-id byte is cleared/overwritten by the
-# two-part scrub (no stale pass_index/arena/wake_state across recycling).  The
+# two-part scrub (no stale pass_index/wake_state across recycling).  The
 # coverage loop runs offsetof(id) (~88) iterations, so it needs a larger unwind
 # than the shared default; the bound is a compile-time constant so the unwinding
-# assertion still holds.  Negative control inserts a field into the [state,arena)
-# gap that the scrub misses.  (Despite --unwind 256 this is fast: the scrub loop
+# assertion still holds.  Negative control inserts a field into the
+# [state,pass_index) gap that the scrub misses.  (Despite --unwind 256 this is fast: the scrub loop
 # is a simple byte-clear the solver dispatches trivially.)
 SLAB_UNWIND=256
 want_ok_slab()  {
@@ -136,19 +136,19 @@ launch want_bug chan_refflow_cbmc.c "-DBUG_DOUBLE_CONSUME"       "a consumed val
 
 collect
 
-# Drift-guard: the proof (and the real scrub's part-2 start) assume `arena`
+# Drift-guard: the proof (and the real scrub's part-2 start) assume `pass_index`
 # immediately follows the atomic `state` byte -- a field inserted into that gap
 # would silently leak across recycling (the stale-pass_index class).  Fail if a
-# field declaration appears between `state` and `arena` in the real header.
+# field declaration appears between `state` and `pass_index` in the real header.
 # (Pure awk, ~instant -- run inline after the pool drains.)
 ROOT="$(cd "$HERE/../.." && pwd)"
 HDR="$ROOT/src/runloom_c/runloom_sched.h"
-printf '  [cbmc] %-44s ' "drift-guard: state->arena adjacency in struct"
+printf '  [cbmc] %-44s ' "drift-guard: state->pass_index adjacency in struct"
 if [ -f "$HDR" ]; then
-  gap="$(awk '/unsigned char state;/{f=1;next} /unsigned char arena;/{f=0} f' "$HDR" \
+  gap="$(awk '/unsigned char state;/{f=1;next} /unsigned char pass_index;/{f=0} f' "$HDR" \
          | grep -E '^[[:space:]]+[A-Za-z_].*;[[:space:]]*$' | grep -vE '^[[:space:]]*(\*|/\*|//)')"
-  if [ -z "$gap" ]; then echo "PASS (no field inserted in [state,arena) gap)"; pass=$((pass+1));
-  else echo "FAIL (field inserted between state and arena -- update the proof!)"; echo "$gap"; fail=$((fail+1)); fi
+  if [ -z "$gap" ]; then echo "PASS (no field inserted in [state,pass_index) gap)"; pass=$((pass+1));
+  else echo "FAIL (field inserted between state and pass_index -- update the proof!)"; echo "$gap"; fail=$((fail+1)); fi
 else echo "SKIP (header not found)"; fi
 
 echo "  $pass passed, $fail failed"

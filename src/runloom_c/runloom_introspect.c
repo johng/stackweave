@@ -58,15 +58,6 @@ long long runloom_next_goid(void)
     return runloom_tls_goid_next++;
 }
 
-/* Reserve a contiguous block of n goids in ONE atomic; returns the first.
- * The bulk-spawn loop then assigns base+0..base+n-1 inline (no per-g call). */
-long long runloom_next_goid_block(long n)
-{
-    long long base = __atomic_fetch_add(&runloom_fiberid_global,
-                                        (long long)n, __ATOMIC_RELAXED);
-    return base;
-}
-
 /* ---------------------------------------------------------------- *
  *  State name tables                                               *
  * ---------------------------------------------------------------- */

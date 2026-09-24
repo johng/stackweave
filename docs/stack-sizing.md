@@ -147,33 +147,28 @@ peak is real but transient -- the sentinel scan only sees what was
 still in memory at the moment we ran it.  In practice this rarely
 matters because the safety factor (4×) covers reasonable transients.
 
-## Stack reclaim on pool release (`MADV_FREE`)
+## Pooled stacks stay resident
 
 When a fiber finishes, its stack returns to a free list (a per-thread
-cache that overflows to a shared cross-hub depot, bounded by
-`STACKWEAVE_STACK_DEPOT_CAP`, default 1024). The release path reclaims the
-stack body's physical pages so idle pool entries don't pin
-**capacity × stack_size** of RAM.
+cache that overflows to a shared cross-hub depot, auto-sized to ~1.5× the
+live-fiber high-water-mark; `STACKWEAVE_STACK_DEPOT_CAP` forces a static
+cap). Pooled stacks keep their touched pages **resident**: the release path
+issues no `madvise`, so a release pays no TLB-shootdown IPI (measured ~17% of
+naked-spawn self-time at 8 hubs, growing with hub count) and a reused stack
+never re-faults -- the same trade Go makes by keeping freed goroutine stacks
+warm. The cost is RSS: the pool holds up to *depot cap × touched stack depth*.
 
-By **default it uses `madvise(MADV_FREE)`** (Go's scavenger choice): the
-kernel reclaims the pages lazily, only under memory pressure, and the
-page-table mappings stay intact -- so reusing the stack before the kernel
-reclaims pays **no re-fault**. Measured ~2.3× cheaper per call than
-`MADV_DONTNEED`, and ~1.8× faster wall / −26% sys-time on a fiber-churn
-workload (mass spawn+complete). The cost is *lazy* RSS: freed pages stay
-counted until pressure, so RSS can look higher than the live set.
+Parked fibers are different: a hub-idle dwell sweep hands the idle pages of
+long-parked fibers' Python data stacks back to the OS (threshold via
+`STACKWEAVE_STACK_PARK_SWEEP_MS`, default 100 ms).
 
-Tune it with `STACKWEAVE_STACK_MADV`:
-
-| value | behaviour |
-|---|---|
-| `free` (default) | lazy reclaim, cheapest CPU, RSS counted until pressure |
-| `dontneed` | eager reclaim (the old behaviour) -- tighter RSS, more CPU |
-| `off` | no reclaim -- pooled stacks stay fully resident |
+While stack sizes are being *measured* (the calibration window, stack advice,
+autosize), released stacks do drop their pages (`MADV_DONTNEED`) so the next
+fiber's resident-page high-water scan isn't skewed by the previous occupant.
 
 The first 4 KB (the pool's linked-list header) is never reclaimed. The
-security scrub (`STACKWEAVE_STACK_SCRUB`) stays on `MADV_DONTNEED` for its
-zero-on-next-touch guarantee.
+security scrub (`set_stack_scrub(True)`) zeroes every page a fiber touched
+before its stack is reused.
 
 ## Prewarming the stack pool (burst servers)
 
@@ -330,9 +325,8 @@ protection the main thread gets, scaled to the fiber's smaller stack:
   `re`, deeply nested calls) hits a catchable `RecursionError` (the parser raises
   `MemoryError`) well before the stack overflows.
 - **Stacks grow on demand.** At each resume boundary a fiber whose headroom
-  has dropped below a quarter of its stack is copied onto a stack twice as big
-  (`STACKWEAVE_STACK_GROW`, default on; `STACKWEAVE_STACK_GROW=0` disables). A fiber
-  that gradually deepens grows with it.
+  has dropped below a quarter of its stack is copied onto a stack twice as big.
+  A fiber that gradually deepens grows with it.
 - **Every stack has a guard page.** A `PROT_NONE` page sits just below each
   fiber stack. An overflow faults *immediately and cleanly* at the guard
   rather than silently scribbling over a neighbouring stack. With the crash reporter installed

@@ -907,7 +907,7 @@ int runloom_netpoll_fd_armed_count(void)
 #endif
 }
 
-/* Hub-idle dwell-based stack reclaim (RUNLOOM_STACK_PARK_SWEEP).  Walk the
+/* Hub-idle dwell-based stack reclaim.  Walk the
  * CALLING hub's parker pool and madvise the below-SP idle stack pages of
  * fibers whose current park has already exceeded threshold_ns.
  *
@@ -1051,7 +1051,7 @@ int runloom_netpoll_sweep_idle(void *hub_opaque, long long threshold_ns)
         runloom_coro_madvise_idle(batch[i]->coro);
         /* Companion reclaim: drop the parked Python g's idle datastack-
          * chunk tail too (the C-stack madvise above never touches it).
-         * Same owning-hub safety contract; gated by RUNLOOM_DATASTACK_SWEEP. */
+         * Same owning-hub safety contract. */
         runloom_sched_madvise_datastack_idle(batch[i]);
         /* Per-g-tstate: release the exclusive sweep claim now that this g's
          * madvise has completed (SWEEPING->PARKED, or re-enqueue a wake that

@@ -36,7 +36,6 @@ typedef enum runloom_lock_rank {
                                        * claim under pool, wake with neither held). */
     RUNLOOM_RANK_GREG         = 20,   /* runloom_greg_lock (global fiber registry) */
     RUNLOOM_RANK_HUB_TSTATE   = 30,   /* runloom_hub_tstate_lock */
-    RUNLOOM_RANK_ARENA_INIT   = 35,   /* runloom_arena_init_lock */
     RUNLOOM_RANK_GLOBAL_RUNQ  = 40,   /* runloom_global_runq_lock */
     RUNLOOM_RANK_CHAN         = 50,   /* per-channel ch->lock */
     RUNLOOM_RANK_HUB_IDLE     = 55,   /* per-hub h->idle_lock -- OUTER to sub_lock:

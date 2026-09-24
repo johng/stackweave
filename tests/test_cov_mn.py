@@ -2,9 +2,9 @@
 and its mn_sched_*.c.inc fragments).
 
 Half the M:N scheduler's lines live behind env-gated modes the normal corpus
-never enables: the controlled-replay / PCT barrier, fiber_n bulk spawn, the sysmon
+never enables: the controlled-replay / PCT barrier, the sysmon
 stalled-hub detector, the DETACHED-tstate handoff rescue, ATTACHED preemption,
-the idle-condvar-vs-nanosleep wake, the stack-park idle sweep, world-yield,
+the idle-condvar-vs-nanosleep wake, a 1 ms stack-park idle sweep, world-yield,
 hub-affinity, the io_uring-as-loop backend, and the gated-off migratable-mode
 warn path.  Each `test_mn_mode_*` runs the shared diverse workload
 (tests/cov_workload.py) in a subprocess with that mode's env set, driving its C
@@ -34,10 +34,9 @@ _DEVNULL = os.open(os.devnull, os.O_WRONLY)
 # (label, extra-env) -- each drives a distinct gated path through mn_sched.c.
 MODES = [
     ("default",      {}),
-    ("gon_bulk",     {"STACKWEAVE_GON_BULK": "1"}),
     ("sysmon",       {"STACKWEAVE_SYSMON": "1", "STACKWEAVE_SYSMON_QUIET": "1",
                       "STACKWEAVE_SYSMON_MS": "8", "STACKWEAVE_COV_CPU": "40000000"}),
-    ("stack_park_sweep", {"STACKWEAVE_STACK_PARK_SWEEP": "1", "STACKWEAVE_STACK_PARK_SWEEP_MS": "1"}),
+    ("stack_park_sweep", {"STACKWEAVE_STACK_PARK_SWEEP_MS": "1"}),
     ("perg_tstate_warn", {"STACKWEAVE_PER_G_TSTATE": "1"}),   # gated off -> warn + default sched
     ("iouring_loop", {"STACKWEAVE_IOURING_LOOP": "1"}),
     ("deadlock_ms",  {"STACKWEAVE_DEADLOCK_MS": "50"}),

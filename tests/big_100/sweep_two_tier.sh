@@ -55,8 +55,8 @@ DESIGN_TMO="${DESIGN_TMO:-90}"
 SURVIVAL_TMO="${SURVIVAL_TMO:-180}"
 EXTRA="${EXTRA:-}"
 RES="${RES:-/tmp/sweep_two_tier_results.txt}"
-# 1M survival needs the fast bulk-arena spawn or it never fields the pool in time.
-GON_ENV="STACKWEAVE_HARNESS_GON=1 STACKWEAVE_GON_BULK=1 STACKWEAVE_GON_FRESH=1 STACKWEAVE_STACK_ARENA_N=1300000"
+# 1M survival needs the fast fiber_n spawn or it never fields the pool in time.
+GON_ENV="STACKWEAVE_HARNESS_GON=1"
 
 : > "$RES"
 
