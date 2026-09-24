@@ -55,17 +55,22 @@ stackweave.optimize("memory")       # stackweave.fiber -> small right-sized stac
 
 ## Install
 
+stackweave installs only onto a free-threaded CPython built with its migration
+patches — see [src/patches/](src/patches/README.md) (`tools/ci/build_patched_cpython.sh 314`
+builds one). `pip install` refuses a stock interpreter. Install with the patched
+interpreter's pip:
+
 ```bash
-pip install stackweave
+/path/to/patched/bin/python3.14 -m pip install stackweave
 ```
 
 ```python
 import stackweave      # scheduler + channels, plus monkey/time/context/sync/aio
 ```
 
-Prebuilt **wheels** (no compiler needed) for CPython 3.11–3.14 on Linux
-(x86_64/aarch64), macOS (arm64/x86_64), Windows (AMD64); source build elsewhere.
-**No runtime dependencies.**
+pip builds it from source (needs a C compiler): the patched and stock
+interpreters share the `cp3NNt` wheel tag, so a prebuilt wheel couldn't be kept
+off stock CPython. **No runtime dependencies.**
 
 ## What it is
 
@@ -134,6 +139,8 @@ Full guide in [docs/](https://github.com/johng/stackweave/tree/main/docs/):
 | `src/stackweave/` | Python layers: `aio`, `sync`, `monkey`, `time`, `runtime` |
 | `tests/` · `examples/` · `benchmark/` · `docs/` | tests · runnable examples · benchmarks + perf harness · docs |
 
-Build from source (contributors): `pip install -e .` from a clone (needs a C
-compiler; `scripts/install.sh` / `scripts\install.bat` bootstrap one). To hack on
-stackweave against free-threaded CPython, use a 3.13t interpreter.
+Build from source (contributors): `pip install -e .` from a clone on a patched
+interpreter (needs a C compiler; `scripts/install.sh` / `scripts\install.bat`
+bootstrap one). On stock CPython, build in place with
+`python setup.py build_ext --inplace` and run with `PYTHONPATH=src`, or set
+`STACKWEAVE_ALLOW_STOCK_CPYTHON=1` to let pip through.
