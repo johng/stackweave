@@ -58,6 +58,15 @@ RUNLOOM_INLINE void runloom_mn_pending_steal(runloom_hub_t *victim,
  * empty-deque path (alongside neighbour-steal).  An idle hub thus recovers a
  * stalled hub's woken work.  This is Go's per-P-local + global-runq model.
  *
+ * LOCAL WAKE (the other half of Go's model).  A wake performed ON a general hub
+ * thread does not come here at all: runloom_mn_woken_enqueue pushes the g onto
+ * the waker's own deque (a lock-free owner push) and kicks one parked hub, so
+ * the common cross-hub wake never takes this mutex.  This queue is the path for
+ * a foreign (non-hub) waker, an offload-hub waker, a pinned g, controlled
+ * replay, or a full deque.  A deque-resident woken g is QUEUED and carries its
+ * queue ref exactly as an entry here does; hub_main detects it at the pick step
+ * and runs the same claim + release.
+ *
  * Accounting: the g stays counted in its origin hub's `pending` and the
  * global counter while it sits here (we do NOT rebalance per-hub pending on
  * pull).  That is correct because the idle path only ever reads the SUM of

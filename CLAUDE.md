@@ -129,6 +129,21 @@ Full derivations for the invariants below: [docs/dev/RUNTIME_GOTCHAS.md](docs/de
   to a BUSY offload hub the fiber strands; nothing migrates, so never a
   soundness hazard. Guard: `tests/test_offload_hubs.py`.
 
+- **Under migration, a hub-thread wake lands on the waker's OWN deque
+  (Go-style local wake), not the global run-queue.** `runloom_mn_woken_enqueue`
+  is the single routing point: general-hub waker + unpinned g + not replay +
+  deque not full -> owner push onto `cur->deque`; anything else -> global
+  run-queue. Two consequences are load-bearing: (1) a deque can now hold a
+  g in `wake_state == QUEUED` carrying a queue ref, so hub_main's pick step
+  flags it (`from_runq = 1`) and the per-g resume block runs the same
+  QUEUED->RUNNING claim + queue-ref drop as for a global pull -- any new
+  deque/steal consumer must do the same or leak the ref and skip the claim;
+  (2) `runloom_mn_any_stealable_work` counts a deque of ONE as surplus under
+  migration, because the owner may be mid-fiber and never reach its pick
+  step -- restoring the default `>1` there reopens a lost-wake vs
+  park_enter. Default mode is byte-unchanged (nothing reaches QUEUED).
+  Guard: `tests/test_local_wake.py`.
+
 ## aio bridge invariants (src/runloom/aio/)
 - Layout: `_base.py` is the foundation (`_go_io`, `_wait_fd`, `_CURRENT_TASKS`);
   the loop is composed from `loop_*.py` mixins; internals reachable via PEP 562
