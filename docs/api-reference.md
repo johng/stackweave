@@ -192,9 +192,8 @@ stackweave_c.offload_fiber(lambda: ch.send(some_blocking_call()))
 result, alive = ch.recv()      # recv() is (value, ok), not a bare value
 ```
 
-Nothing migrates between hubs in this scheme, so unlike
-`STACKWEAVE_PER_G_TSTATE` it needs no patched CPython
-(`stackweave.migration_available()` is irrelevant here).
+The offload fiber is born and dies on its offload hub, so this scheme does not
+rely on cross-hub migration.
 
 `stackweave.monkey.offload()` routes through offload hubs automatically when any
 are reserved, and falls back to the thread pool otherwise -- see

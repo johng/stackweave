@@ -40,7 +40,6 @@ MODES = [
     ("sysmon",      {"STACKWEAVE_SYSMON": "1", "STACKWEAVE_SYSMON_QUIET": "1",
                       "STACKWEAVE_SYSMON_MS": "8", "STACKWEAVE_COV_CPU": "40000000"}),
     ("stack_park_sweep", {"STACKWEAVE_STACK_PARK_SWEEP_MS": "1"}),
-    ("perg_tstate_warn", {"STACKWEAVE_PER_G_TSTATE": "1"}),   # gated off -> warn + default sched
     ("iouring_loop", {"STACKWEAVE_IOURING_LOOP": "1"}),
     ("deadlock_ms",  {"STACKWEAVE_DEADLOCK_MS": "50"}),
     ("ready_starve", {"STACKWEAVE_READY_STARVE_BOUND": "2"}),

@@ -3,10 +3,10 @@
 Run with the PATCHED python (built from patches/cpython313t-tstate-alloc-home.patch)
 + stackweave built against it:
 
-  FIX (borrow on):  STACKWEAVE_PER_G_TSTATE=1 STACKWEAVE_ALLOW_UNSAFE_MIGRATION=1 \
-                    PYTHON_GIL=0 PYTHONPATH=src <patched-python> mpmc_pergt_repro.py
+  FIX (borrow on):  PYTHON_GIL=0 PYTHONPATH=src <patched-python> mpmc_pergt_repro.py
                     -> PASS (24/24)
-  BASELINE (off):   ... STACKWEAVE_NO_ALLOC_HOME=1 ...  -> 8/8 abort (_mi_page_retire/qsbr)
+  BASELINE (off):   same, with stackweave built WITHOUT -DPy_TSTATE_ALLOC_HOME
+                    -> 8/8 abort (_mi_page_retire/qsbr)
 
 6 producers / 5 consumers / 1 bounded chan, 4 hubs, 15 inner rounds.
 """

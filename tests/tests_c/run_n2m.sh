@@ -39,7 +39,7 @@ run_n () {
     local NN=$1 HH=$2 RR=$3 TMO=${4:-600}
     echo ""
     echo "################ RUN N=$NN H=$HH RAMP=$RR (timeout ${TMO}s) @ $(date -Is) ################"
-    timeout "$TMO" /usr/bin/time -v sudo -n env STACKWEAVE_PER_G_TSTATE=0 tests_c/bench_server_runloom "$NN" "$HH" "$RR" 2>&1
+    timeout "$TMO" /usr/bin/time -v sudo -n tests_c/bench_server_runloom "$NN" "$HH" "$RR" 2>&1
     echo "---- exit rc=$? (124=timeout) ----"
     # cool-down so TIME_WAIT/ports recycle before the next, heavier run
     sleep 8

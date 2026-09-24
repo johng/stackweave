@@ -70,7 +70,7 @@ and a concrete reason.
 | OOM | 51 | alloc-failure cleanup unreachable even via the `faultinj` LD_PRELOAD / `strace -e inject` harnesses (the failure path then crashes/aborts before gcov flushes) |
 | RACE | 32 | a free-threaded interleaving with no deterministic trigger; a `for(;;)` commit-CAS retry latch gcov counts only under contention (enclosing function fully covered); or a non-atomic `-O0` gcov line-counter race on a line **proven to execute** (cldeque steal/pop tails; crash disarm body) |
 | DEAD | 19 | defined/exported but zero callers (proven by grep + `nm`) |
-| MIGRATION | 17 | gated on `STACKWEAVE_ALLOW_UNSAFE_MIGRATION` / `per_g_tstate` mode — a known-crash mode this project forbids enabling |
+| MIGRATION | 17 | `per_g_tstate` / global-runq paths, excluded while migration was opt-in; migration is now always on, so these entries are stale until the manifest is re-measured |
 | CRASHONLY | 12 | runs only in the fatal-signal handler, which re-raises and dies before gcov flushes |
 | PLATFORM | 11 | `#ifdef`-out on Linux epoll, or needs an absent kernel/rlimit feature (pre-4.5 EPOLLEXCLUSIVE / MADV_FREE) |
 | SPAWNFAIL | 8 | OS-thread / `PyThreadState_New` failure cleanup; no fault hook |

@@ -5,25 +5,18 @@ HONEST REACHABILITY MAP of this fragment's uncovered lines (full justification
 in the StructuredOutput `unreachable` field; summarized here so the suite reads
 self-contained):
 
-  GROUP A -- the per-g-tstate / global stealable run-queue machine
-  (L407-422 timer-wake claim, L480 from_runq=1, L805-942 the per-g-tstate
-  resume/claim/park/done/yield, L953-962 the steal-woken QUEUED->RUNNING claim,
-  L1015, L1116-1184 the global-runq snap-mode release).  EVERY one of these is
-  gated by runloom_use_global_runq() / runloom_get_per_g_tstate_mode().  mn_init
-  resolves that mode through runloom_resolve_migratable_mode(), which returns 0
-  (default scheduler -- global runq never populated, from_runq never set, the
-  per-g block never entered) UNLESS STACKWEAVE_ALLOW_UNSAFE_MIGRATION=1 is ALSO set.
-  The task forbids that ack (a KNOWN-CRASH migration mode) and the gate is
-  UNCONDITIONAL on it -- INDEPENDENT of hub count.  Verified empirically in this
-  session: `STACKWEAVE_PER_G_TSTATE=1` alone prints the GATED-OFF warning and runs
-  the default scheduler to completion (the per-g block is never reached); only
-  `+STACKWEAVE_ALLOW_UNSAFE_MIGRATION=1` enters it.  There is therefore NO safe
-  (non-ack) trigger -- not even at hub-count==1.  Classified unreachable.
+  GROUP A -- the per-g-tstate / global stealable run-queue machine (the
+  timer-wake claim, from_runq=1, the per-g-tstate resume/claim/park/done/yield,
+  the steal-woken QUEUED->RUNNING claim, the global-runq snap-mode release).
+  EVERY one of these is gated by runloom_use_global_runq() /
+  runloom_get_per_g_tstate_mode(), which is true for every M:N run (cross-hub
+  migration is always on), so every M:N test in the corpus drives it.  Not
+  targeted separately here.
 
   GROUP B -- hard error/cleanup paths with NO fault hook:
     * L154-155: the hub's OWN PyThreadState_New returns NULL (a raw alloc at
-      L147; SPAWN_TSTATE injects only at the PER-G tstate alloc, which lives in
-      the gated mode -- there is no fault site for the hub's own tstate).
+      L147; SPAWN_TSTATE injects only at the PER-G tstate alloc -- there is no
+      fault site for the hub's own tstate).
     * L219-221 / L230-232 / L236: io_uring ring create / loop-arm / epoll-add
       FAILURE cleanups.  io_uring IS available on this box, so the create
       succeeds and the arm/add succeed; there is no env to force any of these to
@@ -35,7 +28,7 @@ self-contained):
       (documented in CLAUDE.md as "proven non-load-bearing" on the happy path).
   Classified unreachable / defensive.
 
-  GROUP C -- REACHABLE in the default scheduler, which THIS suite drives:
+  GROUP C -- REACHABLE, and driven by THIS suite:
     * L388  -- the Chase-Lev deque OVERFLOW fallback.  When a single hub's drain
                must push > RUNLOOM_CLDEQUE_CAP (4096) FRESH gs onto its bounded
                deque in ONE pass, runloom_cldeque_push returns -1 and the g falls
@@ -274,66 +267,6 @@ def test_gilstate_delete_on_main_exit_path():
     assert "DELETE_ON_MAIN_OK hubs=4 work=64" in p.stdout, (
         "hub exit path did not complete the workload under the negative control."
         "\nstdout=%s\nstderr=%s" % (p.stdout, p.stderr[-800:]))
-
-
-# --------------------------------------------------------------------------
-# REACHABILITY GUARD -- pin the GROUP A gate empirically so the central
-# measurement (and any future maintainer) can SEE that the per-g-tstate block is
-# unreachable without the forbidden ack, rather than taking the docstring on
-# faith.  This is itself a real assertion: STACKWEAVE_PER_G_TSTATE=1 ALONE must run
-# the DEFAULT scheduler (emit the GATED-OFF warning, complete the workload, exit
-# 0) -- i.e. it must NOT enter the per-g block.  If a future change ever made the
-# gate honor the flag without the ack, this test would start FAILING (the warning
-# would vanish), flagging that Group A just became reachable and the suite should
-# be extended.  We deliberately do NOT set STACKWEAVE_ALLOW_UNSAFE_MIGRATION.
-# --------------------------------------------------------------------------
-_GATED_OFF_PROG = r'''
-import sys
-sys.path.insert(0, "src")
-import stackweave, stackweave_c as rc
-from stackweave.sync import WaitGroup
-N = 48
-ran = bytearray(N)
-def main():
-    wg = WaitGroup(); wg.add(N)
-    def w(i):
-        rc.sched_yield()
-        if 0 <= i < N:
-            ran[i] = 1
-        wg.done()
-    for i in range(N):
-        rc.mn_fiber(lambda i=i: w(i))
-    wg.wait()
-stackweave.run(3, main)
-assert sum(ran) == N, "lost %d/%d" % (N - sum(ran), N)
-sys.stdout.write("GATED_OFF_DEFAULT_OK %d\n" % sum(ran))
-sys.stdout.flush()
-'''
-
-
-@pytest.mark.skipif(not FT, reason="M:N hub_main only runs with the GIL disabled")
-def test_per_g_tstate_is_gated_off_without_ack():
-    # No STACKWEAVE_ALLOW_UNSAFE_MIGRATION on purpose.
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src",
-               STACKWEAVE_PER_G_TSTATE="1")
-    p = subprocess.run([PY, "-c", _GATED_OFF_PROG],
-                       cwd=REPO, env=env, capture_output=True, text=True, timeout=60)
-    assert p.returncode == 0, (
-        "gated-off per-g-tstate run crashed (rc=%s) -- it should fall back to the "
-        "default scheduler, not enter the migratable block.\nstderr=%s" % (
-            p.returncode, p.stderr[-1500:]))
-    assert "GATED_OFF_DEFAULT_OK 48" in p.stdout, (
-        "workload did not complete under the gated-off fallback.\nstdout=%s" % p.stdout)
-    # The GATED-OFF warning is the proof that the per-g block (Group A) was NOT
-    # entered: the flag was requested but the resolve interlock denied it.
-    # It only applies on an interpreter MISSING a migration patch -- with both
-    # present (src/patches/) the request is supported, so the interlock enables
-    # the migratable block and prints nothing.  The no-crash + work-completes
-    # assertions above hold either way and are the real invariant.
-    if not stackweave.migration_available():
-        assert "GATED OFF" in p.stderr, (
-            "expected the migratable-mode GATED-OFF warning (proves Group A stayed "
-            "unreachable without the ack); stderr=%s" % p.stderr[-1500:])
 
 
 if __name__ == "__main__":

@@ -6,28 +6,30 @@ advertise the cp3NNt wheel tag -- so setup.py gates the two commands pip drives
 migration-patch witnesses.  `setup.py build_ext --inplace` stays ungated; the
 rest of the suite runs on the extension it builds, so it covers that half.
 
-The refusal test is skipped on a patched interpreter: there the gate passes and
-the command would go on to compile the whole extension.
+The refusal test is skipped when the interpreter's installed pyconfig.h defines
+both patch features: there the gate passes and the command would go on to
+compile the whole extension.  The flag env vars are cleared so the interpreter
+alone decides.
 """
 import os
 import pathlib
 import subprocess
 import sys
+import sysconfig
 
 import pytest
-
-import stackweave
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 needs_unpatched = pytest.mark.skipif(
-    stackweave.migration_available(),
+    all(sysconfig.get_config_var(f) for f in ("Py_TSTATE_ALLOC_HOME", "Py_TSTATE_EXEC_HOME")),
     reason="patched interpreter: the gate passes and the build would compile")
 
 
 def _setup(tmp_path, *args):
     env = dict(os.environ)
-    env.pop("STACKWEAVE_ALLOW_STOCK_CPYTHON", None)
+    for k in ("STACKWEAVE_ALLOW_STOCK_CPYTHON", "STACKWEAVE_EXTRA_CFLAGS", "CFLAGS", "CPPFLAGS"):
+        env.pop(k, None)
     return subprocess.run(
         [sys.executable, "setup.py", *args, "--dist-dir", str(tmp_path / "dist")],
         cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)

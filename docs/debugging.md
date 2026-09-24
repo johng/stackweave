@@ -86,16 +86,12 @@ loops) and old `sleep` fibers (tickers), so narrow `states` / raise
 
 ### When is the Python stack available?
 
-* **Single-thread scheduler (`stackweave.aio`, the common case):** the full stack
-  of any parked fiber is reconstructed.  asyncio Tasks also expose
+* **Any parked fiber**, under the single-thread scheduler (`stackweave.aio`)
+  and under M:N alike: the full stack is reconstructed (under M:N each fiber
+  owns a thread-state that is claimed for the walk).  asyncio Tasks also expose
   their own stack via the stock `Task.get_stack()`; stackweave fills in the *raw*
   fibers (channel ops, the netpoll pump, accept loops) that
   `asyncio.all_tasks()` never sees.
-* **Default M:N scheduler:** a parked fiber can be resumed by its hub at
-  any instant, so its stack is withheld (there is no safe way to freeze it);
-  the structural fields above still tell the story.  Run with
-  `STACKWEAVE_PER_G_TSTATE=1` to get full stacks under M:N (each fiber then
-  owns a thread-state that can be claimed for the walk).
 * The **currently-running** fiber has no *saved* stack — use the normal
   `traceback` / `sys._getframe` for your own frames.
 

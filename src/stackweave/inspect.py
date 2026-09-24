@@ -30,14 +30,12 @@ Each fiber dict has:
     owner       int        owning OS-thread scheduler (group fibers by it)
 
 Notes on the Python stack (``stack`` / ``stacks=True``):
-  * Under the single-thread scheduler -- which is what ``stackweave.aio`` uses --
-    the full stack of any parked fiber is reconstructed.  asyncio
+  * The full stack of any parked fiber is reconstructed, under both the
+    single-thread scheduler (which is what ``stackweave.aio`` uses) and M:N
+    (each fiber owns a thread-state that is claimed for the walk).  asyncio
     Tasks additionally expose their own stack via ``Task.get_stack()``;
     this fills in the raw fibers (channel ops, the netpoll pump,
     accept loops) that ``asyncio.all_tasks()`` never sees.
-  * Under the default M:N scheduler a parked fiber can be resumed by
-    its hub at any instant, so its stack is withheld (there is no safe way
-    to freeze it) -- the structural fields above still tell the story.
   * The currently-running fiber has no *saved* stack; use the normal
     ``traceback`` / ``sys._getframe`` for your own frames.
 """
@@ -101,9 +99,8 @@ def set_deadlock_mode(mode):
         "warn"   print the fiber dump (default; non-fatal)
         "raise"  raise RuntimeError out of run()
 
-    Also settable via env STACKWEAVE_DEADLOCK=off|warn|raise.  aio's clean loop
-    shutdown is excluded, so this won't fire on a normal aio teardown with
-    pending background tasks."""
+    aio's clean loop shutdown is excluded, so this won't fire on a normal aio
+    teardown with pending background tasks."""
     if isinstance(mode, str):
         mode = DEADLOCK_MODES[mode]
     _core.set_deadlock_mode(int(mode))
