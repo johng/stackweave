@@ -96,8 +96,6 @@ def run_child(body, extra_env=None, timeout=60, panic_silent=True):
     env = dict(os.environ)
     env["PYTHON_GIL"] = "0"
     env["PYTHONPATH"] = _SRC + os.pathsep + env.get("PYTHONPATH", "")
-    env.pop("STACKWEAVE_CRASH", None)
-    env.pop("STACKWEAVE_CRASH_FILE", None)
     if panic_silent:
         # Keep fiber-panic noise off stderr unless a test wants it.
         env.setdefault("STACKWEAVE_GOROUTINE_PANIC", "silent")

@@ -337,7 +337,7 @@ def arm_diagnostics():
     # core + die cleanly, which is what we want for autonomous restarts.  The
     # Python stack is still recoverable from the core via `py-bt` in gdb.
     stackweave_c.set_introspect_timestamps(True)
-    level = os.environ.get("STACKWEAVE_CRASH", "goroutine,backtrace")
+    level = os.environ.get("DEMO_CRASH_LEVEL", "goroutine,backtrace")
     stackweave_c.install_crash_handler(level, CRASH_REPORT)
     stackweave_c.install_traceback_signal()        # kill -QUIT -> goroutine dump
     print("[site] diagnostics armed (crash handler={}, level={}, traceback signal=SIGQUIT)".format(

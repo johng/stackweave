@@ -77,10 +77,8 @@ requires_strace = pytest.mark.skipif(
 
 
 def _clean_env():
-    """A child env with the GIL off and no inherited STACKWEAVE_CRASH* skew."""
+    """A child env with the GIL off and no inherited STACKWEAVE_CRASH_WAIT_SECS skew."""
     env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
-    env.pop("STACKWEAVE_CRASH", None)
-    env.pop("STACKWEAVE_CRASH_FILE", None)
     env.pop("STACKWEAVE_CRASH_WAIT_SECS", None)
     return env
 

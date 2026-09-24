@@ -158,7 +158,6 @@ lock-free atomic reads, so `hubs()` is cheap enough to poll from a watchdog.
 
 ```python
 gi.install_dump_signal()     # SIGQUIT -> fiber dump on stderr
-# or set env STACKWEAVE_TRACEBACK=1 before import
 ```
 
 This installs a **raw C** handler, so the dump fires even when the
@@ -188,7 +187,6 @@ The crash reporter turns it into a classified dump:
 
 ```python
 gi.install_crash_handler()       # or "all" / "wait" / "gdb" / ...
-# or set env STACKWEAVE_CRASH=on (auto-installs at import — every crash dumps)
 ```
 
 On a fault it maps the faulting address onto the guard pages and prints, e.g.:
@@ -210,7 +208,7 @@ on that fiber; anything else (main/hub stack, heap, a stray pointer) is
 flagged as a non-fiber fault.  After the dump it **chains to the previous
 handler** so a core dump / correct exit code still follow.
 
-`level` (or the `STACKWEAVE_CRASH` env value) selects behaviour, comma-separated:
+`level` selects behaviour, comma-separated:
 
 | level        | effect                                                           |
 |--------------|------------------------------------------------------------------|
@@ -222,8 +220,8 @@ handler** so a core dump / correct exit code still follow.
 | `gdb`        | fork+exec `gdb -batch -ex 'thread apply all bt full'` on self    |
 | `off`        | uninstall                                                        |
 
-`STACKWEAVE_CRASH_FILE` (or `install_crash_handler(file=...)`) appends the report
-to a file as well as stderr.  Call `install_crash_handler()` **before** starting
+`install_crash_handler(file=...)` appends the report to a file as well as
+stderr.  Call `install_crash_handler()` **before** starting
 the runtime so the scheduler hubs are armed as they spawn.
 
 It survives the very overflow it reports because every stackweave OS thread (the

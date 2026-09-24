@@ -28,12 +28,10 @@ the function up after ``patch()``.  A truly foreign C thread, or Python that
 captured ``sys._current_frames`` BEFORE ``patch()``, bypasses the wrapper (same
 caveat as the stdlib lock singletons).  And the wrapper's own immediate reads are
 GRACE-covered, not synchronised -- the data race is fundamentally CPython's; the
-source fix is a CPython patch (see docs/dev/frame_uaf.md).  Disable with
-STACKWEAVE_SAFE_CURRENT_FRAMES=0.
+source fix is a CPython patch (see docs/dev/frame_uaf.md).
 
 House style: .format(), no f-strings.
 """
-import os
 import sys
 
 _orig_current_frames = None
@@ -106,15 +104,9 @@ def safe_current_frames():
     return out
 
 
-def enabled():
-    return os.environ.get("STACKWEAVE_SAFE_CURRENT_FRAMES", "1") not in ("0", "", "off")
-
-
 def install():
     """Rebind sys._current_frames to the snapshotting wrapper.  Idempotent."""
     global _orig_current_frames
-    if not enabled():
-        return
     if _orig_current_frames is not None:
         return
     cf = getattr(sys, "_current_frames", None)

@@ -82,14 +82,11 @@ static PyMethodDef module_methods[] = {
      "stackweave.fiber_fast (stackweave.fiber is the full Python default).  A bare\n"
      "Go-style fiber_fast(callable) under M:N spawns straight through the C core\n"
      "(no Python wrapper frame, and NO grow-down auto-sizer -- fixed default\n"
-     "stack); rich calls (extra args, stack_size=, single-thread, auto mode)\n"
-     "delegate to the Python wrapper registered via _fiber_register."},
+     "stack); rich calls (extra args, stack_size=, single-thread) delegate to\n"
+     "the Python wrapper registered via _fiber_register."},
     {"_fiber_register", m_fiber_register, METH_O,
      "internal: register the Python full-feature fiber wrapper that fiber_fast\n"
      "delegates rich calls to."},
-    {"_fiber_force_full", m_fiber_force_full, METH_O,
-     "internal: force fiber_fast to always delegate to the Python wrapper (set\n"
-     "when auto per-core mode is on, so the per-core resolve is not skipped)."},
     {"fiber_grow",     (PyCFunction)m_fiber_grow, METH_FASTCALL | METH_KEYWORDS,
      "fiber_grow(callable): the default stackweave.fiber entry.  Does the grow-down\n"
      "auto-sizer, but handles the FROZEN case (learned size) in C with no Python\n"
@@ -404,8 +401,7 @@ static PyMethodDef module_methods[] = {
      "install_traceback_signal(signum=SIGQUIT) -> int.  Install a RAW C "
      "handler that writes the fiber dump to stderr -- Go's GOTRACEBACK.  "
      "On POSIX it's `kill -QUIT` (a signal handler that works even when the "
-     "interpreter is wedged, unlike a Python signal handler).  Also via "
-     "STACKWEAVE_TRACEBACK=1."},
+     "interpreter is wedged, unlike a Python signal handler)."},
     {"_diag_flags", m_diag_flags, METH_NOARGS,
      "_diag_flags() -> int.  Current STACKWEAVE_DEBUG flag mask."},
     {"_datastack_sweep_stats", m_datastack_sweep_stats, METH_NOARGS,
@@ -420,13 +416,21 @@ static PyMethodDef module_methods[] = {
      "(fiber stack overflow vs wild pointer), dumps the live-fiber "
      "registry, and chains to the default handler so a core / Python traceback "
      "still follows.  level: 'on'|'all'|'backtrace'|'pystack'|'wait'|'gdb' "
-     "(comma-separated; default from STACKWEAVE_CRASH env, else fiber dump).  "
+     "(comma-separated; default: the fiber dump).  "
      "file: also append the report there.  Returns the flag bitmask installed."},
     {"uninstall_crash_handler", m_uninstall_crash_handler, METH_NOARGS,
      "uninstall_crash_handler() -> None.  Restore the previous signal "
      "dispositions."},
     {"crash_handler_installed", m_crash_handler_installed, METH_NOARGS,
      "crash_handler_installed() -> bool."},
+    {"start_watchdog", m_start_watchdog, METH_O,
+     "start_watchdog(secs) -> None.  Start the self-hang watchdog: a detached "
+     "native thread that writes a hang report to stderr (build + runtime "
+     "snapshot and flight recorder; no abort) when no fiber has completed for "
+     "`secs` seconds while work is outstanding.  The fiber dump and the "
+     "report-file copy follow install_crash_handler's level/file, so install "
+     "that first to get them.  Idempotent (a second call keeps the first "
+     "`secs`).  ValueError if secs <= 0.  POSIX only."},
     {"crash_thread_arm", m_crash_thread_arm, METH_NOARGS,
      "crash_thread_arm() -> None.  Arm the calling OS thread's sigaltstack so "
      "the crash handler survives a stack overflow on this thread (done "
@@ -490,18 +494,6 @@ PyMODINIT_FUNC PyInit_stackweave_c(void)
     runloom_diag_init();          /* parses RUNLOOM_DEBUG once; cheap; idempotent */
     runloom_introspect_init();    /* fiber registry lock */
     runloom_coro_pre_swap = runloom_coro_rearm_stackprot;  /* 3.14: re-arm fiber C-stack limit on every resume */
-    {
-        /* GOTRACEBACK-style fiber dump on SIGQUIT. */
-        const char *tb_env = getenv("STACKWEAVE_TRACEBACK");
-        if (tb_env && tb_env[0] && tb_env[0] != '0') {
-            struct sigaction sa;
-            memset(&sa, 0, sizeof sa);
-            sa.sa_handler = runloom_traceback_signal_handler;
-            sigemptyset(&sa.sa_mask);
-            sa.sa_flags = SA_RESTART;
-            (void)sigaction(SIGQUIT, &sa, NULL);
-        }
-    }
     if (PyType_Ready(&RunloomCoroType) < 0) return NULL;
     /* Set by hand rather than in the positional initializer, whose long run
      * of zero slots is easy to miscount: identity-free equality/hash so a

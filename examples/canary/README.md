@@ -60,7 +60,8 @@ which is exactly what the weekly ledger sampling shows.
 The R6 acceptance is **21 consecutive days green** before any "production-ready"
 claim in the docs.  Run the service under systemd (see below), sample it into
 the soak ledger weekly, and only restart it for a deliberate upgrade (note each
-in the ledger).  Any wedge trips the R5 watchdog artifact.
+in the ledger).  Any wedge trips the R5 watchdog artifact (`server.py` arms it
+with `start_watchdog(120)`).
 
 ## Run continuously (systemd --user)
 

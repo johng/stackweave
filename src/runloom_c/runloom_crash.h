@@ -59,8 +59,9 @@ int  runloom_crash_installed(void);
 /* R5 self-hang watchdog: start a detached thread that emits a hang artifact
  * (build+stats snapshot + fiber dump + flight recorder, no abort) if no fiber
  * completes for `secs` while work is outstanding.  secs<=0 disables.
- * Idempotent.  Auto-started from RUNLOOM_WATCHDOG=<secs> at crash install. */
-void runloom_watchdog_start(int secs);
+ * Idempotent.  The fiber dump and the report-file copy follow the level/file
+ * of runloom_crash_install.  Returns 0, or -1 with errno set.  POSIX only. */
+int  runloom_watchdog_start(int secs);
 
 /* Per-thread sigaltstack arm / disarm.  Idempotent; both no-op unless the
  * handler is installed.  Wired into runloom_coro_thread_init / _fini and the
@@ -73,9 +74,9 @@ void runloom_crash_thread_disarm(void);
  * runloom_after_fork_child. */
 void runloom_crash_reset_after_fork(void);
 
-/* Parse a RUNLOOM_CRASH token string ("on"/"all"/"backtrace"/"pystack"/"wait"/
- * "gdb"/"off"/...; comma- or space-separated) into a flags bitmask.  Returns
- * the bitmask, or -1 for "off"/"0". */
+/* Parse an install_crash_handler level string ("on"/"all"/"backtrace"/
+ * "pystack"/"wait"/"gdb"/"off"/...; comma- or space-separated) into a flags
+ * bitmask.  Returns the bitmask, or -1 for "off"/"0". */
 int  runloom_crash_parse_flags(const char *s);
 
 /* Test-only: overflow the current C stack via unbounded real-C recursion

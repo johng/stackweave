@@ -17,8 +17,6 @@ import threading
 import time
 import stackweave_c
 
-from . import _hot  # @stackweave.hot + auto per-core scaling (stdlib-only, no cycle)
-
 
 _prewarmed = False
 
@@ -57,7 +55,7 @@ _prewarmed = False
 # now-smaller stack -- lands on the PROT_NONE guard page as a clean crash (a
 # classified overflow, never silent corruption), and re-learns next process.
 # Pin an exact size with stackweave.fiber(fn, stack_size=N) to opt a function out
-# entirely; disable globally with STACKWEAVE_GROW_DOWN=0 or set_grow_down(False).
+# entirely; disable globally with set_grow_down(False).
 #
 # Free-threaded note: the learned size lives in a 2-element list on fn.__dict__,
 # read/written under free-threaded CPython's per-object locks.  Concurrent
@@ -69,10 +67,7 @@ GROW_DOWN_SAMPLES = 64               # measure this many runs of a function, the
 GROW_DOWN_MARGIN = 4                 # reserve next_pow2(measured_hwm * MARGIN)
 GROW_DOWN_MIN = 16 * 1024            # never reserve below this (matches C MIN_STACK_SIZE)
 
-grow_down_active = (
-    os.environ.get("STACKWEAVE_GROW_DOWN", "").strip().lower()
-    not in ("0", "off", "false", "no")
-)
+grow_down_active = True
 
 
 def set_grow_down(enabled=True):
@@ -81,8 +76,7 @@ def set_grow_down(enabled=True):
     On by default, and active under M:N scheduling (run(n>1)) only -- single-
     thread run(1) always uses the fixed default stack.  When off, stackweave.fiber()
     reserves the fixed default stack for every fiber (no per-function
-    learning).  Also settable at import via the STACKWEAVE_GROW_DOWN=0 environment
-    variable.  Per-call ``stack_size=`` pins always win regardless of this
+    learning).  Per-call ``stack_size=`` pins always win regardless of this
     setting."""
     global grow_down_active
     grow_down_active = bool(enabled)
@@ -181,15 +175,14 @@ def _tlbc_reexec_if_needed():
     greenlet PR #511 for 3.15.)  stackweave_c now ships the fix: a GC-tracked "frames
     anchor" (module_gcframes.c.inc) walks the fiber registry under stop-the-world
     and visits every parked chain, so deferred referents are credited and TLBC is
-    safe.  See stackweave_c.gc_frames_active and STACKWEAVE_GC_FRAMES.
+    safe.  See stackweave_c.gc_frames_active.
 
-    Interlock: keep TLBC ON whenever the anchor is active (the default on FT 3.14+).
+    Interlock: keep TLBC ON whenever the anchor is active (the norm on FT 3.14+).
     Re-exec with PYTHON_TLBC=0 -- the pre-anchor workaround -- ONLY when the anchor
-    is inactive: STACKWEAVE_GC_FRAMES=0, an anchor init failure, STACKWEAVE_GREG_OFF
-    (which would blind its registry walk), or a build where the fix compiled out.
+    is inactive: an anchor init failure, or a build where the fix compiled out.
     That keeps the crashy "TLBC on + no parked-frame visibility"
     combination unreachable.  Opt out of TLBC entirely with PYTHON_TLBC=0 / -X
-    tlbc=0; force TLBC on regardless with STACKWEAVE_TLBC=1 (dev/debug only).
+    tlbc=0.
 
     CAVEAT -- greenlet coexistence: greenlet's own suspended-frame GC fix is
     3.15-only, so a process mixing greenlet with stackweave on 3.14t STILL needs
@@ -197,8 +190,6 @@ def _tlbc_reexec_if_needed():
     tests/test_greenlet_interop.py, which pins PYTHON_TLBC=0 for that reason."""
     if gil_enabled():
         return                              # GIL on -> no free-threaded TLBC
-    if os.environ.get("STACKWEAVE_TLBC") == "1":
-        return                              # explicit opt-in: keep TLBC on
     if os.environ.get("STACKWEAVE_TLBC_REEXEC") == "1":
         return                              # already re-exec'd (loop guard)
     if (os.environ.get("PYTHON_TLBC") == "0"
@@ -221,8 +212,7 @@ def _tlbc_reexec_if_needed():
     argv = list(getattr(sys, "orig_argv", None) or ([sys.executable] + sys.argv))
     sys.stderr.write(
         "[stackweave] free-threaded 3.14 with the GC frames anchor INACTIVE -- re-exec "
-        "with PYTHON_TLBC=0 to avoid the parked-frame deferred-stackref SIGSEGV "
-        "(enable the anchor by unsetting STACKWEAVE_GC_FRAMES/STACKWEAVE_GREG_OFF)\n")
+        "with PYTHON_TLBC=0 to avoid the parked-frame deferred-stackref SIGSEGV\n")
     sys.stderr.flush()
     try:
         os.execv(argv[0], argv)
@@ -340,17 +330,9 @@ def _fiber_full(callable_, *args, **kwargs):
     grow-down case (a callable's learned stack size, the steady state) in C with
     no Python frame and delegates back HERE only for the sampling phase (first
     GROW_DOWN_SAMPLES spawns of a callable, which must wrap + measure), rich calls
-    (args / stack_size= / single-thread / auto-mode), and non-plain-function
-    callables.  ``stackweave.fiber_fast`` is the separate raw-throughput entry that
+    (args / stack_size= / single-thread), and non-plain-function callables.  ``stackweave.fiber_fast`` is the separate raw-throughput entry that
     bypasses grow-down entirely (fixed default stack).
     """
-    # Auto per-core scaling (optimize("throughput")): if this handler has been
-    # spawned enough to be worth it, swap in its per-core copy.  No-op (one
-    # `is None` check) unless auto mode is on.  Done on the bare callable, before
-    # the arg-binding wrapper below, so it keys on YOUR function's code.
-    if _hot._AUTO is not None:
-        callable_ = _hot._AUTO.resolve(callable_)
-
     # stack_size= is OUR keyword (the per-fiber C stack), not an argument
     # for the target -- pop it before binding args so it pins the fiber's
     # stack instead of being forwarded into the call.  0 = use the default /
@@ -401,7 +383,7 @@ def _fiber_full(callable_, *args, **kwargs):
 # stackweave.fiber is bound to the C `fiber_grow`: the grow-down auto-sizer with its
 # FROZEN case (a callable's learned stack size, the steady state) handled in C
 # with no Python frame.  fiber_grow delegates the sampling phase + rich/single-
-# thread/auto calls back to `_fiber_full` (the full-feature wrapper above), and
+# thread calls back to `_fiber_full` (the full-feature wrapper above), and
 # reads the learned size from fn.__dict__ using the (key, samples) registered
 # here.  stackweave.fiber_fast is the raw-throughput entry that skips grow-down.
 stackweave_c._fiber_register(_fiber_full)
@@ -469,7 +451,7 @@ _mn_lock = threading.Lock()
 _mn_active = False
 
 
-def run(n, main_fn=None, offload_hubs=-1):
+def run(n, main_fn=None, offload_hubs=0):
     """Run the scheduler on n OS-thread hubs until every fiber finishes.
 
     The one and only entry point:
@@ -493,9 +475,7 @@ def run(n, main_fn=None, offload_hubs=-1):
     offload_hubs reserves that many EXTRA hubs -- added to n, never carved out
     of it -- on which a blocking call may run as an ordinary fiber via
     stackweave_c.offload_fiber, without stranding the fibers woken on a general
-    hub.  -1 (the default) consults STACKWEAVE_OFFLOAD_HUBS; an explicit value
-    overrides it, so code that KNOWS it makes blocking calls can ask for them
-    itself rather than requiring whoever launches the process to know.
+    hub.  The default is 0 (none).
 
     Total OS threads become n + offload_hubs.  That can exceed the core count,
     which is fine here: an offload hub is blocked essentially all of the time
@@ -507,12 +487,6 @@ def run(n, main_fn=None, offload_hubs=-1):
     # CPython thread-local-bytecode bug SIGSEGVs under stackweave's stackful many-hub
     # execution -- see _tlbc_reexec_if_needed).  No-op elsewhere / once re-exec'd.
     _tlbc_reexec_if_needed()
-    _hot._install_auto()  # one-time: turn on auto per-core scaling iff its env is set
-    if _hot._AUTO is not None:
-        # auto mode resolves a per-core handler copy per spawn -- a direct
-        # fiber_fast caller must delegate to `fiber` so that resolve is not
-        # skipped (stackweave.fiber already routes here; this covers fiber_fast).
-        stackweave_c._fiber_force_full(True)
     if isinstance(n, bool) or not isinstance(n, int) or n < 1:
         raise ValueError(
             "run(n, main_fn): n must be an int >= 1 (got {0!r})".format(n))
