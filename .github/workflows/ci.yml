@@ -11,7 +11,9 @@
 #             interpreter input changed (build=true), else DOWNLOADED from the
 #             newest matching Release -- then run the stackweave extension + suite
 #             against it.  Provisioning and validation are TIED in one job: one
-#             interpreter, validated once.  Skipped for a docs-only change.
+#             interpreter, validated once.  Skipped ONLY when every changed
+#             file is on the known-inert list (docs, markdown, ...); anything
+#             else runs it, so ci-success cannot go green on an untested change.
 #             The from-source path is CACHED on an exact key covering every
 #             build input, so an unrelated change no longer recompiles CPython;
 #             see .github/actions/provide-cpython for the key and its scope.
@@ -53,15 +55,16 @@ jobs:
   #   build   = the change touches the interpreter OR the build/CI tooling
   #             (src/patches, all of tools/ci, the composite actions, this
   #             workflow) -> compile CPython from source.
-  #   stackweave = a pure stackweave Python-side change -> reuse the newest Release.
-  #   run     = build OR stackweave (else skip; e.g. a docs-only change).
+  #   code    = ANY changed file outside the known-inert list -> reuse the
+  #             newest Release and run the suite.
+  #   run     = build OR code (else skip; e.g. a docs-only change).
   # workflow_dispatch forces build=true (you dispatched it to (re)build).
   changes:
     name: classify (build vs reuse)
     runs-on: ubuntu-latest
     outputs:
       build: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.f.outputs.build }}
-      run: ${{ github.event_name == 'workflow_dispatch' && 'true' || (steps.f.outputs.build == 'true' || steps.f.outputs.stackweave == 'true') }}
+      run: ${{ github.event_name == 'workflow_dispatch' && 'true' || (steps.f.outputs.build == 'true' || steps.c.outputs.code == 'true') }}
       # Deliberately NARROWER than `build`.  Rebuilding to check that a CI script
       # edit still works is cheap and worth doing; PUBLISHING a new interpreter
       # for it is not -- the binaries would be byte-identical to the last one.
@@ -96,12 +99,41 @@ jobs:
               - 'tools/ci/versions.env'
               - 'tools/ci/build_patched_cpython.sh'
               - 'tools/ci/lib.sh'
-            stackweave:
-              - 'src/stackweave/**'
-              - 'src/runloom_c/**'
-              - 'tests/**'
-              - 'setup.py'
-              - 'tools/lincheck/**'
+      # FAIL-SAFE, not fail-open.  This used to be an allowlist of paths that
+      # DO trigger the suite (src/stackweave, src/runloom_c, tests, ...), and it
+      # was missing inputs the suite actually runs: scripts/check_all.sh (the
+      # mn/replay/ctest phases), tools/mn_stress.py, tools/mn_controlled, and
+      # the tools/ trees that ~20 test files load (dst, lifefuzz, introspect,
+      # snowboard, soak, ...).  A change to any of those skipped `test` and
+      # ci-success reported green on nothing.  A required check must not be
+      # able to do that, so the rule is inverted: run unless EVERY changed file
+      # is known to be inert.  A new or forgotten path therefore runs the suite
+      # (costs minutes) instead of silently skipping it (costs a missed bug).
+      #
+      # `every` = a file counts only if it matches ALL patterns, i.e. it is
+      # under `**` and under none of the negations.  It is a separate step
+      # because the quantifier is per-step and the filters above need `some`.
+      # Only add a negation for a path nothing in the cheap suite reads.
+      - id: c
+        if: github.event_name != 'workflow_dispatch'
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d  # v4.0.3
+        with:
+          predicate-quantifier: every
+          filters: |
+            code:
+              - '**'
+              - '!docs/**'
+              - '!**/*.md'
+              - '!LICENSE'
+              - '!mkdocs.yml'
+              - '!.gitignore'
+              - '!examples/**'
+              - '!benchmark/**'
+              # Dispatch-only instruments: they never run on push/PR, so an edit
+              # to one cannot change this workflow's result.
+              - '!.github/workflows/aio-soak.yml'
+              - '!.github/workflows/mac-loop.yml'
+              - '!.github/workflows/macos-debug.yml'
 
   # ---- zero-fuzz patch-apply gate (only when a from-source build will run) ----
   # A fast (~1 min) early signal before the ~15-min build.  `test` does NOT
