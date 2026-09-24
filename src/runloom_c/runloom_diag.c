@@ -2,15 +2,12 @@
  * lock-free per-thread lifecycle event rings, self_check invariant
  * pass.  See runloom_diag.h for the contract. */
 
-#if !defined(_WIN32)
-#  define _POSIX_C_SOURCE 200809L
-#endif
+#define _POSIX_C_SOURCE 200809L
 
 #include "runloom_diag.h"
 #include "plat.h"
 #include "plat_compat.h"
 #include "runloom_lockrank.h"
-#include "plat_atomic.h"
 #include "rl_handle.h"
 #include "runloom_kcsan.h"
 
@@ -18,11 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
-#if defined(_WIN32)
-#  include <io.h>
-#else
-#  include <unistd.h>
-#endif
+#include <unistd.h>
 
 /* ---------------------------------------------------------------- *
  *  Flag parsing                                                    *
@@ -205,16 +198,12 @@ static const char *op_name(unsigned int op)
 static void emit(int fd, const char *buf, size_t len)
 {
     if (fd < 0) { (void)fwrite(buf, 1, len, stderr); return; }
-#if defined(_WIN32)
-    (void)_write(fd, buf, (unsigned)len);
-#else
     ssize_t off = 0;
     while ((size_t)off < len) {
         ssize_t w = write(fd, buf + off, len - off);
         if (w <= 0) break;
         off += w;
     }
-#endif
 }
 
 void runloom_diag_dump(int fd)

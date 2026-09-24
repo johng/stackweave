@@ -90,7 +90,7 @@ queue.  `stackweave.run(1)` starts the scheduler loop.  Each iteration:
    into the fiber struct, swap back to the scheduler.
 5. Loop.
 
-I/O parks the fiber in the netpoll backend (epoll/kqueue/IOCP);
+I/O parks the fiber in the netpoll backend (epoll/kqueue);
 when the fd becomes ready, the fiber returns to the ready FIFO.
 
 The result is that *every concurrent connection costs one stack + one

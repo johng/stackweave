@@ -226,7 +226,7 @@ def main():
     L.append("[^bench]: Full data, methodology, per-connection ladder curves, the assumed "
              "constraints, every benchmark program's source, and the zero-PyObject Cython "
              "disassembly proof: [`%s`](%s). Cross-platform backend syscall profiles "
-             "(Linux/macOS/Windows) are linked from there." % (REPORT, REPORT))
+             "(Linux/macOS) are linked from there." % (REPORT, REPORT))
     L.append("")
 
     out = os.path.join(BENCH, "README_SECTIONS.md")

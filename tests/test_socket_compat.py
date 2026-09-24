@@ -19,7 +19,6 @@ import array
 import errno
 import io
 import os
-import platform
 import socket
 import tempfile
 import time
@@ -29,7 +28,6 @@ import stackweave
 import stackweave.monkey
 import stackweave_c
 
-_IS_WINDOWS = platform.system() == "Windows"
 _HAVE_MSG = hasattr(socket.socket, "sendmsg") and hasattr(socket.socket, "recvmsg")
 
 

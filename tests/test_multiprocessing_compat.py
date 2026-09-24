@@ -37,14 +37,12 @@ pipe round-trip patterns in libuv test/test-pipe-*.c.
 import multiprocessing            # imported before patch() on purpose
 import multiprocessing.connection
 import os
-import platform
 import unittest
 
 import stackweave
 import stackweave.monkey
 import stackweave_c
 
-_IS_WINDOWS = platform.system() == "Windows"
 _Connection = multiprocessing.connection.Connection
 
 
@@ -72,7 +70,6 @@ def tearDownModule():
     stackweave.monkey.unpatch()
 
 
-@unittest.skipIf(_IS_WINDOWS, "POSIX Connection (os.read) path")
 class TestDefaultArgRebind(unittest.TestCase):
     """The import-before-patch fix: Connection._recv/_send/_close must end up
     bound to the cooperative os.read/os.write/os.close after patch()."""
@@ -94,7 +91,6 @@ class TestDefaultArgRebind(unittest.TestCase):
         self.assertIs(close.__defaults__[0], os.close)
 
 
-@unittest.skipIf(_IS_WINDOWS, "POSIX Connection (os.read) path")
 class TestConnectionInProcess(unittest.TestCase):
     """A Pipe's two ends, driven by two fibers in one process.  Exercises
     the real Connection.recv/send/poll code path with no fork."""
@@ -192,7 +188,6 @@ class TestConnectionInProcess(unittest.TestCase):
         self.assertEqual(data, b"\x00\x01\x02" * 10000)
 
 
-@unittest.skipIf(_IS_WINDOWS, "POSIX SemLock path")
 class TestSyncPrimitives(unittest.TestCase):
     """multiprocessing.Lock/Semaphore are POSIX semaphores (sem_wait blocks the
     OS thread).  The cooperative SemLock.acquire does sem_trywait + backoff, so

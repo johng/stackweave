@@ -28,7 +28,7 @@ class CoEvent(object):
     # fds; a million waiters cost ~1 shared anchor fd, not ~2 each), woken by
     # g.wake() (set) or, for a timed wait, the scheduler's timer heap at the
     # deadline (the same parked_safe CAS, exactly-once).  Only a FOREIGN-thread
-    # wait keeps an OS pipe/socketpair fd (park() can't serve a non-fiber),
+    # wait keeps an OS pipe fd (park() can't serve a non-fiber),
     # woken by os.write.  set() -> _unpark_all wakes both kinds; the run-alive
     # anchor + g.wake() make a foreign SETTER race-free for the in-memory waiters.
     #
@@ -331,9 +331,8 @@ class CoSemaphore(object):
                 if timeout is not None and time.monotonic() - t0 >= timeout:
                     return False
                 _raw_time_sleep(0.0001)
-        # Must park.  Build the parker with the guard RELEASED first: _Parker()
-        # can YIELD (on Windows the socketpair wake-fd handshake runs through
-        # the cooperative socket path and parks the fiber).  Re-acquire +
+        # Must park.  Build the parker with the guard RELEASED first (it does
+        # pool/pipe syscalls; keep the guard to O(1) bookkeeping).  Re-acquire +
         # re-check afterward: a permit may have appeared while we built it, or
         # cancel_all() may have fired (TOCTOU: fiber was between guard-release
         # and guard-re-acquire when cancel_all snapshotted the queue and missed it;

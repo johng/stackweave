@@ -51,7 +51,7 @@ PY = sys.executable
 # The single-thread offload only OFFLOADS (vs. running inline) on a backend
 # with a pump-wake primitive; epoll/kqueue have one.  Correctness holds on
 # every backend either way (inline still produces the right result).
-_PUMP_WAKE = rc.netpoll_backend() in ("epoll", "kqueue", "iocp-afd")
+_PUMP_WAKE = rc.netpoll_backend() in ("epoll", "kqueue")
 
 
 # ==========================================================================

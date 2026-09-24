@@ -27,12 +27,8 @@ import stackweave
 import stackweave.monkey
 import stackweave_c
 
-try:
-    import fcntl
-except ImportError:
-    fcntl = None
+import fcntl
 
-_IS_WINDOWS = platform.system() == "Windows"
 _IS_DARWIN = platform.system() == "Darwin"
 
 
@@ -67,7 +63,6 @@ def _tmpfile():
     return path
 
 
-@unittest.skipIf(fcntl is None, "no fcntl module")
 @unittest.skipUnless(hasattr(fcntl, "flock"), "no fcntl.flock")
 class TestFlock(unittest.TestCase):
     def setUp(self):
@@ -149,7 +144,6 @@ class TestFlock(unittest.TestCase):
         self.assertTrue(_drive(body))
 
 
-@unittest.skipIf(fcntl is None, "no fcntl module")
 @unittest.skipUnless(hasattr(fcntl, "lockf"), "no fcntl.lockf")
 class TestLockf(unittest.TestCase):
     def setUp(self):

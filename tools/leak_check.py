@@ -28,11 +28,11 @@ import stackweave_c
 
 
 def fd_count():
-    # Linux exposes open fds at /proc/self/fd; macOS/BSD at /dev/fd.  Windows has
-    # neither (the open-fd leak class doesn't map to a listable dir), so -1
-    # disables the fd half and leaves the object-population check.  base and end
-    # read the same source, so the transient dir-listing fd cancels out and the
-    # fd_tol=0 exact-balance semantics hold (verified: macOS /dev/fd lists stably).
+    # Linux exposes open fds at /proc/self/fd; macOS/BSD at /dev/fd.  If neither
+    # is listable, -1 disables the fd half and leaves the object-population
+    # check.  base and end read the same source, so the transient dir-listing fd
+    # cancels out and the fd_tol=0 exact-balance semantics hold (verified: macOS
+    # /dev/fd lists stably).
     for d in ("/proc/self/fd", "/dev/fd"):
         try:
             return len(os.listdir(d))

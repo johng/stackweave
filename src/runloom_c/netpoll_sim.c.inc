@@ -12,7 +12,7 @@
  *
  * There is NO vtable and NO new poller: the sim backend is one early-return at
  * the top of runloom_netpoll_pump (netpoll_pump.c.inc) that replaces the real
- * epoll_wait/kevent/WSAPoll block with this function.  EVERYTHING else on the
+ * epoll_wait/kevent/select block with this function.  EVERYTHING else on the
  * wait_fd path -- the park/commit FSM, the parker pools, the deadline heap, the
  * per-fd buckets, cancel, and M:N wake routing -- is inherited verbatim; only
  * the CLOCK the deadlines are measured against changes (netpoll_deadline_now_ns

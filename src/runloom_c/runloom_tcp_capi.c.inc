@@ -54,12 +54,8 @@ Py_ssize_t runloom_tcpconn_c_recv_into(PyObject *conn, void *buf, Py_ssize_t n)
 #endif
 
     for (;;) {
-#if defined(RUNLOOM_OS_WINDOWS)
-        long long r = (long long)recv((SOCKET)fd, (char *)buf, (int)n, 0);
-#else
         long long r = (long long)recv(fd, buf, (size_t)n, 0);
-#endif
-        RUNLOOM_IO_SWITCH(runloom_io_classify(RUNLOOM_IO_RECV, r, runloom_sock_errno())) {
+        RUNLOOM_IO_SWITCH(runloom_io_classify(RUNLOOM_IO_RECV, r, errno)) {
         case RUNLOOM_IO_READY:
         case RUNLOOM_IO_EOF:
             return (Py_ssize_t)r;        /* >0 data, or 0 = orderly EOF */
@@ -123,14 +119,9 @@ Py_ssize_t runloom_tcpconn_c_send_all(PyObject *conn, const void *buf, Py_ssize_
 #endif
 
     while (sent < n) {
-#if defined(RUNLOOM_OS_WINDOWS)
-        long long r = (long long)send((SOCKET)fd, (const char *)buf + sent,
-                                      (int)(n - sent), 0);
-#else
         long long r = (long long)send(fd, (const char *)buf + sent,
                                       (size_t)(n - sent), 0);
-#endif
-        RUNLOOM_IO_SWITCH(runloom_io_classify(RUNLOOM_IO_SEND, r, runloom_sock_errno())) {
+        RUNLOOM_IO_SWITCH(runloom_io_classify(RUNLOOM_IO_SEND, r, errno)) {
         case RUNLOOM_IO_PROGRESS:
             sent += (Py_ssize_t)r;
             continue;                     /* re-check sent < n */
@@ -176,12 +167,8 @@ Py_ssize_t runloom_tcp_c_fd_recv(int fd, void *buf, Py_ssize_t n)
     }
 #endif
     for (;;) {
-#if defined(RUNLOOM_OS_WINDOWS)
-        long long r = (long long)recv((SOCKET)fd, (char *)buf, (int)n, 0);
-#else
         long long r = (long long)recv(fd, buf, (size_t)n, 0);
-#endif
-        RUNLOOM_IO_SWITCH(runloom_io_classify(RUNLOOM_IO_RECV, r, runloom_sock_errno())) {
+        RUNLOOM_IO_SWITCH(runloom_io_classify(RUNLOOM_IO_RECV, r, errno)) {
         case RUNLOOM_IO_READY:
         case RUNLOOM_IO_EOF:
             return (Py_ssize_t)r;
@@ -228,14 +215,9 @@ Py_ssize_t runloom_tcp_c_fd_send_all(int fd, const void *buf, Py_ssize_t n)
     }
 #endif
     while (sent < n) {
-#if defined(RUNLOOM_OS_WINDOWS)
-        long long r = (long long)send((SOCKET)fd, (const char *)buf + sent,
-                                      (int)(n - sent), 0);
-#else
         long long r = (long long)send(fd, (const char *)buf + sent,
                                       (size_t)(n - sent), 0);
-#endif
-        RUNLOOM_IO_SWITCH(runloom_io_classify(RUNLOOM_IO_SEND, r, runloom_sock_errno())) {
+        RUNLOOM_IO_SWITCH(runloom_io_classify(RUNLOOM_IO_SEND, r, errno)) {
         case RUNLOOM_IO_PROGRESS:
             sent += (Py_ssize_t)r;
             continue;
@@ -264,11 +246,7 @@ Py_ssize_t runloom_tcp_c_fd_send_all(int fd, const void *buf, Py_ssize_t n)
 void runloom_tcp_c_fd_close(int fd)
 {
     runloom_netpoll_release_if_idle(fd);
-#if defined(RUNLOOM_OS_WINDOWS)
-    closesocket((SOCKET)fd);
-#else
     close(fd);
-#endif
 }
 
 /* The exported pointer table for the PyCapsule fallback. */

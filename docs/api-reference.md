@@ -80,9 +80,8 @@ Override the default and freeze calibration.  Clamped to
 #### `current_g_hwm() → int`
 
 The currently-running fiber's stack high-water-mark in bytes
-(page-granular, paint-free via `mincore`), or `0` outside a fiber or
-where the backend has no introspectable stack (Windows Fibers).  The read
-half of the function-bound grow-down auto-sizer.
+(page-granular, paint-free via `mincore`), or `0` outside a fiber.  The
+read half of the function-bound grow-down auto-sizer.
 
 #### `set_grow_down(enabled=True)` / `grow_down_enabled() → bool`
 
@@ -219,13 +218,11 @@ Pre-allocate `n` fiber stacks so the first `n` spawns skip mmap.
 
 #### `backend() → str`
 
-Active context-switch backend: `"fcontext-asm"`, `"fibers"`, or
-`"ucontext"`.
+Active context-switch backend: `"fcontext-asm"` or `"ucontext"`.
 
 #### `netpoll_backend() → str`
 
-Active netpoll: `"epoll"`, `"kqueue"`, `"wsapoll"`, `"iocp"`, or
-`"select"`.
+Active netpoll: `"epoll"`, `"kqueue"`, or `"select"`.
 
 #### `stats() → dict`
 
@@ -323,8 +320,7 @@ the fault against the per-fiber guard pages -- a fiber stack overflow is
 named and distinguished from a wild pointer -- and dumps the live-fiber
 registry, then chains to the default handler.  `level`:
 `on`/`all`/`backtrace`/`pystack`/`wait`/`gdb`/`off` (default from `STACKWEAVE_CRASH`).
-`file` also appends the report there.  POSIX has the rich path; Windows uses a
-Vectored Exception Handler.
+`file` also appends the report there.
 
 #### `inspect.enable_stack_advice(on=True)` / `stack_advice() → list[dict]` / `print_stack_advice(file=None)`
 

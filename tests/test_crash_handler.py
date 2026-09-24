@@ -17,15 +17,13 @@ import pytest
 import stackweave            # noqa: F401  (import side effects: registers fork handler)
 import stackweave_c
 
-POSIX = os.name == "posix"
 BACKEND = stackweave_c.backend()
-# The address->fiber guard-page mapping only exists on the POSIX stack
-# backends; Windows Fibers have no introspectable stack / guard page.
+# The address->fiber guard-page mapping exists on both stack backends.
 HAS_GUARD = BACKEND in ("fcontext-asm", "ucontext")
 
 requires_guard = pytest.mark.skipif(
-    not (POSIX and HAS_GUARD),
-    reason="crash classification needs a POSIX guard-page backend (got %s)" % BACKEND,
+    not HAS_GUARD,
+    reason="crash classification needs a guard-page backend (got %s)" % BACKEND,
 )
 
 # A fatal memory fault is SIGSEGV on Linux but SIGBUS on macOS arm64 -- a stack

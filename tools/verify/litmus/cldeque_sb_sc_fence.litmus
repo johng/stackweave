@@ -1,8 +1,7 @@
 C cldeque_sb_sc_fence
 (*
- * THE FIX: the patched plat_atomic.h injects a StoreLoad barrier on the owner's
- * SEQ_CST store of `bottom` (MemoryBarrier == __faststorefence on x64, modelled
- * here as a seq_cst thread fence after the store).  Now BOTH the owner and the
+ * THE FIX: a StoreLoad barrier on the owner's SEQ_CST store of `bottom`
+ * (modelled here as a seq_cst thread fence after the store).  Now BOTH the owner and the
  * thief have a StoreLoad fence between their store and their load, so the SB
  * outcome is forbidden under C11/RC11:
  *

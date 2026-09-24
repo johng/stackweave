@@ -1,17 +1,17 @@
 """Backend-agnostic netpoll readiness-conformance suite.
 
 These are the universal event-notification semantics that EVERY stackweave netpoll
-backend must satisfy -- epoll (Linux), kqueue (FreeBSD/macOS), and the three
-Windows backends (iocp-afd / wsapoll / select).  The scenarios are the
+backend must satisfy -- epoll (Linux), kqueue (FreeBSD/macOS), and the select
+fallback.  The scenarios are the
 distilled "standardized" set from the Linux kernel's own epoll selftest
 (tools/testing/selftests/filesystems/epoll/epoll_wakeup_test.c) and libkqueue's
 regression suite (read/write/EOF/timer): ready-before-park, park-then-ready,
 write readiness, R|W subset, deadline/timeout, peer-close EOF, re-arm after
 consume (the edge-triggered drop class), and many concurrent waiters.
 
-This is the "are we doing it right?" suite: run it on any OS, force any backend
-with STACKWEAVE_NETPOLL=epoll|kqueue|iocp|wsapoll|select, and the SAME assertions must
-hold.  Backend-portable on purpose -- it asserts BEHAVIOUR through real sockets
+This is the "are we doing it right?" suite: run it on any OS (or on a build
+made with STACKWEAVE_NETPOLL=select to exercise the select fallback), and the
+SAME assertions must hold.  Backend-portable on purpose -- it asserts BEHAVIOUR through real sockets
 (socketpair) + stackweave_c.wait_fd, never a backend-specific internal.
 
 wait_fd(fd, events, timeout_ms) contract (verified against netpoll.c):
@@ -130,7 +130,6 @@ class TestNetpollConformance(unittest.TestCase):
         a.close(); b.close()
 
     # -- deadline/timeout: a never-ready fd wakes via its deadline (==0) ------
-    #    (This is the scenario that caught the Windows wsapoll deadline hang.)
     def test_timeout_deadline_wakes(self):
         a, b = _pair()                     # nothing ever written to a
         out = []
@@ -210,8 +209,8 @@ class TestNetpollConformance(unittest.TestCase):
 
     # ======================================================================
     # Additional edge cases drawn from wepoll's + mio's + libuv's poll test
-    # suites -- the corners where the kqueue fd-reuse and iocp AFD-timeout
-    # bugs lived.  Same contract: identical result on every backend.
+    # suites -- the corners where the kqueue fd-reuse bugs lived.  Same
+    # contract: identical result on every backend.
     # ======================================================================
 
     # -- LEVEL readiness persists across a PARTIAL consume (wepoll level vs.
@@ -281,7 +280,7 @@ class TestNetpollConformance(unittest.TestCase):
 
     # -- BOTH directions ready at once: request R|W on a socket that is both
     #    readable (peer wrote) and writable.  A backend that COALESCES readiness
-    #    (epoll / iocp-afd / wsapoll / select) reports both at once (R|W);
+    #    (epoll / select) reports both at once (R|W);
     #    kqueue delivers EVFILT_READ and EVFILT_WRITE as SEPARATE events, so a
     #    combined wait legitimately returns just one direction (the caller gets
     #    the other on its next wait).  The universal contract is therefore: a

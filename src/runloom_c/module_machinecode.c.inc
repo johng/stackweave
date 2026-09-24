@@ -29,13 +29,9 @@
 #include <stdint.h>
 #include <string.h>
 
-#if defined(_WIN32)
-#include <windows.h>
-#else
 #include <sys/mman.h>
 #ifndef MAP_ANONYMOUS
 #define MAP_ANONYMOUS MAP_ANON
-#endif
 #endif
 
 typedef struct {
@@ -47,18 +43,6 @@ typedef struct {
 /* Map `n` bytes from `src` as executable (W^X).  Returns the mapping or NULL. */
 static void *runloom_mc_map(const void *src, size_t n)
 {
-#if defined(_WIN32)
-    DWORD old;
-    void *p = VirtualAlloc(NULL, n, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-    if (p == NULL) return NULL;
-    memcpy(p, src, n);
-    if (!VirtualProtect(p, n, PAGE_EXECUTE_READ, &old)) {
-        VirtualFree(p, 0, MEM_RELEASE);
-        return NULL;
-    }
-    FlushInstructionCache(GetCurrentProcess(), p, n);
-    return p;
-#else
     void *p = mmap(NULL, n, PROT_READ | PROT_WRITE,
                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (p == MAP_FAILED) return NULL;
@@ -71,18 +55,12 @@ static void *runloom_mc_map(const void *src, size_t n)
         return NULL;
     }
     return p;
-#endif
 }
 
 static void runloom_mc_unmap(void *p, size_t n)
 {
     if (p == NULL) return;
-#if defined(_WIN32)
-    (void)n;
-    VirtualFree(p, 0, MEM_RELEASE);
-#else
     munmap(p, n);
-#endif
 }
 
 typedef intptr_t (*runloom_mc_fn0)(void);

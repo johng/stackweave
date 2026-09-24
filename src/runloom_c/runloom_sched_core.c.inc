@@ -6,43 +6,20 @@ static int       runloom_cal_frozen = 0;
 /* The stack-calibration globals (runloom_cal_frozen/max_hwm/completed/default)
  * are written by runloom_cal_record, which runs on EVERY fiber completion
  * during the brief startup calibration window -- concurrently across M:N hubs.
- * Guard them with a lock (self-initialising so it needs no PyInit hook on
- * Windows, where CRITICAL_SECTION can't be statically initialised).  Cost is
- * zero in steady state: once frozen, cal_record early-returns on the atomic
- * frozen flag and never touches the lock. */
+ * Guard them with a lock.  Cost is zero in steady state: once frozen,
+ * cal_record early-returns on the atomic frozen flag and never touches the
+ * lock. */
 static runloom_mutex_t runloom_cal_lock = RUNLOOM_MUTEX_STATIC_INIT;
-static int runloom_cal_lock_inited = 0;
-
-static void runloom_cal_ensure_lock(void)
-{
-#if defined(RUNLOOM_OS_WINDOWS)
-    int st = __atomic_load_n(&runloom_cal_lock_inited, __ATOMIC_ACQUIRE);
-    if (st == 2) return;
-    if (st == 0 &&
-        __atomic_compare_exchange_n(&runloom_cal_lock_inited, &st, 1, 0,
-                                    __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
-        runloom_mutex_init(&runloom_cal_lock);
-        __atomic_store_n(&runloom_cal_lock_inited, 2, __ATOMIC_RELEASE);
-        return;
-    }
-    while (__atomic_load_n(&runloom_cal_lock_inited, __ATOMIC_ACQUIRE) != 2) { }
-#else
-    (void)runloom_cal_lock_inited;   /* POSIX: PTHREAD_MUTEX_INITIALIZER suffices */
-#endif
-}
 
 /* After fork(): the child inherits runloom_cal_lock in whatever state it had at
  * fork -- possibly LOCKED by a hub/drain thread that did not survive -- so the
  * next calibration acquire (runloom_cal_record / get/set_default_stack_size /
  * stack_stats) would deadlock against the dead owner.  Re-init it, exactly as
  * runloom_mn_reset_after_fork does for runloom_global_runq_lock ("may be inherited
- * held").  The child is single-threaded at this point, so this is unraced; the
- * inited=2 store keeps the Windows lazy-init state coherent (fork is POSIX-only,
- * so that branch is moot there, but the store is harmless). */
+ * held").  The child is single-threaded at this point, so this is unraced. */
 void runloom_cal_reset_after_fork(void)
 {
     runloom_mutex_init(&runloom_cal_lock);
-    __atomic_store_n(&runloom_cal_lock_inited, 2, __ATOMIC_RELAXED);
 }
 
 static size_t runloom_next_pow2(size_t v)
@@ -68,7 +45,6 @@ static void runloom_cal_record(runloom_g_t *g)
     if (__atomic_load_n(&runloom_cal_frozen, __ATOMIC_ACQUIRE) ||
         !runloom_coro_paint_enabled()) return;
     hwm = runloom_coro_scan_hwm(g->coro);
-    runloom_cal_ensure_lock();
     RUNLOOM_RLOCK(&runloom_cal_lock, RUNLOOM_RANK_CAL);
     if (runloom_cal_frozen) {                 /* lost the freeze race -- done */
         RUNLOOM_RUNLOCK(&runloom_cal_lock, RUNLOOM_RANK_CAL);
@@ -110,7 +86,6 @@ void runloom_sched_set_default_stack_size(size_t bytes)
      * stack than the 16KB 3.13 floor (else a false RecursionError -- p226). */
     bytes = runloom_fiber_stack_floor(bytes);
     if (bytes > RUNLOOM_MAX_STACK_SIZE) bytes = RUNLOOM_MAX_STACK_SIZE;
-    runloom_cal_ensure_lock();
     RUNLOOM_RLOCK(&runloom_cal_lock, RUNLOOM_RANK_CAL);
     runloom_cal_default = bytes;
     __atomic_store_n(&runloom_cal_frozen, 1, __ATOMIC_RELEASE);
@@ -124,7 +99,6 @@ void runloom_sched_set_default_stack_size(size_t bytes)
 size_t runloom_sched_get_default_stack_size(void)
 {
     size_t v;
-    runloom_cal_ensure_lock();
     RUNLOOM_RLOCK(&runloom_cal_lock, RUNLOOM_RANK_CAL);
     v = runloom_cal_default;
     RUNLOOM_RUNLOCK(&runloom_cal_lock, RUNLOOM_RANK_CAL);
@@ -134,7 +108,6 @@ size_t runloom_sched_get_default_stack_size(void)
 void runloom_sched_stack_stats(runloom_stack_stats_t *out)
 {
     if (out == NULL) return;
-    runloom_cal_ensure_lock();
     RUNLOOM_RLOCK(&runloom_cal_lock, RUNLOOM_RANK_CAL);
     out->default_size = runloom_cal_default;
     out->max_hwm      = runloom_cal_max_hwm;
@@ -233,7 +206,7 @@ static void runloom_sched_flush_quiescence(runloom_sched_t *s)
  * funnel through here for their run loop.
  *
  * Lifetime: the per-thread sched is intentionally leaked at thread exit (no
- * portable pre-C11 TLS destructor across GCC/MSVC; a sched is small and the
+ * portable pre-C11 TLS destructor; a sched is small and the
  * thread is gone).  A thread churning many short loops (e.g. aiosmtpd's
  * per-test Controller thread) leaks one sched per thread, not per loop. */
 static RUNLOOM_TLS runloom_sched_t *runloom_tls_sched = NULL;
@@ -588,30 +561,6 @@ unsigned long long runloom_next_wseq_ctr = 0;   /* source-hunt: ->next write seq
 static runloom_g_t   *runloom_g_global_slab = NULL;
 static int            runloom_g_global_size = 0;
 static runloom_mutex_t runloom_g_global_lock = RUNLOOM_MUTEX_STATIC_INIT;
-static int             runloom_g_global_lock_inited = 0;
-
-/* This g-slab balance lock lives in a TU compiled on EVERY platform (unlike the
- * coro balance lock, which is FCONTEXT/POSIX-only and can rely on a real static
- * init).  On Windows RUNLOOM_MUTEX_STATIC_INIT is {0} -- a CRITICAL_SECTION
- * cannot be statically initialised -- so lazily init on first use, exactly like
- * runloom_cal_lock above.  POSIX gets a real static init and this is a no-op. */
-static void runloom_g_global_ensure_lock(void)
-{
-#if defined(RUNLOOM_OS_WINDOWS)
-    int st = __atomic_load_n(&runloom_g_global_lock_inited, __ATOMIC_ACQUIRE);
-    if (st == 2) return;
-    if (st == 0 &&
-        __atomic_compare_exchange_n(&runloom_g_global_lock_inited, &st, 1, 0,
-                                    __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
-        runloom_mutex_init(&runloom_g_global_lock);
-        __atomic_store_n(&runloom_g_global_lock_inited, 2, __ATOMIC_RELEASE);
-        return;
-    }
-    while (__atomic_load_n(&runloom_g_global_lock_inited, __ATOMIC_ACQUIRE) != 2) { }
-#else
-    (void)runloom_g_global_lock_inited;   /* POSIX: static init suffices */
-#endif
-}
 
 /* Move up to BATCH structs from the global pool into this thread's empty slab.
  * Returns the new slab head (== runloom_g_slab), or NULL if the global is dry. */
@@ -619,7 +568,6 @@ static runloom_g_t *runloom_g_global_refill(void)
 {
     runloom_g_t *head, *tail;
     int n;
-    runloom_g_global_ensure_lock();
     runloom_mutex_lock(&runloom_g_global_lock);
     head = runloom_g_global_slab;
     if (head == NULL) { runloom_mutex_unlock(&runloom_g_global_lock); return NULL; }
@@ -647,7 +595,6 @@ static void runloom_g_global_flush(void)
     while (n < RUNLOOM_G_GLOBAL_BATCH && tail->next != NULL) { tail = tail->next; n++; }
     runloom_g_slab = tail->next;
     runloom_g_slab_size -= n;
-    runloom_g_global_ensure_lock();
     runloom_mutex_lock(&runloom_g_global_lock);
     RUNLOOM_NEXT_SET(tail, runloom_g_global_slab, 3);
     runloom_g_global_slab = head;
@@ -658,10 +605,9 @@ static void runloom_g_global_flush(void)
 /* ---- test-only hooks for the fork-deadlock regression test ----------------
  * Not used in production; exposed only as runloom_c._test_* for the regression
  * test that proves the after-fork balance-lock reset.  Kept here so they share
- * the (file-static) lock + ensure shim. */
+ * the (file-static) lock. */
 void runloom_g_global_test_hold_ns(long long ns)
 {
-    runloom_g_global_ensure_lock();
     runloom_mutex_lock(&runloom_g_global_lock);
     if (ns > 0) runloom_sleep_ns(ns);
     runloom_mutex_unlock(&runloom_g_global_lock);
@@ -671,7 +617,6 @@ void runloom_g_global_test_acquire(void)
 {
     /* Blocks forever if the lock was inherited HELD by a dead owner across
      * fork() -- exactly the deadlock the after-fork reset prevents. */
-    runloom_g_global_ensure_lock();
     runloom_mutex_lock(&runloom_g_global_lock);
     runloom_mutex_unlock(&runloom_g_global_lock);
 }
@@ -686,7 +631,6 @@ void runloom_g_global_test_acquire(void)
 void runloom_g_global_reset_after_fork(void)
 {
     runloom_mutex_init(&runloom_g_global_lock);
-    __atomic_store_n(&runloom_g_global_lock_inited, 2, __ATOMIC_RELAXED);
     runloom_g_global_slab = NULL;
     runloom_g_global_size = 0;
 }
@@ -824,7 +768,6 @@ void runloom_g_slab_thread_flush(void)
     while (tail->next != NULL) { tail = tail->next; n++; }
     runloom_g_slab = NULL;
     runloom_g_slab_size = 0;
-    runloom_g_global_ensure_lock();
     runloom_mutex_lock(&runloom_g_global_lock);
     RUNLOOM_NEXT_SET(tail, runloom_g_global_slab, 3);
     runloom_g_global_slab = head;
@@ -842,7 +785,6 @@ void runloom_g_slab_reclaim(void)
     /* Detach the whole global pool under the lock, then free each struct to the
      * OS OUTSIDE the lock -- runloom_greg_unlink takes the registry lock, so
      * don't nest the two. */
-    runloom_g_global_ensure_lock();
     runloom_mutex_lock(&runloom_g_global_lock);
     head = runloom_g_global_slab;
     runloom_g_global_slab = NULL;

@@ -144,9 +144,8 @@ class CoSimpleQueue(object):
         # wakes it with a single direct unpark() (os.write), and only the fd
         # parker's pipe byte is DURABLE across the wake-before-park window for this
         # direct single-waiter wake (the inmem g.wake() path is wake-safe only when
-        # driven by _unpark_all -- see _base.py _Parker).  _Parker() can YIELD (the
-        # Windows socketpair handshake runs through the cooperative socket path),
-        # which is fine here -- there is no lock held across it.
+        # driven by _unpark_all -- see _base.py _Parker).  No lock is held across
+        # _Parker() here.
         p = _Parker()
         rec = [p, True]                      # [parker, active]
         # Register, THEN re-pop: an item that arrived between the fast-path pop and

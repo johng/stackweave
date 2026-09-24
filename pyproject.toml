@@ -28,7 +28,6 @@ classifiers = [
     "Operating System :: MacOS :: MacOS X",
     "Operating System :: POSIX :: BSD",
     "Operating System :: POSIX :: SunOS/Solaris",
-    "Operating System :: Microsoft :: Windows",
     "Operating System :: Android",
     "Programming Language :: C",
     "Programming Language :: Python :: 3",
@@ -89,8 +88,9 @@ Source = "https://github.com/johng/stackweave"
 enable = ["cpython-freethreading"]
 build = "cp311-* cp312-* cp313-* cp313t-* cp314-* cp314t-*"
 # Skip 32-bit and musl for now; the asm fcontext path needs musl-specific
-# testing that's not in CI yet.  Linux x86_64 + aarch64, glibc only.
-skip = ["*-win32", "*-manylinux_i686", "*-musllinux_*", "pp*"]
+# testing that's not in CI yet.  Linux x86_64 + aarch64, glibc only.  Windows
+# is not supported.
+skip = ["*-win*", "*-manylinux_i686", "*-musllinux_*", "pp*"]
 # Sanity-check imports after the wheel is built.  On a free-threaded
 # (Py_GIL_DISABLED) wheel, importing stackweave MUST keep the GIL OFF -- a
 # regression that drops Py_MOD_GIL_NOT_USED would silently re-enable it at import
@@ -114,12 +114,6 @@ archs = ["arm64", "x86_64"]
 # MACOSX_DEPLOYMENT_TARGET keeps us compatible with macOS 10.13+; older
 # than that and ucontext APIs aren't stable.
 environment = "MACOSX_DEPLOYMENT_TARGET=10.13"
-
-[tool.cibuildwheel.windows]
-# MSVC 2022 Build Tools come pre-installed on GitHub's windows-2022 runner.
-archs = ["AMD64"]
-# Verify both backends work.
-test-command = "python -c \"import stackweave_c; assert stackweave_c.netpoll_backend() in ('iocp-afd','wsapoll','select'); print(stackweave_c.backend(), stackweave_c.netpoll_backend())\""
 
 # --------------------------------------------------------------------
 # pytest: tests/conftest.py adds a per-test invariant fixture (structural

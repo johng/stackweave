@@ -27,8 +27,6 @@ import stackweave
 import stackweave_c as rc
 from adv_util import hang_guard, assert_faster_than, needs_free_threading, pollable_pipe, ensure_fd_budget
 
-_IS_WINDOWS = sys.platform == "win32"
-
 READ, WRITE = 1, 2
 CANCELLED = rc.WAIT_FD_CANCELLED
 FT = needs_free_threading()
@@ -67,8 +65,7 @@ def _run_single(fn):
 # basics
 # --------------------------------------------------------------------------
 def test_netpoll_backend_is_known():
-    assert rc.netpoll_backend() in (
-        "epoll", "kqueue", "select", "iocp-afd", "iocp", "wsapoll")
+    assert rc.netpoll_backend() in ("epoll", "kqueue", "select")
 
 
 def test_wait_fd_timeout_returns_zero():
@@ -124,12 +121,6 @@ def test_wait_fd_invalid_fd_raises_not_hangs():
 # --------------------------------------------------------------------------
 # cancellation
 # --------------------------------------------------------------------------
-@pytest.mark.skipif(_IS_WINDOWS, reason=(
-    "runloom_netpoll_cancel_fd is a deliberate no-op on iocp-afd: every AFD_POLL "
-    "already arms AFD_POLL_LOCAL_CLOSE, so the socket close is the race-free "
-    "close-waker and a standalone cancel_fd would double-wake (UAF). A never-ready "
-    "park + bare cancel_fd (no close) therefore cannot wake on Windows. "
-    "g.cancel_wait_fd() -- the per-g cancel -- still works there (test below)"))
 def test_netpoll_cancel_fd_wakes_with_sentinel():
     def f():
         r, w, _keep = pollable_pipe()   # never-ready; the cancel is what wakes it
@@ -151,7 +142,7 @@ def test_g_cancel_wait_fd_wakes_target():
     def waiter():
         r, w, keep = pollable_pipe()    # never-ready; g.cancel_wait_fd wakes it
         hold["fds"] = (r, w)
-        hold["keep"] = keep             # keep the Windows socketpair alive
+        hold["keep"] = keep
         res["rv"] = rc.wait_fd(r, READ, -1)
     def main():
         g = rc.fiber(waiter)
@@ -168,10 +159,6 @@ def test_g_cancel_wait_fd_wakes_target():
 # --------------------------------------------------------------------------
 # fd-reuse stale-arm (the register-once hazard)
 # --------------------------------------------------------------------------
-@pytest.mark.skipif(_IS_WINDOWS, reason=(
-    "iocp-afd polls Winsock sockets only; this exercises the epoll register-once "
-    "arm cache on pipe fds + os.write readiness, neither of which exists on the "
-    "Windows AFD backend"))
 def test_fd_reuse_after_unregister_is_clean():
     def f():
         r, w = os.pipe()
@@ -200,10 +187,6 @@ def test_fd_reuse_after_unregister_is_clean():
     assert el < 1.0, "reused fd took %.3fs to wake (stale arm)" % el
 
 
-@pytest.mark.skipif(_IS_WINDOWS, reason=(
-    "iocp-afd polls Winsock sockets only; this exercises the epoll register-once "
-    "arm cache on pipe fds + os.write readiness, neither of which exists on the "
-    "Windows AFD backend"))
 def test_release_if_idle_enables_clean_reuse():
     def f():
         r, w = os.pipe()

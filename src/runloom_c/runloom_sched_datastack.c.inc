@@ -32,7 +32,7 @@ void runloom_first_run_install_datastack(void)
  * We keep the partial page holding the live frontier and drop whole pages
  * strictly above it.  Refault on the next frame push is the (cheap, zero-
  * filled) cost, identical to the C-stack sweep's contract. */
-#if PY_VERSION_HEX >= 0x030B0000 && !defined(_WIN32) && defined(MADV_DONTNEED)
+#if PY_VERSION_HEX >= 0x030B0000 && defined(MADV_DONTNEED)
 /* Decompose counters (RUNLOOM_DATASTACK_DEBUG only). */
 static unsigned long long runloom_ds_sweep_tail_bytes = 0;
 static unsigned long long runloom_ds_sweep_resident_bytes = 0;
@@ -59,7 +59,7 @@ static unsigned long long runloom_ds_resident_bytes(uintptr_t lo, uintptr_t hi,
 
 void runloom_sched_madvise_datastack_idle(runloom_g_t *g)
 {
-#if PY_VERSION_HEX >= 0x030B0000 && !defined(_WIN32) && defined(MADV_DONTNEED)
+#if PY_VERSION_HEX >= 0x030B0000 && defined(MADV_DONTNEED)
     static int on = -1;              /* read RUNLOOM_DATASTACK_SWEEP once */
     static int dbg = -1;             /* read RUNLOOM_DATASTACK_DEBUG once */
     runloom_pystate_snap_t *snap;
@@ -129,7 +129,7 @@ void runloom_sched_datastack_sweep_stats(unsigned long long *tail_bytes,
                                       unsigned long long *resident_bytes,
                                       unsigned long long *chunks)
 {
-#if PY_VERSION_HEX >= 0x030B0000 && !defined(_WIN32) && defined(MADV_DONTNEED)
+#if PY_VERSION_HEX >= 0x030B0000 && defined(MADV_DONTNEED)
     if (tail_bytes)
         *tail_bytes = __atomic_load_n(&runloom_ds_sweep_tail_bytes, __ATOMIC_RELAXED);
     if (resident_bytes)
@@ -852,9 +852,8 @@ double runloom_sched_timer_next_deadline(runloom_sched_t *s)
  * TLS/SSH crypto in a callback (the aio bridge runs asyncssh's kex + OpenSSL on
  * 512 KB), nested parsers -- so ordinary code never hits the guard page.  It's
  * cheap: stacks are demand-paged (the unused tail consumes no physical RAM until
- * touched -- VM, not RSS, verified on Linux/macOS mmap and Windows CreateFiberEx
- * reserve), so the cost is virtual address space, not memory.  Calibration adapts
- * UP for stack-hungry programs (freeze to next_pow2(max_hwm * RUNLOOM_CAL_SAFETY)
+ * touched -- VM, not RSS, verified on Linux/macOS mmap), so the cost is virtual
+ * address space, not memory.  Calibration adapts UP for stack-hungry programs (freeze to next_pow2(max_hwm * RUNLOOM_CAL_SAFETY)
  * after RUNLOOM_CAL_TARGET completions) but is FLOORED at this default -- it never
  * auto-shrinks below the safe size and re-exposes the deep cases.  Reclaiming the
  * tail for huge fiber counts is the per-kind auto-sizer's job (opt-in

@@ -1,9 +1,6 @@
 /* cldeque.c -- Chase-Lev work-stealing deque.
  *
- * Atomic ops via GCC/Clang __atomic_* builtins.  On MSVC the same names
- * are macro-shimmed onto _Interlocked* via plat_atomic.h (included
- * through plat_compat.h), so the body below is portable as-is.  On
- * MinGW-w64 / Clang-on-Windows the real GCC builtins are used.
+ * Atomic ops via GCC/Clang __atomic_* builtins.
  */
 #include "plat_compat.h"
 #include "cldeque.h"

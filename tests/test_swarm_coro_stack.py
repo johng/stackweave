@@ -52,12 +52,11 @@ from adv_util import (hang_guard, assert_faster_than, raw_thread,
 FT = needs_free_threading()
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BACKEND = rc.backend()
-POSIX = os.name == "posix"
-_PAGE = os.sysconf("SC_PAGESIZE") if POSIX and hasattr(os, "sysconf") else 4096
-# Guard-page address->fiber classification + a precise HWM scan only exist on
-# the POSIX asm/ucontext backends with 4 KB pages (Windows Fibers have no
-# introspectable guard page; macOS 16 KB pages make the mincore HWM over-report).
-HAS_GUARD = POSIX and BACKEND in ("fcontext-asm", "ucontext")
+_PAGE = os.sysconf("SC_PAGESIZE")
+# Guard-page address->fiber classification + a precise HWM scan need the
+# asm/ucontext backends with 4 KB pages (macOS 16 KB pages make the mincore HWM
+# over-report).
+HAS_GUARD = BACKEND in ("fcontext-asm", "ucontext")
 RELIABLE_HWM = HAS_GUARD and _PAGE == 4096
 IS_X86_64 = platform.machine() in ("x86_64", "AMD64", "x86-64")
 
@@ -920,7 +919,7 @@ except ValueError:
 def test_backend_is_a_known_string():
     b = rc.backend()
     assert isinstance(b, str) and b
-    assert b in ("fcontext-asm", "ucontext", "windows-fibers")
+    assert b in ("fcontext-asm", "ucontext")
 
 
 def test_fiber_stack_bogus_id_is_empty_not_crash():

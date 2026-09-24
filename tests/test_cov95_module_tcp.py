@@ -45,9 +45,7 @@ Class D -- synchronous syscall hard errors via strace -e inject= (Linux only),
 Class E -- _diag_flags (subprocess so STACKWEAVE_DEBUG_DIAG is parsed at import):
   module_select L154/157 (_diag_flags returns the parsed STACKWEAVE_DEBUG mask).
 
-Excluded (see the structured report): module_tcp L30-31 (thread_init failure --
-ConvertThreadToFiber, Windows-fibers only; the POSIX body is unconditional
-return 0) -> PLATFORM; module_select L116 (the err-cleanup Py_DECREF of a
+Excluded (see the structured report): module_select L116 (the err-cleanup Py_DECREF of a
 materialised recv_value) -> OOM: a fired RECV case sets cs[fired].recv_value
 only at the very end of runloom_chan_select, immediately before `return fired`;
 every -2/err return happens BEFORE any recv_value is stored, so reaching the
@@ -102,7 +100,7 @@ def test_thread_init_fini_and_prewarm_parse_guards():
     assert rc.thread_init() is None
     # idempotent second call still succeeds (re-runs the success body).
     assert rc.thread_init() is None
-    # thread_fini body (crash_thread_disarm; the Windows fiber unwind is #ifdef'd).
+    # thread_fini body (crash_thread_disarm).
     assert rc.thread_fini() is None
 
     # prewarm L71: a non-int `n` -> "i" conversion fails -> return NULL.

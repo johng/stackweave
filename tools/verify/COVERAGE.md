@@ -37,7 +37,7 @@ Driver: `verify/run_verify.sh` (Spin + CBMC + GenMC + herd7 + Coq + Iris + Alloy
 | select claim / close | `chan_select_main.c.inc`, `chan_waiters.c.inc` | `select_claim.pml`, `select_close.pml`(+4 controls), `Select.v`(Coq ∞) | **deep** |
 | Default M:N wake dedup | `mn_sched_mn_api.c.inc` (`hub_submit`) | `hub_submit.pml`, `sched_qref.c`(CBMC) | good |
 | Ready-ring FIFO | `runloom_sched_core.c.inc` | `sched_readyring_cbmc.c`(CBMC) | good |
-| netpoll commit + arm (epoll/kqueue/AFD) | `netpoll_*.c.inc`, `netpoll_iocp.c` | `netpoll_commit`,`netpoll_rearm`,`netpoll_kqueue`,`netpoll_afd`,`netpoll_multipool`,`netpoll_deadline`,`netpoll_forceunlink`(Spin), `netpoll_claim.c`(GenMC), `commit_*.litmus` | **deep** (see drift note on `netpoll_rearm`) |
+| netpoll commit + arm (epoll/kqueue) | `netpoll_*.c.inc` | `netpoll_commit`,`netpoll_rearm`,`netpoll_kqueue`,`netpoll_multipool`,`netpoll_deadline`,`netpoll_forceunlink`(Spin), `netpoll_claim.c`(GenMC), `commit_*.litmus` | **deep** (see drift note on `netpoll_rearm`) |
 | **io_uring-as-loop backend wake/re-arm** | `io_uring_l_loop.c.inc`, `netpoll_wake_iouring.c.inc`, `mn_sched_hub_main.c.inc` | **`netpoll_iouring_loop.pml`(Spin) — NEW 2026-06-17** | good (NEW) |
 | Blocking-offload pool | `runloom_blockpool.c` | `blockpool.pml`, `blockpool_job.c`(GenMC), `Blockpool.v`(Coq ∞) | **deep** |
 | io_uring single-op + multishot | `io_uring.c`, `io_uring_l_msclose.c.inc` | `iouring_waitcommit.c`(GenMC), `iouring_msclose.pml`(Spin) | good |
@@ -193,7 +193,6 @@ TLA+ `RunloomMnRun`.
 | `netpoll_deadline.pml` | fd-dispatch vs timeout-drain vs cancel claim race |
 | `netpoll_forceunlink.pml` | force_unlink vs pump: exactly-once release / no UAF |
 | `netpoll_kqueue.pml` | kqueue `EV_ADD|EV_ONESHOT` re-add arm (BSD/macOS) |
-| `netpoll_afd.pml` | IOCP+AFD poll-ctx lifetime (Windows): no UAF / double-free |
 | `netpoll_iouring_loop.pml` | **NEW** io_uring-as-loop backend Dekker wake + re-arm |
 | `iouring_msclose.pml` | io_uring multishot handle lifetime, recv vs close: **refcount makes concurrent close-vs-parked-recv UAF-safe** (+ `BUG_NO_REFCOUNT` reproduces the old UAF) |
 | `cross_thread_wake.pml` | Phase C per-thread sched owner-routed wake_safe |

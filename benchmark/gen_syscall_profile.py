@@ -5,7 +5,6 @@ single-snapshot (no before/after).  Generates, from the committed data dirs:
 
     big100_syscall_profile_linux.html    (epoll,    strace -c)
     big100_syscall_profile_mac.html      (kqueue,   ktrace / KDEBUG)
-    big100_syscall_profile_win.html      (iocp-afd, xperf NT-kernel SYSCALL + symbols)
 
 Each: a summary table + a per-program syscall table (syscall, category, count,
 %-of-program), category-coloured, sorted by count.  Run with no args.
@@ -17,26 +16,25 @@ E = html.escape
 
 # --- categorisation (shared with gen_syscall_backends_html.py); specific-first ---
 CATRULES = [
-    ("poll/wait", r"epoll|kevent|kqueue|removeiocompletion|waitforworkvia|associatewaitcompletion|iocompletion"),
-    ("net",       r"recvmsg|recvfrom|recvmmsg|\brecv|sendmsg|sendto|sendmmsg|\bsend|accept|connect|socket|bind|listen|shutdown|sockopt|getpeername|getsockname|deviceiocontrol|afd|wsa"),
-    ("registry",  r"valuekey|openkey|querykey|enumeratekey|createkey|notifychangekey|deletekey|setvaluekey"),
-    ("sync",      r"futex|psynch|ulock|semwait|waitforalert|alertthread|keyedevent|waitforsingleobject|waitformultiple|signalandwait|releasemutant|releasesemaphore|setevent|resetevent|clearevent|pulseevent|mutant|waitforgate|releasekeyed"),
-    ("yield",     r"sched_yield|yieldexecution|thread_switch"),
-    ("time",      r"nanosleep|clock_|gettimeofday|delayexecution|querysystemtime|queryperformance|setitimer|getitimer|timer_|settimer|waitabletimer"),
-    ("proc/thr",  r"clone|fork|vfork|execve|posix_spawn|wait4|waitid|^exit|exit_group|bsdthread|workq|createthread|createprocess|createuserprocess|terminateprocess|terminatethread|openprocess|openthread|resumethread|suspendthread|setinformationthread|queryinformationthread|queryinformationprocess|setinformationprocess|informationtoken|impersonate|processortoken|thread_selfid"),
-    ("mem",       r"mmap|munmap|mprotect|madvise|\bbrk|mremap|mlock|virtualmemory|mapviewofsection|unmapview|sharedregion|flushvirtual"),
-    ("file",      r"read|write|open|close|stat|lseek|fcntl|ioctl|getdents|getdirentries|fsync|fdatasync|access|pread|pwrite|\bdup|pipe|createfile|queryinformationfile|queryattributes|openfile|querydirectory|flushbuffers|queryvolume|fstatat|readlink|unlink|rename|mkdir|ftruncate|getattrlist|fsetattr|createnamedpipe|fscontrol|setinformationfile"),
-    ("signal",    r"sigaction|sigprocmask|sigreturn|sigaltstack|sigsuspend|sigpending|pthread_kill|raiseexception|raisehard|\bkill|tgkill|exceptionhandler"),
+    ("poll/wait", r"epoll|kevent|kqueue"),
+    ("net",       r"recvmsg|recvfrom|recvmmsg|\brecv|sendmsg|sendto|sendmmsg|\bsend|accept|connect|socket|bind|listen|shutdown|sockopt|getpeername|getsockname"),
+    ("sync",      r"futex|psynch|ulock|semwait"),
+    ("yield",     r"sched_yield|thread_switch"),
+    ("time",      r"nanosleep|clock_|gettimeofday|setitimer|getitimer|timer_"),
+    ("proc/thr",  r"clone|fork|vfork|execve|posix_spawn|wait4|waitid|^exit|exit_group|bsdthread|workq|thread_selfid"),
+    ("mem",       r"mmap|munmap|mprotect|madvise|\bbrk|mremap|mlock|sharedregion"),
+    ("file",      r"read|write|open|close|stat|lseek|fcntl|ioctl|getdents|getdirentries|fsync|fdatasync|access|pread|pwrite|\bdup|pipe|fstatat|readlink|unlink|rename|mkdir|ftruncate|getattrlist|fsetattr"),
+    ("signal",    r"sigaction|sigprocmask|sigreturn|sigaltstack|sigsuspend|sigpending|pthread_kill|\bkill|tgkill"),
 ]
 COLOR = {"poll/wait": "#17becf", "net": "#1f77b4", "sync": "#ff7f0e", "yield": "#bcbd22",
-         "time": "#7f7f7f", "registry": "#9edae5", "file": "#2ca02c", "mem": "#8c564b",
+         "time": "#7f7f7f", "file": "#2ca02c", "mem": "#8c564b",
          "proc/thr": "#9467bd", "signal": "#d62728", "other": "#999999"}
 CATS = list(COLOR)
 
 
 def categorize(name):
     low = name.lower()
-    bare = re.sub(r"^(bsc_|msc_|sys_|nt|zw)", "", low)
+    bare = re.sub(r"^(bsc_|msc_|sys_)", "", low)
     for cat, pat in CATRULES:
         if re.search(pat, low) or re.search(pat, bare):
             return cat
@@ -87,12 +85,8 @@ PLATFORMS = [
     ("macOS",   "kqueue",   "mac_sys", "*.counts", parse_counts,
      "ktrace / KDEBUG (per-process; dtrace's syscall provider is SIP-blocked, KDEBUG is not)",
      "big100_syscall_profile_mac.html"),
-    ("Windows", "iocp-afd", "win_sys", "*.counts", parse_counts,
-     "xperf NT-kernel SYSCALL flag + MS symbols (system-wide minus an idle baseline; "
-     "NtTraceControl, the tracer's own syscall, excluded)",
-     "big100_syscall_profile_win.html"),
 ]
-HEAD = {"Linux": "#3fb950", "macOS": "#58a6ff", "Windows": "#d29922"}
+HEAD = {"Linux": "#3fb950", "macOS": "#58a6ff"}
 
 
 def load(ddir, gl, parser):
@@ -110,14 +104,6 @@ def pkey(n):
 
 for plat, backend, ddir, gl, parser, method, outfile in PLATFORMS:
     data = load(ddir, gl, parser)
-    if plat == "Windows":   # subtract idle baseline
-        bpath = os.path.join(HERE, ddir, "BASELINE.counts")
-        base = parse_counts(bpath) if os.path.exists(bpath) else {}
-        for d in data.values():
-            for k in list(d):
-                d[k] = max(0, d[k] - base.get(k, 0))
-                if d[k] == 0:
-                    del d[k]
     progs = sorted(data, key=pkey)
     hc = HEAD[plat]
 
@@ -141,7 +127,7 @@ Per-program syscall counts for the <b>%s</b> netpoll backend on the latest
 origin/main (<code>--hubs 2 --seed 1234</code>).  Captured with <b>%s</b>.
 Tracing perturbs timing, so read the <i>mix</i>, not absolute magnitudes.  See
 <a href="big100_syscall_backends.html">big100_syscall_backends.html</a> for the
-cross-backend (epoll vs kqueue vs iocp-afd) comparison.
+cross-backend (epoll vs kqueue) comparison.
 </div>
 <p class=leg>""" % (plat, backend, plat, backend, backend, method)]
     P.append(" ".join('<span><span class=pill style="background:%s">&nbsp;</span> %s</span>'

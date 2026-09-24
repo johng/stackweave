@@ -13,14 +13,13 @@ import stackweave_c
 
 
 # Single-thread blocking offloads run CONCURRENTLY only on netpoll backends
-# that expose a pump-wake primitive: epoll (eventfd), kqueue (EVFILT_USER)
-# and Windows IOCP+AFD (PostQueuedCompletionStatus).  The Windows WSAPoll /
-# select fallback pumps re-poll the parked-fd set on a timeout and have no
-# wakeable object, so a worker thread can't interrupt an idle pump; on those
-# backends blocking() runs the call inline (serial) rather than offloading
-# (see runloom_netpoll_wake_pump_arm in netpoll.c).  The offloads still complete
+# that expose a pump-wake primitive: epoll (eventfd) and kqueue (EVFILT_USER).
+# The select fallback pump re-polls the parked-fd set on a timeout and has no
+# wakeable object, so a worker thread can't interrupt an idle pump; there
+# blocking() runs the call inline (serial) rather than offloading (see
+# runloom_netpoll_wake_pump_arm in netpoll.c).  The offloads still complete
 # correctly there -- only the wall-clock concurrency bound does not hold.
-_PUMP_WAKE = stackweave_c.netpoll_backend() in ("epoll", "kqueue", "iocp-afd")
+_PUMP_WAKE = stackweave_c.netpoll_backend() in ("epoll", "kqueue")
 
 
 class TestBlocking(unittest.TestCase):
@@ -80,7 +79,7 @@ class TestBlocking(unittest.TestCase):
             # the serial time is a generous bar that still proves concurrency.
             self.assertLess(wall, N * NAP * 0.5)
         else:
-            # WSAPoll / select fallback pumps run the offload inline; only
+            # The select fallback pump runs the offload inline; only
             # completion (checked above) is guaranteed, not concurrency.
             self.skipTest(
                 "netpoll backend %r has no pump-wake; blocking() runs inline"

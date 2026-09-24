@@ -65,8 +65,7 @@ in the ledger).  Any wedge trips the R5 watchdog artifact.
 ## Run continuously (systemd --user)
 
 `systemd/runloom-canary.service` runs the server; drive load from the same or
-another box (or a Windows VM via the SSH tooling, or a lossy netns via
-`tools/soak/netns_chaos.sh`).  As with the R4 duty-cycle, **the repo does not
+another box (or a lossy netns via `tools/soak/netns_chaos.sh`).  As with the R4 duty-cycle, **the repo does not
 enable it** — install it only on a box whose owner agreed:
 
 ```sh

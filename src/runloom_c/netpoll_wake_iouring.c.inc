@@ -259,52 +259,14 @@ void runloom_netpoll_cancel_fd(int fd)
 {
     int i;
     if (fd < 0) return;
-#if defined(RUNLOOM_OS_WINDOWS)
-    /* IOCP-AFD: every wait_fd submits an AFD_POLL whose mask ALWAYS includes
-     * AFD_POLL_LOCAL_CLOSE (see runloom_to_afd_events), so closing the socket
-     * itself fires a completion that the pump dispatches to wake the parked
-     * fiber.  Calling cancel_fd from the close hook on IOCP therefore adds a
-     * SECOND, concurrent waker for the same parker -- it races the LOCAL_CLOSE
-     * completion drained on another hub (both claim+unlink+free the same
-     * stack-allocated parker) -> use-after-free / access violation under M:N
-     * free-threading (crashed every big_100 socket program at scale; POSIX has
-     * no such auto-wake on close so cancel_fd is the sole, race-free waker
-     * there).  So we still do NOT walk by_fd to wake here -- LOCAL_CLOSE is the
-     * race-free close-waker for any fiber ALREADY parked.
-     *
-     * But there is a residual lost-wake the LOCAL_CLOSE completion alone cannot
-     * cover: a fiber that has NOT yet submitted its AFD_POLL when the close
-     * fires (the edge-before-park window -- e.g. it appended to a wait list,
-     * unlinked on a prior wake, or is between this close and its next wait_fd).
-     * No in-flight IRP exists for it, so the LOCAL_CLOSE edge is delivered to
-     * nobody and that fiber would park forever on the now-dead fd (the
-     * p12/p84 teardown-drain hang).  Record the close as a pending-wake for
-     * READ|WRITE so the NEXT wait_fd on this fd consumes the missed edge and
-     * returns immediately instead of parking (the same backstop the epoll/kqueue
-     * pumps use when an event arrives with no parker linked).  This is a plain
-     * lock-free bit set on the never-realloc'd per-fd array -- no parker is
-     * touched, so it cannot double-wake / UAF the LOCAL_CLOSE path.  The bit is
-     * idempotent and self-clearing: consumed by the next wait_fd, or harmlessly
-     * stale until the fd is reused (a reused fd's first wait_fd consumes+clears
-     * it, and on a freshly-opened socket a spurious immediate return just forces
-     * one re-check of a ready/dead fd -- never a dropped real edge). */
-    if (runloom_win_use_iocp) {
-        runloom_fd_pending_wake_set(fd, RUNLOOM_NETPOLL_READ | RUNLOOM_NETPOLL_WRITE);
-        return;
-    }
-#endif
     for (i = 0; i < RUNLOOM_PARKER_POOL_MAX; i++) {
         runloom_parker_pool_t *pool = &runloom_pools[i];
         runloom_parked_t *p, *next;
         /* Skip pools whose lock was never initialized.  An unused / not-yet-up
-         * pool slot holds a ZERO-initialized mutex; locking that is a benign
-         * no-op on POSIX (a zeroed pthread_mutex_t is valid) but a hard access
-         * violation inside EnterCriticalSection on Windows.  This fires when a
-         * socket is closed EARLY -- e.g. in a project's setup(), before every
-         * parker pool is brought up -- through the monkey close hook while
-         * runloom_win_use_iocp is still 0 (backend selection not finished), so
-         * the IOCP early-return above is skipped and we reach this loop (the p08
-         * setup AV).  Matches the guard runloom_netpoll_cancel_all_parked and
+         * pool slot holds a ZERO-initialized mutex, which must not be locked.
+         * This fires when a socket is closed EARLY -- e.g. in a project's
+         * setup(), before every parker pool is brought up -- through the monkey
+         * close hook.  Matches the guard runloom_netpoll_cancel_all_parked and
          * the netpoll pump helpers already use. */
         if (__atomic_load_n(&pool->lock_inited, __ATOMIC_ACQUIRE) != 2)
             continue;
@@ -485,20 +447,6 @@ int runloom_netpoll_wake_pump_arm(void)
     __atomic_store_n(&runloom_pump_wake_fd, fd, __ATOMIC_RELEASE);
     RUNLOOM_RUNLOCK(&runloom_pool.lock, RUNLOOM_RANK_PARKER_POOL);
     return 0;
-#elif defined(RUNLOOM_OS_WINDOWS)
-    /* IOCP: PostQueuedCompletionStatus wakes an idle
-     * GetQueuedCompletionStatus, so no per-arm primitive is needed beyond
-     * the IOCP existing (created in runloom_netpoll_init).  The WSAPoll /
-     * select pumps don't block on a wakeable object -- they re-poll the
-     * parked-fd set on a timeout -- so they expose no pump-wake and
-     * single-thread offload callers fall back to inline there.
-     *
-     * Init FIRST: runloom_win_use_iocp is 0 until backend selection runs, and
-     * a blocking-offload caller may arm before any socket I/O has triggered
-     * netpoll init (e.g. a fiber that only does runloom.blocking()). */
-    if (runloom_netpoll_init() != 0) return -1;
-    if (runloom_win_use_iocp && runloom_iocp_wake_armed()) return 0;
-    return -1;
 #elif defined(RUNLOOM_HAVE_KQUEUE)
     /* Per-hub kqueue: each pool's self-pipe is created with its kqueue in
      * runloom_pool_backend_create (lock_ensure_inited).  Ensure THIS hub's pool
@@ -558,11 +506,6 @@ void runloom_netpoll_wake_pump(void *hub_opaque)
             ssize_t w = write(fd, &one, sizeof one);
             (void)w;
         }
-    }
-#elif defined(RUNLOOM_OS_WINDOWS)
-    (void)hub_opaque;                       /* one shared IOCP for all pumps */
-    if (runloom_win_use_iocp) {
-        runloom_iocp_wake();
     }
 #elif defined(RUNLOOM_HAVE_KQUEUE)
     /* Per-hub kqueue: poke the TARGET hub's pool self-pipe so its (and only its)

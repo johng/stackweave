@@ -46,7 +46,7 @@ PY = sys.executable
 
 needs_sigalrm = pytest.mark.skipif(
     not hasattr(__import__("signal"), "SIGALRM"),
-    reason="the fault site raises SIGALRM; Windows has none")
+    reason="the fault site raises SIGALRM")
 
 
 # One fiber, one park, no timing.  connect() to 240.0.0.1 (class-E, never

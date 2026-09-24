@@ -34,12 +34,12 @@ PY = sys.executable
 #   - SPAWN_G / SPAWN_STACK: goroutine-spawn allocation OOM (every platform).
 #   - FD_READ / FD_WRITE: module_fdio's cooperative read/write loops.
 # Deliberately absent (pass explicitly if you know better):
-#   - TCP_*: RUNLOOM_TCP_FINJ compiles to a no-op outside Windows/kqueue -- the
+#   - TCP_*: RUNLOOM_TCP_FINJ compiles to a no-op outside kqueue -- the
 #     Linux TCP error-path campaign is driven by strace -e inject= instead
 #     (see netpoll_init.c.inc's fault-injection header).
 #   - SPAWN_TSTATE: declared in the site enum but currently unwired (no call
 #     site) -- exhausts at N=1 by construction.
-#   - pump sites (WSAPOLL/IOCP_*/KQUEUE_*/SELECT): other backends only.
+#   - pump sites (KQUEUE_*/SELECT): other backends only.
 LINUX_SITES = [
     "SPAWN_G", "SPAWN_STACK",
     "FD_READ", "FD_WRITE",

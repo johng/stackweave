@@ -52,7 +52,7 @@ _WAIT_FD_CANCELLED = getattr(stackweave_c, "WAIT_FD_CANCELLED", 0x40000000)
 # 8 MB thread stack, the fiber merely parks on the offload) ONLY when there
 # is no usable epoll -- a non-epollable fd (regular file/char device, which
 # select treats as always-ready but epoll rejects) or a platform without epoll
-# (Windows; *BSD/macOS could grow a kqueue path later).  The offload never runs
+# (*BSD/macOS could grow a kqueue path later).  The offload never runs
 # select inline on the fiber stack, so the fat frame is never an issue.
 # ============================================================
 _orig_select_select = None

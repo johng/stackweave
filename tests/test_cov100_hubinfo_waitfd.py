@@ -56,8 +56,6 @@ import pytest
 import stackweave_c as rc
 from adv_util import hang_guard, needs_free_threading, pollable_pipe
 
-_IS_WINDOWS = sys.platform == "win32"
-
 READ, WRITE = 1, 2
 FT = needs_free_threading()
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -187,8 +185,7 @@ def test_sched_reset_drains_same_thread_wait_fd_parker():
     res = {}
 
     def waiter():
-        # park forever on a never-ready fd; only the drain frees it.  On Windows
-        # iocp-afd cannot poll a pipe, so use a socketpair read end there.
+        # park forever on a never-ready fd; only the drain frees it.
         r, w, keep = pollable_pipe()
         res["fds"] = (r, w)
         res["keep"] = keep
@@ -234,8 +231,7 @@ def test_sched_reset_drains_many_same_thread_parkers():
     res = {"fds": [], "keep": []}
 
     def waiter():
-        # never-ready park-forever fd; socketpair on Windows (iocp-afd can't
-        # poll a pipe), os.pipe on POSIX.
+        # never-ready park-forever fd.
         r, w, keep = pollable_pipe()
         res["fds"].append((r, w))
         if keep is not None:
@@ -320,9 +316,6 @@ sys.stdout.write("SIGWAKE caught=%r rv=%r escaped=%r\n" % (
 
 
 @pytest.mark.skipif(not FT, reason="signal-into-wait_fd needs the runtime")
-@pytest.mark.skipif(_IS_WINDOWS, reason=(
-    "uses signal.SIGALRM + signal.setitimer(ITIMER_REAL), which do not exist on "
-    "Windows; the signal-wake-into-wait_fd path is POSIX-signal specific"))
 def test_signal_handler_raises_into_wait_fd_parker():
     """Drives netpoll_wait_fd.c.inc L101 (the signal_wake claim-loop load) and
     the wait_fd signal-restore tail (L401-411).

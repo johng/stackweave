@@ -3,7 +3,7 @@
  * Implementations:
  *   arch/swap_x86_64.S   System V x86_64 (Linux, macOS, BSD)
  *   (future)             aarch64, arm, riscv, x86_64-MS, x86 32-bit
- *   coro.c fallback      ucontext (POSIX, slow), Fibers (Windows)
+ *   coro.c fallback      ucontext (POSIX, slow)
  *
  * Contract:
  *   runloom_asm_ctx_t holds a single "stack pointer" word.

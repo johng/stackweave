@@ -465,9 +465,7 @@ struct runloom_g {
     /* Per-incarnation fiber id (Go's goid analogue).  Assigned fresh
      * at each spawn from a block-batched global counter; unique + always
      * positive for the life of the process.  Read by the dump, written at
-     * spawn with an atomic store.  0 until first spawned.  `long long` (not
-     * uint64_t) so the MSVC _Generic atomic shim has a matching slot --
-     * uint64_t is `unsigned __int64` there, which the shim doesn't name. */
+     * spawn with an atomic store.  0 until first spawned. */
     long long id;
     /* Monotonic-ns timestamp of the last state transition into a PARKED_*
      * state, stamped only when introspection timestamping is enabled

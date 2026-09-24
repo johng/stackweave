@@ -251,8 +251,8 @@ static PyObject *m_sim_foreign_wake_count(PyObject *self, PyObject *unused)
     return PyLong_FromLongLong(runloom_sim_foreign_wake_total());
 }
 
-/* Test-only: read how many times a Windows netpoll fault-injection site fired
- * (see netpoll.c).  Returns -1 for an unknown site / non-Windows build. */
+/* Test-only: read how many times a netpoll fault-injection site fired
+ * (see netpoll_init.c.inc).  Returns -1 for an unknown site. */
 static PyObject *m_fault_count(PyObject *self, PyObject *arg)
 {
     const char *name;

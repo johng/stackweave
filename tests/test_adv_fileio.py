@@ -20,8 +20,6 @@ import pytest
 import stackweave_c as rc
 from adv_util import hang_guard
 
-POSIX = sys.platform != "win32"
-
 
 def _run_single(fn):
     box = {}
@@ -95,7 +93,6 @@ def test_many_concurrent_file_ops():
 # --------------------------------------------------------------------------
 # fd_read / fd_write on a NON-BLOCKING pipe (the correct, cooperative usage)
 # --------------------------------------------------------------------------
-@pytest.mark.skipif(not POSIX, reason="POSIX pipe fd model")
 def test_fd_read_write_nonblocking_pipe_cooperative():
     out = {}
     hold = {}
@@ -127,7 +124,6 @@ def test_fd_read_write_nonblocking_pipe_cooperative():
 # whole scheduler -- they park on EAGAIN but never set O_NONBLOCK, so read()/
 # write() blocked the OS thread.  They now set the fd non-blocking themselves.
 # --------------------------------------------------------------------------
-@pytest.mark.skipif(not POSIX, reason="POSIX fd model")
 def test_fd_read_on_blocking_fd_cooperates():
     out = {}
     hold = {}
@@ -160,7 +156,6 @@ def test_fd_read_on_blocking_fd_cooperates():
 # The fix routes through runloom_netpoll_wait_fd_coop (CANCELLED -> ECANCELED/-1),
 # so a cancel surfaces as OSError(ECANCELED), like every sibling cooperative path.
 # --------------------------------------------------------------------------
-@pytest.mark.skipif(not POSIX, reason="POSIX fd model")
 def test_fd_read_cancel_unblocks_not_hang():
     import errno as _errno
     out = {}
@@ -191,7 +186,6 @@ def test_fd_read_cancel_unblocks_not_hang():
     assert out["result"][1] == _errno.ECANCELED
 
 
-@pytest.mark.skipif(not POSIX, reason="POSIX fd model")
 def test_fd_write_cancel_unblocks_not_hang():
     import errno as _errno
     out = {}

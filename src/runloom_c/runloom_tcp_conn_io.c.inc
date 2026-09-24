@@ -21,7 +21,7 @@
  * Gate on the SAME condition as that suspend/restore support
  * (RUNLOOM_CRITSEC_HAVE in runloom_iframe.c): free-threaded 3.13+ with the
  * iframe TU present.  Elsewhere the GIL already serializes Python-level calls
- * (a close() has no yield point between its check and closesock, and a reader
+ * (a close() has no yield point between its check and close(), and a reader
  * cannot be preempted mid-C between EAGAIN and its park), so a no-op is correct
  * -- and it avoids holding a critical section across a park on a build that
  * would NOT suspend it. */
@@ -113,7 +113,7 @@ static void RunloomTCPConn_dealloc(RunloomTCPConn *self)
          * will never fire again (mirrors the monkey socket close hook). */
         runloom_netpoll_cancel_fd(fd);
         runloom_netpoll_unregister(fd);
-        runloom_closesock((RUNLOOM_SOCK_T)fd);
+        close(fd);
     }
 #if defined(__linux__)
     __atomic_sub_fetch(&runloom_tcpconn_live_count, 1, __ATOMIC_RELEASE);
@@ -141,7 +141,7 @@ static PyObject *RunloomTCPConn_close(RunloomTCPConn *self, PyObject *unused)
      *      (or a close racing dealloc) cannot double-close a fd number the
      *      kernel may already have re-handed to another thread.  CPython's
      *      socketmodule stores INVALID_SOCKET before closing for exactly this
-     *      reason; the old code here stored -1 only AFTER closesock while still
+     *      reason; the old code here stored -1 only AFTER close() while still
      *      advertising closed==0 for the whole cancel/unregister/close window.
      *   2. A fiber entering recv/send re-reads self->fd/self->closed under the
      *      SAME critical section AND holds it across its netpoll park (the
@@ -168,9 +168,9 @@ static PyObject *RunloomTCPConn_close(RunloomTCPConn *self, PyObject *unused)
         runloom_iouring_ms_close(ms);
     }
     /* Cancel any in-flight SINGLE-SHOT io_uring recv/send parked on this fd.
-     * io_uring pinned the file, so closesock() below would NOT complete the op;
+     * io_uring pinned the file, so close() below would NOT complete the op;
      * the parked fiber would hang until unrelated peer activity.  Submit before
-     * closesock so the cancel matches the still-open fd.  netpoll_cancel_fd below
+     * close() so the cancel matches the still-open fd.  netpoll_cancel_fd below
      * only reaches netpoll parkers, not io_uring ones.
      *
      * TWO reaches (R7 item 1, 2026-07-05):
@@ -181,7 +181,7 @@ static PyObject *RunloomTCPConn_close(RunloomTCPConn *self, PyObject *unused)
      *     fd (keeping the struct file alive past the close() below) and deposits
      *     the dup on every hub's cancel-by-fd mailbox; each hub submits an
      *     ASYNC_CANCEL_FD on its dup at loop top, matching the recv by file
-     *     identity even after the original fd closes.  MUST run before closesock
+     *     identity even after the original fd closes.  MUST run before close()
      *     so the dup captures a still-open fd.  Both are harmless no-ops when the
      *     op is elsewhere, so running both in either mode is safe. */
     if (use_iou) {
@@ -194,7 +194,7 @@ static PyObject *RunloomTCPConn_close(RunloomTCPConn *self, PyObject *unused)
      * again (mirrors the monkey socket close hook). */
     runloom_netpoll_cancel_fd(fd);
     runloom_netpoll_unregister(fd);
-    runloom_closesock((RUNLOOM_SOCK_T)fd);
+    close(fd);
     Py_RETURN_NONE;
 }
 
@@ -357,16 +357,12 @@ static PyObject *RunloomTCPConn_recv(RunloomTCPConn *self, PyObject *args)
         /* Classify (rc,errno) through the single total I/O FSM; the exhaustive
          * switch makes an unhandled return pathway a build error.  recv emits
          * only READY/EOF/WOULDBLOCK_R/INTR/ERROR (the others are impossible). */
-#if defined(RUNLOOM_OS_WINDOWS)
-        r = (long long)recv((SOCKET)local_fd, out, (int)n_bytes, flags);
-#else
         {
             int injerr = RUNLOOM_TCP_FINJ(RUNLOOM_FAULT_TCP_RECV);
             r = injerr ? (errno = injerr, -1LL)
                        : (long long)recv(local_fd, out, (size_t)n_bytes, flags);
         }
-#endif
-        RUNLOOM_IO_SWITCH(runloom_io_classify(RUNLOOM_IO_RECV, r, runloom_sock_errno())) {
+        RUNLOOM_IO_SWITCH(runloom_io_classify(RUNLOOM_IO_RECV, r, errno)) {
         case RUNLOOM_IO_READY:
         case RUNLOOM_IO_EOF:
             got = (Py_ssize_t)r;             /* >0 data, or 0 = orderly EOF */
@@ -483,7 +479,7 @@ static PyObject *RunloomTCPConn_recv_into(RunloomTCPConn *self, PyObject *args)
         /* Single-shot IORING_OP_RECV fallback (kernel < 5.19, or non-zero flags).
          * Hold the conn critical section ACROSS submit+park -- same rationale as
          * RunloomTCPConn_recv's single-shot path -- so a concurrent close() on
-         * another hub cannot deposit+drain a cancel-by-fd (or closesock + reuse
+         * another hub cannot deposit+drain a cancel-by-fd (or close() + reuse
          * the fd number) BEFORE this recv's SQE is in flight, which would strand
          * this fiber on a dead/reused fd instead of it being cancelled. */
         r = runloom_iouring_recv(fd, buf.buf, (size_t)n_bytes, flags);
@@ -510,13 +506,8 @@ static PyObject *RunloomTCPConn_recv_into(RunloomTCPConn *self, PyObject *args)
         /* recv_into: same total-FSM classification as recv (READY/EOF success,
          * WOULDBLOCK_R/INTR park, ERROR raise).  fd re-read + close re-checked +
          * park held under the section, as in recv(). */
-#if defined(RUNLOOM_OS_WINDOWS)
-        r = (long long)recv((SOCKET)local_fd, (char *)buf.buf, (int)n_bytes,
-                            flags);
-#else
         r = (long long)recv(local_fd, (char *)buf.buf, (size_t)n_bytes, flags);
-#endif
-        RUNLOOM_IO_SWITCH(runloom_io_classify(RUNLOOM_IO_RECV, r, runloom_sock_errno())) {
+        RUNLOOM_IO_SWITCH(runloom_io_classify(RUNLOOM_IO_RECV, r, errno)) {
         case RUNLOOM_IO_READY:
         case RUNLOOM_IO_EOF:
             got = (Py_ssize_t)r;

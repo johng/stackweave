@@ -189,8 +189,8 @@ def classify(logpath, rc):
         return "ERROR"
     if rc == 4:
         return "SCALE"          # benign platform scale limit (NOT a fault):
-                                # e.g. Windows WSAENOBUFS, or a known-upstream
-                                # cap the program self-reports + exits 4 for.
+                                # e.g. a known-upstream cap or unavailable
+                                # facility the program self-reports + exits 4 for.
     return "FAIL"
 
 

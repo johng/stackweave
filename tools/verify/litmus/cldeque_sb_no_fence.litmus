@@ -1,9 +1,9 @@
 C cldeque_sb_no_fence
 (*
  * THE BUG: the Chase-Lev pop-vs-steal store-buffering (SB / Dekker) hazard when
- * the OWNER's StoreLoad fence is missing -- exactly what the MSVC plat_atomic.h
- * shim caused by downgrading the SEQ_CST store of `bottom` to a plain MOV
- * (cldeque.c:52).  Reduced to its SB core on the two shared words:
+ * the OWNER's StoreLoad fence is missing -- e.g. the SEQ_CST store of `bottom`
+ * downgraded to a plain MOV (cldeque.c:57; bug 7, a since-removed MSVC atomic
+ * shim).  Reduced to its SB core on the two shared words:
  *
  *   P0 = owner pop():   store bottom (shrink), then load top   (decide claim)
  *   P1 = thief steal():  store top   (CAS advance), SC fence, load bottom

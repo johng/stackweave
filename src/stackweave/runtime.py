@@ -4,7 +4,7 @@ This module delegates to the C scheduler (stackweave_c.fiber / .run / .sched_*)
 for all fiber state management.  An earlier version implemented the
 scheduler in Python on top of raw stackweave_c.Coro -- that worked for one
 fiber at a time but tangled Python's tstate.cframe chain across
-multiple concurrent fibers, crashing the process on Windows Fibers.
+multiple concurrent fibers, crashing the process.
 The C scheduler does per-g tstate snapshots which is the only correct
 way to multiplex Python frames across stacks.
 

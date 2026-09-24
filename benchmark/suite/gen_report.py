@@ -1006,10 +1006,9 @@ def sec_code():
 
 def sec_profiles():
     links = [
-        ("big100_syscall_backends.html", "Cross-backend syscall comparison (epoll vs kqueue vs IOCP)"),
+        ("big100_syscall_backends.html", "Cross-backend syscall comparison (epoll vs kqueue)"),
         ("big100_syscall_profile_linux.html", "Linux syscall profile (strace, epoll)"),
         ("big100_syscall_profile_mac.html", "macOS syscall profile (ktrace/KDEBUG, kqueue)"),
-        ("big100_syscall_profile_win.html", "Windows syscall profile (xperf, IOCP-AFD)"),
     ]
     items = []
     for fn, desc in links:
@@ -1017,7 +1016,7 @@ def sec_profiles():
             items.append('<li><a href="%s">%s</a> &mdash; %s</li>' % (fn, fn, desc))
     return ('<h2 id="profiles">Cross-platform backend profiling</h2>'
             '<p>Pre-existing syscall-level profiles of the stackweave backends on each OS '
-            '(how epoll / kqueue / IOCP differ under the big_100 workload):</p>'
+            '(how epoll / kqueue differ under the big_100 workload):</p>'
             '<ul>%s</ul>' % "".join(items))
 
 

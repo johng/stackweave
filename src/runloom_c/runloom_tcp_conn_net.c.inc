@@ -28,23 +28,6 @@ static PyObject *RunloomTCPConn_listen_cls(PyTypeObject *cls, PyObject *args, Py
     if (runloom_resolve(host, port, /*passive*/1, &addr, &addrlen, &family) != 0)
         return NULL;
 
-#if defined(RUNLOOM_OS_WINDOWS)
-    runloom_winsock_init();
-    {
-        SOCKET s = socket(family, SOCK_STREAM, IPPROTO_TCP);
-        if (s == INVALID_SOCKET) return runloom_raise_errno();
-        (void)setsockopt(s, SOL_SOCKET, SO_REUSEADDR,
-                         (const char *)&on, sizeof(on));
-        if (bind(s, (struct sockaddr *)&addr, addrlen) == SOCKET_ERROR ||
-            listen(s, backlog) == SOCKET_ERROR) {
-            int saved = WSAGetLastError();
-            closesocket(s);
-            WSASetLastError(saved);
-            return runloom_raise_errno();
-        }
-        fd = (int)s;
-    }
-#else
     {   int injerr = RUNLOOM_TCP_FINJ(RUNLOOM_FAULT_TCP_SOCKET);
         fd = injerr ? (errno = injerr, -1)
                     : socket(family, SOCK_STREAM, IPPROTO_TCP); }
@@ -61,13 +44,12 @@ static PyObject *RunloomTCPConn_listen_cls(PyTypeObject *cls, PyObject *args, Py
         errno = saved;
         return PyErr_SetFromErrno(PyExc_OSError);
     }
-#endif
 
     runloom_set_nonblock(fd);
 
     result = RunloomTCPConn_alloc(cls);
     if (result == NULL) {
-        runloom_closesock((RUNLOOM_SOCK_T)fd);
+        close(fd);
         return NULL;
     }
     result->fd = fd;
@@ -104,20 +86,12 @@ static PyObject *RunloomTCPConn_accept(RunloomTCPConn *self, PyObject *unused)
     }
 
     while (1) {
-        /* Success is detected with each platform's native idiom (a SOCKET handle
-         * is not a small signed fd); the total I/O FSM then classifies a FAILURE
+        /* Success is new_fd >= 0; the total I/O FSM then classifies a FAILURE
          * into park-and-retry (WOULDBLOCK_R / INTR / RETRY) vs raise (ERROR).
          * RETRY == ECONNABORTED: the peer reset between the SYN and our accept --
          * a transient, not a listener failure.  Go's netpoll and libuv both retry
-         * it; surfacing it spuriously killed the accept loop.  Routing it through
-         * the shared classifier also applies that retry on the WSA backend
-         * (WSAECONNABORTED), where the old branch raised it. */
+         * it; surfacing it spuriously killed the accept loop. */
         runloom_io_event_t ev;
-#if defined(RUNLOOM_OS_WINDOWS)
-        SOCKET s = accept((SOCKET)self->fd, NULL, NULL);
-        if (s != INVALID_SOCKET) { new_fd = (int)s; break; }
-        ev = runloom_io_classify(RUNLOOM_IO_ACCEPT, -1, runloom_sock_errno());
-#else
         int injerr = RUNLOOM_TCP_FINJ(RUNLOOM_FAULT_TCP_ACCEPT);
         if (injerr) { new_fd = (errno = injerr, -1); }
 #if defined(__linux__) && defined(SOCK_NONBLOCK)
@@ -133,7 +107,6 @@ static PyObject *RunloomTCPConn_accept(RunloomTCPConn *self, PyObject *unused)
         else { new_fd = accept(self->fd, NULL, NULL); }
         if (new_fd >= 0) break;
         ev = runloom_io_classify(RUNLOOM_IO_ACCEPT, -1, errno);
-#endif
         RUNLOOM_IO_SWITCH(ev) {
         case RUNLOOM_IO_WOULDBLOCK_R:
         case RUNLOOM_IO_INTR:
@@ -161,7 +134,7 @@ static PyObject *RunloomTCPConn_accept(RunloomTCPConn *self, PyObject *unused)
 
     result = RunloomTCPConn_alloc(Py_TYPE(self));
     if (result == NULL) {
-        runloom_closesock((RUNLOOM_SOCK_T)new_fd);
+        close(new_fd);
         return NULL;
     }
     result->fd = new_fd;
@@ -191,56 +164,15 @@ static PyObject *RunloomTCPConn_connect_cls(PyTypeObject *cls, PyObject *args, P
     if (runloom_resolve(host, port, /*passive*/0, &addr, &addrlen, &family) != 0)
         return NULL;
 
-#if defined(RUNLOOM_OS_WINDOWS)
-    runloom_winsock_init();
-    {
-        SOCKET s = socket(family, SOCK_STREAM, IPPROTO_TCP);
-        if (s == INVALID_SOCKET) return runloom_raise_errno();
-        fd = (int)s;
-    }
-#else
     {   int injerr = RUNLOOM_TCP_FINJ(RUNLOOM_FAULT_TCP_SOCKET);
         fd = injerr ? (errno = injerr, -1)
                     : socket(family, SOCK_STREAM, IPPROTO_TCP); }
     if (fd < 0) return PyErr_SetFromErrno(PyExc_OSError);
-#endif
 
     runloom_set_nonblock(fd);
 
-    /* Non-blocking connect.  If the connect returns EINPROGRESS
-     * (or WSAEWOULDBLOCK on Windows), park on WRITE and read
-     * SO_ERROR to determine final status. */
-#if defined(RUNLOOM_OS_WINDOWS)
-    rc = connect((SOCKET)fd, (struct sockaddr *)&addr, addrlen);
-    if (rc == SOCKET_ERROR) {
-        int err = WSAGetLastError();
-        /* Observational: same total I/O FSM on the WSA backend (WSAEWOULDBLOCK
-         * -> WOULDBLOCK_W -> park WRITE + SO_ERROR; else ERROR). */
-        RUNLOOM_IO_NOTE(RUNLOOM_IO_CONNECT,
-                        runloom_io_classify(RUNLOOM_IO_CONNECT, -1, runloom_sock_errno()));
-        if (err == WSAEWOULDBLOCK) {
-            if (runloom_netpoll_wait_fd_coop(fd, RUNLOOM_NETPOLL_WRITE, -1LL) < 0) {
-                int saved = errno;
-                closesocket((SOCKET)fd);
-                errno = saved;
-                /* wait_fd may have run a Python signal handler that raised (e.g. an
-                 * alarm handler / Ctrl-C) -> propagate it; don't overwrite with OSError. */
-                return PyErr_Occurred() ? NULL : PyErr_SetFromErrno(PyExc_OSError);
-            }
-            int sockerr = 0; int optlen = sizeof(sockerr);
-            if (getsockopt((SOCKET)fd, SOL_SOCKET, SO_ERROR,
-                           (char *)&sockerr, &optlen) == 0 && sockerr != 0) {
-                closesocket((SOCKET)fd);
-                WSASetLastError(sockerr);
-                return runloom_raise_errno();
-            }
-        } else {
-            closesocket((SOCKET)fd);
-            WSASetLastError(err);
-            return runloom_raise_errno();
-        }
-    }
-#else
+    /* Non-blocking connect.  If the connect returns EINPROGRESS,
+     * park on WRITE and read SO_ERROR to determine final status. */
     rc = connect(fd, (struct sockaddr *)&addr, addrlen);
     {   /* test-only: override the result AFTER the real connect() initiates the
          * connection, so EINTR is modelled as a signal on an in-flight connect
@@ -288,13 +220,12 @@ static PyObject *RunloomTCPConn_connect_cls(PyTypeObject *cls, PyObject *args, P
             return PyErr_SetFromErrno(PyExc_OSError);
         }
     }
-#endif
 
     runloom_set_nodelay(fd, family);
 
     result = RunloomTCPConn_alloc(cls);
     if (result == NULL) {
-        runloom_closesock((RUNLOOM_SOCK_T)fd);
+        close(fd);
         return NULL;
     }
     result->fd = fd;
@@ -313,12 +244,7 @@ static PyObject *RunloomTCPConn_setsockopt(RunloomTCPConn *self, PyObject *args)
     Py_buffer val;
     int rc;
     if (!PyArg_ParseTuple(args, "iiy*", &level, &optname, &val)) return NULL;
-#if defined(RUNLOOM_OS_WINDOWS)
-    rc = setsockopt((SOCKET)self->fd, level, optname,
-                    (const char *)val.buf, (int)val.len);
-#else
     rc = setsockopt(self->fd, level, optname, val.buf, (socklen_t)val.len);
-#endif
     PyBuffer_Release(&val);
     if (rc != 0) return runloom_raise_errno();
     Py_RETURN_NONE;

@@ -2,7 +2,7 @@
 
 The cooperative fd I/O loop (POSIX read(2)/write(2) with netpoll parking) is
 faulted in-process via STACKWEAVE_FAULT_FD_READ / STACKWEAVE_FAULT_FD_WRITE (see module.c +
-netpoll.c) -- uniform across kqueue/epoll/Windows, no tracer needed.  Uses the
+netpoll.c) -- uniform across kqueue/epoll, no tracer needed.  Uses the
 errno module so it is correct on every platform.  Asserts:
 
   EINTR        -> retried (continue); the pipe round-trips.
@@ -10,8 +10,7 @@ errno module so it is correct on every platform.  Asserts:
   EIO / EBADF  on read  -> a clean OSError, never a crash or hang.
   EPIPE/EIO/EBADF on write -> a clean OSError.
 
-no-gil only.  POSIX only (on Windows fd_read/write block the OS thread -- there
-is no cooperative retry loop to fault).
+no-gil only.
 """
 import errno as E
 import os
@@ -20,10 +19,6 @@ import subprocess
 import sys
 
 import pytest
-
-pytestmark = pytest.mark.skipif(
-    sys.platform.startswith("win"),
-    reason="fd_read/fd_write block the OS thread on Windows; no loop to fault")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)

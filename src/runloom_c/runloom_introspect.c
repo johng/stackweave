@@ -1,9 +1,7 @@
 /* runloom_introspect.c -- fiber registry + developer-facing dump.
  * See runloom_introspect.h for the contract and the lifetime reasoning. */
 
-#if !defined(_WIN32)
-#  define _POSIX_C_SOURCE 200809L
-#endif
+#define _POSIX_C_SOURCE 200809L
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 
@@ -26,20 +24,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#if defined(_WIN32)
-#  include <io.h>
-#else
-#  include <unistd.h>
-#endif
+#include <unistd.h>
 
 /* ---------------------------------------------------------------- *
  *  Monotonic clock                                                 *
  * ---------------------------------------------------------------- */
 long long runloom_introspect_monotonic_ns(void)
 {
-    /* Cross-platform (QueryPerformanceCounter on Windows, CLOCK_MONOTONIC on
-     * POSIX) -- the raw CLOCK_MONOTONIC path used to return 0 on MSVC, which
-     * left park-age tracking dead on Windows. */
     return runloom_monotonic_ns();
 }
 
@@ -51,10 +42,6 @@ long long runloom_introspect_monotonic_ns(void)
  *  cacheline is touched only once per GOID_BLOCK spawns.  Ids are   *
  *  compact + roughly monotonic, which is what a human wants.        *
  * ---------------------------------------------------------------- */
-/* `long long` (not uint64_t): the MSVC _Generic atomic shim names long long
- * but not unsigned __int64 (== uint64_t there) -- and __atomic_fetch_add has
- * no unsigned-long-long slot at all.  Ids are always positive, so signed is
- * fine. */
 #define RUNLOOM_GOID_BLOCK 1024
 static long long runloom_fiberid_global = 1;   /* next id to hand out (1-based) */
 static RUNLOOM_TLS long long runloom_tls_goid_next = 0;
@@ -482,9 +469,6 @@ void runloom_set_deadlock_mode(int mode)
 static void emit(int fd, const char *buf, size_t len)
 {
     if (fd < 0) { (void)fwrite(buf, 1, len, stderr); return; }
-#if defined(_WIN32)
-    (void)_write(fd, buf, (unsigned)len);
-#else
     {
         ssize_t off = 0;
         while ((size_t)off < len) {
@@ -493,7 +477,6 @@ static void emit(int fd, const char *buf, size_t len)
             off += w;
         }
     }
-#endif
 }
 
 /* emit() a string literal; the length comes from the literal itself. */

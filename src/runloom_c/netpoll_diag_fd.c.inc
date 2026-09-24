@@ -2,9 +2,7 @@
  * standalone.  See netpoll.c for the includes/typedefs/file-scope state
  * these definitions depend on. */
 
-#if !defined(RUNLOOM_OS_WINDOWS)
 #include <poll.h>   /* runloom_netpoll_dump_parkers ready-but-parked probe */
-#endif
 
 
 int runloom_netpoll_inspect_for_self_check(struct runloom_self_check_stats *out)
@@ -122,7 +120,6 @@ void runloom_netpoll_dump_parkers(void)
             else if (e == RUNLOOM_NETPOLL_WRITE) wr++;
             else if (e == (RUNLOOM_NETPOLL_READ | RUNLOOM_NETPOLL_WRITE)) rdwr++;
             else other++;
-#if !defined(RUNLOOM_OS_WINDOWS)
             /* Diagnostic readiness probe (lost-wakeup detector): is this fd
              * ACTUALLY ready right now while its g is still parked?  If many are
              * ready-but-parked the wedge is a lost netpoll wakeup; if few/none
@@ -136,7 +133,6 @@ void runloom_netpoll_dump_parkers(void)
                 if (poll(&pfd, 1, 0) > 0 &&
                     (pfd.revents & (want | POLLHUP | POLLERR))) rdyp++;
             }
-#endif
         }
         m = snprintf(buf, sizeof buf,
             "[parker-dump] pool#%d total=%d walked=%d READ=%d WRITE=%d RW=%d other=%d readyParked=%d kq=%d\n",
@@ -206,7 +202,7 @@ static size_t         runloom_fd_registered_cap_bytes = 0;
  * buffer IS the optimal proof on this hot, lock-free path (the ACQ_REL pairing
  * above is the correctness argument).  A transition table / NOTE-edge would be
  * ceremony with no missing-handler bug to catch.  Backend-agnostic: epoll, kqueue,
- * select, and WSAPoll all feed it via the same pump -> parker recheck. */
+ * and select all feed it via the same pump -> parker recheck. */
 static unsigned char *runloom_fd_pending_wake = NULL;
 static size_t         runloom_fd_pending_wake_cap = 0;
 
@@ -241,7 +237,6 @@ static size_t runloom_fd_cap_target(void)
 {
     size_t target = 65536;
     const char *env;
-#if !defined(RUNLOOM_OS_WINDOWS)
     struct rlimit r;
     if (getrlimit(RLIMIT_NOFILE, &r) == 0) {
         if (r.rlim_max != RLIM_INFINITY && r.rlim_max > 0)
@@ -249,7 +244,6 @@ static size_t runloom_fd_cap_target(void)
         else if (r.rlim_cur != RLIM_INFINITY && r.rlim_cur > 0)
             target = (size_t)r.rlim_cur;
     }
-#endif
     env = getenv("STACKWEAVE_NETPOLL_MAXFD");
     if (env != NULL && *env != '\0') {
         char *end = NULL;
@@ -373,8 +367,8 @@ static int runloom_fd_pending_wake_consume(int fd, int events)
          * must consume), and EXCLUDE POLLNVAL: a closed-but-reused fd number
          * polls rc=1 with revents=POLLNVAL, so trusting poll's RETURN COUNT as
          * "ready" would re-admit the very double-count we are killing.  Gated to
-         * epoll: kqueue (EV_ONESHOT) and IOCP/WSAPoll (per-parker IRPs) never
-         * stash, so `pending` is always 0 there and this block is dead anyway. */
+         * epoll: kqueue (EV_ONESHOT) never stashes, so `pending` is always 0
+         * there and this block is dead anyway. */
         if (pending != 0) {
             struct pollfd pfd;
             int pr;
@@ -518,20 +512,6 @@ static int                       runloom_iouring_ring_count = 0;
  * runloom_pool_backend_create() at pool lazy-init.  A single shared kqueue
  * serialised every hub's register/collect/wake on the kernel's per-kqueue lock
  * and collapsed connect throughput super-linearly with hub count. */
-#elif defined(RUNLOOM_OS_WINDOWS)
-#  include "netpoll_iocp.h"
-/* Runtime-selected Windows backend.  Tier order:
- *   1. IOCP+AFD via \Device\Afd -- fastest at scale, O(1) per
- *      ready socket.  Requires NtDeviceIoControlFile (NT 4.0+).
- *   2. WSAPoll -- Vista+, no FD_SETSIZE cap, linear over fds.
- *   3. select() -- XP / Server 2003 fallback.
- *
- * Selection happens once in runloom_netpoll_init; backend_name is
- * exported via runloom_c.netpoll_backend() for introspection. */
-typedef int (WSAAPI *runloom_wsapoll_fn)(LPWSAPOLLFD, ULONG, INT);
-static runloom_wsapoll_fn runloom_win_wsapoll = NULL;
-static int             runloom_win_use_iocp = 0;
-static const char     *runloom_win_backend_name = "select";   /* updated by init */
 #else
 /* POSIX select() fallback: self-pipe pump interrupt -- the select()
  * analogue of the epoll eventfd.  The read end joins every select()

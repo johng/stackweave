@@ -18,8 +18,6 @@ deadline (Go removes a stopped timer from its heap immediately).
 """
 import numbers
 import os as _os
-import socket as _socket
-import sys as _sys
 import threading as _threading
 import time as _time
 
@@ -37,21 +35,13 @@ import stackweave_c
 # exactly the primitive stackweave.context's deadline waker uses.
 #
 # The fd is created ONCE, eagerly at import (single-threaded, before any fiber
-# runs and before monkey.patch(), so the REAL un-patched pipe/socket is used):
-# a lazy per-timer fd would race under free-threading and, on Windows, storm
-# heavy socketpair() fallbacks.  Nothing is ever written to either end, so READ
-# never becomes ready -- a parked fiber only ever times out or is cancelled.
-# On Windows the readiness backend can only poll Winsock sockets, so use a
-# socketpair (an AF_INET loopback pair AFD can poll); on POSIX a pipe.
+# runs and before monkey.patch(), so the REAL un-patched pipe is used): a lazy
+# per-timer fd would race under free-threading.  Nothing is ever written to
+# either end, so READ never becomes ready -- a parked fiber only ever times out
+# or is cancelled.
 _READ = 1   # stackweave_c.wait_fd READ direction
 
-_wake_socks = None   # keep the Windows socketpair alive so the fds stay valid
-if _sys.platform == "win32":
-    _s1, _s2 = _socket.socketpair()
-    _wake_socks = (_s1, _s2)
-    _wake_rfd = _s1.fileno()
-else:
-    _wake_rfd, _wake_wfd = _os.pipe()
+_wake_rfd, _wake_wfd = _os.pipe()
 
 
 def _check_duration(seconds):

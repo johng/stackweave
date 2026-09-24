@@ -15,10 +15,7 @@ to exactly 0 after.  Driven under M:N run(8) on purpose -- the bug needs the
 cross-hub pump timing that the single-thread drain loop does not exercise.
 """
 import os
-import sys
 import time
-
-import pytest
 
 import stackweave
 import stackweave_c
@@ -26,11 +23,6 @@ import stackweave_c
 READ = 1
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason=(
-    "epoll is LEVEL-triggered and this reproduces a pipe-fd stale pending-wake "
-    "stash on fd-number reuse; the Windows iocp-afd backend polls Winsock "
-    "sockets only (no pipe wait_fd) and has no level-triggered pending-wake "
-    "bitmap, so the scenario does not apply"))
 def test_fd_reuse_no_spurious_wait_fd_return():
     """Alternating wake / no-wake cycles that REUSE one pipe fd: a no-write
     cycle must block to its deadline, never return early off a stale stash."""

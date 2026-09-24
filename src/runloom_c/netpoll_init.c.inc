@@ -3,9 +3,6 @@
  * these definitions depend on. */
 
 
-/* Initialise pool->lock once, regardless of platform.  POSIX could use
- * PTHREAD_MUTEX_INITIALIZER and skip this, but Windows CRITICAL_SECTION
- * has no static-init form so the lazy-init pattern is uniform. */
 /* Per-pool kqueue + pump-wake self-pipe (BSD/macOS).  Each hub's pool gets its
  * OWN kqueue so register/collect/wake never contend on the kernel's single
  * per-kqueue lock across hubs.  Best-effort: on any failure the field stays -1
@@ -98,21 +95,6 @@ static void runloom_pool_backend_create(runloom_parker_pool_t *pool)
 
 static void runloom_parker_pool_lock_ensure_inited(runloom_parker_pool_t *pool)
 {
-#if defined(RUNLOOM_OS_WINDOWS)
-    /* InterlockedCompareExchange returns the prior value; only the
-     * first caller transitions 0 -> 1 and runs the init. */
-    if (InterlockedCompareExchange(&pool->lock_inited, 1, 0) == 0) {
-        runloom_mutex_init(&pool->lock);
-        runloom_pool_backend_create(pool);
-    } else {
-        /* Spin briefly while another thread finishes init.  In practice
-         * the init is one InitializeCriticalSection call (~100 ns), so
-         * any starvation here is bounded. */
-        while (pool->lock_inited != 2) { /* spin */ }
-        return;
-    }
-    pool->lock_inited = 2;
-#else
     if (__atomic_load_n(&pool->lock_inited, __ATOMIC_ACQUIRE) == 2) {
         return;
     }
@@ -126,7 +108,6 @@ static void runloom_parker_pool_lock_ensure_inited(runloom_parker_pool_t *pool)
         while (__atomic_load_n(&pool->lock_inited, __ATOMIC_ACQUIRE) != 2)
             { /* spin */ }
     }
-#endif
 }
 
 const char *runloom_netpoll_backend(void)
@@ -135,12 +116,6 @@ const char *runloom_netpoll_backend(void)
     return "epoll";
 #elif defined(RUNLOOM_HAVE_KQUEUE)
     return "kqueue";
-#elif defined(RUNLOOM_OS_WINDOWS)
-    /* Force init so the IOCP/WSAPoll probe runs.  Without this the
-     * default string ("select") is returned even when IOCP would
-     * succeed -- the actual init only runs on first wait. */
-    if (!__atomic_load_n(&runloom_netpoll_inited, __ATOMIC_ACQUIRE)) runloom_netpoll_init();
-    return runloom_win_backend_name;
 #else
     return "select";
 #endif
@@ -185,14 +160,14 @@ int runloom_netpoll_hub_epoll_fd(void)
 
 /* ---- netpoll syscall fault injection (test-only) ----------------------- *
  * Where strace's `-e inject=` drives the Linux epoll campaign, the platforms
- * WITHOUT a syscall-injecting tracer (Windows; FreeBSD/macOS kqueue) gate IN
- * PROCESS on env vars.  RUNLOOM_FAULT_<SITE> = "<mode>:<code>", mode in
+ * WITHOUT a syscall-injecting tracer (FreeBSD/macOS kqueue) gate IN PROCESS on
+ * env vars.  RUNLOOM_FAULT_<SITE> = "<mode>:<code>", mode in
  * {once, always, nth}, forces the named pump syscall to report a failure:
  *   once:CODE   -- inject CODE exactly the first time the site is reached
  *   always:CODE -- inject CODE every time (persistent error)
  *   nth:N:CODE  -- inject CODE exactly the Nth (1-based) time the site is
  *                  reached -- the counted-exhaustive sweep's primitive
- * code is a WSA error (Windows) or an errno (kqueue).  Each site counts how
+ * code is an errno.  Each site counts how
  * many times it fired (read via runloom_c._fault_count) so a test can prove a
  * PERSISTENT error BACKS OFF (bounded count) instead of busy-spinning.  Inert
  * unless the env var is set (one getenv per pump iteration when armed).  The
@@ -200,8 +175,7 @@ int runloom_netpoll_hub_epoll_fd(void)
  * the introspection uniformly (they stay zero on epoll, which uses strace). */
 /* Fault-injection site enum lives in netpoll.h (shared with runloom_tcp.c). */
 static const char *const runloom_fault_names[RUNLOOM_FAULT_NSITES] = {
-    "WSAPOLL", "SELECT", "IOCP_WAIT", "IOCP_SUBMIT", "KQUEUE_WAIT",
-    "KQUEUE_CREATE", "KQUEUE_CTL", "KQUEUE_PERHUB",
+    "SELECT", "KQUEUE_WAIT", "KQUEUE_CREATE", "KQUEUE_CTL", "KQUEUE_PERHUB",
     "TCP_SOCKET", "TCP_CONNECT", "TCP_ACCEPT", "TCP_RECV", "TCP_SEND",
     "FD_READ", "FD_WRITE",
     "SPAWN_G", "SPAWN_STACK", "SPAWN_TSTATE" };
@@ -231,12 +205,11 @@ void runloom_fault_reset(void)
     }
 }
 
-/* Compiled on every platform: the netpoll pump faults (KQUEUE/SELECT/IOCP/
- * WSAPOLL) only fire on their own backend, but the syscall-surface faults
+/* Compiled on every platform: the netpoll pump faults (KQUEUE/SELECT) only
+ * fire on their own backend, but the syscall-surface faults
  * (TCP_*, FD_*) are reachable on Linux too (e.g. module.c fd_read/fd_write). */
 static const char *const runloom_fault_envs[RUNLOOM_FAULT_NSITES] = {
-    "STACKWEAVE_FAULT_WSAPOLL", "STACKWEAVE_FAULT_SELECT", "STACKWEAVE_FAULT_IOCP_WAIT",
-    "STACKWEAVE_FAULT_IOCP_SUBMIT", "STACKWEAVE_FAULT_KQUEUE_WAIT",
+    "STACKWEAVE_FAULT_SELECT", "STACKWEAVE_FAULT_KQUEUE_WAIT",
     "STACKWEAVE_FAULT_KQUEUE_CREATE", "STACKWEAVE_FAULT_KQUEUE_CTL",
     "STACKWEAVE_FAULT_KQUEUE_PERHUB",
     "STACKWEAVE_FAULT_TCP_SOCKET", "STACKWEAVE_FAULT_TCP_CONNECT", "STACKWEAVE_FAULT_TCP_ACCEPT",
@@ -278,59 +251,23 @@ int runloom_fault_inject(int site)
         if (n <= 0 || end == NULL || *end != ':') return 0;
         code = atoi(end + 1);
         if (code == 0) return 0;
-#if defined(RUNLOOM_OS_WINDOWS)
-        hit = InterlockedIncrement(&runloom_fault_seen[site]);
-#else
         hit = __atomic_add_fetch(&runloom_fault_seen[site], 1, __ATOMIC_ACQ_REL);
-#endif
         if (hit != n) return 0;
         goto fire;
     }
     else return 0;
     if (code == 0) return 0;
     if (once) {
-#if defined(RUNLOOM_OS_WINDOWS)
-        if (InterlockedCompareExchange(&runloom_fault_once_done[site], 1, 0) != 0)
-            return 0;          /* once-mode already fired */
-#else
         long expected = 0;
         if (!__atomic_compare_exchange_n(&runloom_fault_once_done[site], &expected,
                 1, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
             return 0;
-#endif
     }
 fire:
-#if defined(RUNLOOM_OS_WINDOWS)
-    InterlockedIncrement(&runloom_fault_fired[site]);
-#else
     __atomic_add_fetch(&runloom_fault_fired[site], 1, __ATOMIC_RELAXED);
-#endif
     return code;
 }
 
-#if defined(RUNLOOM_OS_WINDOWS)
-/* Windows analogue of runloom_netpoll_wait_failed (epoll/kqueue): a hard poll
- * error returns WITHOUT blocking, so a persistent one (a polled socket closed
- * under us -> WSAENOTSOCK, a teardown race) would peg a CPU as the idle loop
- * re-pumps the instant pump() returns.  WSAEINTR is transient (retry, no
- * backoff); anything else logs once and sleeps 1 ms, degrading a silent CPU
- * peg into an observable, throttled slow-loop.  Returns 1 (handled). */
-static int runloom_netpoll_win_wait_failed(int wsa_err)
-{
-    static volatile LONG warned;
-    if (wsa_err == WSAEINTR) return 1;
-    if (InterlockedExchange(&warned, 1) == 0) {
-        fprintf(stderr,
-                "[stackweave] netpoll pump: Windows poll failed (WSA=%d); backing off "
-                "to avoid a busy-spin -- the polled socket is likely closed "
-                "(teardown race) or invalid\n", wsa_err);
-    }
-    Py_BEGIN_ALLOW_THREADS
-    Sleep(1);
-    Py_END_ALLOW_THREADS
-    return 1;
-}
-#endif /* RUNLOOM_OS_WINDOWS */
 
 int runloom_netpoll_init(void)
 {
@@ -341,7 +278,7 @@ int runloom_netpoll_init(void)
     if (__atomic_load_n(&runloom_netpoll_inited, __ATOMIC_ACQUIRE)) return 0;
     runloom_parker_pool_lock_ensure_inited(&runloom_pool);
     /* EVERYTHING that brings the backend up runs under runloom_pool.lock:
-     * the per-fd arrays AND the single shared epoll/kqueue/IOCP handle.
+     * the per-fd arrays AND the single shared epoll/kqueue handle.
      *
      * The old code checked `inited` unlocked, then created the backend
      * OUTSIDE the lock.  Under M:N every hub calls this concurrently at
@@ -413,37 +350,6 @@ int runloom_netpoll_init(void)
      * inline single-kqueue self-pipe setup that lived here on main is gone --
      * just validate the default pool's kqueue came up. */
     if (runloom_pool.kqueue_fd < 0) { RUNLOOM_RUNLOCK(&runloom_pool.lock, RUNLOOM_RANK_PARKER_POOL); return -1; }
-#elif defined(RUNLOOM_OS_WINDOWS)
-    /* Bring up Winsock once.  Idempotent via plat_compat's
-     * InterlockedCompareExchange guard. */
-    runloom_winsock_init();
-    /* Backend selection on Windows.  Default tier order:
-     *   1. IOCP+AFD     - NT 5.1+; O(1) per ready socket, scales to 10k+
-     *   2. WSAPoll      - Vista+ fallback (linear walk per call)
-     *   3. select()     - XP / restricted-sandbox fallback (FD_SETSIZE cap)
-     *
-     *   RUNLOOM_NETPOLL=wsapoll  -> force WSAPoll
-     *   RUNLOOM_NETPOLL=select   -> force select() */
-    {
-        const char *env = getenv("STACKWEAVE_NETPOLL");
-        int want_wsapoll = (env != NULL && strcmp(env, "wsapoll") == 0);
-        int want_select  = (env != NULL && strcmp(env, "select")  == 0);
-
-        if (!want_wsapoll && !want_select && runloom_iocp_init() == 0) {
-            runloom_win_use_iocp = 1;
-            runloom_win_backend_name = "iocp-afd";
-        } else if (want_select) {
-            runloom_win_backend_name = "select";
-        } else {
-            HMODULE ws2 = GetModuleHandleA("ws2_32.dll");
-            if (ws2 == NULL) ws2 = LoadLibraryA("ws2_32.dll");
-            if (ws2 != NULL) {
-                runloom_win_wsapoll = (runloom_wsapoll_fn)
-                    (void *)GetProcAddress(ws2, "WSAPoll");
-            }
-            runloom_win_backend_name = (runloom_win_wsapoll != NULL) ? "wsapoll" : "select";
-        }
-    }
 #else
     /* select() fallback: arm the self-pipe wake.  Best-effort -- if
      * pipe()/fcntl() fail the pump still re-polls on its bounded
@@ -507,13 +413,6 @@ void runloom_netpoll_fini(void)
             if (p->selfpipe_w > 0) { close(p->selfpipe_w); p->selfpipe_w = -1; }
         }
     }
-#elif defined(RUNLOOM_OS_WINDOWS)
-    if (runloom_win_use_iocp) {
-        runloom_iocp_fini();
-        runloom_win_use_iocp = 0;
-    }
-    /* WSAPoll / select are stateless; nothing else to close.
-     * Winsock itself is left up by design (see runloom_winsock_init). */
 #else
     /* select() fallback: tear down the self-pipe wake. */
     if (runloom_selfpipe_r >= 0) { close(runloom_selfpipe_r); runloom_selfpipe_r = -1; }
@@ -552,7 +451,7 @@ void runloom_netpoll_reset_after_fork(void)
          * parent's kernel kqueue, so the inherited handles (closed by fini above,
          * set -1) must not be reused.  lock_inited is set to 2 directly here, so
          * the lazy backend path is skipped -- create it explicitly.  No-op on
-         * epoll/Windows/select. */
+         * epoll/select. */
         runloom_pool_backend_create(p);
     }
     /* The per-fd registration bitmap says "fd X is already armed in the

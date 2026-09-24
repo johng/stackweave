@@ -252,7 +252,7 @@ static void runloom_mn_hub_submit(runloom_hub_t *h, runloom_g_t *g)
      * to pick up sub_head/global-runq work.  Level-triggered + non-exclusive, so
      * Per-hub kqueue: kick ONLY the target hub `h`'s own pump (its self-pipe),
      * not a broadcast -- this is the hot cross-hub handoff path.  Shared-handle
-     * backends (epoll/IOCP/select) ignore the arg. */
+     * backends (epoll/select) ignore the arg. */
     runloom_netpoll_wake_pump((void *)h);
     /* MNWAKE-TRACE: both kicks fired (model WakerSignal -- idle_cond + wake-pump
      * eventfd, each FREE delivery).  One event per WOKEN-g submit (snap.valid, as
@@ -346,7 +346,6 @@ void runloom_mn_wake_g(void *hub_opaque, runloom_g_t *g)
 int runloom_mn_hub_request_iouring_cancel(void *hub_opaque, void *op)
 {
     runloom_hub_t *h = (runloom_hub_t *)hub_opaque;
-    /* MSVC atomics don't support void ** in _Generic; cast to intptr_t. */
     intptr_t expected = 0;
     intptr_t cop = (intptr_t)op;
     if (h == NULL || op == NULL) return 0;
@@ -379,7 +378,7 @@ static void runloom_mn_kick_hub_all_modes(runloom_hub_t *h)
 
 #if defined(IORING_ASYNC_CANCEL_FD)
 /* Broadcast a cancel-by-fd to every live hub's ring (R7 item 1 /
- * DESIGN_mn_iouring_cancel_fd.md).  Called by TCPConn.close() BEFORE closesock
+ * DESIGN_mn_iouring_cancel_fd.md).  Called by TCPConn.close() BEFORE close()
  * (so `fd` is still open): dup() it once per hub -- a dup shares the same
  * struct file, so an ASYNC_CANCEL_FD on the dup matches the recv op (keyed by
  * that file) even after the original fd closes -- and deposit each dup in the

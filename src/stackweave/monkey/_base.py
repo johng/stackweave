@@ -19,7 +19,6 @@ import sys
 import threading as _th
 import time
 
-_IS_WINDOWS = _platform.system() == "Windows"
 _IS_DARWIN  = _platform.system() == "Darwin"
 
 # The pid that imported this module -- i.e. the process whose stackweave scheduler
@@ -56,12 +55,6 @@ _raw_os_read  = os.read
 _raw_os_write = os.write
 _raw_os_close = os.close
 _raw_time_sleep = time.sleep
-# Captured before _patch_socket installs the cooperative versions.  Parker
-# uses these to talk to its self-pipe / self-socketpair without going
-# through the cooperative wrappers (which would, for instance, park
-# forever on a non-blocking recv that returns BlockingIOError).
-_raw_sock_recv = socket.socket.recv
-_raw_sock_send = socket.socket.send
 # Captured before _patch_socket installs the cooperative settimeout/setblocking
 # wrappers.  _make_nonblocking forces the fd non-blocking with the RAW setblocking
 # (never the patched one, which would pop the entry it just recorded), and the
@@ -235,26 +228,11 @@ def _patched_setblocking(self, flag):
 
 
 def _fd_pollable(fd):
-    """Is this fd pollable by the C-side netpoll?
+    """Is this fd pollable by the C-side netpoll (epoll/kqueue/select)?
 
-    POSIX (epoll/kqueue/select):
         sockets, fifos/pipes, ttys, char/block devices  -> yes
         regular files                                    -> no
-    Windows (WSAPoll/select):
-        SOCKET handles  -> yes (handled by the socket-layer patches,
-                           not by this function -- os.read/write
-                           callers never see SOCKET fds)
-        pipe / file / tty fds -> no.  Win32 select() refuses anything
-                                 except SOCKETs; pipe fds are kernel
-                                 HANDLEs wrapped by the CRT and are
-                                 not selectable.
-
-    On Windows we therefore always return False from this helper --
-    the os.read/write path can only ever see non-socket fds, which
-    must go through the thread-pool backend instead of wait_fd.
     """
-    if _IS_WINDOWS:
-        return False
     try:
         st = os.fstat(fd)
     except OSError:
@@ -266,23 +244,16 @@ def _fd_pollable(fd):
 
 # ---------- self-pipe parker ----------
 #
-# Two implementations, chosen at import time:
-#   POSIX  -> os.pipe() + os.read/os.write.  Pipes are kernel-fd ints
-#             that wait_fd's epoll/kqueue/select backends can all poll.
-#   Windows -> socket.socketpair() + sock.recv/sock.send.  Windows
-#             select() refuses pipe fds (those are Python-side fakes
-#             over Win32 HANDLEs); it ONLY polls SOCKET handles.
-#             socket.socketpair() on Windows returns two AF_INET TCP
-#             sockets whose fileno() values are real SOCKET handles
-#             and therefore work with wait_fd's select backend.
+# os.pipe() + os.read/os.write.  Pipes are kernel-fd ints that wait_fd's
+# epoll/kqueue/select backends can all poll.
 #
-# Either way, the Parker is single-thread cooperative -- the
+# The Parker is single-thread cooperative -- the
 # unpark()-before-park() race is not handled because in cooperative
 # mode the parker can't be signalled until the parking fiber has
 # yielded.
 class _Parker(object):
-    __slots__ = ("r", "w", "_sockets", "_g_handle", "_via_park")
-    # Free-list of reusable (r, w, _sockets) tuples.  The pool lock uses a
+    __slots__ = ("r", "w", "_g_handle", "_via_park")
+    # Free-list of reusable (r, w) fd pairs.  The pool lock uses a
     # NON-BLOCKING acquire so that no fiber ever waits for it (blocking
     # would freeze the fiber's hub if sysmon preempted the holder).  A
     # fiber that finds the lock contended skips pooling and closes its FDs
@@ -290,7 +261,7 @@ class _Parker(object):
     # still races lock-free via try/except IndexError.
     _pool = []
     _pool_lock = _thread.allocate_lock()   # captured pre-patch → real OS mutex
-    _POOL_CAP = 64                          # max pooled (r, w, _sockets) tuples
+    _POOL_CAP = 64                          # max pooled (r, w) fd pairs
 
     def __init__(self, inmem=False):
         # The handle of the fiber parked here.  In FD mode it is read by
@@ -310,28 +281,19 @@ class _Parker(object):
         if self._via_park:
             self._g_handle = stackweave_c.current_g()
             self.r = self.w = -1
-            self._sockets = None
             return
         try:
             reused = _Parker._pool.pop()
         except IndexError:
             reused = None
         if reused is not None:
-            self.r, self.w, self._sockets = reused
-        elif _IS_WINDOWS:
-            s1, s2 = socket.socketpair()
-            s1.setblocking(False)
-            s2.setblocking(False)
-            self._sockets = (s1, s2)
-            self.r = s1.fileno()
-            self.w = s2.fileno()
+            self.r, self.w = reused
         else:
             r, w = os.pipe()
             os.set_blocking(r, False)
             os.set_blocking(w, False)
             self.r = r
             self.w = w
-            self._sockets = None
 
     def park(self, timeout=None):
         if self._via_park:
@@ -380,16 +342,10 @@ class _Parker(object):
                 _raw_select([self.r], [], [], timeout)
             except (OSError, ValueError):
                 pass
-        if self._sockets is not None:
-            try:
-                _raw_sock_recv(self._sockets[0], 64)
-            except (BlockingIOError, OSError):
-                pass
-        else:
-            try:
-                _raw_os_read(self.r, 64)
-            except (BlockingIOError, OSError):
-                pass
+        try:
+            _raw_os_read(self.r, 64)
+        except (BlockingIOError, OSError):
+            pass
 
     def unpark(self):
         if self._via_park:
@@ -400,16 +356,10 @@ class _Parker(object):
             if h is not None:
                 h.wake()
             return
-        if self._sockets is not None:
-            try:
-                _raw_sock_send(self._sockets[1], b"\x01")
-            except (BlockingIOError, BrokenPipeError, OSError):
-                pass
-        else:
-            try:
-                _raw_os_write(self.w, b"\x01")
-            except (BlockingIOError, BrokenPipeError, OSError):
-                pass
+        try:
+            _raw_os_write(self.w, b"\x01")
+        except (BlockingIOError, BrokenPipeError, OSError):
+            pass
 
     def release(self):
         # Drop the fiber handle (and its g incref): the wait is over, so this
@@ -419,20 +369,13 @@ class _Parker(object):
         if self._via_park:
             return                     # in-memory parker: no fd to drain / pool
         # Drain any stale wake bytes before returning to the pool.  Must
-        # use raw recv/read -- the patched versions would park forever
-        # on BlockingIOError instead of returning empty.
-        if self._sockets is not None:
-            try:
-                while _raw_sock_recv(self._sockets[0], 64):
-                    pass
-            except (BlockingIOError, OSError):
+        # use raw read -- the patched version would park forever on
+        # BlockingIOError instead of returning empty.
+        try:
+            while _raw_os_read(self.r, 64):
                 pass
-        else:
-            try:
-                while _raw_os_read(self.r, 64):
-                    pass
-            except (BlockingIOError, OSError):
-                pass
+        except (BlockingIOError, OSError):
+            pass
         # Non-blocking try: if another fiber is in release() concurrently,
         # skip pooling and close the FDs.  acquire(False) never blocks, so the
         # hub is never frozen even if sysmon preempts the lock holder.
@@ -440,20 +383,15 @@ class _Parker(object):
         if _Parker._pool_lock.acquire(False):
             try:
                 if len(_Parker._pool) < _Parker._POOL_CAP:
-                    _Parker._pool.append((self.r, self.w, self._sockets))
+                    _Parker._pool.append((self.r, self.w))
                     pooled = True
             finally:
                 _Parker._pool_lock.release()
         if not pooled:
-            if self._sockets is not None:
-                for s in self._sockets:
-                    try: s.close()
-                    except OSError: pass
-            else:
-                try: os.close(self.r)
-                except OSError: pass
-                try: os.close(self.w)
-                except OSError: pass
+            try: os.close(self.r)
+            except OSError: pass
+            try: os.close(self.w)
+            except OSError: pass
 
 
 class CoFMutex(object):
@@ -530,8 +468,8 @@ class CoFMutex(object):
             self._gunlock()
             return False
         # Contended.  Build the parker with the guard RELEASED first -- an fd
-        # _Parker() can yield during Windows socketpair setup, so it must not run
-        # under the guard (same ordering CoSemaphore.acquire documents).
+        # _Parker() does pool/pipe syscalls, so keep it out of the guard (same
+        # ordering CoSemaphore.acquire documents).
         self._gunlock()
         p = _Parker(inmem=_in_fiber())
         self._glock()

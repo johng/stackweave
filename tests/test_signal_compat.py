@@ -15,7 +15,6 @@ These run under the single-threaded scheduler (stackweave_c.fiber/run on the mai
 thread), which is where signal masks are stable and set_wakeup_fd is usable.
 """
 import os
-import platform
 import time
 import unittest
 
@@ -28,7 +27,6 @@ try:
 except ImportError:
     signal = None
 
-_IS_WINDOWS = platform.system() == "Windows"
 _HAVE_SIGWAIT = signal is not None and hasattr(signal, "sigwait")
 _HAVE_SIGTIMEDWAIT = signal is not None and hasattr(signal, "sigtimedwait")
 _HAVE_SIGMASK = signal is not None and hasattr(signal, "pthread_sigmask")

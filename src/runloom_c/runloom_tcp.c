@@ -12,17 +12,11 @@
  * The first wait_fd call on a fd costs one epoll_ctl ADD and every subsequent
  * same-direction call is zero syscalls.
  *
- * Platform notes:
- *   POSIX: recv()/send()/accept4()/connect() with non-blocking fds.
- *   Windows: same surface; recv/send map to Winsock, the underlying
- *            wait_fd routes through IOCP-AFD / WSAPoll / select.
- *            Buffer pointers stay valid across coro yields because
- *            the syscall is synchronous from our side; the actual
- *            wait is on epoll/IOCP, not in the recv() call.
+ * recv()/send()/accept4()/connect() run on non-blocking fds.  Buffer pointers
+ * stay valid across coro yields because the syscall is synchronous from our
+ * side; the actual wait is in netpoll, not in the recv() call.
  */
-#if !defined(_WIN32)
-#  define _POSIX_C_SOURCE 200809L
-#endif
+#define _POSIX_C_SOURCE 200809L
 
 #include "runloom_tcp.h"
 #include "plat.h"
@@ -126,24 +120,14 @@ static int runloom_tcpconn_use_iouring(RunloomTCPConn *self)
 }
 #endif
 
-#if defined(RUNLOOM_OS_WINDOWS)
-   /* winsock2.h + ws2tcpip.h + windows.h pulled in by plat_compat.h. */
-#  define RUNLOOM_SOCK_T   SOCKET
-#  define RUNLOOM_BADSOCK  INVALID_SOCKET
-#  define runloom_closesock(s) closesocket(s)
-#else
-#  include <sys/socket.h>
-#  include <sys/types.h>
-#  include <netinet/in.h>
-#  include <netinet/tcp.h>
-#  include <netdb.h>
-#  include <fcntl.h>
-#  include <unistd.h>
-#  include <arpa/inet.h>
-#  define RUNLOOM_SOCK_T   int
-#  define RUNLOOM_BADSOCK  (-1)
-#  define runloom_closesock(s) close(s)
-#endif
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <netdb.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <arpa/inet.h>
 
 #define RUNLOOM_NETPOLL_READ  0x1
 #define RUNLOOM_NETPOLL_WRITE 0x2

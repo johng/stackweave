@@ -1,8 +1,6 @@
 /* runloom_crash.c -- fatal-signal crash reporter.  See runloom_crash.h. */
 
-#if !defined(_WIN32)
-#  define _POSIX_C_SOURCE 200809L
-#endif
+#define _POSIX_C_SOURCE 200809L
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 
@@ -22,30 +20,28 @@
 #include <stdlib.h>
 #include <string.h>
 
-#if !defined(_WIN32)
-#  include <signal.h>
-#  include <unistd.h>
-#  include <fcntl.h>
-#  include <errno.h>
-#  include <time.h>
-#  include <pthread.h>
-#  include <sys/types.h>
-#  include <sys/mman.h>
-#  if defined(__has_include)
-#    if __has_include(<execinfo.h>)
-#      include <execinfo.h>
-#      define RUNLOOM_HAVE_EXECINFO 1
-#    endif
-#    if __has_include(<sys/prctl.h>)
-#      include <sys/prctl.h>
-#      define RUNLOOM_HAVE_PRCTL 1
-#    endif
-#    if __has_include(<sys/wait.h>)
-#      include <sys/wait.h>
-#    endif
-#  else
+#include <signal.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <time.h>
+#include <pthread.h>
+#include <sys/types.h>
+#include <sys/mman.h>
+#if defined(__has_include)
+#  if __has_include(<execinfo.h>)
+#    include <execinfo.h>
+#    define RUNLOOM_HAVE_EXECINFO 1
+#  endif
+#  if __has_include(<sys/prctl.h>)
+#    include <sys/prctl.h>
+#    define RUNLOOM_HAVE_PRCTL 1
+#  endif
+#  if __has_include(<sys/wait.h>)
 #    include <sys/wait.h>
 #  endif
+#else
+#  include <sys/wait.h>
 #endif
 
 /* R5 crash-telemetry build identity.  RUNLOOM_CRASH_VERSION can be overridden
@@ -76,7 +72,6 @@ static int runloom_crash_flags_v   = 0;
 static int runloom_crash_on        = 0;    /* installed? (atomic) */
 static int runloom_crash_report_fd = -1;   /* extra report file, or -1 */
 
-#if !defined(_WIN32)
 
 /* The fatal signals we install on.  SIGSEGV / SIGBUS are the headline (a
  * fiber stack overflow lands in a guard page -> SIGSEGV); the rest are
@@ -681,58 +676,6 @@ void runloom_crash_uninstall(void)
     }
 }
 
-#else /* _WIN32 ----------------------------------------------------- */
-
-/* Minimal Windows path: a Vectored Exception Handler that dumps the fiber
- * registry on an access violation / stack overflow, then continues the search
- * so the OS still produces the crash.  (No sigaltstack equivalent yet, so a
- * true stack overflow may be unable to run this; the rich path is POSIX.) */
-static void *runloom_crash_veh_handle = NULL;
-
-static LONG WINAPI runloom_crash_veh(EXCEPTION_POINTERS *ep)
-{
-    DWORD code = (ep && ep->ExceptionRecord) ? ep->ExceptionRecord->ExceptionCode : 0;
-    if (code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_STACK_OVERFLOW) {
-        if (runloom_crash_flags_v & RUNLOOM_CRASH_GOROUTINES)
-            runloom_dump_fibers_fd(2);
-    }
-    return EXCEPTION_CONTINUE_SEARCH;
-}
-
-int runloom_crash_install(int flags, const char *report_path)
-{
-    (void)report_path;
-    if (flags == 0) flags = RUNLOOM_CRASH_DEFAULT;
-    if (flags & RUNLOOM_CRASH_PYSTACK) {
-        PyObject *fh = PyImport_ImportModule("faulthandler");
-        if (fh != NULL) {
-            PyObject *r = PyObject_CallMethod(fh, "enable", NULL);
-            Py_XDECREF(r);
-            Py_DECREF(fh);
-        }
-        PyErr_Clear();
-    }
-    runloom_crash_flags_v = flags;
-    if (runloom_crash_veh_handle == NULL)
-        runloom_crash_veh_handle = AddVectoredExceptionHandler(1, runloom_crash_veh);
-    __atomic_store_n(&runloom_crash_on, 1, __ATOMIC_RELEASE);
-    return 0;
-}
-
-void runloom_crash_uninstall(void)
-{
-    if (runloom_crash_veh_handle != NULL) {
-        RemoveVectoredExceptionHandler(runloom_crash_veh_handle);
-        runloom_crash_veh_handle = NULL;
-    }
-    __atomic_store_n(&runloom_crash_on, 0, __ATOMIC_RELEASE);
-}
-
-void runloom_crash_thread_arm(void)      { /* no altstack on Windows yet */ }
-void runloom_crash_thread_disarm(void)   { }
-void runloom_crash_reset_after_fork(void){ }
-
-#endif /* _WIN32 */
 
 /* ---------------------------------------------------------------- *
  *  Shared helpers                                                  *

@@ -232,8 +232,7 @@ def install_crash_handler(level=None, file=None):
 
     For full per-thread coverage call this BEFORE starting the runtime, so the
     scheduler hubs are armed as they spawn.  Returns the installed flag bitmask
-    (or None if uninstalled).  POSIX has the rich path; Windows dumps via a
-    Vectored Exception Handler.  Idempotent; chains to any existing handler."""
+    (or None if uninstalled).  Idempotent; chains to any existing handler."""
     return _core.install_crash_handler(level, file)
 
 

@@ -1,5 +1,5 @@
-"""Windows netpoll fault-injection workload (driven by
-test_win_netpoll_faultinject.py).
+"""Netpoll fault-injection workload (driven by test_kqueue_faultinject.py,
+test_kqueue_faults_ext.py and test_select_faultinject.py).
 
 Parks a fiber on a never-readable socket with a deadline.  The pump polls
 that socket every iteration, so an injected poll/submit fault (STACKWEAVE_FAULT_<SITE>,
@@ -28,7 +28,7 @@ if _core:
 
 import stackweave_c
 
-SITE = os.environ.get("FAULT_SITE", "WSAPOLL")
+SITE = os.environ.get("FAULT_SITE", "SELECT")
 TIMEOUT_MS = int(os.environ.get("FAULT_TIMEOUT_MS", "800"))
 
 

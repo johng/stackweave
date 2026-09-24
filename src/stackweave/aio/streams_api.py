@@ -133,7 +133,7 @@ class _Server(object):
             return
         self._closed = True
         # shutdown() before close() wakes any fiber parked on this
-        # fd via wait_fd -- epoll/kqueue/IOCP all signal POLLIN+POLLHUP
+        # fd via wait_fd -- epoll/kqueue both signal POLLIN+POLLHUP
         # on the listen socket, which our netpoll routes back to the
         # accept_loop's wait_fd call.  close() alone doesn't reliably
         # wake parked pollers on Linux.

@@ -26,9 +26,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Portable signed-ssize_t / off_t equivalents.  Windows lacks ssize_t
- * in standard headers and we only need to compile the stubs there
- * (io_uring is Linux-only). */
+/* Fixed-width signed ssize_t / off_t equivalents for the ring API (the
+ * non-Linux stubs compile against the same header). */
 typedef int64_t runloom_iouring_ssize_t;
 typedef int64_t runloom_iouring_off_t;
 
@@ -80,7 +79,7 @@ int runloom_iouring_cancel_g(struct runloom_g *g);
  * submit an ASYNC_CANCEL so the kernel completes them -ECANCELED and the drain
  * wakes any parked fiber.  io_uring holds a reference to the underlying file, so
  * a plain close(fd) does NOT cancel a parked single-shot recv/send on the fd --
- * TCPConn.close() calls this before closesock to unblock such a parker.  No-op
+ * TCPConn.close() calls this before close() to unblock such a parker.  No-op
  * where io_uring is unavailable or IORING_ASYNC_CANCEL_FD is unsupported. */
 void runloom_iouring_cancel_fd(int fd);
 

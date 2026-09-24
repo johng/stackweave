@@ -366,10 +366,8 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
     /* trace conformance: this thread just created + gilstate-bound its tstate */
     runloom_gilstate_trace("Create", h->id, h->id);
     PyEval_RestoreThread(hts);
-    /* Per-OS-thread coro-backend setup.  On Windows Fibers this calls
-     * ConvertThreadToFiber so SwitchToFiber works on this thread; on
-     * POSIX it's a no-op.  Must run BEFORE the first runloom_coro_resume
-     * (otherwise SwitchToFiber faults with "not a fiber"). */
+    /* Per-OS-thread coro-backend setup (arms this thread's crash-handler
+     * sigaltstack).  Must run BEFORE the first runloom_coro_resume. */
     runloom_coro_thread_init();
     runloom_tls_hub = h;
 
@@ -513,8 +511,7 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
          * deposited an op targeting THIS hub's SINGLE_ISSUER ring; submit the
          * ASYNC_CANCEL here, where we are the ring's sole issuer. */
         {
-            /* MSVC atomics don't support void ** in _Generic; cast to intptr_t.
-             * Cheap relaxed PEEK first: the mailbox is empty almost every turn
+            /* Cheap relaxed PEEK first: the mailbox is empty almost every turn
              * (and ALWAYS when io_uring is off, the default), so skip the per-turn
              * locked xchg and only claim with the ACQ_REL exchange when a foreign
              * task.cancel actually deposited an op.  A deposit racing the peek is
@@ -1683,8 +1680,8 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
         h->iouring_ring    = NULL;
         h->iouring_eventfd = -1;
     }
-    /* Reverse runloom_coro_thread_init for clean exit on Windows
-     * (ConvertFiberToThread); no-op elsewhere. */
+    /* Reverse runloom_coro_thread_init (flush this thread's coro/stack pools,
+     * disarm the sigaltstack). */
     runloom_coro_thread_fini();
     /* Delete this hub's tstate ON THIS (owning) THREAD, not later in
      * runloom_mn_fini on the main thread.  PyThreadState_New (above) gilstate-

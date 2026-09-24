@@ -90,7 +90,6 @@ import stackweave_c as rc  # noqa: E402
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PY = sys.executable
 FT = needs_free_threading()
-POSIX = sys.platform != "win32"
 
 
 def _run_single(fn, label, secs=15):
@@ -173,7 +172,6 @@ def _install_alarm_handler():
     return signal
 
 
-@pytest.mark.skipif(not POSIX, reason="POSIX signals + pipe/socket fd model")
 def test_fd_read_signal_during_park_propagates():
     """fdio L70,L73: a raised SIGALRM handler interrupts a fiber parked in
     fd_read -> the buffer is released and the _Boom exception propagates out of
@@ -208,7 +206,6 @@ def test_fd_read_signal_during_park_propagates():
     assert out.get("res") == ("Boom", "alarm"), out.get("res")
 
 
-@pytest.mark.skipif(not POSIX, reason="POSIX signals + socketpair fd model")
 def test_fd_write_signal_during_park_propagates():
     """fdio L111,L114: a raised SIGALRM handler interrupts a fiber parked in
     fd_write (the peer's recv buffer is full, so write() returns EAGAIN and

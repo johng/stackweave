@@ -2653,7 +2653,7 @@
       <return type-id='type-id-21'/>
     </function-decl>
     <function-decl name='runloom_coro_thread_init' mangled-name='runloom_coro_thread_init' filepath='src/runloom_c/coro.c' line='1033' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='runloom_coro_thread_init'>
-      <return type-id='type-id-21'/>
+      <return type-id='type-id-1'/>
     </function-decl>
     <function-decl name='runloom_coro_thread_fini' mangled-name='runloom_coro_thread_fini' filepath='src/runloom_c/coro.c' line='1049' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='runloom_coro_thread_fini'>
       <return type-id='type-id-1'/>

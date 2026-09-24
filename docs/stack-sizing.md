@@ -164,10 +164,9 @@ Tune it with `STACKWEAVE_STACK_MADV`:
 | `dontneed` | eager reclaim (the old behaviour) -- tighter RSS, more CPU |
 | `off` | no reclaim -- pooled stacks stay fully resident |
 
-The first 4 KB (the pool's linked-list header) is never reclaimed. This is
-a Linux/POSIX optimisation; on Windows (Fibers backend) the OS manages
-stacks and stackweave lets it. The security scrub (`STACKWEAVE_STACK_SCRUB`)
-stays on `MADV_DONTNEED` for its zero-on-next-touch guarantee.
+The first 4 KB (the pool's linked-list header) is never reclaimed. The
+security scrub (`STACKWEAVE_STACK_SCRUB`) stays on `MADV_DONTNEED` for its
+zero-on-next-touch guarantee.
 
 ## Prewarming the stack pool (burst servers)
 
@@ -329,9 +328,8 @@ protection the main thread gets, scaled to the fiber's smaller stack:
   (`STACKWEAVE_STACK_GROW`, default on; `STACKWEAVE_STACK_GROW=0` disables). A fiber
   that gradually deepens grows with it.
 - **Every stack has a guard page.** A `PROT_NONE` page sits just below each
-  fiber stack (the OS provides one on the Windows Fibers backend). An
-  overflow faults *immediately and cleanly* at the guard rather than silently
-  scribbling over a neighbouring stack. With the crash reporter installed
+  fiber stack. An overflow faults *immediately and cleanly* at the guard
+  rather than silently scribbling over a neighbouring stack. With the crash reporter installed
   (`stackweave.inspect.install_crash_handler()` or `STACKWEAVE_CRASH=on`) that fault
   is turned into a classified message that *names the overflowing fiber and
   its stack size* instead of a bare segfault -- see

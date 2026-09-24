@@ -75,8 +75,6 @@ def mode_echo():
 
 
 def _port(listener):
-    # socket.dup (WSADuplicateSocket on Windows), NOT os.dup: os.dup is a CRT
-    # fd op and corrupts a raw WinSock socket handle on Windows.
     s = socket.socket(fileno=socket.dup(listener.fileno()))
     try:
         return s.getsockname()[1]
@@ -245,7 +243,7 @@ def main():
         print("BADMODE %r" % mode)
         return 2
     rc = fn()
-    # The compiled-in (kqueue/Windows) fault harness sets FAULT_SITE so it can
+    # The compiled-in (kqueue) fault harness sets FAULT_SITE so it can
     # confirm the injection actually fired; strace runs (Linux) leave it unset.
     site = os.environ.get("FAULT_SITE")
     if site:

@@ -6,8 +6,7 @@
  *
  * Reference: Chase & Lev, "Dynamic Circular Work-Stealing Deque"
  * SPAA 2005.  Implementation uses C11-style atomics via gcc/clang
- * __atomic_* builtins (works on MSVC too via /experimental:c11atomics
- * or our fallback path).
+ * __atomic_* builtins.
  *
  * Capacity is fixed at construction (we use 4096 — enough for very
  * deep ready queues; growable if needed later).

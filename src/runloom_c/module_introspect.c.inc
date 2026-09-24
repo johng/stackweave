@@ -284,28 +284,12 @@ static PyObject *m_live_fibers(PyObject *self, PyObject *unused)
  * wedged (a Python signal.signal handler only runs at a bytecode boundary,
  * which a fully-stalled process never reaches).  The handler does nothing
  * but the async-signal-safe-ish structural dump. */
-#if !defined(_WIN32)
 #include <signal.h>
 static void runloom_traceback_signal_handler(int sig)
 {
     (void)sig;
     runloom_dump_fibers_fd(2);
 }
-#else
-/* Windows analog of the SIGQUIT dump: a console control handler that fires on
- * Ctrl+Break (CTRL_BREAK_EVENT), the closest thing to `kill -QUIT`.  Windows
- * runs this on a dedicated thread, so the try-locking, write()-only structural
- * dump is safe here too.  Returning TRUE marks the event handled so the
- * process keeps running (Ctrl+Break would otherwise terminate it). */
-static BOOL WINAPI runloom_console_ctrl_handler(DWORD ctrl_type)
-{
-    if (ctrl_type == CTRL_BREAK_EVENT) {
-        runloom_dump_fibers_fd(2);
-        return TRUE;
-    }
-    return FALSE;   /* leave Ctrl-C / close / logoff / shutdown to the default */
-}
-#endif
 
 static PyObject *m_reset_after_fork(PyObject *self, PyObject *unused)
 {
@@ -342,16 +326,6 @@ static PyObject *m_install_traceback_signal(PyObject *self, PyObject *args)
     int signum = -1;
     (void)self;
     if (!PyArg_ParseTuple(args, "|i", &signum)) return NULL;
-#if defined(_WIN32)
-    /* On Windows there is no SIGQUIT; the dump fires on Ctrl+Break instead
-     * (CTRL_BREAK_EVENT), installed via a console control handler. */
-    (void)signum;
-    if (!SetConsoleCtrlHandler(runloom_console_ctrl_handler, TRUE)) {
-        PyErr_SetFromWindowsErr(0);
-        return NULL;
-    }
-    return PyLong_FromLong(0);   /* no signal number on Windows */
-#else
     if (signum < 0) signum = SIGQUIT;
     {
         struct sigaction sa;
@@ -365,5 +339,4 @@ static PyObject *m_install_traceback_signal(PyObject *self, PyObject *args)
         }
     }
     return PyLong_FromLong((long)signum);
-#endif
 }

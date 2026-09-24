@@ -16,10 +16,7 @@ from ._base import *  # noqa: F401,F403  (shared foundation)
 # already asked for LOCK_NB (wants the immediate raise), or the op is an
 # unlock (LOCK_UN -- never blocks).
 # ============================================================
-try:
-    import fcntl as _fcntl_mod
-except ImportError:
-    _fcntl_mod = None        # Windows: no fcntl module, patch is a no-op.
+import fcntl as _fcntl_mod
 
 _orig_flock = None
 _orig_lockf = None
@@ -74,8 +71,6 @@ def _patched_lockf(fd, cmd, length=0, start=0, whence=0):
 
 def _patch_fcntl():
     global _orig_flock, _orig_lockf
-    if _fcntl_mod is None:
-        return
     if hasattr(_fcntl_mod, "flock"):
         _orig_flock = _fcntl_mod.flock
         _fcntl_mod.flock = _patched_flock
@@ -85,8 +80,6 @@ def _patch_fcntl():
 
 
 def _unpatch_fcntl():
-    if _fcntl_mod is None:
-        return
     if _orig_flock is not None:
         _fcntl_mod.flock = _orig_flock
     if _orig_lockf is not None:

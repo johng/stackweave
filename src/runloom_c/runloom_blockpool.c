@@ -31,11 +31,9 @@
  *     pump-interrupt eventfd so the otherwise-idle scheduler wakes to drain its
  *     wake_list.  Hubs busy-poll (~1 ms) so wake_g alone suffices there.
  */
-#if !defined(_WIN32)
-#  define _POSIX_C_SOURCE 200809L
-#  ifndef _GNU_SOURCE
-#    define _GNU_SOURCE
-#  endif
+#define _POSIX_C_SOURCE 200809L
+#ifndef _GNU_SOURCE
+#  define _GNU_SOURCE
 #endif
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
@@ -61,11 +59,7 @@
 #define RUNLOOM_BP_SHARDS_MAX          32    /* hard cap on submit shards          */
 #define RUNLOOM_BP_WORKERS_PER_SHARD   3     /* default workers per shard (>=1)    */
 
-#if defined(_MSC_VER)
-#  define BP_CACHELINE_ALIGN __declspec(align(64))
-#else
-#  define BP_CACHELINE_ALIGN __attribute__((aligned(64)))
-#endif
+#define BP_CACHELINE_ALIGN __attribute__((aligned(64)))
 
 /* The job-completion handshake is a ONE-WAY 2-state FSM on `done`: a job is
  * PENDING until the single worker that owns it publishes DONE (release-store)
@@ -128,31 +122,6 @@ static int           bp_worker_shard[RUNLOOM_BLOCKPOOL_MAX];  /* worker i -> its
 
 /* Installed by the Python layer (see runloom_blockpool.h); NULL = pure-C use. */
 void (*runloom_blockpool_worker_thread_fini)(void) = NULL;
-
-/* bp_init_lock uses RUNLOOM_MUTEX_STATIC_INIT.  On POSIX that is a live mutex
- * (PTHREAD_MUTEX_INITIALIZER); on Windows it is only a zeroed CRITICAL_SECTION
- * that MUST be InitializeCriticalSection'd before first use.  Initialise it
- * exactly once, race-free, before any lock, using the same 0/1/2 CAS+spin guard
- * the rest of runloom_c uses for one-time setup.  No-op on POSIX. */
-#if defined(RUNLOOM_OS_WINDOWS)
-static int bp_init_lock_state = 0;   /* 0 = uninit, 1 = initialising, 2 = ready */
-static void bp_init_lock_ensure(void)
-{
-    int expected = 0;
-    if (__atomic_load_n(&bp_init_lock_state, __ATOMIC_ACQUIRE) == 2) return;
-    if (__atomic_compare_exchange_n(&bp_init_lock_state, &expected, 1, 0,
-                                    __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
-        runloom_mutex_init(&bp_init_lock);
-        __atomic_store_n(&bp_init_lock_state, 2, __ATOMIC_RELEASE);
-    } else {
-        while (__atomic_load_n(&bp_init_lock_state, __ATOMIC_ACQUIRE) != 2) {
-            /* winner only runs InitializeCriticalSection -- a brief spin */
-        }
-    }
-}
-#else
-#  define bp_init_lock_ensure() ((void)0)
-#endif
 
 long runloom_blockpool_inflight(void)
 {
@@ -300,7 +269,6 @@ int runloom_blockpool_init(int n_workers)
     if (__atomic_load_n(&bp_inited, __ATOMIC_ACQUIRE)) return 0;
     if (__atomic_load_n(&bp_failed, __ATOMIC_ACQUIRE)) return -1;
 
-    bp_init_lock_ensure();          /* Windows: make bp_init_lock usable */
     RUNLOOM_RLOCK(&bp_init_lock, RUNLOOM_RANK_BLOCKPOOL);
     if (bp_inited) { RUNLOOM_RUNLOCK(&bp_init_lock, RUNLOOM_RANK_BLOCKPOOL); return 0; }
     if (bp_failed) { RUNLOOM_RUNLOCK(&bp_init_lock, RUNLOOM_RANK_BLOCKPOOL); return -1; }
@@ -367,7 +335,6 @@ int runloom_blockpool_init(int n_workers)
 void runloom_blockpool_fini(void)
 {
     int i, n, nshard;
-    bp_init_lock_ensure();          /* Windows: make bp_init_lock usable */
     RUNLOOM_RLOCK(&bp_init_lock, RUNLOOM_RANK_BLOCKPOOL);
     if (!bp_inited) { RUNLOOM_RUNLOCK(&bp_init_lock, RUNLOOM_RANK_BLOCKPOOL); return; }
     bp_stopping = 1;
@@ -404,9 +371,6 @@ void runloom_blockpool_reset_after_fork(void)
 {
     int i;
     runloom_mutex_init(&bp_init_lock);
-#if defined(RUNLOOM_OS_WINDOWS)
-    bp_init_lock_state = 2;
-#endif
     for (i = 0; i < RUNLOOM_BP_SHARDS_MAX; i++) {
         bp_shards[i].head = bp_shards[i].tail = NULL;
     }

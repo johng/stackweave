@@ -15,12 +15,7 @@
 # (same file scripts/collect_wheels.sh reads; copy scripts/release_hosts.env.example):
 #   STACKWEAVE_REPO_URL   git URL to build from   (PROMPTED if unset)
 #   STACKWEAVE_REF        branch/tag/sha          (default: main)
-#   RELEASE_SSH_HOSTS  space-separated "<target>|<base-dir>|<kind>" entries.
-#                      Only kind=posix hosts are used here -- there is no
-#                      free-threaded MSVC migration target, and the exec-home
-#                      patch explicitly does not cover MSVC's thread-id
-#                      intrinsics, so Windows is skipped rather than shipped
-#                      half-patched.
+#   RELEASE_SSH_HOSTS  space-separated "<target>|<base-dir>" entries.
 #                      Each host needs: git, curl, a C toolchain, make.
 #
 # RELEASE PREFIX: CPython installs are not relocatable, so release artifacts
@@ -52,7 +47,7 @@ ask() {   # ask VAR "prompt" "default"   -- no TTY means take the default, never
 ask STACKWEAVE_REPO_URL "Repo URL to build from" ""
 ask STACKWEAVE_REF      "Ref to build (branch/tag/sha)" "main"
 [ -z "${RELEASE_SSH_HOSTS+set}" ] && ask RELEASE_SSH_HOSTS \
-    "Remote build hosts 'target|dir|kind ...' (blank = this machine only)" ""
+    "Remote build hosts 'target|dir ...' (blank = this machine only)" ""
 : "${RELEASE_SSH_HOSTS:=}"
 : "${RL_CI_RELEASE_PREFIX:=/opt/runloom-cpython}"
 : "${RL_CI_VERSIONS:=}"
@@ -82,12 +77,11 @@ RL_CI_RELEASE_PREFIX="$RL_CI_RELEASE_PREFIX" RL_CI_VERSIONS="${RL_CI_VERSIONS:-}
 for entry in $RELEASE_SSH_HOSTS; do
     target="$(printf '%s' "$entry" | cut -d'|' -f1)"
     basedir="$(printf '%s' "$entry" | cut -d'|' -f2)"
-    kind="$(printf '%s' "$entry" | cut -d'|' -f3)"
     [ -z "$target" ] && continue
-    if [ "$kind" = windows ]; then
-        say "SKIP $target (windows): no free-threaded MSVC migration target; exec-home does not cover MSVC thread-id intrinsics"
-        continue
-    fi
+    case "$(printf '%s' "$entry" | cut -d'|' -f3)" in
+        ""|posix) ;;
+        *) printf '[release] %s: only POSIX build hosts are supported (Windows was dropped)\n' "$entry" >&2; exit 1 ;;
+    esac
     [ -n "$STACKWEAVE_REPO_URL" ] || { printf '[release] STACKWEAVE_REPO_URL unset -- cannot build remotely\n' >&2; exit 1; }
 
     workdir="$basedir/rl-ci-$STAMP"

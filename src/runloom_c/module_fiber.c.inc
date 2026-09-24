@@ -379,8 +379,7 @@ static PyObject *m_unpark_many(PyObject *self, PyObject *seq)
 
 /* Stack high-water-mark (bytes) of the currently-running fiber, page-
  * granular, measured paint-free via mincore (runloom_coro_scan_hwm).  Returns
- * 0 outside a fiber, or where the backend has no introspectable stack
- * (Windows Fibers) -- callers treat 0 as "unknown, keep the current size".
+ * 0 outside a fiber -- callers treat 0 as "unknown, keep the current size".
  *
  * This is the read half of the function-bound grow-down: a fiber calls it
  * just before returning to learn how deep it actually went, then writes the

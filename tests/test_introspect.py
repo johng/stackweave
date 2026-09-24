@@ -13,13 +13,6 @@ import stackweave
 import stackweave_c
 import stackweave.inspect as gi
 
-# Goroutine introspection is POSIX-only (runloom_introspect.c is wrapped in
-# #if !defined(_WIN32)); the C functions aren't built on Windows, so skip
-# wherever the API is absent rather than hardcoding a platform.
-pytestmark = pytest.mark.skipif(
-    not hasattr(stackweave_c, "fiber_count"),
-    reason="fiber introspection is POSIX-only (not built on this platform)")
-
 
 class TestCountAndRegistry(unittest.TestCase):
     def test_count_zero_when_idle(self):
@@ -95,9 +88,6 @@ class TestStates(unittest.TestCase):
         self.assertGreater(cap["wake_in"], 0.0)
         self.assertEqual(cap["blocked_on"], "timer")
 
-    @pytest.mark.skipif(sys.platform == "win32",
-                        reason="pipe fds aren't pollable by the Windows netpoll "
-                               "(no io-wait park); socket I/O covers it instead")
     def test_io_wait_reports_fd(self):
         r, w = os.pipe()
         cap = {}

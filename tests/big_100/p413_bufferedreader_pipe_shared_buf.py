@@ -62,8 +62,6 @@ import os
 import sys
 
 # ---- availability guard (POSIX-only: pipe fds must be pollable) ------------
-# Windows pipe fds are not pollable by the netpoll backend, so a buffered read
-# on an os.pipe() read end can't park cooperatively there.  Detect-and-skip.
 POSIX = sys.platform.startswith(("linux", "darwin", "freebsd"))
 if not POSIX:
     print("SKIP: POSIX-only (raw pipe fds not pollable on this platform: "

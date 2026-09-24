@@ -12,7 +12,7 @@ import stackweave_c
 class TestCoreBackend(unittest.TestCase):
     def test_backend_name(self):
         b = stackweave_c.backend()
-        self.assertIn(b, ("ucontext", "fibers", "fcontext-asm"))
+        self.assertIn(b, ("ucontext", "fcontext-asm"))
 
 
 class TestCoroPrimitive(unittest.TestCase):

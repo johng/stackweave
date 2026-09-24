@@ -20,9 +20,6 @@
  * sigaltstack (runloom_crash_thread_arm, wired into runloom_coro_thread_init
  * and the blockpool workers), so the handler runs even when the fault IS the
  * stack overflow.
- *
- * POSIX has the rich path.  On Windows a Vectored Exception Handler does the
- * fiber dump and continues the search (the OS still produces the crash).
  */
 #ifndef RUNLOOM_CRASH_H
 #define RUNLOOM_CRASH_H

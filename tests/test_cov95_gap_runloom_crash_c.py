@@ -55,12 +55,6 @@ import stackweave_c as rc
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PY = sys.executable
 
-POSIX = os.name == "posix"
-requires_posix = pytest.mark.skipif(
-    not POSIX,
-    reason="runloom_crash.c POSIX path (sigaltstack arm/disarm) needs POSIX")
-
-
 def _strace_supports_inject():
     """True iff a strace that understands `-e inject=` is on PATH (>= 4.15)."""
     strace = shutil.which("strace")
@@ -95,7 +89,6 @@ def _clean_env():
 # L180-181: arm's sigaltstack-FAILURE cleanup (munmap the just-mmap'd altstack,
 # return without arming).  Forced with strace -e inject=sigaltstack:error=EINVAL.
 # --------------------------------------------------------------------------
-@requires_posix
 @requires_strace
 def test_arm_sigaltstack_failure_munmaps_and_returns():
     body = (
@@ -141,7 +134,6 @@ def test_arm_sigaltstack_failure_munmaps_and_returns():
 # runloom_coro_thread_fini -> runloom_crash_thread_disarm: with exactly one arm
 # and one disarm there is no concurrent gcov-counter writer on L192-195.
 # --------------------------------------------------------------------------
-@requires_posix
 def test_single_hub_disarm_runs_body_deterministically():
     body = (
         "import sys\n"

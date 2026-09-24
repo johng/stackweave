@@ -4,7 +4,7 @@ select() is a BUILD-TIME backend on POSIX (STACKWEAVE_NETPOLL=select -> -DRUNLOO
 SELECT suppresses epoll/kqueue), so this harness builds a select-forced
 extension into a temp dir once, then drives netpoll_inproc_fault_workload.py
 against it with STACKWEAVE_FAULT_SELECT armed (the same compiled-in mechanism the
-kqueue/Windows pumps use).  Asserts the POSIX select pump:
+kqueue pump uses).  Asserts the POSIX select pump:
 
   EINTR (once)       -> retried; the parked fiber still wakes.
   EBADF (persistent) -> BACKS OFF, not a busy-spin.  Regression test for the
@@ -12,8 +12,7 @@ kqueue/Windows pumps use).  Asserts the POSIX select pump:
       epoll/kqueue and never compiled on a select build, so a persistent
       select() error (a parked fd closed under us) pegged a CPU.
 
-no-gil only; POSIX only (the Windows select fallback is covered by
-test_win_netpoll_faultinject.py).
+no-gil only.
 """
 import os
 import re
@@ -23,10 +22,6 @@ import sys
 import tempfile
 
 import pytest
-
-pytestmark = pytest.mark.skipif(
-    sys.platform.startswith("win"),
-    reason="POSIX select fallback; Windows select is in test_win_netpoll_faultinject")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)

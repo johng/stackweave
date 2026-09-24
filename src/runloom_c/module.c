@@ -5,7 +5,7 @@
  *      .resume()         switch into the coroutine
  *      .done             True if entry returned
  *   runloom_c.yield_()   yield from inside a coroutine
- *   runloom_c.backend()  "fibers" | "ucontext"
+ *   runloom_c.backend()  "fcontext-asm" | "ucontext"
  *
  * Free-threaded friendly: each OS thread runs its own coroutines.
  * We do NOT release the GIL during resume() because the Python callable

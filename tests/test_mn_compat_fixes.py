@@ -20,7 +20,6 @@ mn_run (fiber exceptions are swallowed, so results go through shared state
 every fiber finishes, so a dropped/stranded fiber shows up as a hang
 (the isolated runner's timeout) -> a clean failure.
 """
-import os
 import socket
 import ssl
 import struct
@@ -374,20 +373,9 @@ class TestBufferedPipeMN(unittest.TestCase):
             stackweave_c.mn_fiber(reader)
             return canary, state
         canary, state = _drive_mn(body, nhubs=1)   # 1 hub: a hub-block freezes the canary
-        # The child's full output comes back on every platform.
+        # The child's full output comes back.
         self.assertEqual(state.get("data"), b"done")
-        if os.name == "nt":
-            # Windows anonymous pipes can't be put in non-blocking mode and
-            # netpoll-selected the way POSIX fds can, so proc.stdout.read() does
-            # a genuine blocking read that wedges the hub.  The handoff rescuer
-            # recovers it -- the data still arrives and the body completes with
-            # no deadlock (mn_run would hang on a stranded canary otherwise) --
-            # but the read does NOT park, so the same-hub canary can't keep
-            # ticking.  Assert the Windows guarantee (handoff recovery: the
-            # reader finished and signalled the canary to stop) instead.
-            self.assertTrue(canary["stop"])
-        else:
-            self.assertGreater(canary["ticks"], 5)     # cooperative: canary kept ticking
+        self.assertGreater(canary["ticks"], 5)     # cooperative: canary kept ticking
 
 
 # ----------------------------------------------------------- select / poll

@@ -29,7 +29,7 @@ parked socket op unwinds instead of re-parking forever.  Code under test:
     the canceller runs); the ARMED race is exercised under M:N.
 
 Run from the repo root (sys.path.insert "src" below).  kqueue-only: the cancel
-paths above are identical on epoll/iocp, but this module asserts them on the
+paths above are identical on epoll, but this module asserts them on the
 kqueue backend specifically (the wake_all=1 per-fd fan-out + the one-shot re-arm
 model are kqueue-specific, finding B2), so it skips elsewhere.
 """
