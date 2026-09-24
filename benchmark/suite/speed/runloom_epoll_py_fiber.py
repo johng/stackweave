@@ -1,5 +1,5 @@
-"""The [runloom] column of the speed benchmark. All metrics run under the REAL
-M:N scheduler runloom.run(hubs) -- never run(1), which is the different M:1
+"""The [stackweave] column of the speed benchmark. All metrics run under the REAL
+M:N scheduler stackweave.run(hubs) -- never run(1), which is the different M:1
 cooperative scheduler (decision #5).
 
   --metric spawn      : spawn N no-op fibers, drain  -> seconds (orchestrator
@@ -14,9 +14,9 @@ import os
 import socket
 import time
 
-import runloom
-import runloom_c
-import runloom.sync as rs
+import stackweave
+import stackweave_c
+import stackweave.sync as rs
 
 HUBS_DEFAULT = int((os.cpu_count() or 1) * 0.7)
 
@@ -26,30 +26,30 @@ def noop():
 
 
 def m_spawn(n, hubs, stack_size=0, warm=0):
-    # Naked single-spawn rate.  Default (stack_size=0) uses runloom.fiber_fast --
+    # Naked single-spawn rate.  Default (stack_size=0) uses stackweave.fiber_fast --
     # a thin Python spawn with no per-spawn work, the apples-to-apples vs Go's
-    # `go f()`.  The DEFAULT runloom.fiber adds the grow-down auto-sizer (small
+    # `go f()`.  The DEFAULT stackweave.fiber adds the grow-down auto-sizer (small
     # right-sized stacks, an RSS feature Go lacks); its learned size now spawns
     # down the DEFERRED stack-alloc path, so the default is ~1.9M/s warm
     # (small-stacks AND fast) -- not the old ~7x-slower eager-alloc number.
-    # optimize("throughput")/("memory") swaps runloom.fiber between fiber_fast and
+    # optimize("throughput")/("memory") swaps stackweave.fiber between fiber_fast and
     # grow-down.  stack_size>0 pins each fiber's C stack (decomposition variant).
     # warm>0: run `warm` extra in-process passes first, report the BEST timed pass,
-    # so the one-time runloom.run() scheduler boot is excluded -- the same basis Go
+    # so the one-time stackweave.run() scheduler boot is excluded -- the same basis Go
     # is measured on (its runtime is already up at main()).
     if stack_size > 0:
         def root():
             for _ in range(n):
-                runloom.fiber(noop, stack_size=stack_size)
+                stackweave.fiber(noop, stack_size=stack_size)
     else:
         def root():
-            f = runloom.fiber_fast
+            f = stackweave.fiber_fast
             for _ in range(n):
                 f(noop)
     best = None
     for _ in range(warm + 1):
         t0 = time.perf_counter()
-        runloom.run(hubs, root)
+        stackweave.run(hubs, root)
         dt = time.perf_counter() - t0
         best = dt if best is None else min(best, dt)
     return {"seconds": best, "n": n, "cores": hubs,
@@ -62,7 +62,7 @@ def _make_distinct_worker(K, yobj):
     # SHARED code object scales fine; one SHARED closure's cells do not).  This
     # worker reads `sy`/`K` as GLOBALS in its own dict, so it has NO shared cells
     # -- which is why it scales.  (The `shared` mode uses a nested closure, so all
-    # fibers share its cells == the wall.)  User-facing fix: @runloom.hot.
+    # fibers share its cells == the wall.)  User-facing fix: @stackweave.hot.
     g = {"sy": yobj, "K": K, "__builtins__": __builtins__}
     exec(compile("def w():\n for _ in range(K):\n  sy()", "<w>", "exec"), g)
     return g["w"]
@@ -75,7 +75,7 @@ def m_ctxswitch(n, hubs, distinct=False):
     # a cross-hub wake of a freshly-parked idle hub every op: ~30us, pathological
     # and unrepresentative). G*K == n total switches.
     #
-    # The yield object is runloom_c.sched_yield, an IMMORTAL process-lifetime
+    # The yield object is stackweave_c.sched_yield, an IMMORTAL process-lifetime
     # singleton (module_init.c.inc), so the per-yield refcount-contention layer
     # is already gone for both modes.  --distinct ALSO de-shares the code object
     # (above), so the only residual cost is the per-yield Python frame itself,
@@ -83,14 +83,14 @@ def m_ctxswitch(n, hubs, distinct=False):
     # naive "one handler fn for every fiber" server; distinct == the fixed path.
     G = max(2, hubs * 16)
     K = max(1, n // G)
-    sched_yield = runloom_c.sched_yield
+    sched_yield = stackweave_c.sched_yield
 
     if distinct:
         workers = [_make_distinct_worker(K, sched_yield) for _ in range(G)]
 
         def root():
             for w in workers:
-                runloom.fiber(w)
+                stackweave.fiber(w)
     else:
         def worker():
             for _ in range(K):
@@ -98,9 +98,9 @@ def m_ctxswitch(n, hubs, distinct=False):
 
         def root():
             for _ in range(G):
-                runloom.fiber(worker)
+                stackweave.fiber(worker)
     t0 = time.perf_counter()
-    runloom.run(hubs, root)
+    stackweave.run(hubs, root)
     return {"seconds": time.perf_counter() - t0, "n": n, "cores": hubs,
             "switches": G * K, "fibers": G, "yields_each": K,
             "mode": "distinct" if distinct else "shared"}
@@ -135,7 +135,7 @@ def m_rtt(host, port, n, payload):
             _recvn(s, payload)
         out["seconds"] = time.perf_counter() - t0
         s.close()
-    runloom.run(2, root)
+    stackweave.run(2, root)
     return {"ns_per_rtt": out["seconds"] * 1e9 / n, "n": n, "payload": payload,
             "cores": 1}
 
@@ -192,20 +192,20 @@ def m_http(host, port, hubs, conns, ramp, measure):
             pass
 
     def timer():
-        runloom.sleep(ramp)
+        stackweave.sleep(ramp)
         state["measuring"] = True
         t0 = time.perf_counter()
-        runloom.sleep(measure)
+        stackweave.sleep(measure)
         state["measuring"] = False
         state["stop"] = True
         state["elapsed"] = time.perf_counter() - t0
 
     def root():
         for i in range(conns):
-            runloom.fiber(worker, i)
-        runloom.fiber(timer)
+            stackweave.fiber(worker, i)
+        stackweave.fiber(timer)
 
-    runloom.run(hubs, root)
+    stackweave.run(hubs, root)
     total = sum(struct.unpack_from("<q", counters, i * 8)[0] for i in range(conns))
     elapsed = state.get("elapsed", measure)
     return {"rps": total / elapsed, "reqs": total, "measure_s": elapsed,
@@ -241,7 +241,7 @@ def main():
         res = m_rtt(args.host, args.port, args.n, args.payload)
     else:
         res = m_http(args.host, args.port, args.hubs, args.conns, args.ramp, args.measure)
-    res.update({"runtime": "runloom", "metric": args.metric})
+    res.update({"runtime": "stackweave", "metric": args.metric})
     print(json.dumps(res))
 
 

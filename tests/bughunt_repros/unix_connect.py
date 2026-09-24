@@ -42,8 +42,8 @@ def scenario(tag):
 if sys.argv[1] == "stock":
     scenario("stock:")
 else:
-    import runloom
+    import stackweave
     def main():
-        runloom.fiber(lambda: scenario("patched-fiber:"))
-    runloom.monkey.patch()
-    runloom.run(2, main)
+        stackweave.fiber(lambda: scenario("patched-fiber:"))
+    stackweave.monkey.patch()
+    stackweave.run(2, main)

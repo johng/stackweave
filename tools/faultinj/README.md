@@ -1,7 +1,7 @@
 # faultinj -- syscall / allocation fault injection
 
 A small `LD_PRELOAD` shim (`faultinj.c` + `Makefile`) that fails a chosen
-allocation or syscall on the Nth call, plus a compact runloom `workload.py` that
+allocation or syscall on the Nth call, plus a compact stackweave `workload.py` that
 exercises the paths whose cleanup branches the coverage report flagged as
 untested: channel send/recv, the single-thread scheduler, the M:N scheduler (hub
 threads -> `eventfd`/`epoll`), and a timed park (`timerfd` / deadline heap).

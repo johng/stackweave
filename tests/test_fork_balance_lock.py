@@ -17,8 +17,8 @@ import time
 import signal
 import threading
 
-import runloom            # registers the os.register_at_fork(after_in_child) handler
-import runloom_c
+import stackweave            # registers the os.register_at_fork(after_in_child) handler
+import stackweave_c
 
 _HOLD_NS = 4_000_000_000   # 4s: longer than the child timeout so the lock is held at fork
 _CHILD_TIMEOUT = 2.5
@@ -29,7 +29,7 @@ def _run_once():
 
     def _hold():
         acquired.set()
-        runloom_c._test_g_balance_hold_ns(_HOLD_NS)   # acquire + sleep + release
+        stackweave_c._test_g_balance_hold_ns(_HOLD_NS)   # acquire + sleep + release
 
     t = threading.Thread(target=_hold, daemon=True)
     t.start()
@@ -43,7 +43,7 @@ def _run_once():
         # CHILD: register_at_fork already ran reset_after_fork(). The lock was
         # inherited from the (dead) holding thread. Probe it.
         try:
-            runloom_c._test_g_balance_acquire()       # hangs iff inherited held
+            stackweave_c._test_g_balance_acquire()       # hangs iff inherited held
             os._exit(0)
         except BaseException:
             os._exit(2)

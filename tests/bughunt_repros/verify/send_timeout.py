@@ -1,5 +1,5 @@
 import socket, sys, time
-import runloom
+import stackweave
 
 def scenario(tag):
     srv = socket.socket(); srv.bind(("127.0.0.1", 0)); srv.listen(1)
@@ -18,5 +18,5 @@ def scenario(tag):
 if sys.argv[1] == "stock":
     scenario("stock:")
 else:
-    def main(): runloom.fiber(lambda: scenario("patched:"))
-    runloom.monkey.patch(); runloom.run(2, main)
+    def main(): stackweave.fiber(lambda: scenario("patched:"))
+    stackweave.monkey.patch(); stackweave.run(2, main)

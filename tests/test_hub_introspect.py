@@ -1,4 +1,4 @@
-"""runloom.inspect.hubs() / runloom_c.mn_hub_states() -- the per-hub diagnostic
+"""stackweave.inspect.hubs() / stackweave_c.mn_hub_states() -- the per-hub diagnostic
 snapshot (the hub-level companion to fibers()).
 
 Covers the reliable contract:
@@ -18,9 +18,9 @@ import unittest
 
 sys.path.insert(0, "src")
 
-import runloom
-import runloom_c
-from runloom import inspect as gi
+import stackweave
+import stackweave_c
+from stackweave import inspect as gi
 
 HUB_KEYS = {"id", "state", "running_g", "dwell_ms", "pending",
             "preempt_requested", "instrumented", "blocked_at"}
@@ -36,7 +36,7 @@ class HubIntrospectTest(unittest.TestCase):
 
     def test_empty_outside_run(self):
         # No M:N scheduler running -> [] (not an error).
-        self.assertEqual(runloom_c.mn_hub_states(), [])
+        self.assertEqual(stackweave_c.mn_hub_states(), [])
         self.assertEqual(gi.hubs(), [])
 
     def test_structure_and_stack_cmd(self):
@@ -45,7 +45,7 @@ class HubIntrospectTest(unittest.TestCase):
         def main():
             out["hubs"] = gi.hubs()
 
-        runloom.run(4, main)
+        stackweave.run(4, main)
         hubs = out["hubs"]
         self.assertEqual(len(hubs), 4)
         self.assertEqual(sorted(h["id"] for h in hubs), [0, 1, 2, 3])
@@ -60,11 +60,11 @@ class HubIntrospectTest(unittest.TestCase):
         out = {}
 
         def main():
-            runloom.fiber(blocking_sleep_worker)
-            runloom.sleep(0.10)          # let the wedge pass the budget
+            stackweave.fiber(blocking_sleep_worker)
+            stackweave.sleep(0.10)          # let the wedge pass the budget
             out["hubs"] = gi.hubs()
 
-        runloom.run(4, main)
+        stackweave.run(4, main)
         hubs = out["hubs"]
         wedged = [h for h in hubs
                   if h["state"] == "detached" and (h["dwell_ms"] or 0) >= 50]
@@ -80,10 +80,10 @@ class HubIntrospectTest(unittest.TestCase):
 
         def main():
             # Purely cooperative work -- nothing should look wedged.
-            runloom.sleep(0.10)
+            stackweave.sleep(0.10)
             out["hubs"] = gi.hubs()
 
-        runloom.run(4, main)
+        stackweave.run(4, main)
         for h in out["hubs"]:
             self.assertIsNone(h["blocked_at"], h)
 
@@ -92,7 +92,7 @@ class HubIntrospectTest(unittest.TestCase):
         out = {}
 
         def main():
-            runloom.fiber(blocking_sleep_worker)   # blocks 600ms -> a DETACHED wedge
+            stackweave.fiber(blocking_sleep_worker)   # blocks 600ms -> a DETACHED wedge
             # The py-spy hint fires when a hub's DISPLAYED dwell >= WEDGE_MS (50ms).
             # A single snapshot can race a dwell-counter reset (sysmon resume
             # bookkeeping momentarily shows the wedged hub at dwell 0 -> no hint;
@@ -102,15 +102,15 @@ class HubIntrospectTest(unittest.TestCase):
             # the hint window when a reset clustered with the samples.)
             texts = []
             for _ in range(40):
-                runloom.sleep(0.012)            # 40 * 12ms = 480ms < the 600ms wedge
+                stackweave.sleep(0.012)            # 40 * 12ms = 480ms < the 600ms wedge
                 buf = io.StringIO()
                 gi.print_hubs(file=buf)
                 texts.append(buf.getvalue())
             out["texts"] = texts
 
-        runloom.run(4, main)
+        stackweave.run(4, main)
         texts = out["texts"]
-        self.assertTrue(any("runloom hubs" in t for t in texts))
+        self.assertTrue(any("stackweave hubs" in t for t in texts))
         # A wedge was present during the window, so the py-spy hint is emitted.
         self.assertTrue(
             any("py-spy dump --pid" in t for t in texts),

@@ -1,14 +1,14 @@
-"""Slice 3 -- the socketpair-backed byte/readiness plane under RUNLOOM_SIM.
+"""Slice 3 -- the socketpair-backed byte/readiness plane under STACKWEAVE_SIM.
 
 A REAL socket workload (real send/recv on a real socketpair, real wait_fd park on
 EAGAIN) runs deterministically: readiness is delivered by the per-scheduler ready
-ledger (runloom_c.sim_deliver_ready dispatched by the sim pump), never the kernel
+ledger (stackweave_c.sim_deliver_ready dispatched by the sim pump), never the kernel
 epoll -- so the full real park/commit/deadline/wake path is exercised as a
 function of the seed.  Under sim the pump never epoll_waits, so a socketpair
 reader parked on EAGAIN is woken ONLY by the ledger; these tests prove the wake
 lands, the bytes are exact, it is instant (logical compression) and deterministic.
 
-RUNLOOM_SIM is read once + cached, so it is set before import; run_isolated gives
+STACKWEAVE_SIM is read once + cached, so it is set before import; run_isolated gives
 this file its own subprocess.  See docs/dev/soak/SIM_IO_DST.md.
 """
 import os
@@ -20,12 +20,12 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "src"))
 sys.path.insert(0, os.path.join(REPO, "tools", "dst"))
 os.environ["PYTHON_GIL"] = "0"
-os.environ["RUNLOOM_SIM"] = "1"
-os.environ.setdefault("RUNLOOM_LOGICAL_CLOCK", "1")
+os.environ["STACKWEAVE_SIM"] = "1"
+os.environ.setdefault("STACKWEAVE_LOGICAL_CLOCK", "1")
 # (RUNLOOM_HUBS removed -- confirmed inert: read by no C source.  This file
 #  is the FROZEN H=1 plane: it drives rc.run(); the native mn plane is
 #  tests/test_mn_sim_*.py per docs/dev/soak/MN_SIM_DST_PLAN.md.)
-import runloom_c            # noqa: E402
+import stackweave_c            # noqa: E402
 import simnet_fd            # noqa: E402
 
 
@@ -43,17 +43,17 @@ class TestSimBytes(unittest.TestCase):
         def writer():
             conn.a.sendall(b"hello")
 
-        d0 = runloom_c.count_deadlocked()
-        runloom_c.fiber(reader)                       # spawned first -> runs + parks first
-        runloom_c.fiber(writer)
+        d0 = stackweave_c.count_deadlocked()
+        stackweave_c.fiber(reader)                       # spawned first -> runs + parks first
+        stackweave_c.fiber(writer)
         t0 = time.monotonic()
-        runloom_c.run()
+        stackweave_c.run()
         elapsed = time.monotonic() - t0
         conn.close()
 
         self.assertEqual(got.get("data"), b"hello",
                          "socketpair reader did not receive the bytes via the ledger")
-        self.assertEqual(runloom_c.count_deadlocked() - d0, 0, "unexpected deadlock")
+        self.assertEqual(stackweave_c.count_deadlocked() - d0, 0, "unexpected deadlock")
         self.assertLess(elapsed, 2.0, "not instant -- logical clock did not compress")
 
     def test_bidirectional_echo(self):
@@ -69,9 +69,9 @@ class TestSimBytes(unittest.TestCase):
             conn.a.sendall(b"ping")
             out["reply"] = conn.a.recv_exact(4)
 
-        runloom_c.fiber(server)
-        runloom_c.fiber(client)
-        runloom_c.run()
+        stackweave_c.fiber(server)
+        stackweave_c.fiber(client)
+        stackweave_c.run()
         conn.close()
         self.assertEqual(out.get("reply"), b"gnip")
 
@@ -91,10 +91,10 @@ class TestSimBytes(unittest.TestCase):
                 conns[i].a.sendall(bytes([65 + i]) * 3)
 
             for i in range(5):
-                runloom_c.fiber(lambda i=i: reader(i))    # all park first
+                stackweave_c.fiber(lambda i=i: reader(i))    # all park first
             for i in range(5):
-                runloom_c.fiber(lambda i=i: writer(i))
-            runloom_c.run()
+                stackweave_c.fiber(lambda i=i: writer(i))
+            stackweave_c.run()
             for c in conns:
                 c.close()
             return order
@@ -121,8 +121,8 @@ class TestSimBytes(unittest.TestCase):
                 out["err"] = repr(e)
 
         t0 = time.monotonic()
-        runloom_c.fiber(lonely_reader)
-        runloom_c.run()                              # must return, not hang
+        stackweave_c.fiber(lonely_reader)
+        stackweave_c.run()                              # must return, not hang
         elapsed = time.monotonic() - t0
         conn.close()
         self.assertLess(elapsed, 2.0, "lonely reader hung instead of being reaped")
@@ -144,23 +144,23 @@ class TestSimBytesMITM(unittest.TestCase):
         out = {}
 
         def reader():
-            out["t0"] = runloom_c._logical_ns()
+            out["t0"] = stackweave_c._logical_ns()
             out["data"] = conn.b.recv_exact(4)       # parks; woken only after D
-            out["t1"] = runloom_c._logical_ns()
+            out["t1"] = stackweave_c._logical_ns()
 
         def writer():
             conn.a.sendall(b"pong")
 
-        d0 = runloom_c.count_deadlocked()
-        runloom_c.fiber(reader)                       # parks first
-        runloom_c.fiber(writer)
+        d0 = stackweave_c.count_deadlocked()
+        stackweave_c.fiber(reader)                       # parks first
+        stackweave_c.fiber(writer)
         t_wall = time.monotonic()
-        runloom_c.run()
+        stackweave_c.run()
         wall = time.monotonic() - t_wall
         conn.close()
 
         self.assertEqual(out.get("data"), b"pong")
-        self.assertEqual(runloom_c.count_deadlocked() - d0, 0,
+        self.assertEqual(stackweave_c.count_deadlocked() - d0, 0,
                          "shuttlers inflated the deadlock census")
         delta = out["t1"] - out["t0"]
         self.assertTrue(0.49e9 <= delta <= 0.51e9,
@@ -181,9 +181,9 @@ class TestSimBytesMITM(unittest.TestCase):
             for c in b"abcdef":
                 conn.a.sendall(bytes([c]))
 
-        runloom_c.fiber(reader)
-        runloom_c.fiber(writer)
-        runloom_c.run()
+        stackweave_c.fiber(reader)
+        stackweave_c.fiber(writer)
+        stackweave_c.run()
         conn.close()
         self.assertEqual(got.get("data"), b"abcdef",
                          "MITM did not preserve stream order")
@@ -193,22 +193,22 @@ class TestSimBytesMITM(unittest.TestCase):
         import random
 
         def run_scenario():
-            runloom_c.sim_reset()                    # fresh logical clock -> bit-exact across runs
+            stackweave_c.sim_reset()                    # fresh logical clock -> bit-exact across runs
             rng = random.Random(1234)
             conn = simnet_fd.SimFdConn(delay_fn=lambda: rng.random() * 0.05)
             out = {}
 
             def reader():
                 out["data"] = conn.b.recv_exact(8)
-                out["t"] = runloom_c._logical_ns()
+                out["t"] = stackweave_c._logical_ns()
 
             def writer():
                 for c in b"deadbeef":
                     conn.a.sendall(bytes([c]))
 
-            runloom_c.fiber(reader)
-            runloom_c.fiber(writer)
-            runloom_c.run()
+            stackweave_c.fiber(reader)
+            stackweave_c.fiber(writer)
+            stackweave_c.run()
             conn.close()
             return out["data"], out["t"]              # absolute logical time (clock reset each run)
 
@@ -249,13 +249,13 @@ class TestSimBytesLargeSend(unittest.TestCase):
             except OSError as e:
                 out["writer_err"] = repr(e)
 
-        d0 = runloom_c.count_deadlocked()
-        runloom_c.fiber(reader)
-        runloom_c.fiber(writer)
+        d0 = stackweave_c.count_deadlocked()
+        stackweave_c.fiber(reader)
+        stackweave_c.fiber(writer)
         t0 = time.monotonic()
-        runloom_c.run()
+        stackweave_c.run()
         out["wall"] = time.monotonic() - t0
-        out["dl"] = runloom_c.count_deadlocked() - d0
+        out["dl"] = stackweave_c.count_deadlocked() - d0
         conn.close()
         return out
 
@@ -291,11 +291,11 @@ class TestSimBytesLargeSend(unittest.TestCase):
         import random
 
         def scenario():
-            runloom_c.sim_reset()
+            stackweave_c.sim_reset()
             rng = random.Random(4321)
             conn = simnet_fd.SimFdConn(delay_fn=lambda: rng.random() * 0.001)
             out = self._roundtrip(conn, conn.b, conn.a)
-            return out.get("got"), runloom_c._logical_ns()
+            return out.get("got"), stackweave_c._logical_ns()
 
         a = scenario()
         b = scenario()
@@ -324,9 +324,9 @@ class TestSimBytesLoss(unittest.TestCase):
             conn.a.sendall(b"xyz")
 
         t0 = time.monotonic()
-        runloom_c.fiber(reader)
-        runloom_c.fiber(writer)
-        runloom_c.run()
+        stackweave_c.fiber(reader)
+        stackweave_c.fiber(writer)
+        stackweave_c.run()
         wall = time.monotonic() - t0
         conn.close()
         self.assertLess(wall, 2.0, "lossy connection hung instead of terminating")
@@ -337,7 +337,7 @@ class TestSimBytesLoss(unittest.TestCase):
         import random
 
         def scenario():
-            runloom_c.sim_reset()
+            stackweave_c.sim_reset()
             rng = random.Random(555)
             conn = simnet_fd.SimFdConn(delay_fn=lambda: 0.0,
                                        loss_fn=lambda: rng.random() < 0.5)
@@ -357,9 +357,9 @@ class TestSimBytesLoss(unittest.TestCase):
                 for i in range(6):
                     conn.a.sendall(bytes([65 + i]))
 
-            runloom_c.fiber(reader)
-            runloom_c.fiber(writer)
-            runloom_c.run()
+            stackweave_c.fiber(reader)
+            stackweave_c.fiber(writer)
+            stackweave_c.run()
             conn.close()
             return b"".join(got)
 
@@ -388,9 +388,9 @@ class TestSimBytesReset(unittest.TestCase):
             conn.reset()                             # reader has parked by now (spawned first)
 
         t0 = time.monotonic()
-        runloom_c.fiber(reader)
-        runloom_c.fiber(resetter)
-        runloom_c.run()
+        stackweave_c.fiber(reader)
+        stackweave_c.fiber(resetter)
+        stackweave_c.run()
         wall = time.monotonic() - t0
         conn.close()
         self.assertEqual(out.get("r"), "ECONNRESET",
@@ -412,8 +412,8 @@ class TestSimBytesReset(unittest.TestCase):
             except simnet_fd.SimError:
                 out["second"] = "ECONNRESET"
 
-        runloom_c.fiber(flow)
-        runloom_c.run()
+        stackweave_c.fiber(flow)
+        stackweave_c.run()
         conn.close()
         self.assertTrue(out.get("first"), "no data delivered before reset: %r" % out)
         self.assertEqual(out.get("second"), "ECONNRESET",
@@ -431,8 +431,8 @@ class TestSimBytesReset(unittest.TestCase):
             except simnet_fd.SimError:
                 out["s"] = "ECONNRESET"
 
-        runloom_c.fiber(flow)
-        runloom_c.run()
+        stackweave_c.fiber(flow)
+        stackweave_c.run()
         conn.close()
         self.assertEqual(out.get("s"), "ECONNRESET")
 
@@ -457,10 +457,10 @@ class TestSimBytesReset(unittest.TestCase):
         def c2writer():
             conn2.a.sendall(b"bbbb")
 
-        runloom_c.fiber(c1flow)
-        runloom_c.fiber(c2reader)
-        runloom_c.fiber(c2writer)
-        runloom_c.run()
+        stackweave_c.fiber(c1flow)
+        stackweave_c.fiber(c2reader)
+        stackweave_c.fiber(c2writer)
+        stackweave_c.run()
         conn1.close()
         conn2.close()
         self.assertEqual(out.get("c2"), b"bbbb",
@@ -468,7 +468,7 @@ class TestSimBytesReset(unittest.TestCase):
 
     def test_reset_deterministic(self):
         def scenario():
-            runloom_c.sim_reset()
+            stackweave_c.sim_reset()
             conn = simnet_fd.SimFdConn(delay_fn=lambda: 0.0)
             out = {}
 
@@ -482,10 +482,10 @@ class TestSimBytesReset(unittest.TestCase):
                 except simnet_fd.SimError:
                     out["second"] = "reset"
 
-            runloom_c.fiber(flow)
-            runloom_c.run()
+            stackweave_c.fiber(flow)
+            stackweave_c.run()
             conn.close()
-            return out.get("first"), out.get("second"), runloom_c._logical_ns()
+            return out.get("first"), out.get("second"), stackweave_c._logical_ns()
 
         self.assertEqual(scenario(), scenario())
 
@@ -495,7 +495,7 @@ class TestSimBytesReset(unittest.TestCase):
         reader's parker is already unlinked, so cancel_fd is a no-op and only the
         wrapper's post-success reset_flag re-check enforces the discard.  (Review
         find: recv checking the flag only pre-park leaked the buffered bytes.)"""
-        runloom_c.sim_reset()
+        stackweave_c.sim_reset()
         conn0 = simnet_fd.SimFdConn(delay_fn=lambda: 0.0)    # conn_id 0 -> dispatched first
         conn1 = simnet_fd.SimFdConn(delay_fn=lambda: 0.0)    # conn_id 1
         out = {}
@@ -514,10 +514,10 @@ class TestSimBytesReset(unittest.TestCase):
             conn0.a.sendall(b"x")
             conn1.a.sendall(b"leak")
 
-        runloom_c.fiber(resetter)
-        runloom_c.fiber(victim)
-        runloom_c.fiber(driver)
-        runloom_c.run()
+        stackweave_c.fiber(resetter)
+        stackweave_c.fiber(victim)
+        stackweave_c.fiber(driver)
+        stackweave_c.run()
         conn0.close()
         conn1.close()
         self.assertEqual(out.get("got"), "RESET",
@@ -529,8 +529,8 @@ class TestSimBytesReset(unittest.TestCase):
         def flow():
             conn.reset()
 
-        runloom_c.fiber(flow)
-        runloom_c.run()
+        stackweave_c.fiber(flow)
+        stackweave_c.run()
         conn.close()
         conn.close()          # idempotent, no raise
 
@@ -553,15 +553,15 @@ class TestSimBytesPartition(unittest.TestCase):
             out["data"] = conn.b.recv_exact(4)
             out["arrived"] = conn.logical_now()
 
-        d0 = runloom_c.count_deadlocked()
+        d0 = stackweave_c.count_deadlocked()
         t0 = time.monotonic()
-        runloom_c.fiber(writer)
-        runloom_c.fiber(reader)
-        runloom_c.run()
+        stackweave_c.fiber(writer)
+        stackweave_c.fiber(reader)
+        stackweave_c.run()
         wall = time.monotonic() - t0
         conn.close()
         self.assertEqual(out.get("data"), b"held")
-        self.assertEqual(runloom_c.count_deadlocked() - d0, 0,
+        self.assertEqual(stackweave_c.count_deadlocked() - d0, 0,
                          "reader parked through the partition was falsely reaped")
         latency = out["arrived"] - out["t0"]
         self.assertTrue(HEAL - 0.01 <= latency <= HEAL + 0.01,
@@ -579,9 +579,9 @@ class TestSimBytesPartition(unittest.TestCase):
         def reader():
             out["data"] = conn.b.recv_exact(6)
 
-        runloom_c.fiber(writer)
-        runloom_c.fiber(reader)
-        runloom_c.run()
+        stackweave_c.fiber(writer)
+        stackweave_c.fiber(reader)
+        stackweave_c.run()
         conn.close()
         self.assertEqual(out.get("data"), b"abcdef", "partition broke stream order")
 
@@ -595,7 +595,7 @@ class TestSimBytesPartition(unittest.TestCase):
 
     def test_partition_deterministic(self):
         def scenario():
-            runloom_c.sim_reset()
+            stackweave_c.sim_reset()
             conn = simnet_fd.SimFdConn(delay_fn=lambda: 0.0)
             out = {}
 
@@ -605,11 +605,11 @@ class TestSimBytesPartition(unittest.TestCase):
 
             def reader():
                 out["data"] = conn.b.recv_exact(4)
-                out["at"] = runloom_c._logical_ns()
+                out["at"] = stackweave_c._logical_ns()
 
-            runloom_c.fiber(writer)
-            runloom_c.fiber(reader)
-            runloom_c.run()
+            stackweave_c.fiber(writer)
+            stackweave_c.fiber(reader)
+            stackweave_c.run()
             conn.close()
             return out.get("data"), out.get("at")
 
@@ -657,9 +657,9 @@ class TestSimBytesDgramReorder(unittest.TestCase):
             for i in range(n):
                 conn.a.send(bytes([i]))
 
-        runloom_c.fiber(reader)
-        runloom_c.fiber(writer)
-        runloom_c.run()
+        stackweave_c.fiber(reader)
+        stackweave_c.fiber(writer)
+        stackweave_c.run()
         conn.close()
         return out["got"]
 
@@ -679,7 +679,7 @@ class TestSimBytesDgramReorder(unittest.TestCase):
         # over a handful of seeds at least one burst is delivered out of send order
         reordered = False
         for s in range(1, 12):
-            runloom_c.sim_reset()
+            stackweave_c.sim_reset()
             got = self._run(8, random.Random(s).shuffle)
             self.assertEqual(sorted(got), [bytes([i]) for i in range(8)])
             if got != [bytes([i]) for i in range(8)]:
@@ -690,7 +690,7 @@ class TestSimBytesDgramReorder(unittest.TestCase):
         import random
 
         def scenario():
-            runloom_c.sim_reset()
+            stackweave_c.sim_reset()
             return self._run(8, random.Random(99).shuffle)
 
         self.assertEqual(scenario(), scenario())
@@ -708,7 +708,7 @@ class TestSimReapOracle(unittest.TestCase):
     asserts its expected infra-reap total and flags excess as a stranded fiber."""
 
     def _oneway(self, suppress):
-        runloom_c.sim_reset()
+        stackweave_c.sim_reset()
         conn = simnet_fd.SimFdConn(delay_fn=lambda: 0.0,
                                    loss_fn=(lambda: True) if suppress else None)
         out = {}
@@ -725,11 +725,11 @@ class TestSimReapOracle(unittest.TestCase):
             except OSError:
                 pass
 
-        runloom_c.fiber(reader)
-        runloom_c.fiber(writer)
-        runloom_c.run()
+        stackweave_c.fiber(reader)
+        stackweave_c.fiber(writer)
+        stackweave_c.run()
         conn.close()
-        return runloom_c.sim_reap_count()
+        return stackweave_c.sim_reap_count()
 
     def test_reap_count_teeth(self):
         base = self._oneway(suppress=False)      # reader completes -> only 2 shuttlers reaped
@@ -740,8 +740,8 @@ class TestSimReapOracle(unittest.TestCase):
 
     def test_reap_count_reset(self):
         self._oneway(suppress=True)
-        runloom_c.sim_reset()
-        self.assertEqual(runloom_c.sim_reap_count(), 0, "sim_reset did not clear the reap tally")
+        stackweave_c.sim_reset()
+        self.assertEqual(stackweave_c.sim_reap_count(), 0, "sim_reset did not clear the reap tally")
 
 
 class TestSimFdProgram(unittest.TestCase):

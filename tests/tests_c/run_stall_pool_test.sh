@@ -23,10 +23,10 @@ ls -la test_stall_pool 2>&1 || { echo "BUILD FAILED"; exit 1; }
 # The rescue-thread pool this exercised was removed (2026-06).  The surviving
 # invariant is no-lost-wake: every worker eventually runs even with multiple
 # wedged hubs.  Run a few times; any non-PASS is a regression.
-echo "--- RUN no-lost-wake check (multi-wedge, RUNLOOM_HANDOFF=1) -- expect PASS 64/64 ---"
+echo "--- RUN no-lost-wake check (multi-wedge, STACKWEAVE_HANDOFF=1) -- expect PASS 64/64 ---"
 rc=0
 for r in 1 2 3 4 5; do
-    PYTHON_GIL=0 RUNLOOM_HANDOFF=1 RUNLOOM_SYSMON_MS=20 timeout 30 ./test_stall_pool || rc=1
+    PYTHON_GIL=0 STACKWEAVE_HANDOFF=1 STACKWEAVE_SYSMON_MS=20 timeout 30 ./test_stall_pool || rc=1
     echo "  run $r exit rc=$?"
 done
 echo "=== stall pool test end $(date -Is) rc=$rc ==="

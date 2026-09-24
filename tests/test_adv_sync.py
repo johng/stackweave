@@ -1,8 +1,8 @@
-"""Adversarial QA: runloom.sync primitives (WaitGroup / Future / gather /
+"""Adversarial QA: stackweave.sync primitives (WaitGroup / Future / gather /
 Semaphore / RWMutex / Once).
 
 These are pure-Python fan-in/synchronisation primitives built on the
-park()/g.wake() handshake + a runloom_c.Mutex guard.  Their two failure modes
+park()/g.wake() handshake + a stackweave_c.Mutex guard.  Their two failure modes
 are (1) lost/duplicated wakes -> a hang or a wrong count, and (2) a WAKE-side
 op running on a FOREIGN OS thread, whose wake path (mn_wake_g) is not
 foreign-safe and would SIGSEGV -- every such op must REJECT the foreign caller
@@ -15,9 +15,9 @@ import time
 
 import pytest
 
-import runloom
-import runloom_c as rc
-from runloom.sync import WaitGroup, Future, gather, Semaphore, RWMutex, Once
+import stackweave
+import stackweave_c as rc
+from stackweave.sync import WaitGroup, Future, gather, Semaphore, RWMutex, Once
 from adv_util import hang_guard, raw_thread, needs_free_threading
 
 FT = needs_free_threading()
@@ -142,7 +142,7 @@ def test_future_resolve_from_foreign_thread_rejected():
 def test_gather_preserves_order_and_runs_concurrently():
     def f():
         def slow(i):
-            runloom.sleep(0.02)
+            stackweave.sleep(0.02)
             return i * 10
         return gather(*[(lambda i=i: slow(i)) for i in range(5)])
     with hang_guard(15, "gather order"):
@@ -223,7 +223,7 @@ def test_semaphore_bounds_concurrency_under_mn():
                 if cur[0] > peak[0]:
                     peak[0] = cur[0]
                 guard.unlock()
-                runloom.sleep(0.001)
+                stackweave.sleep(0.001)
                 guard.lock(); cur[0] -= 1; guard.unlock()
                 sem.release(1)
             finally:
@@ -232,7 +232,7 @@ def test_semaphore_bounds_concurrency_under_mn():
             rc.mn_fiber(worker)
         wg.wait()
     with hang_guard(60, "semaphore mn bound"):
-        runloom.run(4, main)
+        stackweave.run(4, main)
     assert peak[0] <= LIMIT, "semaphore admitted %d > limit %d concurrently" % (peak[0], LIMIT)
     assert peak[0] >= 1
 

@@ -6,7 +6,7 @@ the extra bytes the client pushes have to wait in the kernel receive buffer.
 Only once ``resume_reading()`` is scheduled do the remaining bytes flow, and
 they must arrive in the original order (concatenation identity).
 
-Driven through runloom.aio.run() (its asyncio.run drop-in), no pytest-asyncio,
+Driven through stackweave.aio.run() (its asyncio.run drop-in), no pytest-asyncio,
 matching tests/test_adv_aio.py / tests/test_aio_net.py conventions.
 """
 import asyncio
@@ -15,7 +15,7 @@ import time
 
 import pytest
 
-import runloom.aio as aio
+import stackweave.aio as aio
 from adv_util import hang_guard
 
 

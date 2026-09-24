@@ -10,7 +10,7 @@ Run:
 
 import os
 
-import runloom
+import stackweave
 
 # Free-threaded build: fan fibers across all cores (M:N scheduler).
 HUBS = os.cpu_count() or 4
@@ -32,15 +32,15 @@ def sum_all(inp, result):
     result.send(total)
 
 def main():
-    nums = runloom.Chan(10)
-    squares = runloom.Chan(10)
-    result = runloom.Chan(1)
+    nums = stackweave.Chan(10)
+    squares = stackweave.Chan(10)
+    result = stackweave.Chan(1)
 
-    runloom.fiber(generate, nums, 10)
-    runloom.fiber(square, nums, squares)
-    runloom.fiber(sum_all, squares, result)
+    stackweave.fiber(generate, nums, 10)
+    stackweave.fiber(square, nums, squares)
+    stackweave.fiber(sum_all, squares, result)
 
     print("sum of squares 1..10 =", result.recv()[0])   # 385
 
 if __name__ == "__main__":
-    runloom.run(HUBS, main)
+    stackweave.run(HUBS, main)

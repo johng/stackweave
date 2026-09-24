@@ -12,7 +12,7 @@ import threading
 
 import harness
 import netutil
-import runloom
+import stackweave
 
 NCHAN = 64
 
@@ -25,8 +25,8 @@ def setup(H):
                "missed_pong": [0]}
 
     def serve(conn):
-        outbound = runloom.Chan(128)
-        writer_done = runloom.Chan(1)
+        outbound = stackweave.Chan(128)
+        writer_done = stackweave.Chan(1)
         nick = None
         chan = None
         started = False

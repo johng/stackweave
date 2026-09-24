@@ -1,5 +1,5 @@
 import socket, sys
-import runloom
+import stackweave
 
 def battery(tag):
     for h in (b"127.0.0.1", b"localhost"):
@@ -10,5 +10,5 @@ def battery(tag):
 
 if sys.argv[1] == "stock": battery("stock:")
 else:
-    def main(): runloom.fiber(lambda: battery("patched:"))
-    runloom.monkey.patch(); runloom.run(2, main)
+    def main(): stackweave.fiber(lambda: battery("patched:"))
+    stackweave.monkey.patch(); stackweave.run(2, main)

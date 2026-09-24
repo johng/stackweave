@@ -7,7 +7,7 @@ is a SLICE OF AN mmap REGION, while another goroutine on a DIFFERENT hub (and th
 teardown path) munmaps / closes the backing file in a stressful order WHILE the
 recv is still parked.
 
-The bite: the patched recv_into (src/runloom/monkey/sockets.py:135) hands the
+The bite: the patched recv_into (src/stackweave/monkey/sockets.py:135) hands the
 caller's buffer straight to the C netpoll recv primitive -- with no timeout it
 takes the FAST C path `_tcp_recv(fd, buffer, n, flags)`, which holds the buffer
 pointer across the netpoll park.  When the peer finally sends, the netpoll wake
@@ -96,9 +96,9 @@ ORDERS = ("clean", "crosshub", "mmfirst", "fdfirst", "sockfirst")
 CHILD = r'''
 import sys, os, mmap, socket, threading, time
 sys.path.insert(0, {src!r})
-import runloom
-import runloom.monkey
-runloom.monkey.patch()                     # cooperative socket recv_into on hubs
+import stackweave
+import stackweave.monkey
+stackweave.monkey.patch()                     # cooperative socket recv_into on hubs
 
 ORDER = sys.argv[1] if len(sys.argv) > 1 else "crosshub"
 K     = int(sys.argv[2]) if len(sys.argv) > 2 else 24
@@ -148,7 +148,7 @@ def peer_delayed_send(idx, sock):
     # the sockets are being torn down (stop) so a send into a closed fd is not
     # mistaken for the hazard.
     try:
-        runloom.sleep(DELAY)
+        stackweave.sleep(DELAY)
         if stop[0] and not CLEAN:
             return
         sock.sendall(bytes([fill_byte(idx)]) * SLOT)
@@ -161,7 +161,7 @@ def crosshub_unmapper(mm):
     # recvs.  It munmaps the backing region WHILE the recvs are parked / their
     # copies in flight: the runloom-specific cross-hub unmap-vs-parked-IO race.
     try:
-        runloom.sleep(DELAY * 0.5)         # let the recvs park first
+        stackweave.sleep(DELAY * 0.5)         # let the recvs park first
         if not stop[0]:
             return
         mm.close()                         # munmap from (likely) another hub
@@ -184,13 +184,13 @@ def main():
         with lock:
             socks.append(a); socks.append(b)
         # recv target = this slot's slice of the mmap region.
-        runloom.fiber(recv_into_parked, i, a, view[i * SLOT:(i + 1) * SLOT])
-        runloom.fiber(peer_delayed_send, i, b)
+        stackweave.fiber(recv_into_parked, i, a, view[i * SLOT:(i + 1) * SLOT])
+        stackweave.fiber(peer_delayed_send, i, b)
 
     if ORDER == "crosshub":
-        runloom.fiber(crosshub_unmapper, mm)
+        stackweave.fiber(crosshub_unmapper, mm)
 
-    runloom.sleep(DELAY * 0.4)             # let every recv_into actually park
+    stackweave.sleep(DELAY * 0.4)             # let every recv_into actually park
     sys.stdout.write("DONE-MARKER\n"); sys.stdout.flush()
 
     if CLEAN:
@@ -204,7 +204,7 @@ def main():
                 got = sum(1 for d in delivered if d > 0)
             if got >= K:
                 break
-            runloom.sleep(0.01)
+            stackweave.sleep(0.01)
         # mm.flush so the delivered bytes are guaranteed visible via the file
         # before we close the mapping and the parent re-reads it.
         try: mm.flush()
@@ -243,10 +243,10 @@ def main():
 
     # Give the resumed copies / wakes a beat to land on the (now torn-down)
     # mapping before run() joins -- this is the window a SIGBUS lands in.
-    runloom.sleep(0.02)
+    stackweave.sleep(0.02)
     # return -> run() joins the (woken/torn) recv goroutines.
 
-runloom.run(4, main)
+stackweave.run(4, main)
 
 # METAMORPHIC content arm: for the clean order, re-read the backing FILE and
 # emit the per-slot delivered bytes so the PARENT can verify no torn/lost write
@@ -413,7 +413,7 @@ def post(H):
 
 
 if __name__ == "__main__":
-    # SUBPROCESS program: each worker iteration forks a real child runloom
+    # SUBPROCESS program: each worker iteration forks a real child stackweave
     # process that mmaps a file, parks K recv_into goroutines over its slices,
     # and tears the mmap/fd/sockets down in a chosen order while a sibling on
     # another hub munmaps.  A SIGBUS therefore crashes the CHILD (caught by the
@@ -421,7 +421,7 @@ if __name__ == "__main__":
     # soak driver from fork-bombing the box at 1M.
     harness.main("p322_mmap_unmap_parked_io_ordering", body, setup=setup,
                  post=post, default_funcs=100, max_funcs=300,
-                 describe="child runloom tears down an mmap region (mm.close / "
+                 describe="child stackweave tears down an mmap region (mm.close / "
                           "os.close(fd) / socket.close permutations) while K "
                           "goroutines are PARKED in recv_into over slices of it "
                           "and a sibling on another hub munmaps; returncode 0/"

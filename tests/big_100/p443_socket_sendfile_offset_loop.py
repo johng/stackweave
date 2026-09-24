@@ -1,13 +1,13 @@
 """big_100 / 443 -- cooperative socket.sendfile partial-loop offset conservation
 under M:N, with a sibling mutating the SAME source fd across the EAGAIN park.
 
-The subject is runloom's cooperative ``socket.sendfile`` -- specifically
-``runloom.monkey.sockets._co_sendfile_use_sendfile`` (monkey/sockets.py:323),
+The subject is stackweave's cooperative ``socket.sendfile`` -- specifically
+``stackweave.monkey.sockets._co_sendfile_use_sendfile`` (monkey/sockets.py:323),
 the zero-copy half it reimplements over the RAW ``os.sendfile`` captured
 pre-offload as ``_base._raw_os_sendfile`` (monkey/_base.py:73).  Stock
 socket.sendfile refuses a non-blocking socket and drives its own
 selectors.PollSelector; the fiber socket is non-blocking by construction, so
-runloom reimplements the loop and PARKS on wait_fd(sock, WRITE) on EAGAIN
+stackweave reimplements the loop and PARKS on wait_fd(sock, WRITE) on EAGAIN
 instead of pinning a hub.  The hot loop is (sockets.py:339-364):
 
     total_sent = 0
@@ -109,7 +109,7 @@ import socket
 import sys
 
 # ---- availability guard (POSIX zero-copy sendfile) ------------------------
-# os.sendfile (the zero-copy path runloom reimplements cooperatively) exists on
+# os.sendfile (the zero-copy path stackweave reimplements cooperatively) exists on
 # Linux/*BSD/macOS but NOT on Windows; without it _patched_sendfile falls to the
 # read()+send() fallback, which is a DIFFERENT primitive (no os-level offset arg
 # to attack).  Detect-and-skip so this program only runs where the offset loop
@@ -121,7 +121,7 @@ if not sys.platform.startswith(("linux", "freebsd", "darwin")) \
     sys.exit(0)
 
 import harness
-import runloom
+import stackweave
 
 # ---- the finite tagged UNIVERSE -------------------------------------------
 # The source blob is NBLOCKS blocks of BLOCK bytes each; block i stores its own
@@ -253,7 +253,7 @@ def receiver(H, in_sock, received, sent_cell, wg):
             if not chunk:
                 return                   # clean EOF
             received.extend(chunk)
-            runloom.yield_now()
+            stackweave.yield_now()
     finally:
         wg.done()
 
@@ -271,7 +271,7 @@ def lseek_molester(H, src_fd, rng, wg):
                 os.lseek(src_fd, rng.randrange(BLOB_SIZE), os.SEEK_SET)
             except OSError:
                 return                   # fd closed (round tearing down) -> stop
-            runloom.yield_now()
+            stackweave.yield_now()
     finally:
         wg.done()
 
@@ -293,7 +293,7 @@ def ftruncate_molester(H, src_fd, rng, wg):
                 os.ftruncate(src_fd, target)
             except OSError:
                 return
-            runloom.yield_now()
+            stackweave.yield_now()
     finally:
         wg.done()
 
@@ -306,7 +306,7 @@ def close_out_molester(H, out_sock, rng, wg, closed_flag):
         for _ in range(rng.randint(1, 4)):
             if not H.running():
                 return
-            runloom.yield_now()
+            stackweave.yield_now()
         closed_flag[0] = True
         try:
             out_sock.close()
@@ -352,7 +352,7 @@ def worker(H, wid, rng, state):
 
         # Receiver always runs; the contention cases add exactly one sibling.
         nchildren = 1 + (0 if case == CASE_CONTROL else 1)
-        wg = runloom.WaitGroup()
+        wg = stackweave.WaitGroup()
         wg.add(nchildren)
 
         mseed = rng.getrandbits(48)

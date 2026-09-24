@@ -1,4 +1,4 @@
-"""seamfuzz -- targeted fuzzer for the runloom <-> CPython-3.14t-internals SEAM.
+"""seamfuzz -- targeted fuzzer for the stackweave <-> CPython-3.14t-internals SEAM.
 
 Every recent REAL bug lived on this seam: gilstate/tstate attach-detach, the
 stop-the-world (STW) handshake, biased-refcount merge, preempt-mid-object-
@@ -20,16 +20,16 @@ The four moves -- each provably drives one seam machine (refs are src/runloom_c)
                container chain (trashcan/delete_later arm) while a thread STW-
                collects, so preemption fires mid-tp_dealloc (the C5 gate,
                resume_preempt.c.inc:954).
-  * foreign -- real OS threads hammer a runloom CoLock also held by a fiber:
+  * foreign -- real OS threads hammer a stackweave CoLock also held by a fiber:
                the foreign-thread cooperative path (module_chan.c.inc:458-482).
 
 Oracle: nonzero exit / signal (SEGV/SIGABRT) / timeout(HANG) / _self_check(0)!=0.
 Lanes (compose via env, no code change):
   * pydebug lane: SEAM_PYTHON=/path/to/--with-pydebug-python -> CPython internal
     asserts fire at the exact seam line (tstate ownership, gilstate, brc, heap).
-  * ASan lane: run under tools/run_asan_ext.sh's preloaded libasan (runloom's own
+  * ASan lane: run under tools/run_asan_ext.sh's preloaded libasan (stackweave's own
     C-heap UAF).  * TSan lane: run under the tsan-gold interp.
-  * widener: RUNLOOM_DELAY=<seed> + RUNLOOM_DELAY_MAX_NS arm the diag delay sites
+  * widener: STACKWEAVE_DELAY=<seed> + STACKWEAVE_DELAY_MAX_NS arm the diag delay sites
     (set per-seed by the sweep) so timing-rare seam reorders become deterministic.
 
 Usage:
@@ -83,16 +83,16 @@ def build_spec(seed):
 def worker_env(spec):
     env = dict(os.environ)
     env["PYTHON_GIL"] = "0"
-    env["RUNLOOM_GIL"] = "0"
+    env["STACKWEAVE_GIL"] = "0"
     env["PYTHONPATH"] = os.path.join(ROOT, "src") + os.pathsep + env.get("PYTHONPATH", "")
-    env["RUNLOOM_DEBUG"] = "ring,gstate"
+    env["STACKWEAVE_DEBUG"] = "ring,gstate"
     env["RUNLOOM_DBG_GSTATE"] = "1"
-    env["RUNLOOM_DELAY"] = str(spec["seed"])        # arm the diag delay sites
-    env["RUNLOOM_DELAY_MAX_NS"] = str(spec["delay_max_ns"])
+    env["STACKWEAVE_DELAY"] = str(spec["seed"])        # arm the diag delay sites
+    env["STACKWEAVE_DELAY_MAX_NS"] = str(spec["delay_max_ns"])
     env["SEAM_NHUB"] = str(spec["nhub"])
     env["SEAM_MOVES"] = ",".join(spec["moves"])
     env["SEAM_ITERS"] = str(spec["iters"])
-    # NB: deliberately does NOT set RUNLOOM_ALLOW_UNSAFE_MIGRATION -- that forces
+    # NB: deliberately does NOT set STACKWEAVE_ALLOW_UNSAFE_MIGRATION -- that forces
     # the documented-impossible per-g live-frame tstate migration, whose mimalloc
     # heap->thread_id abort is a KNOWN-dead-mode artifact, not a seam bug.
     return env
@@ -101,20 +101,20 @@ def worker_env(spec):
 def run_moves(nhub, moves, iters):
     """Run the selected seam moves under one mn_init/mn_run/mn_fini envelope.
     Every move is bounded/self-terminating so mn_run() returns on its own."""
-    import runloom_c
+    import stackweave_c
     gc.set_threshold(50, 5, 5)                      # amplify STW frequency
 
     def stw():
         for _ in range(iters):
             gc.collect()
-            runloom_c.sched_yield_classic()
+            stackweave_c.sched_yield_classic()
 
-    ring = runloom_c.Chan(256)
+    ring = stackweave_c.Chan(256)
 
     def producer():
         for i in range(iters):
             ring.send(Fin(i))                        # sole ref handed across
-            runloom_c.sched_yield_classic()
+            stackweave_c.sched_yield_classic()
         ring.close()
 
     def consumer():
@@ -142,17 +142,17 @@ def run_moves(nhub, moves, iters):
             del deep
         t.join()
 
-    runloom_c.mn_init(nhub)
+    stackweave_c.mn_init(nhub)
     if "stw" in moves:
-        runloom_c.mn_fiber(stw)
+        stackweave_c.mn_fiber(stw)
     if "xhub" in moves:
-        runloom_c.mn_fiber(producer)
-        runloom_c.mn_fiber(consumer)
+        stackweave_c.mn_fiber(producer)
+        stackweave_c.mn_fiber(consumer)
     if "preempt" in moves:
-        runloom_c.mn_fiber(preempt_dealloc, 8 << 20)   # roomy stack for the churn
+        stackweave_c.mn_fiber(preempt_dealloc, 8 << 20)   # roomy stack for the churn
     foreign_threads = []
     if "foreign" in moves:
-        from runloom.monkey.locks import CoLock
+        from stackweave.monkey.locks import CoLock
         lk = CoLock()
 
         def foreign():
@@ -163,18 +163,18 @@ def run_moves(nhub, moves, iters):
         def fiber_hold():
             for _ in range(iters):
                 lk.acquire()
-                runloom_c.sched_yield()
+                stackweave_c.sched_yield()
                 lk.release()
 
         foreign_threads = [threading.Thread(target=foreign) for _ in range(nhub)]
         for t in foreign_threads:
             t.start()
-        runloom_c.mn_fiber(fiber_hold)
-    runloom_c.mn_run()
+        stackweave_c.mn_fiber(fiber_hold)
+    stackweave_c.mn_run()
     for t in foreign_threads:
         t.join()
-    runloom_c.mn_fini()
-    return runloom_c._self_check(0)
+    stackweave_c.mn_fini()
+    return stackweave_c._self_check(0)
 
 
 def run_program(spec, timeout=120.0):

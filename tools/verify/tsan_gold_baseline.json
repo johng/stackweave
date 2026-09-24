@@ -1,7 +1,7 @@
 {
  "commit": "2e4bc909331848408887aee8a79d3308dbf2678a",
  "date": "2026-08-21T19:18:00+10:00",
- "note": "Set by tsan_gold_drift.py --update after a clean gold-standard run (tools/run_sanitizers_ext.sh with RUNLOOM_TSAN_PYTHON). Records WHICH sources were verified, so the warning keys on content rather than commit count.",
+ "note": "Set by tsan_gold_drift.py --update after a clean gold-standard run (tools/run_sanitizers_ext.sh with STACKWEAVE_TSAN_PYTHON). Records WHICH sources were verified, so the warning keys on content rather than commit count.",
  "python": "/home/x/cpython-tsan/bin/python3.14t",
  "sources_hash": "24ec3774886877bd"
 }

@@ -1,4 +1,4 @@
-import runloom_c as rc
+import stackweave_c as rc
 
 out = rc.Chan(1)
 cancel = rc.Chan(1)

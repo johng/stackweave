@@ -24,16 +24,16 @@ PY = sys.executable
 WORKLOAD = textwrap.dedent("""\
     import os, sys
     sys.path.insert(0, {src!r})
-    import runloom, runloom_c
+    import stackweave, stackweave_c
     N = 400
     fired = bytearray(N)
     def timer(i):
-        runloom_c.sched_sleep(0.002 + (i % 7) * 0.001)   # 2-8 ms deadlines
+        stackweave_c.sched_sleep(0.002 + (i % 7) * 0.001)   # 2-8 ms deadlines
         fired[i] = 1
     def root():
         for i in range(N):
-            runloom.fiber(lambda i=i: timer(i))
-    runloom.run(4, main_fn=root)
+            stackweave.fiber(lambda i=i: timer(i))
+    stackweave.run(4, main_fn=root)
     missed = sum(1 for f in fired if not f)
     print("FIRED", N - missed, "MISSED", missed)
     """)

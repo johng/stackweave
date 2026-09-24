@@ -15,7 +15,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "tools", "lifefuzz"))
 sys.path.insert(0, os.path.join(REPO, "tools", "dst"))
 sys.path.insert(0, os.path.join(REPO, "src"))
-os.environ["RUNLOOM_SIM"] = "1"          # before any runloom_c import in run_program
+os.environ["STACKWEAVE_SIM"] = "1"          # before any stackweave_c import in run_program
 import lifefuzz as lf  # noqa: E402
 
 

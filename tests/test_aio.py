@@ -1,9 +1,9 @@
-"""Tests for runloom.aio (the async/await bridge)."""
+"""Tests for stackweave.aio (the async/await bridge)."""
 import asyncio
 import time
 import unittest
 
-import runloom.aio as aio
+import stackweave.aio as aio
 
 
 class TestBasicRun(unittest.TestCase):

@@ -36,7 +36,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (single-owner value conservation).
   distinct fd + mmap, never shared with any sibling).  Per round it:
     - obtains a fresh `mv = shm.buf` export,
     - writes a UNIQUE per-(wid,round) byte pattern into the whole block, PARKING
-      (runloom.yield_now / sleep) partway through the write so a sibling reliably
+      (stackweave.yield_now / sleep) partway through the write so a sibling reliably
       interleaves while this fiber's half-written export is latched,
     - PARKS again with the block fully written,
     - reads every byte back through the SAME export and asserts it equals the
@@ -93,7 +93,7 @@ from multiprocessing import shared_memory     # in p444) so any mp primitives th
                                               # shm lifecycle touches are patched.
 
 import harness
-import runloom
+import stackweave
 
 # Size of each fiber-owned block.  Big enough that a torn store or a cross-fiber
 # alias moves several bytes visibly, small enough that 800 blocks are a trivial
@@ -138,7 +138,7 @@ def buf_pattern_round(H, wid, rng, state, shm, nonce):
                 # Park here: our export is alive and half-written.  A correct
                 # runtime keeps the mmap/fd/export exactly as we left it; a
                 # sibling's block must NOT alias over ours.
-                runloom.yield_now()
+                stackweave.yield_now()
     except ValueError as exc:
         H.fail("SharedMemory .buf export RELEASED mid-write (wid {0} nonce "
                "{1}): {2!r} -- a close()/refcount drop crossed hubs and freed "
@@ -148,9 +148,9 @@ def buf_pattern_round(H, wid, rng, state, shm, nonce):
 
     # ---- park again, fully written, then read the whole block back -------------
     if nonce & 1:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
     else:
-        runloom.yield_now()
+        stackweave.yield_now()
 
     try:
         for i in range(BLOCK_SIZE):

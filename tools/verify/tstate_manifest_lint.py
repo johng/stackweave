@@ -2,10 +2,10 @@
 """tstate_manifest_lint.py -- force a decided disposition for EVERY PyThreadState
 field (item 15).
 
-runloom's scheduler snapshots/restores pieces of PyThreadState per fiber
+stackweave's scheduler snapshots/restores pieces of PyThreadState per fiber
 (runloom_sched_pystate.c.inc).  The recurring bug (appendix 9/11/12/72/73): a new
 CPython release ADDS a tstate field that carries per-thread state (exc chain,
-contextvars, decimal context, the 3.14 c_stack guard), runloom never privatizes
+contextvars, decimal context, the 3.14 c_stack guard), stackweave never privatizes
 it, and a cross-fiber leak or crash ships.  Nobody DECIDED about the field
 because nothing forced the decision.
 
@@ -16,7 +16,7 @@ each against a committed manifest of dispositions:
   SNAP        -- snapshotted+restored per fiber (own/borrow noted separately)
   OWNER_ONLY  -- read only on the owning thread; must never be snapped
   SHARED_OK   -- interpreter-wide / immutable across fibers; safe to share
-  IGNORE      -- runloom provably does not depend on it
+  IGNORE      -- stackweave provably does not depend on it
 
 A struct field with NO manifest entry FAILS the lint -> a new CPython field
 cannot slip in unclassified.  A field the code TOUCHES but the manifest marks
@@ -36,7 +36,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 MANIFEST = os.path.join(HERE, "tstate_manifest.json")
 PYSTATE_TU = os.path.join(ROOT, "src/runloom_c/runloom_sched_pystate.c.inc")
-PY = os.environ.get("RUNLOOM_PYTHON",
+PY = os.environ.get("STACKWEAVE_PYTHON",
                     os.path.expanduser("~/.pyenv/versions/3.14.4t/bin/python3"))
 
 
@@ -123,7 +123,7 @@ def main(argv):
                 man[f] = {"disposition": "REVIEW" if f in touched else "IGNORE",
                           "note": ("TOUCHED by scheduler -- classify: SNAP / "
                                    "OWNER_ONLY / SHARED_OK") if f in touched
-                                  else "not touched by runloom"}
+                                  else "not touched by stackweave"}
         json.dump(man, open(MANIFEST, "w"), indent=1, sort_keys=True)
         print("[tstate-manifest] seeded %d fields -> %s (review REVIEW entries)"
               % (len(man), MANIFEST))

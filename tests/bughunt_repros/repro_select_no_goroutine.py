@@ -4,7 +4,7 @@ Expected-good behavior: immediate RuntimeError like ch.recv().
 Observed: busy-spin (CPU pegged) in the phase1/phase2/park-noop retry loop.
 """
 import sys, time, os
-import runloom_c as rc
+import stackweave_c as rc
 
 ch = rc.Chan()          # unbuffered, empty, nobody on the other side
 

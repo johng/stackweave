@@ -1,6 +1,6 @@
 # Reporting a crash or hang
 
-runloom writes a **self-contained diagnostic artifact** on a fatal fault, and
+stackweave writes a **self-contained diagnostic artifact** on a fatal fault, and
 (optionally) on a self-detected hang. Pasting that artifact into an issue is
 usually enough to locate the problem **without a reproduction** — which is the
 whole point: field failures are rare and hard to reproduce, so the report has
@@ -9,50 +9,50 @@ to carry everything.
 ## Turn it on
 
 ```python
-import runloom
+import stackweave
 # writes the report to ./runloom_crash.txt (append) as well as stderr:
-runloom.install_crash_handler("goroutines,backtrace", file="runloom_crash.txt")
+stackweave.install_crash_handler("goroutines,backtrace", file="runloom_crash.txt")
 ```
 
 or via environment (no code change):
 
 ```sh
-RUNLOOM_CRASH=goroutines,backtrace RUNLOOM_CRASH_FILE=runloom_crash.txt \
-RUNLOOM_WATCHDOG=60 \
+STACKWEAVE_CRASH=goroutines,backtrace STACKWEAVE_CRASH_FILE=runloom_crash.txt \
+STACKWEAVE_WATCHDOG=60 \
 python your_server.py
 ```
 
-- `RUNLOOM_CRASH` — what to dump: `goroutines`, `backtrace`, `gdb`, `wait` (or
+- `STACKWEAVE_CRASH` — what to dump: `goroutines`, `backtrace`, `gdb`, `wait` (or
   `all`, `off`).
-- `RUNLOOM_CRASH_FILE` — a file to append the report to (also always on stderr).
-- `RUNLOOM_WATCHDOG=<secs>` — arm the self-hang watchdog (see below).
+- `STACKWEAVE_CRASH_FILE` — a file to append the report to (also always on stderr).
+- `STACKWEAVE_WATCHDOG=<secs>` — arm the self-hang watchdog (see below).
 
 ## What the artifact contains
 
 ```
-======================== runloom crash ========================
-[runloom] fatal SIGSEGV at address (nil)  (pid ..., thread ...)
-[runloom] --- build + runtime snapshot ---
-[runloom]   version <v>  built <date>
-[runloom]   backends: coro=fcontext-asm netpoll=epoll   [ASan]/[assert] if built so
-[runloom]   gs: total=.. pending=.. completed=.. hubs=..
-[runloom]   stacks: live=.. depot=..
-[runloom]   netpoll: parked=.. heap=.. fd_armed=.. heals=..
-[runloom]   inflight: blockpool=.. iouring=..
-[runloom] <guard-page classification: stack overflow / in-stack / heap>
-=== runloom fiber dump: N live ===        <- every live fiber + its state
-[runloom] native backtrace (faulting thread)
+======================== stackweave crash ========================
+[stackweave] fatal SIGSEGV at address (nil)  (pid ..., thread ...)
+[stackweave] --- build + runtime snapshot ---
+[stackweave]   version <v>  built <date>
+[stackweave]   backends: coro=fcontext-asm netpoll=epoll   [ASan]/[assert] if built so
+[stackweave]   gs: total=.. pending=.. completed=.. hubs=..
+[stackweave]   stacks: live=.. depot=..
+[stackweave]   netpoll: parked=.. heap=.. fd_armed=.. heals=..
+[stackweave]   inflight: blockpool=.. iouring=..
+[stackweave] <guard-page classification: stack overflow / in-stack / heap>
+=== stackweave fiber dump: N live ===        <- every live fiber + its state
+[stackweave] native backtrace (faulting thread)
 <flight recorder tail: the recent scheduler transitions that led here>
 ```
 
-The **build + runtime snapshot** is the R0 gauge surface (`runloom.stats()`)
+The **build + runtime snapshot** is the R0 gauge surface (`stackweave.stats()`)
 captured async-signal-safely — the same numbers that show a leak as a rising
 counter, frozen at the instant of the fault. `pending` / `completed` /
 `parked` together say whether the runtime was busy, idle, or wedged; `heals`
 > 0 means the app leaked sockets to the GC; a huge `fd_armed` or `parked` points
 at a registration/parker leak.
 
-## The self-hang watchdog (`RUNLOOM_WATCHDOG=secs`)
+## The self-hang watchdog (`STACKWEAVE_WATCHDOG=secs`)
 
 A silent hang — the server "just stops responding" — is the hardest field
 failure to diagnose. The watchdog is a detached native thread that emits the
@@ -66,14 +66,14 @@ one report per episode, not a flood.
 continuously-active service (the soak/canary workloads it was built for). A
 service whose fibers are long-lived by design (a pure keepalive server that
 rarely completes a fiber) can look stalled while perfectly healthy — set
-`RUNLOOM_WATCHDOG` generously, or leave it off, for that shape.
+`STACKWEAVE_WATCHDOG` generously, or leave it off, for that shape.
 
 ## What it does NOT contain
 
 No request payloads, no user data, no environment variables, no memory
 contents beyond the fault address and stack classification. It is a snapshot of
-runloom's own scheduler state and the faulting backtrace — safe to paste into a
-public issue. (If you built with `gdb` in `RUNLOOM_CRASH`, the optional gdb dump
+stackweave's own scheduler state and the faulting backtrace — safe to paste into a
+public issue. (If you built with `gdb` in `STACKWEAVE_CRASH`, the optional gdb dump
 may include more; omit it for a public report.)
 
 ## Filing

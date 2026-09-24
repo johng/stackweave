@@ -14,7 +14,7 @@ import logging
 import os
 
 import harness
-import runloom
+import stackweave
 
 
 class FlakyHandler(logging.Handler):
@@ -92,7 +92,7 @@ def worker(H, wid, rng, state):
         H.op(wid)
         H.task_done(wid)
         if (n & 7) == 0:
-            runloom.yield_now()
+            stackweave.yield_now()
 
 
 def body(H):

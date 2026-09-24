@@ -1,5 +1,5 @@
 # The docs/channels.md "canonical send unless cancelled" pattern.
-import runloom_c as rc
+import stackweave_c as rc
 
 def main():
     out = rc.Chan(1)          # buffered: send is ready whenever there's space

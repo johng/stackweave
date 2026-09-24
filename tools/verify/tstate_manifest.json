@@ -1,23 +1,23 @@
 {
  "_status": {
   "disposition": "IGNORE",
-  "note": "not touched by runloom"
+  "note": "not touched by stackweave"
  },
  "_whence": {
   "disposition": "IGNORE",
-  "note": "not touched by runloom"
+  "note": "not touched by stackweave"
  },
  "async_exc": {
   "disposition": "IGNORE",
-  "note": "not touched by runloom"
+  "note": "not touched by stackweave"
  },
  "async_gen_finalizer": {
   "disposition": "IGNORE",
-  "note": "not touched by runloom"
+  "note": "not touched by stackweave"
  },
  "async_gen_firstiter": {
   "disposition": "IGNORE",
-  "note": "not touched by runloom"
+  "note": "not touched by stackweave"
  },
  "c_profilefunc": {
   "disposition": "SNAP",
@@ -29,7 +29,7 @@
  },
  "c_recursion_remaining": {
   "disposition": "SNAP",
-  "note": "PRE-3.14 ONLY (removed in 3.14; the lint lists it as stale when run on 3.14). Kept deliberately -- runloom still supports 3.12/3.13, where this field exists and IS snapshotted, under the PY_VERSION_HEX >= 0x030C0000 branch in runloom_sched_pystate.c.inc. On 3.14 that branch compiles out and only py_recursion_remaining is snapped."
+  "note": "PRE-3.14 ONLY (removed in 3.14; the lint lists it as stale when run on 3.14). Kept deliberately -- stackweave still supports 3.12/3.13, where this field exists and IS snapshotted, under the PY_VERSION_HEX >= 0x030C0000 branch in runloom_sched_pystate.c.inc. On 3.14 that branch compiles out and only py_recursion_remaining is snapped."
  },
  "c_tracefunc": {
   "disposition": "SNAP",
@@ -49,7 +49,7 @@
  },
  "coroutine_origin_tracking_depth": {
   "disposition": "IGNORE",
-  "note": "not touched by runloom"
+  "note": "not touched by stackweave"
  },
  "critical_section": {
   "disposition": "SNAP",
@@ -61,7 +61,7 @@
  },
  "current_executor": {
   "disposition": "OWNER_ONLY",
-  "note": "CPython 3.14 tier-2. The executor in flight on THIS thread's dispatch; set/cleared by the eval loop around its own tier-2 execution. Not touched by runloom. Must not be snapped: restoring one would resurrect an executor into a dispatch that never entered it. CAVEAT -- this build is free-threaded with the JIT OFF (_Py_JIT unset), so the field is always NULL here and the SNAP-vs-OWNER_ONLY question is UNTESTED for a JIT-enabled free-threaded build; revisit if tier-2 is turned on -- see docs/installation.md, 'Interpreter build: the tier-2 JIT is off, TLBC is on'."
+  "note": "CPython 3.14 tier-2. The executor in flight on THIS thread's dispatch; set/cleared by the eval loop around its own tier-2 execution. Not touched by stackweave. Must not be snapped: restoring one would resurrect an executor into a dispatch that never entered it. CAVEAT -- this build is free-threaded with the JIT OFF (_Py_JIT unset), so the field is always NULL here and the SNAP-vs-OWNER_ONLY question is UNTESTED for a JIT-enabled free-threaded build; revisit if tier-2 is turned on -- see docs/installation.md, 'Interpreter build: the tier-2 JIT is off, TLBC is on'."
  },
  "current_frame": {
   "disposition": "SNAP",
@@ -89,15 +89,15 @@
  },
  "dict": {
   "disposition": "IGNORE",
-  "note": "not touched by runloom"
+  "note": "not touched by stackweave"
  },
  "dict_global_version": {
   "disposition": "IGNORE",
-  "note": "not touched by runloom"
+  "note": "not touched by stackweave"
  },
  "eval_breaker": {
   "disposition": "IGNORE",
-  "note": "not touched by runloom"
+  "note": "not touched by stackweave"
  },
  "exc_info": {
   "disposition": "SNAP",
@@ -109,39 +109,39 @@
  },
  "gilstate_counter": {
   "disposition": "IGNORE",
-  "note": "not touched by runloom"
+  "note": "not touched by stackweave"
  },
  "holds_gil": {
   "disposition": "OWNER_ONLY",
-  "note": "CPython 3.14. Whether THIS OS THREAD currently holds the GIL; owned end-to-end by CPython's attach/detach (take_gil/drop_gil). A property of the thread's attachment, never of a fiber -- snapshotting it would let a resumed fiber restore a stale bit and desynchronise CPython's own GIL bookkeeping from reality. Not touched by runloom, and must not be."
+  "note": "CPython 3.14. Whether THIS OS THREAD currently holds the GIL; owned end-to-end by CPython's attach/detach (take_gil/drop_gil). A property of the thread's attachment, never of a fiber -- snapshotting it would let a resumed fiber restore a stale bit and desynchronise CPython's own GIL bookkeeping from reality. Not touched by stackweave, and must not be."
  },
  "id": {
   "disposition": "IGNORE",
-  "note": "not touched by runloom"
+  "note": "not touched by stackweave"
  },
  "interp": {
   "disposition": "IGNORE",
-  "note": "not touched by runloom"
+  "note": "not touched by stackweave"
  },
  "native_thread_id": {
   "disposition": "IGNORE",
-  "note": "not touched by runloom"
+  "note": "not touched by stackweave"
  },
  "next": {
   "disposition": "IGNORE",
-  "note": "not touched by runloom"
+  "note": "not touched by stackweave"
  },
  "prev": {
   "disposition": "IGNORE",
-  "note": "not touched by runloom"
+  "note": "not touched by stackweave"
  },
  "previous_executor": {
   "disposition": "IGNORE",
-  "note": "PRE-3.14 ONLY (replaced by current_executor in 3.14; listed as stale there). Kept deliberately for 3.12/3.13 -- not touched by runloom on any version."
+  "note": "PRE-3.14 ONLY (replaced by current_executor in 3.14; listed as stale there). Kept deliberately for 3.12/3.13 -- not touched by stackweave on any version."
  },
  "py_recursion_limit": {
   "disposition": "IGNORE",
-  "note": "not touched by runloom"
+  "note": "not touched by stackweave"
  },
  "py_recursion_remaining": {
   "disposition": "SNAP",
@@ -149,27 +149,27 @@
  },
  "recursion_headroom": {
   "disposition": "IGNORE",
-  "note": "not touched by runloom"
+  "note": "not touched by stackweave"
  },
  "remote_debugger_support": {
   "disposition": "OWNER_ONLY",
-  "note": "CPython 3.14, PEP 768. Per-thread control block an external debugger writes into and the eval breaker polls. Thread-level, not fiber-level: privatizing it per fiber would strand a pending debugger call in a parked snapshot (never run) or replay it on resume (run twice). Not touched by runloom. Note that under M:N a debugger targeting a thread reaches whichever fiber is running there -- a known limitation of multiplexing, not something a snapshot can fix."
+  "note": "CPython 3.14, PEP 768. Per-thread control block an external debugger writes into and the eval breaker polls. Thread-level, not fiber-level: privatizing it per fiber would strand a pending debugger call in a parked snapshot (never run) or replay it on resume (run twice). Not touched by stackweave. Note that under M:N a debugger targeting a thread reaches whichever fiber is running there -- a known limitation of multiplexing, not something a snapshot can fix."
  },
  "state": {
   "disposition": "IGNORE",
-  "note": "not touched by runloom"
+  "note": "not touched by stackweave"
  },
  "thread_id": {
   "disposition": "IGNORE",
-  "note": "not touched by runloom"
+  "note": "not touched by stackweave"
  },
  "threading_local_key": {
   "disposition": "IGNORE",
-  "note": "not touched by runloom"
+  "note": "not touched by stackweave"
  },
  "threading_local_sentinel": {
   "disposition": "IGNORE",
-  "note": "not touched by runloom"
+  "note": "not touched by stackweave"
  },
  "tracing": {
   "disposition": "SNAP",
@@ -177,6 +177,6 @@
  },
  "what_event": {
   "disposition": "IGNORE",
-  "note": "not touched by runloom"
+  "note": "not touched by stackweave"
  }
 }

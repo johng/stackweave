@@ -19,7 +19,7 @@ owner and are deliberately never armed here -- we never call run()/set_trace()):
     global registry is shared mutable state: concurrent set_break()/Bdb() (whose
     __init__ runs _load_breaks(), iterating Breakpoint.bplist) race on it EXACTLY
     like any shared dict across OS threads -- DOCUMENTED Python behavior, not a
-    runloom bug.  So every operation that reads or writes the global registry --
+    stackweave bug.  So every operation that reads or writes the global registry --
     Bdb() construction, set_break, clear_break -- is serialized under ONE
     cooperative Lock, turning the breakpoint arm into a CONSERVATION test (did every
     break I set read back exactly, and clear back to empty) rather than a test of
@@ -29,7 +29,7 @@ owner and are deliberately never armed here -- we never call run()/set_trace()):
     the per-instance self.breaks is a closed world equal to exactly what this fiber
     set.
 
-WHERE M:N COULD BREAK IT.  runloom runs these fibers in parallel across hubs with
+WHERE M:N COULD BREAK IT.  stackweave runs these fibers in parallel across hubs with
 the GIL off.  If a fiber's per-instance fncache (arm 1) or self.breaks (arm 2) were
 to leak into or from a sibling's instance -- a cross-fiber leak of single-owner
 state, a torn dict entry, an identity/value change across a yield -- the closed-form
@@ -77,7 +77,7 @@ import os
 import bdb
 
 import harness
-import runloom
+import stackweave
 
 # Per-fiber canonic() filename set for arm 1.  A mix of unique absolute real-path
 # strings (canonic -> normcase(abspath)) and "<angle>" pseudo names (canonic ->
@@ -138,7 +138,7 @@ def canonic_check(H, wid, dbg, pairs):
 
     # YIELD: let siblings interleave on their own instances.  A leak of another
     # fiber's fncache into this one would corrupt the recompute.
-    runloom.yield_now()
+    stackweave.yield_now()
 
     # Second pass: must be BIT-IDENTICAL to the first and still equal the closed
     # form (the fncache entry must survive the yield unchanged).
@@ -292,7 +292,7 @@ def setup(H):
         # Serializes every access to the PROCESS-GLOBAL Breakpoint registry
         # (Bdb() construction, set_break, clear_break) so arm 2 is a CONSERVATION
         # test, not a test of bdb's (absent) thread-safety.  Built in the root.
-        "glock": runloom.sync.Lock(),
+        "glock": stackweave.sync.Lock(),
         "srcdir": srcdir,
         # Race-free per-wid counters (one writer per slot; see HARD RULE 1).
         "canonic_checks": [0] * H.funcs,

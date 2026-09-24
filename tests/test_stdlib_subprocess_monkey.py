@@ -1,5 +1,5 @@
 """CPython's OWN Lib/test/test_subprocess.py (ProcessTestCase) verbatim under
-runloom.monkey.patch().
+stackweave.monkey.patch().
 
 monkey makes ``subprocess.Popen.wait`` cooperative (via the cooperative
 ``selectors`` + ``os`` categories) and routes the pipe I/O through the

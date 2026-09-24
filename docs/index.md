@@ -1,14 +1,14 @@
-# runloom
+# stackweave
 
 **Go-style stackful coroutines for Python.**
 
-runloom gives you the *cooperative concurrency* model from Go -- `go(fn)`,
+stackweave gives you the *cooperative concurrency* model from Go -- `go(fn)`,
 channels, cheap fibers, blocking-style I/O -- running on top of
 CPython with a hand-rolled assembly context switch and a C scheduler.
 
 ```python
-import socket, runloom
-runloom.monkey.patch()
+import socket, stackweave
+stackweave.monkey.patch()
 
 def handle(conn):
     while True:
@@ -22,10 +22,10 @@ def accept_loop():
     s = socket.socket(); s.bind(("127.0.0.1", 9000)); s.listen(128)
     while True:
         conn, _ = s.accept()
-        runloom.fiber(lambda c=conn: handle(c))
+        stackweave.fiber(lambda c=conn: handle(c))
 
-runloom.fiber(accept_loop)
-runloom.run(1)
+stackweave.fiber(accept_loop)
+stackweave.run(1)
 ```
 
 No `async`, no `await`, no callback chains -- `recv` and `accept`
@@ -37,13 +37,13 @@ fibers.
 - **Cheap fibers.**  A fiber is ~16 KB of C stack + ~150 B
   metadata after [calibration](stack-sizing.md).  50 000 idle
   fibers on one OS thread is normal; 200 000 has been tested.
-- **Two programming styles.**  Use `runloom.fiber(fn)` for plain
-  Go-style code, or `runloom.aio.run(coro)` to drive existing `async def`
+- **Two programming styles.**  Use `stackweave.fiber(fn)` for plain
+  Go-style code, or `stackweave.aio.run(coro)` to drive existing `async def`
   code on the same scheduler.  See the [asyncio bridge](asyncio.md).
-- **Channels.**  `runloom.Chan(capacity)` with send/recv/close, plus
-  `runloom.select([...])` for multi-channel waits.  Buffered and
+- **Channels.**  `stackweave.Chan(capacity)` with send/recv/close, plus
+  `stackweave.select([...])` for multi-channel waits.  Buffered and
   unbuffered.  See [Channels](channels.md).
-- **Monkey-patched stdlib.**  After `runloom.monkey.patch()`, ordinary
+- **Monkey-patched stdlib.**  After `stackweave.monkey.patch()`, ordinary
   `socket.recv`, `time.sleep`, `select.select`, `ssl`, `subprocess`,
   `threading.Event`, file I/O, and DNS all yield cooperatively.  See
   [Monkey-patching](monkey-patching.md).
@@ -51,7 +51,7 @@ fibers.
   fibers across N OS threads when the GIL is disabled.  See
   [Parallelism](parallelism.md).
 
-## When to use runloom
+## When to use stackweave
 
 **Good fit**
 
@@ -69,16 +69,16 @@ fibers.
 - You need to interoperate with libraries that already drive an
   asyncio loop and aren't willing to switch (Trio, custom event loops).
 - You're CPU-bound on a single fiber -- that's threads, not
-  coroutines.  runloom can't preempt inside a long C call (same limitation
+  coroutines.  stackweave can't preempt inside a long C call (same limitation
   Go has with cgo).
-- You need Python 3.10 or older -- runloom requires 3.11+ for the
+- You need Python 3.10 or older -- stackweave requires 3.11+ for the
   per-fiber `PyThreadState` snapshot.
 
 ## How it works in 60 seconds
 
-When you call `runloom.fiber(fn)`, the scheduler allocates a new
+When you call `stackweave.fiber(fn)`, the scheduler allocates a new
 fiber (a C struct + a private C stack) and puts it on the ready
-queue.  `runloom.run(1)` starts the scheduler loop.  Each iteration:
+queue.  `stackweave.run(1)` starts the scheduler loop.  Each iteration:
 
 1. Pop the next fiber from the ready FIFO.
 2. Switch to its private C stack (one `swap` instruction, ~80 ns on
@@ -100,15 +100,15 @@ switches.
 
 ## What's next
 
-- New to runloom?  Start with the [Quickstart](quickstart.md).
+- New to stackweave?  Start with the [Quickstart](quickstart.md).
 - Hit a term you don't recognise -- hub, park, strand, wedge, snap, netpoll,
   sysmon?  The [Glossary](glossary.md) defines the vocabulary the rest of these
   docs (and the source comments) assume.
-- Already async?  Read [runloom.aio](asyncio.md).
+- Already async?  Read [stackweave.aio](asyncio.md).
 - Working on a server?  See the [Cookbook](cookbook.md) for worker
   pools, pipelines, and graceful shutdown.
 - Memory matters?  See [Stack sizing](stack-sizing.md).
 - One handler shared across every core?  See [Hot handlers](hot-handlers.md)
-  (`@runloom.hot`) so it scales instead of contending.
+  (`@stackweave.hot`) so it scales instead of contending.
 - Curious how deep "real native stacks" goes?  [Research: executing native
   machine code from a fiber](research-native-code.md) (experimental).

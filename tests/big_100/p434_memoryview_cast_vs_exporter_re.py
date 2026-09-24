@@ -106,7 +106,7 @@ before the universe assert or the BufferError-gate even fires.
 import struct
 
 import harness
-import runloom
+import stackweave
 
 # Finite BYTE universe for the seed bytes.  Every cast Q-word is the little-endian
 # pack of 8 of these; a torn/freed read yields a uint64 NOT equal to any such
@@ -255,11 +255,11 @@ def run_round_impl(H, wid, rnd, rng, case, slot, state):
     # phase after it has set the export state for that phase, and BLOCKS on the
     # result before mutating the state again -- so the sibling's resize provably
     # lands in the intended export-count window, not a yield-timed guess.
-    go0 = runloom.Chan(1)
-    go1 = runloom.Chan(1)
-    res0 = runloom.Chan(1)
-    res1 = runloom.Chan(1)
-    wg = runloom.WaitGroup()
+    go0 = stackweave.Chan(1)
+    go1 = stackweave.Chan(1)
+    res0 = stackweave.Chan(1)
+    res1 = stackweave.Chan(1)
+    wg = stackweave.WaitGroup()
     wg.add(1)
 
     # Per-sibling RNG seeded from this fiber's rng (a SHARED random.Random corrupts
@@ -281,7 +281,7 @@ def run_round_impl(H, wid, rnd, rng, case, slot, state):
 
     H.fiber(resizer)
 
-    # NOTE: runloom.Chan.recv() returns a Go-style (value, ok) tuple, so the
+    # NOTE: stackweave.Chan.recv() returns a Go-style (value, ok) tuple, so the
     # sibling's True/False resize result is recv()[0] -- unpack it, never test the
     # truthy tuple.
 
@@ -299,7 +299,7 @@ def run_round_impl(H, wid, rnd, rng, case, slot, state):
         base.release()
         return
     go0.send(True)               # sibling now attempts the both-live resize
-    runloom.yield_now()          # park with base+cast LIVE -- the resize races here
+    stackweave.yield_now()          # park with base+cast LIVE -- the resize races here
     # Re-verify across the park: a wrongly-succeeded resize freed/moved ob_start and
     # these reads would be a UAF (out-of-universe value).
     reread_ok = check_cast_values(H, cast, rnd)

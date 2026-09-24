@@ -20,13 +20,13 @@ Regions DRIVEN here (uncovered line -> how):
             ``park:<reason>`` label appears in the output -- proof each arm ran.
 
   L185      ``runloom_introspect_set_timestamps(1)`` inside
-            ``runloom_introspect_init`` when ``RUNLOOM_INTROSPECT_TIME`` is set.
+            ``runloom_introspect_init`` when ``STACKWEAVE_INTROSPECT_TIME`` is set.
             Read ONCE at module import -> subprocess with the env, asserting
             ``get_introspect_timestamps()`` is True AND that a real park then
             reports a non-None ``age`` (proving the stamping the line enabled is
             actually live, not just the flag).
 
-  L194-195  ``RUNLOOM_MAX_GOROUTINES`` env parse + ``runloom_set_max_fibers`` in
+  L194-195  ``STACKWEAVE_MAX_GOROUTINES`` env parse + ``runloom_set_max_fibers`` in
             init.  Read ONCE at import -> subprocess with the env, asserting
             ``get_max_fibers()`` == the value AND that the admission gate it
             installed actually rejects an over-cap spawn (real backpressure,
@@ -66,7 +66,7 @@ import sys
 
 import pytest
 
-import runloom_c as rc
+import stackweave_c as rc
 from adv_util import hang_guard
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -146,7 +146,7 @@ def test_dump_labels_every_dark_wait_reason():
 
 # --------------------------------------------------------------------------
 # L185: runloom_introspect_set_timestamps(1) inside runloom_introspect_init,
-# gated by RUNLOOM_INTROSPECT_TIME.  Read once at module import -> subprocess.
+# gated by STACKWEAVE_INTROSPECT_TIME.  Read once at module import -> subprocess.
 # We assert (a) get_introspect_timestamps() is True (the line ran) AND (b) a
 # real PARKED_SAFE fiber, observed via fibers(), reports a non-None `age` --
 # proving the env-enabled stamping is genuinely live end to end.
@@ -154,9 +154,9 @@ def test_dump_labels_every_dark_wait_reason():
 _TS_CHILD = r"""
 import os, sys
 sys.path.insert(0, 'src')
-import runloom_c as rc
+import stackweave_c as rc
 
-assert rc.get_introspect_timestamps() is True, "RUNLOOM_INTROSPECT_TIME did not turn on tracking"
+assert rc.get_introspect_timestamps() is True, "STACKWEAVE_INTROSPECT_TIME did not turn on tracking"
 
 seen = {}
 def main():
@@ -184,22 +184,22 @@ sys.stdout.write("INTROSPECT_TIME_OK\n")
 
 
 def test_introspect_time_env_enables_age_tracking():
-    env = dict(os.environ, RUNLOOM_INTROSPECT_TIME="1",
+    env = dict(os.environ, STACKWEAVE_INTROSPECT_TIME="1",
                PYTHON_GIL="0", PYTHONPATH="src")
     # Make sure the cap env doesn't leak in from a parent run and skew this.
-    env.pop("RUNLOOM_MAX_GOROUTINES", None)
+    env.pop("STACKWEAVE_MAX_GOROUTINES", None)
     try:
         p = subprocess.run([PY, "-c", _TS_CHILD], cwd=REPO, env=env,
                            capture_output=True, text=True, timeout=200)
     except subprocess.TimeoutExpired:
         pytest.skip("INTROSPECT_TIME subprocess timed out (shared-box contention)")
-    assert p.returncode == 0, "RUNLOOM_INTROSPECT_TIME child failed rc=%d\n%s" % (
+    assert p.returncode == 0, "STACKWEAVE_INTROSPECT_TIME child failed rc=%d\n%s" % (
         p.returncode, p.stderr[-1500:])
     assert "INTROSPECT_TIME_OK" in p.stdout, (p.stdout, p.stderr[-800:])
 
 
 # --------------------------------------------------------------------------
-# L194-195: RUNLOOM_MAX_GOROUTINES parse (atol) + runloom_set_max_fibers in
+# L194-195: STACKWEAVE_MAX_GOROUTINES parse (atol) + runloom_set_max_fibers in
 # init.  Read once at module import -> subprocess.  We assert (a)
 # get_max_fibers() == the parsed value (L194-195 ran) AND (b) the admission
 # gate it installed actually REJECTS an over-cap spawn -- real backpressure.
@@ -207,11 +207,11 @@ def test_introspect_time_env_enables_age_tracking():
 _MAXG_CHILD = r"""
 import os, sys
 sys.path.insert(0, 'src')
-import runloom_c as rc
+import stackweave_c as rc
 
 CAP = {cap}
 assert rc.get_max_fibers() == CAP, (
-    "RUNLOOM_MAX_GOROUTINES=%d but get_max_fibers()=%d" % (CAP, rc.get_max_fibers()))
+    "STACKWEAVE_MAX_GOROUTINES=%d but get_max_fibers()=%d" % (CAP, rc.get_max_fibers()))
 
 # The cap must be a live admission gate, not just a stored number: spawning past
 # it from inside a fiber (the cap counts the live ones) must eventually raise.
@@ -242,16 +242,16 @@ sys.stdout.write("MAX_GOROUTINES_OK\n")
 
 def test_max_fibers_env_installs_admission_gate():
     cap = 6
-    env = dict(os.environ, RUNLOOM_MAX_GOROUTINES=str(cap),
+    env = dict(os.environ, STACKWEAVE_MAX_GOROUTINES=str(cap),
                PYTHON_GIL="0", PYTHONPATH="src")
-    env.pop("RUNLOOM_INTROSPECT_TIME", None)
+    env.pop("STACKWEAVE_INTROSPECT_TIME", None)
     try:
         p = subprocess.run([PY, "-c", _MAXG_CHILD.format(cap=cap)],
                            cwd=REPO, env=env, capture_output=True, text=True,
                            timeout=200)
     except subprocess.TimeoutExpired:
         pytest.skip("MAX_GOROUTINES subprocess timed out (shared-box contention)")
-    assert p.returncode == 0, "RUNLOOM_MAX_GOROUTINES child failed rc=%d\n%s" % (
+    assert p.returncode == 0, "STACKWEAVE_MAX_GOROUTINES child failed rc=%d\n%s" % (
         p.returncode, p.stderr[-1500:])
     assert "MAX_GOROUTINES_OK" in p.stdout, (p.stdout, p.stderr[-800:])
 
@@ -266,9 +266,9 @@ def test_max_fibers_env_installs_admission_gate():
 _MAXG_BAD_CHILD = r"""
 import os, sys
 sys.path.insert(0, 'src')
-import runloom_c as rc
+import stackweave_c as rc
 assert rc.get_max_fibers() == 0, (
-    "non-numeric RUNLOOM_MAX_GOROUTINES installed a cap: %d" % rc.get_max_fibers())
+    "non-numeric STACKWEAVE_MAX_GOROUTINES installed a cap: %d" % rc.get_max_fibers())
 ran = {"n": 0}
 def main():
     def w():
@@ -287,15 +287,15 @@ sys.stdout.write("MAX_GOROUTINES_BAD_OK\n")
 
 
 def test_max_fibers_env_invalid_is_unlimited():
-    env = dict(os.environ, RUNLOOM_MAX_GOROUTINES="notanumber",
+    env = dict(os.environ, STACKWEAVE_MAX_GOROUTINES="notanumber",
                PYTHON_GIL="0", PYTHONPATH="src")
-    env.pop("RUNLOOM_INTROSPECT_TIME", None)
+    env.pop("STACKWEAVE_INTROSPECT_TIME", None)
     try:
         p = subprocess.run([PY, "-c", _MAXG_BAD_CHILD], cwd=REPO, env=env,
                            capture_output=True, text=True, timeout=200)
     except subprocess.TimeoutExpired:
         pytest.skip("MAX_GOROUTINES(bad) subprocess timed out (shared-box contention)")
-    assert p.returncode == 0, "bad RUNLOOM_MAX_GOROUTINES child failed rc=%d\n%s" % (
+    assert p.returncode == 0, "bad STACKWEAVE_MAX_GOROUTINES child failed rc=%d\n%s" % (
         p.returncode, p.stderr[-1500:])
     assert "MAX_GOROUTINES_BAD_OK" in p.stdout, (p.stdout, p.stderr[-800:])
 

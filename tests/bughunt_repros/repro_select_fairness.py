@@ -1,8 +1,8 @@
 """Go semantics: 'If one or more of the communications can proceed, a single
 one that can proceed is chosen via a uniform pseudo-random selection.'
-runloom's select_try_each scans cases in caller order -> case 0 always wins
+stackweave's select_try_each scans cases in caller order -> case 0 always wins
 when multiple cases are ready, so a busy case 0 starves case 1 forever."""
-import runloom_c as rc
+import stackweave_c as rc
 from collections import Counter
 
 def main():

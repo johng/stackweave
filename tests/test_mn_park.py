@@ -1,4 +1,4 @@
-"""runloom_c.park() -- the generic M:N in-memory park (no fd) + G.wake().
+"""stackweave_c.park() -- the generic M:N in-memory park (no fd) + G.wake().
 
 park_self (= sched_park_safe) is SINGLE-THREAD only: on an M:N hub it returns
 immediately (sched->current is NULL) so a loop around it busy-spins (the #4
@@ -12,8 +12,8 @@ wake-before-park race + a multi-parker stress.
 import threading   # REAL OS thread (no monkey.patch here)
 import time
 
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
 
 # ---- park() must BLOCK, not busy-spin (the #4 bug) ------------------------
@@ -26,21 +26,21 @@ def _park_returns(hubs):
     stop = [False]
 
     def waiter():
-        hb["g"] = runloom_c.current_g()
+        hb["g"] = stackweave_c.current_g()
         t0 = time.monotonic()
         while time.monotonic() - t0 < 0.1 and not stop[0]:
-            runloom_c.park()
+            stackweave_c.park()
             returns[0] += 1
 
     def main():
-        runloom.fiber(waiter)
+        stackweave.fiber(waiter)
         t0 = time.monotonic()
         while time.monotonic() - t0 < 0.13:
-            runloom.sleep(0.01)
+            stackweave.sleep(0.01)
         stop[0] = True
         if "g" in hb:
             hb["g"].wake()
-    runloom.run(hubs, main)
+    stackweave.run(hubs, main)
     return returns[0]
 
 
@@ -60,12 +60,12 @@ def _wake_case(hubs, foreign, fw):
     hb = {}
 
     def waiter():
-        hb["g"] = runloom_c.current_g()
-        runloom_c.park(foreign_wakeable=fw)
+        hb["g"] = stackweave_c.current_g()
+        stackweave_c.park(foreign_wakeable=fw)
         box.append("woke")
 
     def main():
-        runloom.fiber(waiter)
+        stackweave.fiber(waiter)
         # Deterministic: wait until the waiter has RECORDED its handle, not a
         # fixed nap.  A bare nap is a load-dependent bet that the waiter ran
         # within 80ms; if it has not recorded hb["g"] when we wake, we either
@@ -78,7 +78,7 @@ def _wake_case(hubs, foreign, fw):
         # cap only bounds a hang, the happy path exits in a few iterations.
         i = 0
         while "g" not in hb and i < 1_000_000:
-            runloom_c.sched_yield(); i += 1
+            stackweave_c.sched_yield(); i += 1
         assert "g" in hb, "waiter never recorded its handle"
         if foreign:
             t = threading.Thread(target=lambda: hb["g"].wake())
@@ -89,8 +89,8 @@ def _wake_case(hubs, foreign, fw):
         # nap.  Cap only bounds a lost wake (the failure this test checks for).
         i = 0
         while not box and i < 1_000_000:
-            runloom_c.sched_yield(); i += 1
-    runloom.run(hubs, main)
+            stackweave_c.sched_yield(); i += 1
+    stackweave.run(hubs, main)
     return box == ["woke"]
 
 
@@ -130,11 +130,11 @@ def test_wake_before_park_race_stress():
             done = [False]
 
             def waiter():
-                hb["g"] = runloom_c.current_g()
-                runloom_c.park()
+                hb["g"] = stackweave_c.current_g()
+                stackweave_c.park()
                 done[0] = True
 
-            runloom.fiber(waiter)
+            stackweave.fiber(waiter)
             # Wait until the waiter has recorded its handle.  The waiter may be
             # round-robined onto THIS fiber's OWN hub, in which case it
             # cannot start until we yield -- a bare non-yielding spin then races
@@ -149,16 +149,16 @@ def test_wake_before_park_race_stress():
             while "g" not in hb:
                 spins += 1
                 if spins % 4096 == 0:
-                    runloom.sleep(0)                    # yield: let it start
+                    stackweave.sleep(0)                    # yield: let it start
             hb["g"].wake()                              # often lands before park()
             for _ in range(200):
                 if done[0]:
                     break
-                runloom.sleep(0.001)
+                stackweave.sleep(0.001)
             if done[0]:
                 ok += 1
         main.ok = ok
-    runloom.run(8, main)
+    stackweave.run(8, main)
     assert main.ok == 80
 
 
@@ -171,12 +171,12 @@ def test_many_parkers_all_woken():
         woke = bytearray(n)
 
         def waiter(i):
-            handles[i] = runloom_c.current_g()
-            runloom_c.park()
+            handles[i] = stackweave_c.current_g()
+            stackweave_c.park()
             woke[i] = 1
 
         for i in range(n):
-            runloom.fiber(waiter, i)
+            stackweave.fiber(waiter, i)
         # Deterministic: wait until every waiter has RECORDED its handle, not a
         # fixed nap.  A 0.15s bet that all 200 fibers ran is load-dependent --
         # under load some handles[i] are still None, so h.wake() hits None
@@ -184,14 +184,14 @@ def test_many_parkers_all_woken():
         # it parked forever -> run() deadlocks joining it.  Cap bounds a hang.
         i = 0
         while any(h is None for h in handles) and i < 5_000_000:
-            runloom_c.sched_yield(); i += 1
+            stackweave_c.sched_yield(); i += 1
         assert all(h is not None for h in handles), "not all waiters recorded"
         for h in handles:
             h.wake()
         # Deterministic completion wait instead of a fixed nap.
         i = 0
         while sum(woke) < n and i < 5_000_000:
-            runloom_c.sched_yield(); i += 1
+            stackweave_c.sched_yield(); i += 1
         main.total = sum(woke)
-    runloom.run(8, main)
+    stackweave.run(8, main)
     assert main.total == 200

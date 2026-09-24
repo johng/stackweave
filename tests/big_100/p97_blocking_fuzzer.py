@@ -16,7 +16,7 @@ import harness
 import cancelutil
 import netutil
 import procutil
-import runloom
+import stackweave
 
 
 def op_socket(H, rng, state, wid=0):

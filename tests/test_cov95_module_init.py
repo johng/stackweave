@@ -2,7 +2,7 @@
 
   * src/runloom_c/module_init.c.inc -- the module method table, PyInit, the
     fiber-safe module getattro slot, and the two env-gated PyInit branches
-    (RUNLOOM_STACK_SCRUB, RUNLOOM_TRACEBACK).
+    (STACKWEAVE_STACK_SCRUB, STACKWEAVE_TRACEBACK).
   * src/runloom_c/module_g.c.inc    -- the RunloomG (fiber handle) type:
     RunloomG_stack() (the watchdog state probe) and RunloomG_richcompare's
     NOT-IMPLEMENTED / RETURN_FALSE arms.
@@ -39,11 +39,11 @@ module_g.c.inc -- RunloomG_richcompare (L169, L174):
        genuinely by wrapped-pointer, not object identity.
 
 module_init.c.inc -- PyInit env branches (read ONCE at import -> subprocess):
-  L491 (runloom_coro_scrub_set(1))  gated by RUNLOOM_STACK_SCRUB.  Subprocess
+  L491 (runloom_coro_scrub_set(1))  gated by STACKWEAVE_STACK_SCRUB.  Subprocess
        asserts get_stack_scrub() is True (the line ran) -- and a negative
        control subprocess WITHOUT the env asserts it is False, so the branch is
        exercised on both sides.
-  L500-504 (SIGQUIT sigaction install)  gated by RUNLOOM_TRACEBACK.  A RAW C
+  L500-504 (SIGQUIT sigaction install)  gated by STACKWEAVE_TRACEBACK.  A RAW C
        sigaction handler that does NOT go through Python's signal module, so it
        is invisible to signal.getsignal().  The only honest detector is
        behaviour: with the env, a process that sends itself SIGQUIT SURVIVES
@@ -89,7 +89,7 @@ import sys
 
 import pytest
 
-import runloom_c as rc
+import stackweave_c as rc
 from adv_util import hang_guard
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -237,15 +237,15 @@ def test_g_richcompare_notimplemented_and_false_arms():
 
 
 # ==========================================================================
-# module_init.c.inc :: RUNLOOM_STACK_SCRUB -> runloom_coro_scrub_set(1) (L491)
+# module_init.c.inc :: STACKWEAVE_STACK_SCRUB -> runloom_coro_scrub_set(1) (L491)
 # ==========================================================================
 _SCRUB_CHILD = r"""
 import sys
 sys.path.insert(0, 'src')
-import runloom_c as rc
+import stackweave_c as rc
 want = {want}
 got = rc.get_stack_scrub()
-assert got is want, "RUNLOOM_STACK_SCRUB={env!r}: get_stack_scrub()=%r want %r" % (got, want)
+assert got is want, "STACKWEAVE_STACK_SCRUB={env!r}: get_stack_scrub()=%r want %r" % (got, want)
 # And the setting is a live toggle, not a frozen read: turning it off works.
 rc.set_stack_scrub(False)
 assert rc.get_stack_scrub() is False
@@ -256,7 +256,7 @@ sys.stdout.write("SCRUB_OK\n")
 def _run_child(src, env_extra, timeout=200):
     env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src", **env_extra)
     # Keep sibling cov env vars from a parent run from skewing this child.
-    for k in ("RUNLOOM_STACK_SCRUB", "RUNLOOM_TRACEBACK"):
+    for k in ("STACKWEAVE_STACK_SCRUB", "STACKWEAVE_TRACEBACK"):
         if k not in env_extra:
             env.pop(k, None)
     return subprocess.run([PY, "-c", src], cwd=REPO, env=env,
@@ -264,13 +264,13 @@ def _run_child(src, env_extra, timeout=200):
 
 
 def test_stack_scrub_env_enables_scrub():
-    """RUNLOOM_STACK_SCRUB at import runs runloom_coro_scrub_set(1) (L491);
+    """STACKWEAVE_STACK_SCRUB at import runs runloom_coro_scrub_set(1) (L491);
     get_stack_scrub() observes it.  Asserts the enabled side."""
     try:
         p = _run_child(_SCRUB_CHILD.format(want=True, env="1"),
-                       {"RUNLOOM_STACK_SCRUB": "1"})
+                       {"STACKWEAVE_STACK_SCRUB": "1"})
     except subprocess.TimeoutExpired:
-        pytest.skip("RUNLOOM_STACK_SCRUB subprocess timed out (shared-box contention)")
+        pytest.skip("STACKWEAVE_STACK_SCRUB subprocess timed out (shared-box contention)")
     assert p.returncode == 0, "scrub child failed rc=%d\n%s" % (p.returncode, p.stderr[-1500:])
     assert "SCRUB_OK" in p.stdout, (p.stdout, p.stderr[-800:])
 
@@ -280,15 +280,15 @@ def test_stack_scrub_env_absent_is_off():
     NOT run and scrub stays off -- so the env branch is exercised both ways."""
     try:
         p = _run_child(_SCRUB_CHILD.format(want=False, env="0"),
-                       {"RUNLOOM_STACK_SCRUB": "0"})
+                       {"STACKWEAVE_STACK_SCRUB": "0"})
     except subprocess.TimeoutExpired:
-        pytest.skip("RUNLOOM_STACK_SCRUB=0 subprocess timed out (shared-box contention)")
+        pytest.skip("STACKWEAVE_STACK_SCRUB=0 subprocess timed out (shared-box contention)")
     assert p.returncode == 0, "scrub-off child failed rc=%d\n%s" % (p.returncode, p.stderr[-1500:])
     assert "SCRUB_OK" in p.stdout, (p.stdout, p.stderr[-800:])
 
 
 # ==========================================================================
-# module_init.c.inc :: RUNLOOM_TRACEBACK -> SIGQUIT sigaction install (L500-504)
+# module_init.c.inc :: STACKWEAVE_TRACEBACK -> SIGQUIT sigaction install (L500-504)
 # ==========================================================================
 # The handler is a RAW C sigaction install (sa_handler =
 # runloom_traceback_signal_handler) that does NOT go through Python's signal
@@ -300,7 +300,7 @@ def test_stack_scrub_env_absent_is_off():
 _TRACEBACK_CHILD = r"""
 import os, sys, signal
 sys.path.insert(0, 'src')
-import runloom_c as rc
+import stackweave_c as rc
 alive = {"after_quit": False}
 def main():
     def parker():
@@ -321,13 +321,13 @@ sys.stdout.write("TRACEBACK_OK\n")
 
 
 def test_traceback_env_installs_sigquit_handler():
-    """RUNLOOM_TRACEBACK at import installs the SIGQUIT fiber-dump handler
+    """STACKWEAVE_TRACEBACK at import installs the SIGQUIT fiber-dump handler
     (L500-504).  The child survives a self-SIGQUIT and exits 0; the dump text
     proves the handler body (runloom_dump_fibers_fd) ran."""
     try:
-        p = _run_child(_TRACEBACK_CHILD, {"RUNLOOM_TRACEBACK": "1"})
+        p = _run_child(_TRACEBACK_CHILD, {"STACKWEAVE_TRACEBACK": "1"})
     except subprocess.TimeoutExpired:
-        pytest.skip("RUNLOOM_TRACEBACK subprocess timed out (shared-box contention)")
+        pytest.skip("STACKWEAVE_TRACEBACK subprocess timed out (shared-box contention)")
     # Survived the signal -> clean exit (NOT killed by SIGQUIT), printed its
     # marker, and the handler body wrote the structural fiber dump to fd 2.
     # ROBUST: this is an async-signal-delivery + fd-2 dump race; under heavy
@@ -338,37 +338,37 @@ def test_traceback_env_installs_sigquit_handler():
     # which the negative-control test below catches deterministically.
     if not (p.returncode == 0
             and "TRACEBACK_OK" in p.stdout
-            and "runloom fiber dump" in p.stderr):
+            and "stackweave fiber dump" in p.stderr):
         pytest.skip(
-            "RUNLOOM_TRACEBACK SIGQUIT-handler signal/dump timing perturbed under "
+            "STACKWEAVE_TRACEBACK SIGQUIT-handler signal/dump timing perturbed under "
             "load (rc=%d); covered on a quieter run\nstderr=%s"
             % (p.returncode, p.stderr[-600:]))
 
 
 def test_traceback_env_absent_sigquit_kills():
-    """Negative control: WITHOUT RUNLOOM_TRACEBACK the install line (L497 guard
+    """Negative control: WITHOUT STACKWEAVE_TRACEBACK the install line (L497 guard
     false) does not run, so SIGQUIT terminates the process -- proving the positive
     test's survival is the handler, not a quirk of how the child sends the signal.
 
-    The child first RESETS SIGQUIT to SIG_DFL, *before* importing runloom_c.  This
+    The child first RESETS SIGQUIT to SIG_DFL, *before* importing stackweave_c.  This
     is load-bearing: a shell that launches the test runner in the BACKGROUND sets
     SIGINT/SIGQUIT to SIG_IGN for the job (POSIX async-list disposition), and that
     SIG_IGN is inherited all the way down to this child -- so without the reset the
     child would ignore its own SIGQUIT and 'SURVIVE' for an environmental reason,
-    not because runloom installed a handler (a false failure seen running check_all
+    not because stackweave installed a handler (a false failure seen running check_all
     via `nohup ... &`).  Resetting to SIG_DFL establishes the real baseline: if the
-    import then leaves it killable, runloom installed no handler; if it survives,
-    runloom DID install one (the bug this guards).  Deterministic in any launch env."""
+    import then leaves it killable, stackweave installed no handler; if it survives,
+    stackweave DID install one (the bug this guards).  Deterministic in any launch env."""
     src = (
         "import os, sys, signal\n"
         "sys.path.insert(0, 'src')\n"
         "signal.signal(signal.SIGQUIT, signal.SIG_DFL)\n"  # baseline, pre-import (see docstring)
-        "import runloom_c as rc\n"
+        "import stackweave_c as rc\n"
         "os.kill(os.getpid(), signal.SIGQUIT)\n"
         "sys.stdout.write('SURVIVED\\n')\n"   # must NOT print
     )
     try:
-        p = _run_child(src, {})   # no RUNLOOM_TRACEBACK
+        p = _run_child(src, {})   # no STACKWEAVE_TRACEBACK
     except subprocess.TimeoutExpired:
         pytest.skip("SIGQUIT negative-control subprocess timed out (contention)")
     # Killed by SIGQUIT -> negative return code -signal.SIGQUIT (subprocess

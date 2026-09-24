@@ -1,4 +1,4 @@
-"""CPython's OWN Lib/test/test_socket.py, run verbatim under runloom.monkey.patch().
+"""CPython's OWN Lib/test/test_socket.py, run verbatim under stackweave.monkey.patch().
 
 monkey makes blocking socket recv/send/recvfrom/sendto/accept/connect (and
 recvmsg/sendmsg) cooperative.  We host:

@@ -1,5 +1,5 @@
-import runloom
-from runloom.sync import Semaphore
+import stackweave
+from stackweave.sync import Semaphore
 def main():
     sem = Semaphore(2)
     sem.acquire(2)
@@ -8,4 +8,4 @@ def main():
     except ValueError as e:
         print("raised:", e)
     print("held:", sem._held, "try_acquire(2) ->", sem.try_acquire(2))
-runloom.run(1, main)
+stackweave.run(1, main)

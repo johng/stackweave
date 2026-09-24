@@ -35,7 +35,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
-SRC_C = os.path.join(ROOT, "src", "runloom_c")
+SRC_C = os.path.join(ROOT, "src", "stackweave_c")
 BASELINE = os.path.join(HERE, "model_source_anchors.json")
 ANCHOR_RE = re.compile(r"SOURCE-ANCHOR:\s*([A-Za-z0-9_ \t]+)")
 SCAN_DIRS = [os.path.join(HERE, d) for d in ("cbmc", "genmc", "spin")]

@@ -1,4 +1,4 @@
-"""runloom.tools.watchdog -- deadlock / hang detector with full state dump.
+"""stackweave.tools.watchdog -- deadlock / hang detector with full state dump.
 
 A goroutine deadlock or a scheduler lost-wake shows up as a process that
 simply stops making progress: `run()` / `mn_run()` never returns and no
@@ -7,30 +7,30 @@ debuggable artifact.
 
 On a deadline breach it dumps, to stderr:
   1. every OS thread's C+Python stack            (faulthandler)
-  2. runloom's per-thread lifecycle event ring      (runloom_c._diag_dump)
-  3. the scheduler/netpoll self-check result     (runloom_c._self_check)
-  4. scheduler stats                             (runloom_c.stats)
+  2. stackweave's per-thread lifecycle event ring      (stackweave_c._diag_dump)
+  3. the scheduler/netpoll self-check result     (stackweave_c._self_check)
+  4. scheduler stats                             (stackweave_c.stats)
 
 Usage
 -----
     from tools.watchdog import watchdog, run_guarded
 
     with watchdog(5.0, label="chan ping-pong"):
-        runloom_c.run()
+        stackweave_c.run()
 
     # or wrap a callable:
-    run_guarded(lambda: runloom_c.run(), seconds=5.0)
+    run_guarded(lambda: stackweave_c.run(), seconds=5.0)
 
 For the event ring (#2) to contain anything, start the process with
-    RUNLOOM_DEBUG=ring,gstate        (or RUNLOOM_DEBUG=all)
-which runloom_c reads once at import.
+    STACKWEAVE_DEBUG=ring,gstate        (or STACKWEAVE_DEBUG=all)
+which stackweave_c reads once at import.
 
 Notes
 -----
 * faulthandler (#1) works even when the interpreter is wedged in a C
   call holding the GIL -- it runs from a dedicated watchdog thread and
   writes the dump directly.  On free-threaded 3.13t there is no GIL, so
-  the runloom diag calls (#2-#4) also run reliably from the timer thread.
+  the stackweave diag calls (#2-#4) also run reliably from the timer thread.
 * By default a breach RAISES TimeoutError in the watchdog thread context
   and (optionally) aborts the process for a core dump.  In tests, prefer
   raising; for live hunting (hunt_hang-style), pass abort=True.
@@ -42,9 +42,9 @@ import threading
 import time
 
 try:
-    import runloom_c
+    import stackweave_c
 except ImportError:  # allow importing this module without the ext built
-    runloom_c = None
+    stackweave_c = None
 
 
 def hang_dump(file=sys.stderr, label=""):
@@ -64,28 +64,28 @@ def hang_dump(file=sys.stderr, label=""):
     except Exception as e:                     # pragma: no cover - defensive
         print("  (faulthandler failed: {0!r})".format(e), file=file)
 
-    if runloom_c is not None:
+    if stackweave_c is not None:
         # 2. scheduler self-check (walks parker lists / fd buckets / counters).
-        print("\n--- runloom_c._self_check(verbose=1) ---", file=file)
+        print("\n--- stackweave_c._self_check(verbose=1) ---", file=file)
         try:
             file.flush()
-            violations = runloom_c._self_check(1)
+            violations = stackweave_c._self_check(1)
             print("  violations: {0}".format(violations), file=file)
         except Exception as e:
             print("  (self_check failed: {0!r})".format(e), file=file)
 
         # 3. scheduler / netpoll stats.
-        print("\n--- runloom_c.stats() ---", file=file)
+        print("\n--- stackweave_c.stats() ---", file=file)
         try:
-            print("  {0}".format(runloom_c.stats()), file=file)
+            print("  {0}".format(stackweave_c.stats()), file=file)
         except Exception as e:
             print("  (stats failed: {0!r})".format(e), file=file)
 
-        # 4. per-thread lifecycle event ring (needs RUNLOOM_DEBUG=ring).
-        print("\n--- runloom_c._diag_dump() (event ring) ---", file=file)
+        # 4. per-thread lifecycle event ring (needs STACKWEAVE_DEBUG=ring).
+        print("\n--- stackweave_c._diag_dump() (event ring) ---", file=file)
         try:
             file.flush()
-            runloom_c._diag_dump(file.fileno() if hasattr(file, "fileno") else -1)
+            stackweave_c._diag_dump(file.fileno() if hasattr(file, "fileno") else -1)
         except Exception as e:
             print("  (diag_dump failed: {0!r})".format(e), file=file)
 
@@ -96,7 +96,7 @@ def hang_dump(file=sys.stderr, label=""):
 # Global deadline scaler (see tests/run_isolated.py): a loaded/slow/emulated host
 # multiplies every watchdog deadline so "the box was busy" reads as slow, not a
 # false wedge.  Default 1.
-_TIMEOUT_MULT = max(0.01, float(os.environ.get("RUNLOOM_TIMEOUT_MULT", "1")))
+_TIMEOUT_MULT = max(0.01, float(os.environ.get("STACKWEAVE_TIMEOUT_MULT", "1")))
 
 
 class _Watchdog(object):
@@ -123,7 +123,7 @@ class _Watchdog(object):
 
     def __enter__(self):
         # faulthandler's own timer is C-level and fires even under a held
-        # GIL; we ALSO run a Python timer so the runloom diag calls happen.
+        # GIL; we ALSO run a Python timer so the stackweave diag calls happen.
         faulthandler.enable()
         faulthandler.dump_traceback_later(self.seconds, exit=False)
         self._timer = threading.Timer(self.seconds + 0.05, self._fire)
@@ -191,7 +191,7 @@ if __name__ == "__main__":
     # so run() never returns -- a genuine "scheduler never makes the work
     # finish" hang.  run_guarded catches it, dumps state, and raises.
     sys.path.insert(0, "src")
-    import runloom_c as pc
+    import stackweave_c as pc
 
     def never_finishes():
         def spinner():

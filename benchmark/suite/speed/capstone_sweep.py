@@ -3,9 +3,9 @@
 
 ctxswitch ns/switch vs hub count for the tstate-free c_entry fiber (pure
 scheduler, no Python eval; run_centry.py) vs the Python fiber (runloom_epoll_py_fiber.py),
-each pinned to `hubs` cores, n=0-subtracted, median of REPS. Proves runloom's
+each pinned to `hubs` cores, n=0-subtracted, median of REPS. Proves stackweave's
 scheduler yield is ~20 ns and flat while the Python-fiber path explodes -> the
-ctxswitch wall is CPython, not runloom. Rendered in report.html's speed section.
+ctxswitch wall is CPython, not stackweave. Rendered in report.html's speed section.
 """
 import json
 import os
@@ -29,16 +29,16 @@ SRV0 = config.SERVER_CPUS[0]
 
 def _run(script, hubs, n, extra=()):
     cpus = "%d-%d" % (SRV0, SRV0 + hubs - 1)
-    # RUNLOOM_PREEMPT=0: the ATTACHED/CPU-preemption watchdog (default ON) fires
+    # STACKWEAVE_PREEMPT=0: the ATTACHED/CPU-preemption watchdog (default ON) fires
     # on a pure-CPU yield-loop microbenchmark (the hub stays in g-context past
     # the 50ms wedge budget) and force-enables sysmon -- pure noise here, and it
     # hits Python fibers (tstate-ATTACHED) but NOT nogil c_entry, which would
     # make the python-vs-c_entry comparison unfair.  A real I/O-bound server
     # returns to hub_main on every park and never trips it, so disabling it
-    # measures the representative cooperative-yield cost.  RUNLOOM_SYSMON=0 alone
+    # measures the representative cooperative-yield cost.  STACKWEAVE_SYSMON=0 alone
     # can't do this (preempt re-enables sysmon).
     env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH=os.path.join(REPO, "src"),
-               RUNLOOM_SYSMON="0", RUNLOOM_PREEMPT="0")
+               STACKWEAVE_SYSMON="0", STACKWEAVE_PREEMPT="0")
     cmd = ["taskset", "-c", cpus, PY, script, "--metric", "ctxswitch",
            "--n", str(n), "--hubs", str(hubs), *extra]
     out = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=180).stdout

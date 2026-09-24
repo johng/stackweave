@@ -16,7 +16,7 @@ import socket
 
 import os
 
-import runloom
+import stackweave
 
 # Free-threaded build: fan fibers across all cores (M:N scheduler).
 HUBS = os.cpu_count() or 4
@@ -39,8 +39,8 @@ def handle(conn, addr):
         print("closed", addr)
 
 def main():
-    runloom.monkey.patch()
-    print("backend:", runloom.backend(), "netpoll:", runloom.netpoll_backend())
+    stackweave.monkey.patch()
+    print("backend:", stackweave.backend(), "netpoll:", stackweave.netpoll_backend())
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     listener.bind((HOST, PORT))
@@ -50,9 +50,9 @@ def main():
     def accept_loop():
         while True:
             conn, addr = listener.accept()
-            runloom.fiber(lambda c=conn, a=addr: handle(c, a))
+            stackweave.fiber(lambda c=conn, a=addr: handle(c, a))
 
-    runloom.run(HUBS, accept_loop)
+    stackweave.run(HUBS, accept_loop)
 
 if __name__ == "__main__":
     main()

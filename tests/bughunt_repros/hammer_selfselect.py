@@ -2,9 +2,9 @@
 counterparties; (2) select listing the same channel twice for recv; (3) pairs
 of selects ping-ponging.  Looking for hangs, double-delivery, crashes."""
 import sys
-import runloom
-import runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave
+import stackweave_c as rc
+from stackweave.sync import WaitGroup
 
 HUBS = int(sys.argv[1]) if len(sys.argv) > 1 else 8
 
@@ -37,7 +37,7 @@ def main():
         rc.mn_fiber(lambda pid=p: party(pid))
     wg.wait()
 
-runloom.run(HUBS, main)
+stackweave.run(HUBS, main)
 assert tally["sent"] == tally["got"], "sent %d != got %d (lost or dup delivery)" % (tally["sent"], tally["got"])
 print("shape1 OK: %d rendezvous, sent==got" % tally["sent"])
 
@@ -62,7 +62,7 @@ def main2():
     rc.mn_fiber(producer)
     wg.wait()
 
-runloom.run(HUBS, main2)
+stackweave.run(HUBS, main2)
 assert sorted(got) == list(range(500)), "dup/lost with duplicate cases: %d unique" % len(set(got))
 print("shape2 OK: duplicate recv cases, 500 values exactly once")
 
@@ -90,5 +90,5 @@ def main3():
     rc.mn_fiber(right)
     wg.wait()
 
-runloom.run(HUBS, main3)
+stackweave.run(HUBS, main3)
 print("shape3 OK: select-vs-select ping-pong", count)

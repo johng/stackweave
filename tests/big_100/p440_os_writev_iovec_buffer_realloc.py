@@ -1,7 +1,7 @@
 """big_100 / 440 -- os.writev/os.readv iovec-vs-bytearray-realloc across the park.
 
 The subject is the cooperative ``os.writev`` / ``os.readv`` monkey-patches
-(src/runloom/monkey/osio.py ``_patched_os_writev`` / ``_patched_os_readv``) and
+(src/stackweave/monkey/osio.py ``_patched_os_writev`` / ``_patched_os_readv``) and
 the exact CPython internal state they straddle: the per-buffer ``Py_buffer``
 export (the bytearray's ``ob_exports`` counter, and its ``ob_bytes`` /
 ``ob_alloc`` backing store) that the C ``posix_writev`` / ``posix_readv`` build
@@ -12,7 +12,7 @@ PARTIAL-TRANSFER: a single ``_orig_os_writev(fd, buffers)`` call writes at most
 what fits in the kernel pipe buffer and returns that count -- the patched
 wrapper does NOT loop it to completion, it only RE-CALLS ``_orig_os_writev`` on
 a *full-pipe* ``BlockingIOError`` after parking the fiber in
-``runloom_c.wait_fd(fd, WRITE)`` on a grown-down C stack.  So a full vectored
+``stackweave_c.wait_fd(fd, WRITE)`` on a grown-down C stack.  So a full vectored
 write is a SEQUENCE of ``_orig_os_writev`` C calls, and between them the fiber
 sleeps PARKED with the buffer list a LIVE Python list -- each re-call rebuilds
 the ``iovec`` array (re-exports each buffer, re-reads ob_bytes/ob_alloc) from
@@ -115,7 +115,7 @@ if not POSIX or not hasattr(os, "writev") or not hasattr(os, "readv"):
     sys.exit(0)
 
 import harness
-import runloom
+import stackweave
 
 # ---- the finite sentinel tag UNIVERSE --------------------------------------
 # Each writev buffer i of a round carries a single constant tag byte drawn from
@@ -320,7 +320,7 @@ def run_writev_round(H, wid, rng, rnd, state, slot, raced):
     info = {"mut": 0, "wrote": -1}
 
     nfibers = 3 if raced else 2
-    wg = runloom.WaitGroup()
+    wg = stackweave.WaitGroup()
     wg.add(nfibers)
     # The reader must keep running until it sees clean EOF (writer closed wfd);
     # the writer closes wfd in its finally so the reader's os.read returns b"".
@@ -338,7 +338,7 @@ def run_writev_round(H, wid, rng, rnd, state, slot, raced):
                 got.extend(chunk)
                 # Slow the reader so the small pipe stays full and the writev on
                 # the other side PARKS in wait_fd(WRITE) -- the hazard window.
-                runloom.sleep(0.0004)
+                stackweave.sleep(0.0004)
         finally:
             wg.done()
 
@@ -389,7 +389,7 @@ def run_writev_round(H, wid, rng, rnd, state, slot, raced):
                         shared[off] = MUT_TAG
                 except (IndexError, ValueError):
                     pass
-                runloom.yield_now()
+                stackweave.yield_now()
                 # Re-stamp the original tag over some pokes so the stream is not
                 # ENTIRELY MUT_TAG (keeps both legal values present on the wire).
                 if mrng.getrandbits(1):
@@ -398,7 +398,7 @@ def run_writev_round(H, wid, rng, rnd, state, slot, raced):
                             shared[off] = t
                     except (IndexError, ValueError):
                         pass
-                runloom.sleep(0.0003)
+                stackweave.sleep(0.0003)
         finally:
             wg.done()
 
@@ -462,7 +462,7 @@ def run_readv_round(H, wid, rng, rnd, state, slot):
     TOTAL = NBUF * BUF_LEN
     target_len = 1024                       # each readv chunk target
     info = {"berr": 0, "consumed": 0}
-    wg = runloom.WaitGroup()
+    wg = stackweave.WaitGroup()
     wg.add(3)
     # The reader exports `live` (a bytearray) across each readv park; the mutator
     # tries to resize THAT object.  We keep a stable reference both fibers share.
@@ -486,7 +486,7 @@ def run_readv_round(H, wid, rng, rnd, state, slot):
                     except (BrokenPipeError, OSError):
                         return
                 pos += n
-                runloom.sleep(0.0004)         # let the reader park exported
+                stackweave.sleep(0.0004)         # let the reader park exported
         finally:
             try:
                 os.close(wfd)
@@ -534,7 +534,7 @@ def run_readv_round(H, wid, rng, rnd, state, slot):
                     return
                 live = box["live"]
                 if live is None:
-                    runloom.yield_now()
+                    stackweave.yield_now()
                     continue
                 # Try to RESIZE the exported readv target.  While the readv holds
                 # the export this MUST raise BufferError (the ob_exports guard); a
@@ -547,7 +547,7 @@ def run_readv_round(H, wid, rng, rnd, state, slot):
                     info["berr"] += 1
                 except (ValueError, IndexError):
                     pass
-                runloom.sleep(0.0002)
+                stackweave.sleep(0.0002)
         finally:
             wg.done()
 

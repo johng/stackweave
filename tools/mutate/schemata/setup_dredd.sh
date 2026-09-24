@@ -3,7 +3,7 @@
 # this box.  dredd (github.com/mc-imperial/dredd) rewrites a C/C++ source so EVERY
 # mutation point becomes a runtime-selectable branch (env DREDD_ENABLED_MUTATION),
 # compiled ONCE -- so an exhaustive mutation sweep costs one build + N test runs,
-# not N builds.  That is what makes mutation testing the runloom C core tractable.
+# not N builds.  That is what makes mutation testing the stackweave C core tractable.
 #
 # Installs into tools/mutate/schemata/dredd/ (gitignored -- it's a ~100 MB LLVM
 # binary, versioned by download, not committed).  Idempotent.

@@ -19,8 +19,8 @@ import time
 
 import pytest
 
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 from adv_util import hang_guard
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -48,7 +48,7 @@ def _subproc(script, env_extra=None):
 # --------------------------------------------------------------------------
 _OVERFLOW_SCRIPT = r'''
 import sys; sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 rc.install_crash_handler("backtrace")
 def f():
     rc._crash_selftest_overflow()      # deliberate C-stack overflow
@@ -166,7 +166,7 @@ def test_many_concurrent_offloads_complete():
     N = 40
     results = bytearray(N)
     def main():
-        from runloom.sync import WaitGroup
+        from stackweave.sync import WaitGroup
         wg = WaitGroup(); wg.add(N)
         def worker(i):
             try:

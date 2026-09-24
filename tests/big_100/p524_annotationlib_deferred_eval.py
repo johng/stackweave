@@ -31,7 +31,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain threads):
   never shared.  The fiber then:
     - calls ``get_annotations(obj, format=Format.VALUE)`` -> the FIRST deferred
       eval, which must return exactly ``{name: this-fiber-value}``;
-    - ``runloom.yield_now()`` / ``sleep`` at the hazard boundary so a sibling
+    - ``stackweave.yield_now()`` / ``sleep`` at the hazard boundary so a sibling
       reliably interleaves (and may drive its OWN deferred eval / cache write);
     - calls ``get_annotations`` AGAIN -> now served from the object's cache; must
       return an EQUAL map AND the SAME cached value objects (identity-stable) as
@@ -50,7 +50,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain threads):
   cross-thread handoff control that does the FIRST get on one thread and the SECOND
   get on another -- exactly mirroring a hub migration) that 100% of accesses return
   the owning thread's value -- 0 leaks, 0 crashes, 115k+ cross-thread handoffs
-  clean.  Under a CORRECT runloom the same must hold; the single-owner oracle
+  clean.  Under a CORRECT stackweave the same must hold; the single-owner oracle
   PASSES (program exits 0) when there is no bug.
 
 ORACLES:
@@ -58,7 +58,7 @@ ORACLES:
     factory-built FUNCTION per iteration; VALUE round-trip before/after a yield must
     equal ``{name: wid-value}`` with identity-stable cached values; FORWARDREF
     mixed-resolvability must return this fiber's value + a ForwardRef.  A violation
-    is a runloom isolation desync -- ``H.fail`` fires.
+    is a stackweave isolation desync -- ``H.fail`` fires.
 
   * COMPLETENESS (post, HARD): ``require_no_lost`` -- a fiber stranded inside
     ``__annotate__`` / the cache write-back never returns; the watchdog catches it.
@@ -83,13 +83,13 @@ free-threading runtime fault in the CLASS ``__annotations__`` cache path -- NOT 
 test bug.  Evidence gathered while implementing this program:
 
   * The FUNCTION-VALUE and FORWARDREF arms (identical single-owner methodology)
-    PASS under runloom at 8 hubs / thousands of fibers -- millions of round-trips,
+    PASS under stackweave at 8 hubs / thousands of fibers -- millions of round-trips,
     zero desync.  Only the CLASS arm fails, so the oracle methodology is sound.
   * The CLASS arm's SECOND ``get_annotations(cls, VALUE)`` returns ``{}`` (an
     EMPTY dict) where the FIRST returned the correct 4-entry map, then the process
     takes a SIGSEGV.  The class is single-owner (built by a factory, stored in a
     local, never shared) so the cache must persist.
-  * It reproduces at hubs>=2 and is CLEAN at hubs=1, and reproduces with runloom
+  * It reproduces at hubs>=2 and is CLEAN at hubs=1, and reproduces with stackweave
     preemption both ON and OFF -- i.e. cooperative migration of the single fiber
     across hubs between the two get_annotations calls is enough.
   * It reproduces even with LITERAL (closure-free) class annotations, so it is the
@@ -121,7 +121,7 @@ import annotationlib
 from annotationlib import Format, get_annotations, ForwardRef
 
 import harness
-import runloom
+import stackweave
 
 # Per-fiber annotation values are drawn from this band.  Each wid+idx gets a
 # distinct base so a leaked sibling value is visibly wrong.
@@ -134,11 +134,11 @@ NSLOTS = 4
 # TLBC on: a parked fiber's suspended frames (invisible to the free-threaded
 # collector's live-tstate walk) held the only deferred references to freshly
 # created code objects, so the collector freed them early and resume re-used freed
-# memory -> per-thread mimalloc free-list corruption -> SIGSEGV.  runloom_c's GC
+# memory -> per-thread mimalloc free-list corruption -> SIGSEGV.  stackweave_c's GC
 # frames anchor (module_gcframes.c.inc) now makes parked frames GC-visible, so the
 # arm PASSES with TLBC ON (the default) and is a live REGRESSION GUARD.  Set
 # PYGO_P524_CLASS_ARM=0 to skip it, or RE-ARM the crash for verification by
-# disabling the anchor while forcing TLBC on: RUNLOOM_TLBC=1 RUNLOOM_GC_FRAMES=0.
+# disabling the anchor while forcing TLBC on: STACKWEAVE_TLBC=1 STACKWEAVE_GC_FRAMES=0.
 CLASS_ARM = os.environ.get("PYGO_P524_CLASS_ARM", "1") != "0"
 
 # Run the (heavier) FORWARDREF fake-globals arm every Nth inner iteration so the
@@ -231,9 +231,9 @@ def check_value_roundtrip(H, wid, obj, expected, kind):
 
     # YIELD at the hazard boundary: a sibling may drive its OWN first deferred eval
     # + cache write-back while we are parked, possibly on another hub.
-    runloom.yield_now()
+    stackweave.yield_now()
     if id(obj) & 1:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
 
     second = get_annotations(obj, format=Format.VALUE)
     if second != expected:
@@ -368,7 +368,7 @@ if __name__ == "__main__":
                  "wid-value} with identity-stable cached values, and FORWARDREF "
                  "on a mixed object returns this fiber's value + a ForwardRef.  A "
                  "cross-fiber annotation value, a cache identity change across a "
-                 "yield, or a lost ForwardRef cell is the runloom deferred-eval "
+                 "yield, or a lost ForwardRef cell is the stackweave deferred-eval "
                  "isolation bug.  (The class-annotation arm is gated behind "
                  "PYGO_P524_CLASS_ARM: it exposes a SUSPECTED runtime fault -- "
                  "second get_annotations(cls,VALUE) returns {} + SIGSEGV at "

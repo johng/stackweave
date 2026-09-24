@@ -9,9 +9,9 @@ The `logging` module is DOCUMENTED thread-safe and is built on real locks:
     actual `self.emit(record)` in `with self.lock:` -- so two concurrent emits to
     the SAME handler are serialized, and emit() sees a stable record.
 
-Under runloom M:N, many fibers ("goroutines") share a hub OS-thread and a shared
+Under stackweave M:N, many fibers ("goroutines") share a hub OS-thread and a shared
 hub PyThreadState.  Anything CPython keys to the OS-thread -- or to a shared module
-global -- is shared across all fibers on a hub unless runloom isolates it.  The
+global -- is shared across all fibers on a hub unless stackweave isolates it.  The
 hazards a CORRECT runtime must still defend against here:
 
   * many fibers emit concurrently through ONE shared Logger -> ONE shared Handler;
@@ -32,7 +32,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified, not assumed):
   built, never spliced from two fibers); per (wid) the M seqs must be exactly
   {0..M-1} with no gap and no duplicate.  This is the run(1)/GIL-ON behaviour: a
   lock-serialized append-only handler never loses, duplicates, or tears a record.
-  Under M:N it MUST hold too -- a torn/lost/duplicated record there is a runloom
+  Under M:N it MUST hold too -- a torn/lost/duplicated record there is a stackweave
   regression in how the shared per-handler RLock + the list.append() interact
   across a hub migration / preempt-mid-emit, NOT documented-unsafe usage.  We
   verified the serialized-append oracle is GREEN under plain OS threads with the
@@ -49,7 +49,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified, not assumed):
   pattern -- does NOT hold a serializing lock across those pieces (it yields
   between them).  Concurrent emits then SPLICE in the raw text stream: a parsed
   line can interleave another fiber's bytes.  That raw interleaving reproduces
-  under plain OS threads too (it is unprotected multi-write I/O, not a runloom
+  under plain OS threads too (it is unprotected multi-write I/O, not a stackweave
   fault), so we MEASURE the splice rate and REPORT it, NEVER fail on it -- exactly
   like p67's TLS leak rate.  Crucially, the load-bearing STRUCTURED records are
   emitted through the LOCK-HELD path and stay intact even while the raw stream
@@ -83,7 +83,7 @@ import io
 import logging
 
 import harness
-import runloom
+import stackweave
 
 # LOAD-BEARING population cap.  This is a correctness probe of the shared-handler
 # record path, not a scale soak -- keep contenders MODEST so every emitter
@@ -129,7 +129,7 @@ class RecordingHandler(logging.Handler):
         # (set by the emitter), then yield so a preempt/migration lands while we
         # hold the shared handler RLock, then commit the append.  On a correct
         # runtime the lock makes this atomic w.r.t. other emits; a torn append, a
-        # lost entry, or a duplicated one is a runloom regression.
+        # lost entry, or a duplicated one is a stackweave regression.
         wid = record.bigwid
         seq = record.bigseq
         # The formatted message independently carries wid:seq -- parse it back so a
@@ -137,7 +137,7 @@ class RecordingHandler(logging.Handler):
         # with the args) is caught as a torn record, not silently counted.
         msg = self.format(record)
         self.emits += 1
-        runloom.yield_now()                 # preempt/migrate mid-emit, lock held
+        stackweave.yield_now()                 # preempt/migrate mid-emit, lock held
         self.records.append((wid, seq, msg))
 
 
@@ -177,9 +177,9 @@ class RawSplitHandler(logging.Handler):
         # interleave its bytes into this line in the raw stream (documented-unsafe
         # multi-write I/O).  The full line, if NOT spliced, is "R{wid}:{seq};\n".
         s.write("R{0}:".format(wid))
-        runloom.yield_now()
+        stackweave.yield_now()
         s.write("{0}".format(seq))
-        runloom.yield_now()
+        stackweave.yield_now()
         s.write(";\n")
 
 
@@ -223,12 +223,12 @@ def churner(H, wid, rng, state):
         while H.running() and n < 200:
             sink = logging.NullHandler()
             logger.addHandler(sink)         # global-list mutation under _lock
-            runloom.yield_now()
+            stackweave.yield_now()
             # setLevel churns the logger's effective level; keep it <= base so the
             # load-bearing INFO records are NEVER filtered out (conservation must
             # hold).  Alternate DEBUG/the base level only.
             logger.setLevel(logging.DEBUG if (n & 1) else base_level)
-            runloom.yield_now()
+            stackweave.yield_now()
             logger.removeHandler(sink)      # global-list mutation under _lock
             n += 1
             H.op(wid)
@@ -258,7 +258,7 @@ def run_raw_phase(H, state):
     n = state["raw_emitters"]
     if n <= 0:
         return
-    wg = runloom.WaitGroup()
+    wg = stackweave.WaitGroup()
     wg.add(n)
 
     def run_one(wid):
@@ -386,7 +386,7 @@ def run_single_owner_control(H, state):
     state["single_handler"] = priv_h
     state["single_expected"] = K
 
-    wg = runloom.WaitGroup()
+    wg = stackweave.WaitGroup()
     wg.add(1)
 
     def one():
@@ -538,7 +538,7 @@ def post(H):
         H.log("note: the raw-stream arm observed {0} spliced line(s) across {1} "
               "raw lines -- documented-unsafe UNPROTECTED multi-write I/O (a "
               "handler that writes a record in pieces without serializing across "
-              "them; reproduces under plain GIL threads), NOT a runloom bug.  The "
+              "them; reproduces under plain GIL threads), NOT a stackweave bug.  The "
               "LOAD-BEARING structured records went through the lock-held path and "
               "stayed intact (torn=0) even while the raw stream spliced.".format(
                   raw_spliced, raw_lines))

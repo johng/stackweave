@@ -19,7 +19,7 @@ parse257 runs a hand-written character scanner over the string.  None of that is
 per-call state a sibling should be able to perturb: the inputs are fiber-LOCAL
 strings and the outputs are fresh tuples/ints.
 
-WHERE M:N COULD BREAK IT (the gap this program probes).  runloom multiplexes tens
+WHERE M:N COULD BREAK IT (the gap this program probes).  stackweave multiplexes tens
 of thousands of goroutines across >1 hub with the GIL off.  A fiber builds a
 fiber-local reply string with KNOWN embedded values, parses it, records the result,
 YIELDS (so a sibling on another hub interleaves and parses its OWN different reply),
@@ -46,7 +46,7 @@ WHY THIS IS A LEGITIMATE SINGLE-OWNER ORACLE (per the HARD RULES):
     genuine fault, not documented Python semantics.
   * Verified against plain threads: 8 OS threads each parsing their own reply lines
     (GIL on and off) return the closed-form value 100% of the time, 0 cross-thread
-    bleed.  A correct runloom must match, so the oracle PASSES (exit 0) with no bug.
+    bleed.  A correct stackweave must match, so the oracle PASSES (exit 0) with no bug.
 
 ORACLES:
   * LOAD-BEARING -- PARSER PURITY (worker, HARD, fail-fast).  Per iteration a fiber
@@ -79,7 +79,7 @@ steady state is a clean shared read -- a fault there is real, not init churn).
 import ftplib
 
 import harness
-import runloom
+import stackweave
 
 # Number of distinct parser CASES exercised per batch (all four parsers).  Each is
 # fed a fiber-local reply string with known embedded values so the expected output
@@ -159,9 +159,9 @@ def parse_batch(H, wid, rng):
     # YIELD: a sibling on another hub parses its OWN different replies here.  If any
     # parser leaks state across fibers (torn module-global regex, shared Match /
     # scanner buffer), the re-parse below diverges.
-    runloom.yield_now()
+    stackweave.yield_now()
     if wid & 1:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
 
     # ---- parse AFTER the yield --------------------------------------------
     host2, port2 = ftplib.parse227(r227)

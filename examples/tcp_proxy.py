@@ -3,7 +3,7 @@
 A port forwarder is the textbook two-fibers-per-connection job: one
 fiber copies client->upstream, another copies upstream->client, and
 each blocks on recv without holding up the other.  Under
-runloom.monkey.patch() these are plain blocking sockets.
+stackweave.monkey.patch() these are plain blocking sockets.
 
 Self-contained: it stands up an echo upstream, the proxy, and a client
 as three fibers and runs the traffic through end to end.
@@ -15,12 +15,12 @@ import socket
 
 import os
 
-import runloom
+import stackweave
 
 # Free-threaded build: fan fibers across all cores (M:N scheduler).
 HUBS = os.cpu_count() or 4
 
-runloom.monkey.patch()
+stackweave.monkey.patch()
 
 def pump(src, dst):
     """Copy src -> dst until src reaches EOF, then half-close dst."""
@@ -42,7 +42,7 @@ def handle(client, upstream_addr):
     upstream = socket.socket()
     upstream.connect(upstream_addr)
     # One fiber each way; this fiber handles the return path.
-    runloom.fiber(pump, client, upstream)
+    stackweave.fiber(pump, client, upstream)
     pump(upstream, client)
     client.close()
     upstream.close()
@@ -82,16 +82,16 @@ def client(proxy_addr):
     s.close()
 
 def main():
-    up_ready = runloom.Chan(1)
-    proxy_ready = runloom.Chan(1)
+    up_ready = stackweave.Chan(1)
+    proxy_ready = stackweave.Chan(1)
 
-    runloom.fiber(echo_upstream, up_ready)
+    stackweave.fiber(echo_upstream, up_ready)
     upstream_addr = up_ready.recv()[0]
 
-    runloom.fiber(proxy, proxy_ready, upstream_addr)
+    stackweave.fiber(proxy, proxy_ready, upstream_addr)
     proxy_addr = proxy_ready.recv()[0]
 
-    runloom.fiber(client, proxy_addr)
+    stackweave.fiber(client, proxy_addr)
 
 if __name__ == "__main__":
-    runloom.run(HUBS, main)
+    stackweave.run(HUBS, main)

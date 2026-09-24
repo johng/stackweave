@@ -1,6 +1,6 @@
 # Channels
 
-runloom channels match Go's semantics:
+stackweave channels match Go's semantics:
 
 - **Buffered or unbuffered.**  `Chan(N)` for capacity N; `Chan(0)` for
   rendezvous.
@@ -11,9 +11,9 @@ runloom channels match Go's semantics:
   then returns `(None, False)`.
 
 ```python
-import runloom
+import stackweave
 
-ch = runloom.Chan(5)        # capacity 5
+ch = stackweave.Chan(5)        # capacity 5
 ```
 
 ## Send and receive
@@ -40,9 +40,9 @@ def consumer():
             return
         print("got", v)
 
-runloom.fiber(producer)
-runloom.fiber(consumer)
-runloom.run(1)
+stackweave.fiber(producer)
+stackweave.fiber(consumer)
+stackweave.run(1)
 ```
 
 Output:
@@ -74,7 +74,7 @@ if the buffer was full.  `try_recv()` returns `None` if nothing is
 ready, or `(value, ok)` if a value was available.
 
 ```python
-ch = runloom.Chan(1)
+ch = stackweave.Chan(1)
 
 ch.try_send("first")          # True  -- buffer was empty
 ch.try_send("second")         # False -- buffer is full
@@ -92,7 +92,7 @@ or "drain whatever's available without waiting."
 until the other side is ready.
 
 ```python
-ch = runloom.Chan(0)
+ch = stackweave.Chan(0)
 
 def producer():
     ch.send("hi")             # blocks here until consumer arrives
@@ -101,9 +101,9 @@ def producer():
 def consumer():
     print("got:", ch.recv())  # blocks here until producer sends
 
-runloom.fiber(producer)
-runloom.fiber(consumer)
-runloom.run(1)
+stackweave.fiber(producer)
+stackweave.fiber(consumer)
+stackweave.run(1)
 ```
 
 Output:
@@ -119,7 +119,7 @@ of a mailbox/actor.
 
 ## `select`
 
-`runloom.select(cases, default=False)` waits on multiple channels
+`stackweave.select(cases, default=False)` waits on multiple channels
 at once.  Each case is a tuple:
 
 - `("recv", ch)` -- wait until `ch` has data, then receive.
@@ -129,15 +129,15 @@ Returns `(case_index, payload)`.  For a `recv` case, `payload` is the
 `(value, ok)` tuple.  For a `send` case, `payload` is `None`.
 
 ```python
-import runloom
+import stackweave
 
-a, b = runloom.Chan(1), runloom.Chan(1)
+a, b = stackweave.Chan(1), stackweave.Chan(1)
 
 def producer():
     a.send("A")
 
 def consumer():
-    idx, payload = runloom.select([
+    idx, payload = stackweave.select([
         ("recv", a),
         ("recv", b),
     ])
@@ -146,9 +146,9 @@ def consumer():
     else:
         print("b got:", payload)
 
-runloom.fiber(producer)
-runloom.fiber(consumer)
-runloom.run(1)
+stackweave.fiber(producer)
+stackweave.fiber(consumer)
+stackweave.run(1)
 ```
 
 Output:
@@ -164,7 +164,7 @@ event `select` returns `-1` (not a tuple -- the caller's signal that
 the default branch fired).
 
 ```python
-r = runloom.select([("recv", a), ("recv", b)], default=True)
+r = stackweave.select([("recv", a), ("recv", b)], default=True)
 if r == -1:
     print("nobody ready right now")
 else:
@@ -175,7 +175,7 @@ else:
 ### Mixing send and recv
 
 ```python
-idx, _ = runloom.select([
+idx, _ = stackweave.select([
     ("send", out_ch, computed_value),
     ("recv", cancel_ch),
 ])
@@ -188,7 +188,7 @@ This is the canonical "send unless cancelled" pattern.
 ## Closing semantics in detail
 
 ```python
-ch = runloom.Chan(2)
+ch = stackweave.Chan(2)
 ch.try_send("a")
 ch.try_send("b")
 ch.close()
@@ -260,7 +260,7 @@ if not ok:
 
 ### Don't share a closed-channel object across `run()` calls
 
-`runloom.run(1)` returns when all fibers are done.  If you keep a
+`stackweave.run(1)` returns when all fibers are done.  If you keep a
 closed channel as a module-level singleton across multiple `run()`
 calls, you'll see `close on closed channel` errors on the second
 iteration.  Create channels inside the entry point.

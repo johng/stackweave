@@ -51,7 +51,7 @@ too):
     joiners park on all_tasks_done at once (the many-joiner notify_all fan-out);
   * case 1  EXTERNAL-JOIN: producers don't join; a separate joiner goroutine on
     its own hub calls q.join() once -- the lone-joiner cross-hub wake;
-  * case 2  TIMEOUT-PRESSURE: a watchdog goroutine runs runloom timeouts in
+  * case 2  TIMEOUT-PRESSURE: a watchdog goroutine runs stackweave timeouts in
     parallel with the join, churning the timer heap and adding cross-hub wake
     traffic while the joiner parks (probes a join park that competes with timer
     wakes on the same hubs), then a producer-join as in case 0.
@@ -63,7 +63,7 @@ join-return timing vs final account, producer/consumer conservation under M:N.
 import queue                      # cooperative queue.Queue after monkey.patch()
 
 import harness
-import runloom
+import stackweave
 
 # Per-round sizing.  Small enough that a round completes within a timeout-bounded
 # window (so workers manage several rounds and the conservation oracle actually
@@ -136,11 +136,11 @@ def consumer(H, q, cid, getcount, getsum, getxor, fault):
 
 
 def timer_churn(H, stop):
-    """Case 2 helper: churn the runloom timer heap with short sleeps while the
+    """Case 2 helper: churn the stackweave timer heap with short sleeps while the
     join parks, so the joiner's all_tasks_done wake competes with timer wakes on
     the shared hubs.  Stops when `stop[0]` is set."""
     while not stop[0] and H.running():
-        runloom.sleep(0.0005)
+        stackweave.sleep(0.0005)
 
 
 def run_round(H, wid, rng, state, case):
@@ -169,7 +169,7 @@ def run_round(H, wid, rng, state, case):
     # than a hand-rolled all_done flag (reading unfinished outside the queue's lock
     # would itself race the decrement).
     join_observations = []               # (unfinished, qsize) seen right after join
-    obs_lock = runloom.sync.Lock()
+    obs_lock = stackweave.sync.Lock()
 
     # WaitGroups.  `put_barrier` is tripped by every producer the instant it has
     # finished PUTTING (before it joins).  Joiners wait on it before calling
@@ -181,11 +181,11 @@ def run_round(H, wid, rng, state, case):
     # queue.Queue semantics.  Gating join() behind the put-barrier removes that
     # benign early-return so a qsize!=0 / unfinished!=0 at join-return is a real
     # lost/over-decrement.
-    put_barrier = runloom.WaitGroup()
+    put_barrier = stackweave.WaitGroup()
     put_barrier.add(PRODUCERS)
-    pwg = runloom.WaitGroup()            # producer goroutine completion
+    pwg = stackweave.WaitGroup()            # producer goroutine completion
     pwg.add(PRODUCERS)
-    cwg = runloom.WaitGroup()
+    cwg = stackweave.WaitGroup()
     cwg.add(CONSUMERS)
 
     def observe_join():
@@ -231,7 +231,7 @@ def run_round(H, wid, rng, state, case):
     # join).  It joins once ALL producers have finished putting.
     ewg = None
     if case == 1:
-        ewg = runloom.WaitGroup()
+        ewg = stackweave.WaitGroup()
         ewg.add(1)
 
         def external_joiner():

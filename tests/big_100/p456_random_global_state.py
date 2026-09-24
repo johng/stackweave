@@ -17,7 +17,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (the p321/p67 discriminator discipline):
     random.random()/getrandbits(k) hammered concurrently by many hub fibers.  Sharing
     one un-locked Random across concurrent callers is documented-unsafe usage for ANY
     GIL-off concurrency model (it reproduces under plain threads with PYTHON_GIL=0, no
-    runloom).  So we do NOT fail on the *outcome* being non-deterministic -- that is
+    stackweave).  So we do NOT fail on the *outcome* being non-deterministic -- that is
     expected.  We DO assert a closed invariant that no amount of benign racing may ever
     break: every random.random() is a float in [0.0, 1.0), and every getrandbits(k) is
     an int in [0, 2**k).  An out-of-range float, a getrandbits(k) that does NOT fit k
@@ -30,15 +30,15 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (the p321/p67 discriminator discipline):
   * LOAD-BEARING arm (single-owner reproducibility, HARD): each fiber owns a PRIVATE
     `random.Random(wid)`.  A single-owner Random has exactly one writer, so it is
     race-free by construction -- under plain threads GIL-ON or GIL-OFF, and under a
-    correct runloom, re-seeding it with the same seed ALWAYS reproduces the identical
+    correct stackweave, re-seeding it with the same seed ALWAYS reproduces the identical
     draw sequence.  The fiber generates a sequence (mixing random()/getrandbits/randint),
     INTERLEAVED with yields and sleeps so it is routinely preempted and migrated across
     hubs MID-sequence; it then re-seeds Random(wid) and MUST reproduce the byte-identical
-    sequence.  If runloom corrupts a per-fiber Python object across a hub switch (a
+    sequence.  If stackweave corrupts a per-fiber Python object across a hub switch (a
     migration that desyncs the object's C state, a preempt-mid-RMW that another hub's
     fiber then clobbers because it wrongly shares the instance) the reproduced sequence
     DIVERGES.  That divergence does NOT happen under stock single-owner use (verified
-    via a plain-threads control, GIL on AND off) -- so it is a true runloom signal, and
+    via a plain-threads control, GIL on AND off) -- so it is a true stackweave signal, and
     the program EXITS 0 when there is no bug.
 
   Why single-owner is the load-bearing oracle and the shared global is only measured:
@@ -67,7 +67,7 @@ reproduction, localizes the corruption before the oracle even fires.
 import random
 
 import harness
-import runloom
+import stackweave
 
 # Modest, correctness-probe population (this is a state-integrity probe, not a soak).
 MAX_WORKERS = 12000
@@ -176,7 +176,7 @@ def measured_global_arm(H, rng, state, slot):
             state["global_collisions"][slot & 1023] += 1
         seen[bucket] = v
         state["global_draws"][slot & 1023] += 1
-        runloom.yield_now()                     # keep the global arm genuinely concurrent
+        stackweave.yield_now()                     # keep the global arm genuinely concurrent
 
 
 def worker(H, wid, rng, state):
@@ -191,9 +191,9 @@ def worker(H, wid, rng, state):
         # (intra-hub preempt) and parks on a timer (which can resume it on ANOTHER hub) --
         # both must preserve the private Random's C state.
         if (i & 1) == 0:
-            runloom.yield_now()
+            stackweave.yield_now()
         else:
-            runloom.sleep(0.0002)
+            stackweave.sleep(0.0002)
 
     r = -1
     for _ in H.round_range():
@@ -221,7 +221,7 @@ def worker(H, wid, rng, state):
             H.fail("PER-INSTANCE NON-REPRODUCIBLE: a PRIVATE random.Random(seed={0}) "
                    "owned by ONE fiber produced DIFFERENT sequences on two re-seeded "
                    "passes (first diverge at draw {1}: {2!r} != {3!r}) -- a single-owner "
-                   "Random is race-free, so this is runloom corrupting the per-fiber "
+                   "Random is race-free, so this is stackweave corrupting the per-fiber "
                    "object's Mersenne-Twister C state across a hub migration / "
                    "preempt-mid-RMW (wid {4}, round {5})".format(
                        seed, idx, d1, d2, wid, r))
@@ -280,7 +280,7 @@ def post(H):
     if gcoll:
         H.log("note: the shared-global arm observed {0} value collisions across {1} "
               "draws ({2:.2f}%) -- expected/benign under unsynchronized sharing of one "
-              "random._inst (reproduces under plain GIL-off threads, NOT a runloom bug); "
+              "random._inst (reproduces under plain GIL-off threads, NOT a stackweave bug); "
               "every value was still a valid in-range float/int, so the shared MT state "
               "was never corrupted".format(gcoll, gdraws, coll_pct))
 
@@ -297,7 +297,7 @@ if __name__ == "__main__":
                  "un-locked random.Random (a Mersenne-Twister 624-word state); the "
                  "LOAD-BEARING oracle is single-owner reproducibility -- a PRIVATE "
                  "random.Random(wid) must reproduce its draw sequence after re-seed "
-                 "across preempt/migration (a desync indicts runloom).  The shared "
+                 "across preempt/migration (a desync indicts stackweave).  The shared "
                  "global random.*() under concurrency is MEASURED: every value must be "
                  "a valid in-range float/getrandbits-k-bit int (an impossible value = "
                  "corrupted MT state, a hard fail), but non-reproducibility is "

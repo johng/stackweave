@@ -1,6 +1,6 @@
 # run: timeout 120 .venv/bin/python r6_close_park_window.py 8000   (free-threaded build, default env)
 import os, socket, sys, threading, time
-import runloom, runloom_c as rc
+import stackweave, stackweave_c as rc
 N = int(sys.argv[1]) if len(sys.argv) > 1 else 4000
 progress = {"i": 0, "outcomes": {}}
 def _port(lst):

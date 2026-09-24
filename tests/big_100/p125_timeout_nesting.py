@@ -32,8 +32,8 @@ Stresses: context nesting, deadline vs explicit-cancel reason propagation,
 the done-channel cascade, no upward leak.
 """
 import harness
-import runloom
-import runloom.context as rctx
+import stackweave
+import stackweave.context as rctx
 
 CANCELED = rctx.CANCELED
 DEADLINE_EXCEEDED = rctx.DEADLINE_EXCEEDED
@@ -81,7 +81,7 @@ def do_outer_first(H, rng, counts, slot):
     try:
         # Wait on the OUTER done channel: outer's deadline fires it first.
         outer.done.recv()
-        runloom.sleep(0.008)                # let the cascade settle all levels
+        stackweave.sleep(0.008)                # let the cascade settle all levels
         ierr = inner.err()
         merr = mid.err()
         oerr = outer.err()
@@ -112,7 +112,7 @@ def do_explicit_cancel(H, rng, counts, slot):
     try:
         mcancel()                           # explicit cancel of the middle node
         inner.done.recv()                   # cascade closes inner.done
-        runloom.sleep(0.003)
+        stackweave.sleep(0.003)
         ierr = inner.err()
         merr = mid.err()
         oerr = outer.err()

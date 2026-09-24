@@ -20,7 +20,7 @@ import _thread as _real_thread       # captured before monkey.patch()
 
 import harness
 import netutil
-import runloom
+import stackweave
 
 REAL_SLEEP = _time.sleep
 
@@ -81,7 +81,7 @@ def producer(H, wid, rng, pairs):
         except OSError:
             break
         sent += 1
-        runloom.sleep(rng.uniform(0.001, 0.006))
+        stackweave.sleep(rng.uniform(0.001, 0.006))
     H.sent_counts[wid >> 1] = sent
 
 

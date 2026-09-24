@@ -1,4 +1,4 @@
-"""runloom.tools.mn_stress -- seeded randomized stress/fuzz driver for the
+"""stackweave.tools.mn_stress -- seeded randomized stress/fuzz driver for the
 M:N (multi-hub, work-stealing) scheduler.
 
 This targets the path the rest of the Python test-suite never touches:
@@ -17,7 +17,7 @@ Every run is a seeded, reproducible "token conservation" experiment:
     report partial sums.  INVARIANT: every token is received exactly once
     -- total count and checksum must match what was sent.
 
-Between iterations runloom_c._self_check() must report zero violations.
+Between iterations stackweave_c._self_check() must report zero violations.
 The whole thing runs under tools.watchdog.run_guarded, so a hang is
 caught, fully dumped, and tagged with the reproducing --seed instead of
 wedging forever.
@@ -37,7 +37,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import runloom_c
+import stackweave_c
 from tools.watchdog import run_guarded
 
 
@@ -60,9 +60,9 @@ def _one_experiment(rng, stable=False):
     per_prod = rng.randint(5, 40)
 
     # Pool of channels with assorted buffering (0 = unbuffered handoff).
-    chans = [runloom_c.Chan(rng.choice([0, 0, 1, 2, 8])) for _ in range(nchan)]
-    prod_done = runloom_c.Chan(nprod)          # producers report completion
-    results = runloom_c.Chan(ncons)            # consumers report (count, sum)
+    chans = [stackweave_c.Chan(rng.choice([0, 0, 1, 2, 8])) for _ in range(nchan)]
+    prod_done = stackweave_c.Chan(nprod)          # producers report completion
+    results = stackweave_c.Chan(ncons)            # consumers report (count, sum)
 
     sent_count = nprod * per_prod
     # token value = prod_id * 1000 + seq ; checksum is deterministic
@@ -78,7 +78,7 @@ def _one_experiment(rng, stable=False):
                 ch = chans[(pid + seq) % nchan]
                 ch.send(token)
                 if (seq & 7) == 0:
-                    runloom_c.sched_yield_classic()
+                    stackweave_c.sched_yield_classic()
             prod_done.send(pid)
         return run
 
@@ -112,7 +112,7 @@ def _one_experiment(rng, stable=False):
                 cases = [("recv", chans[i]) for i in range(nchan) if not closed[i]]
                 if not cases:
                     break
-                idx, (val, ok) = runloom_c.select(cases)
+                idx, (val, ok) = stackweave_c.select(cases)
                 # Map idx back to the channel it fired on.
                 live = [i for i in range(nchan) if not closed[i]]
                 ci = live[idx]
@@ -124,17 +124,17 @@ def _one_experiment(rng, stable=False):
             results.send((count, total))
         return run
 
-    runloom_c.mn_init(nhubs)
+    stackweave_c.mn_init(nhubs)
     # Spread consumers between the two styles (stable => range only).
     for cid in range(ncons):
         if stable or (cid % 2 == 0 and nchan > 0):
-            runloom_c.mn_fiber(consumer_range(cid))
+            stackweave_c.mn_fiber(consumer_range(cid))
         else:
-            runloom_c.mn_fiber(consumer_select(cid))
+            stackweave_c.mn_fiber(consumer_select(cid))
     for pid in range(nprod):
-        runloom_c.mn_fiber(producer(pid))
-    runloom_c.mn_fiber(closer)
-    runloom_c.mn_run()
+        stackweave_c.mn_fiber(producer(pid))
+    stackweave_c.mn_fiber(closer)
+    stackweave_c.mn_run()
 
     # Collect consumer reports (buffered; drained from the main thread).
     recv_count = 0
@@ -148,7 +148,7 @@ def _one_experiment(rng, stable=False):
         recv_count += c
         recv_sum += s
         drained += 1
-    runloom_c.mn_fini()
+    stackweave_c.mn_fini()
     return sent_count, sent_sum, recv_count, recv_sum, dict(
         nhubs=nhubs, nprod=nprod, ncons=ncons, nchan=nchan, per_prod=per_prod)
 
@@ -184,11 +184,11 @@ def run(iters=200, hubs=None, seed=None, timeout=20.0, verbose=False, stable=Fal
                   .format(i, iseed, params, sc, ssum, rc, rsum))
             return 1
 
-        v = runloom_c._self_check(0)
+        v = stackweave_c._self_check(0)
         if v != 0:
             print("\nSELF_CHECK VIOLATION at iter={0} seed={1}: {2} violations"
                   .format(i, iseed, v))
-            runloom_c._self_check(1)
+            stackweave_c._self_check(1)
             return 1
 
         if verbose or (i % 25 == 0):

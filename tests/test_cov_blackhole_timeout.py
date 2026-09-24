@@ -16,7 +16,7 @@ timer, not by any peer event):
   open (no FIN).  The reader, having consumed the data, parks with a socket
   timeout; only the netpoll timer can release it.
 
-* ``test_netns_blackhole_reader_times_out`` -- OPT-IN (``RUNLOOM_NETNS_TESTS=1``),
+* ``test_netns_blackhole_reader_times_out`` -- OPT-IN (``STACKWEAVE_NETNS_TESTS=1``),
   the stronger environmental realization.  Inside an isolated network namespace
   (``unshare -rn``, host firewall untouched) the loopback is blackholed with
   ``tc netem loss 100%`` *after* a byte flows, so even the server's FIN is
@@ -36,15 +36,15 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(REPO, "src")
 PY = sys.executable
 
-# Each scenario runs runloom.run() in its own subprocess (a clean runtime per
+# Each scenario runs stackweave.run() in its own subprocess (a clean runtime per
 # case, matching the one-run()-per-process model of the isolated runner).  The
 # BLACKHOLE env toggle selects the dead-but-established variant (bring lo up +
 # netem 100% loss + server close) over the silent-hold variant.
 WORKER = textwrap.dedent("""\
     import os, sys, subprocess, time
     sys.path.insert(0, {src!r})
-    import runloom, runloom_c
-    runloom.monkey.patch()
+    import stackweave, stackweave_c
+    stackweave.monkey.patch()
     import socket
 
     BLACKHOLE = os.environ.get("PG_BLACKHOLE") == "1"
@@ -78,7 +78,7 @@ WORKER = textwrap.dedent("""\
             out["r"] = type(e).__name__
         out["dt"] = time.monotonic() - t0
 
-    runloom.run(2, main_fn=lambda: runloom.fiber(worker))
+    stackweave.run(2, main_fn=lambda: stackweave.fiber(worker))
     print("RESULT", out.get("r"), "%.2f" % out.get("dt", -1))
     """).format(src=SRC)
 
@@ -112,8 +112,8 @@ class TestBlackholeTimeout(unittest.TestCase):
     def test_netns_blackhole_reader_times_out(self):
         """Opt-in: real blackhole (netem 100% loss) drops even the FIN; only the
         netpoll timer can free the reader.  A TIMEOUT (not EOF) is the proof."""
-        if os.environ.get("RUNLOOM_NETNS_TESTS") != "1":
-            self.skipTest("netns blackhole is opt-in: set RUNLOOM_NETNS_TESTS=1")
+        if os.environ.get("STACKWEAVE_NETNS_TESTS") != "1":
+            self.skipTest("netns blackhole is opt-in: set STACKWEAVE_NETNS_TESTS=1")
         for tool in ("unshare", "tc", "ip"):
             if subprocess.run(["sh", "-c", "command -v " + tool],
                               capture_output=True).returncode != 0:

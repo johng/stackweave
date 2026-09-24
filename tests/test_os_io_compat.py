@@ -1,5 +1,5 @@
 """Cooperative vectored os I/O (os.readv / os.writev) and the public
-runloom.monkey.offload() escape hatch.
+stackweave.monkey.offload() escape hatch.
 
 os.readv/os.writev are the vectored analogues of os.read/os.write: on a
 pollable fd (pipe/socket) they park on wait_fd; on a regular file they offload
@@ -7,16 +7,16 @@ to the backend pool.  Adapted from CPython Lib/test/test_os.py
 (ReadvWritevTests / test_readv / test_writev).
 
 offload() runs a blocking callable on the backend pool, parking the fiber
--- the sanctioned escape hatch for blocking calls runloom can't transparently make
+-- the sanctioned escape hatch for blocking calls stackweave can't transparently make
 cooperative (buffered FileIO on slow media, C DB drivers, CPU-bound work).
 """
 import os
 import time
 import unittest
 
-import runloom
-import runloom.monkey
-import runloom_c
+import stackweave
+import stackweave.monkey
+import stackweave_c
 
 
 def _drive(fn):
@@ -28,19 +28,19 @@ def _drive(fn):
         except BaseException as e:   # noqa: BLE001
             box[1] = e
 
-    runloom_c.fiber(runner)
-    runloom_c.run()
+    stackweave_c.fiber(runner)
+    stackweave_c.run()
     if box[1] is not None:
         raise box[1]
     return box[0]
 
 
 def setUpModule():
-    runloom.monkey.patch()
+    stackweave.monkey.patch()
 
 
 def tearDownModule():
-    runloom.monkey.unpatch()
+    stackweave.monkey.unpatch()
 
 
 @unittest.skipUnless(hasattr(os, "writev") and hasattr(os, "readv"),
@@ -70,15 +70,15 @@ class TestVectoredIO(unittest.TestCase):
             def ticker():
                 while not stop["v"]:
                     ticks.append(1)
-                    runloom.sleep(0.003)
+                    stackweave.sleep(0.003)
 
             def sender():
                 for _ in range(6):
-                    runloom.sleep(0.004)        # ~24 ms before data lands
+                    stackweave.sleep(0.004)        # ~24 ms before data lands
                 os.writev(w, [b"AB", b"CD"])
 
-            runloom_c.fiber(ticker)
-            runloom_c.fiber(sender)
+            stackweave_c.fiber(ticker)
+            stackweave_c.fiber(sender)
             bufs = [bytearray(2), bytearray(2)]
             n = os.readv(r, bufs)            # blocks until the sender writes
             stop["v"] = True
@@ -125,10 +125,10 @@ class TestOffload(unittest.TestCase):
             def ticker():
                 while not stop["v"]:
                     ticks.append(1)
-                    runloom.sleep(0.003)
+                    stackweave.sleep(0.003)
 
-            runloom_c.fiber(ticker)
-            val = runloom.monkey.offload(slow_double, 21)
+            stackweave_c.fiber(ticker)
+            val = stackweave.monkey.offload(slow_double, 21)
             stop["v"] = True
             return val, len(ticks)
         val, ticks = _drive(body)
@@ -141,7 +141,7 @@ class TestOffload(unittest.TestCase):
 
         def body():
             try:
-                runloom.monkey.offload(boom)
+                stackweave.monkey.offload(boom)
             except ValueError as e:
                 return str(e)
             return None

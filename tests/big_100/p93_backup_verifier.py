@@ -8,7 +8,7 @@ mismatch (none should occur, since the tree is static).
 
 Stresses: CPU (hashing) + I/O (reads) + compression + cooperative cancellation.
 
-SCALE NOTE (memory ceiling, NOT a runloom bug): every func is a long-lived goroutine that PARKS on the channel/work and all resume ~simultaneously at teardown (close wakes every parked waiter -- chan_ops.c.inc). At 1M on a 16 GB box that simultaneous-resume working set exceeds RAM even with macOS compression -> jetsam SIGKILL (137). Verified mem-bound: PASSES at 400k, jetsam at 1M; close correctly wakes all waiters (not a lost-wakeup). Cap funcs to a memory- and drain-budget-safe level.
+SCALE NOTE (memory ceiling, NOT a stackweave bug): every func is a long-lived goroutine that PARKS on the channel/work and all resume ~simultaneously at teardown (close wakes every parked waiter -- chan_ops.c.inc). At 1M on a 16 GB box that simultaneous-resume working set exceeds RAM even with macOS compression -> jetsam SIGKILL (137). Verified mem-bound: PASSES at 400k, jetsam at 1M; close correctly wakes all waiters (not a lost-wakeup). Cap funcs to a memory- and drain-budget-safe level.
 """
 import gzip
 import hashlib

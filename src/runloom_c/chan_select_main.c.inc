@@ -32,7 +32,7 @@ select_retry:
     if (chan_no_goroutine()) {
         PyErr_SetString(PyExc_RuntimeError,
                         "channel select would block, but no goroutine is running "
-                        "(blocking channel ops require a runloom goroutine context)");
+                        "(blocking channel ops require a stackweave goroutine context)");
         return -2;
     }
 

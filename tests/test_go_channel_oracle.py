@@ -1,10 +1,10 @@
-"""Differential channel/select conformance: runloom vs COMPILED Go (item 8, Go half).
+"""Differential channel/select conformance: stackweave vs COMPILED Go (item 8, Go half).
 
-runloom's channels promise Go semantics.  The oracle for that promise is the Go
+stackweave's channels promise Go semantics.  The oracle for that promise is the Go
 compiler itself, not a model: each scenario is written twice -- once in Go, once
-in runloom -- and reduced to the SAME normalized outcome string (delivered
+in stackweave -- and reduced to the SAME normalized outcome string (delivered
 values with their comma-ok flags, close behaviour, panic/raise, fan-in sums).
-A divergence is a real semantics bug in runloom's chan/select, surfaced against
+A divergence is a real semantics bug in stackweave's chan/select, surfaced against
 ground truth instead of via a downstream deadlock.
 
 Covers the deterministic core (bugs in the chan/select/park class): buffered
@@ -34,7 +34,7 @@ pytestmark = pytest.mark.skipif(GO is None, reason="Go toolchain not installed")
 # each side so a conforming runtime prints byte-identical tails.
 SCENARIOS = {
     # buffered cap-3: fill, close, recv 5x -> 3 values ok, then zero+notok twice.
-    # Normalize the closed-zero to "Z" so Go's 0 and runloom's None agree.
+    # Normalize the closed-zero to "Z" so Go's 0 and stackweave's None agree.
     "buffered_drain_then_closed": (
         r'''
 package main
@@ -104,7 +104,7 @@ def body():
 rc.fiber(body); rc.run()
 '''),
 
-    # send on a closed channel: Go panics; runloom must raise.  Both normalize to
+    # send on a closed channel: Go panics; stackweave must raise.  Both normalize to
     # "send-on-closed-error".
     "send_on_closed": (
         r'''
@@ -187,7 +187,7 @@ def go_outcome(src, tmp):
 
 
 def runloom_outcome(body):
-    script = "import runloom_c as rc, runloom\n" + body
+    script = "import stackweave_c as rc, stackweave\n" + body
     p = subprocess.run([PY, "-c", script], env=ENV, capture_output=True,
                        text=True, timeout=45)
     return extract(p.stdout), p
@@ -212,8 +212,8 @@ def test_go_conformance(name):
     with tempfile.TemporaryDirectory() as tmp:
         g, r, gp, rp = run_scenario(name, tmp)
     assert g is not None, "Go produced no OUTCOME: %s" % gp.stderr[-400:]
-    assert r is not None, "runloom produced no OUTCOME: %s" % rp.stderr[-400:]
-    assert g == r, ("scenario %r diverges from Go:\n  go     : %r\n  runloom: %r"
+    assert r is not None, "stackweave produced no OUTCOME: %s" % rp.stderr[-400:]
+    assert g == r, ("scenario %r diverges from Go:\n  go     : %r\n  stackweave: %r"
                     % (name, g, r))
 
 
@@ -226,7 +226,7 @@ def main():
             print("  %-28s %s" % (name, "OK" if ok else "DIVERGES"))
             if not ok:
                 print("      go     : %r" % g)
-                print("      runloom: %r" % r)
+                print("      stackweave: %r" % r)
                 fails.append(name)
     if fails:
         print("GO-DIFFERENTIAL FAIL: %s" % ", ".join(fails))

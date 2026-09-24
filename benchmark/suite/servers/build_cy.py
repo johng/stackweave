@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile handler_cy.pyx -> handler_cy*.so against the runloom_c C-API header.
+"""Compile handler_cy.pyx -> handler_cy*.so against the stackweave_c C-API header.
 
 Run with the free-threaded interpreter:
     PYTHONPATH=<repo>/src python3.13t build_cy.py build_ext --inplace
@@ -16,18 +16,18 @@ from Cython.Build import cythonize
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))  # servers->suite->benchmark->repo
-INC = os.path.join(REPO, "src", "runloom_c")
+INC = os.path.join(REPO, "src", "stackweave_c")
 
 if not os.path.exists(os.path.join(INC, "runloom_tcp_capi.h")):
-    sys.exit("cannot find runloom_tcp_capi.h under %s -- build runloom_c first" % INC)
+    sys.exit("cannot find runloom_tcp_capi.h under %s -- build stackweave_c first" % INC)
 
 ext = Extension(
     "handler_cy",
     sources=[os.path.join(HERE, "handler_cy.pyx")],
     include_dirs=[INC],
     extra_compile_args=["-O3", "-fno-strict-aliasing", "-g"],
-    # No libraries: the C functions are reached through the runloom_c.__tcp_capi__
-    # capsule at import time, so handler_cy.so has no undefined runloom symbol.
+    # No libraries: the C functions are reached through the stackweave_c.__tcp_capi__
+    # capsule at import time, so handler_cy.so has no undefined stackweave symbol.
 )
 
 if len(sys.argv) == 1:

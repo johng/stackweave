@@ -60,7 +60,7 @@ localizes the lost count before the conservation sum even closes.
 import collections
 
 import harness
-import runloom
+import stackweave
 
 # Finite sentinel UNIVERSE: a fixed, recognizable set of keys.  A key the shared
 # Counter or most_common() ever yields that is NOT in this set is a torn/corrupted
@@ -135,22 +135,22 @@ def feed_shared(shared, case, keys_list, counts, lock):
     if case == CASE_UPDATE_LIST:
         with lock:
             shared.update(keys_list)
-            runloom.yield_now()            # reader heapifies during our RMW
+            stackweave.yield_now()            # reader heapifies during our RMW
     elif case == CASE_UPDATE_DICT:
         with lock:
             shared.update(dict(counts))
-            runloom.yield_now()
+            stackweave.yield_now()
     elif case == CASE_UPDATE_CTR:
         donor = collections.Counter(counts)
         with lock:
             shared.update(donor)
-            runloom.yield_now()
+            stackweave.yield_now()
     elif case == CASE_IADD:
         donor = collections.Counter(counts)
         with lock:
             # collections.Counter.__iadd__ is the C in-place add over the live dict.
             shared.update(donor)           # net effect: +counts (see note below)
-            runloom.yield_now()
+            stackweave.yield_now()
         # NOTE: we route the actual mutation through update() here rather than the
         # `shared += donor` rebinding, because `+=` on a Counter REBINDS the local
         # name to a NEW object (Counter.__iadd__ returns a possibly-new Counter and
@@ -169,9 +169,9 @@ def feed_shared(shared, case, keys_list, counts, lock):
             # only if BOTH the subtract and the re-add landed every unit; a dropped
             # decrement or increment shows up as a per-key mismatch.
             shared.subtract(donor)
-            runloom.yield_now()
+            stackweave.yield_now()
             shared.update(donor)
-            runloom.yield_now()
+            stackweave.yield_now()
             shared.update(donor)           # net: -1 +1 +1 == +1 application
 
 
@@ -217,7 +217,7 @@ def reader(H, shared, done_ch):
             pass
         if done_ch.try_recv() is not None:
             break
-        runloom.yield_now()
+        stackweave.yield_now()
     # Touch saw so it isn't optimized to nothing; also a final crash-free walk.
     if saw < 0:                            # never true; keeps `saw` live
         H.fail("reader saw negative")
@@ -245,10 +245,10 @@ def run_round_impl(H, wid, rng, slot, state):
 
     privates = [collections.Counter() for _ in range(PRODUCERS)]
 
-    done_ch = runloom.Chan(1)
-    prod_wg = runloom.WaitGroup()
+    done_ch = stackweave.Chan(1)
+    prod_wg = stackweave.WaitGroup()
     prod_wg.add(PRODUCERS)
-    reader_wg = runloom.WaitGroup()
+    reader_wg = stackweave.WaitGroup()
     reader_wg.add(1)
 
     def run_producer(idx):
@@ -343,12 +343,12 @@ def worker(H, wid, rng, state):
 
 
 def setup(H):
-    # lock is the cooperative runloom lock used to serialize WRITES to the shared
+    # lock is the cooperative stackweave lock used to serialize WRITES to the shared
     # Counter (Counter is documented as NOT thread-safe; serializing writes makes
     # the oracle a CONSERVATION test, while the reader still races without it).
     # Built here, inside the root, where cooperative primitives are valid.
     H.state = {
-        "lock": runloom.sync.Lock(),
+        "lock": stackweave.sync.Lock(),
         "offered": [0] * H.funcs,          # ONE slot per worker (race-free; wid-indexed)
     }
 

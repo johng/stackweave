@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# check_dbg_netpoll.sh -- run the netpoll/mn/aio suite with the RUNLOOM_DBG_NETPOLL
+# check_dbg_netpoll.sh -- run the netpoll/mn/aio suite with the STACKWEAVE_DBG_NETPOLL
 # stale-arm tripwire armed everywhere (item 7, increment 2).
 #
 # The tripwire validates the arm-cache-vs-kernel skip path INLINE (one
@@ -23,8 +23,8 @@ TESTS="${DBGNP_TESTS:-test_tcpconn test_tcp_scenarios test_aio test_aio_net \
   test_monkey_offload test_adv_tcpconn test_netpoll_arming}"
 TESTS="$(for t in $TESTS; do printf '%s.py ' "$t"; done)"
 
-echo "== dbg-netpoll: run broad suite with RUNLOOM_DBG_NETPOLL=1 (inline stale-arm check) =="
-RUNLOOM_DBG_NETPOLL=1 PYTHON_GIL=0 PYTHONPATH=src "$PY" tests/run_isolated.py \
+echo "== dbg-netpoll: run broad suite with STACKWEAVE_DBG_NETPOLL=1 (inline stale-arm check) =="
+STACKWEAVE_DBG_NETPOLL=1 PYTHON_GIL=0 PYTHONPATH=src "$PY" tests/run_isolated.py \
     -j"${DBGNP_JOBS:-6}" $TESTS
 rc=$?
 if [ "$rc" = 0 ]; then

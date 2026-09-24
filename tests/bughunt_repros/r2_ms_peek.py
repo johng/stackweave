@@ -1,18 +1,18 @@
-"""R2: RUNLOOM_TCPCONN_IOURING=1: once a plain recv() has armed the multishot
+"""R2: STACKWEAVE_TCPCONN_IOURING=1: once a plain recv() has armed the multishot
 recv on a conn, a later recv(n, MSG_PEEK) (flags != 0) goes down the
 single-shot IORING_OP_RECV path while the multishot stays armed and consumes
 incoming data into its private buffer queue -> the PEEK never sees data and
 the fiber hangs (or data is reordered).
 
-Run with: RUNLOOM_TCPCONN_IOURING=1 python r2_ms_peek.py
+Run with: STACKWEAVE_TCPCONN_IOURING=1 python r2_ms_peek.py
 Expected (stdlib semantics): peek returns b"second" quickly.
 """
 import os
 import socket
 import sys
 
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 
 
 def _port(lst):
@@ -33,15 +33,15 @@ def main():
     def server():
         conn = lst.accept()
         conn.send_all(b"first!")
-        runloom.sleep(0.3)
+        stackweave.sleep(0.3)
         conn.send_all(b"second")
-        runloom.sleep(3.0)          # keep conn open while client peeks
+        stackweave.sleep(3.0)          # keep conn open while client peeks
         conn.close()
 
     def client():
         c = rc.TCPConn.connect("127.0.0.1", port)
         out["first"] = c.recv(6)          # arms the multishot under IOURING=1
-        runloom.sleep(0.8)                # let "second" arrive (and be eaten by ms)
+        stackweave.sleep(0.8)                # let "second" arrive (and be eaten by ms)
         out["peek"] = c.recv(6, socket.MSG_PEEK)
         out["second"] = c.recv(6)
         c.close(); lst.close()

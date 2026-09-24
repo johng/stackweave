@@ -10,14 +10,14 @@ events).  If you feed a document in 2-3 slices with a yield BETWEEN feed() calls
 sibling fiber runs on the same hub in the gap.  Were any of expat's per-parse state,
 or the TreeBuilder's element-stack cursor, NOT isolated per fiber (e.g. a shared
 scratch buffer, a thread-ID-keyed parser handle, or a contextvar-bound builder that
-leaked across the runloom hub switch), a sibling's start/end events could be spliced
+leaked across the stackweave hub switch), a sibling's start/end events could be spliced
 onto THIS fiber's half-built tree -- a cross-tree node graft.
 
 WHERE M:N COULD BREAK IT (the gap this program probes).  Each fiber owns its OWN
 ET.XMLParser (hence its own expat parser handle and its own TreeBuilder + element
 stack) -- a single-owner object, never shared.  It feeds a document it built itself,
 one whose EVERY element carries this fiber's `wid` as an attribute, in equal chunks
-with runloom.yield_now() between each feed() so a sibling reliably interleaves at the
+with stackweave.yield_now() between each feed() so a sibling reliably interleaves at the
 exact moment the TreeBuilder's element stack is non-empty (parent open, mid-parse).
 Under a CORRECT runtime the parser is fully fiber-local: expat state and the element
 stack belong to this fiber alone, the yield merely parks it, and the finished tree is
@@ -55,7 +55,7 @@ the known input.  Two conservation laws, both fail-fast, on a SINGLE-OWNER parse
   These oracles are single-owner (each fiber's parser, TreeBuilder, and both trees
   are fiber-local, never shared), so on a correct runtime they PASS (program exits 0).
   A shared parser or a shared tree would race exactly like shared-across-threads --
-  documented Python behavior, NOT a runloom bug -- so nothing here is shared.
+  documented Python behavior, NOT a stackweave bug -- so nothing here is shared.
 
 ORACLES:
   * LOAD-BEARING -- STRUCTURAL + ROUND-TRIP CONSERVATION (worker, HARD, fail-fast).
@@ -82,7 +82,7 @@ structural flatten() comparison even fires.
 import xml.etree.ElementTree as ET
 
 import harness
-import runloom
+import stackweave
 
 
 # Sustained parses per worker, bounded by H.running().  The mid-feed splice hazard
@@ -140,7 +140,7 @@ def chunked_parse(data, nchunks):
     while pos < n:
         parser.feed(data[pos:pos + step])
         pos += step
-        runloom.yield_now()               # sibling runs while our element stack is open
+        stackweave.yield_now()               # sibling runs while our element stack is open
     return parser.close()
 
 

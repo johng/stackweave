@@ -10,21 +10,21 @@ Stresses: frame chain / cframe state, traceback construction after yields.
 import traceback
 
 import harness
-import runloom
+import stackweave
 
 
 def level3(H):
-    runloom.yield_now()
+    stackweave.yield_now()
     raise ValueError("deep")
 
 
 def level2(H):
-    runloom.yield_now()
+    stackweave.yield_now()
     level3(H)
 
 
 def level1(H):
-    runloom.yield_now()
+    stackweave.yield_now()
     level2(H)
 
 

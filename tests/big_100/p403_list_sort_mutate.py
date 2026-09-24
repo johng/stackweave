@@ -71,7 +71,7 @@ conservation of slots under M:N.
 import random
 
 import harness
-import runloom
+import stackweave
 
 # Finite sentinel UNIVERSE.  A value NOT in here, yielded by any walk of the list,
 # is a torn / freed / use-after-realloc slot -- a hard fault.  Made large enough
@@ -151,7 +151,7 @@ def run_sorter(H, wid, lst, gate, rng, reverse, counts, slot):
                        type(exc).__name__, exc))
             return
         rev = not rev
-        runloom.yield_now()
+        stackweave.yield_now()
 
 
 def run_mutator(H, wid, lst, gate, mrng, counts, slot):
@@ -196,7 +196,7 @@ def run_mutator(H, wid, lst, gate, mrng, counts, slot):
                    "popping in-UNIVERSE values must not fault".format(
                        type(exc).__name__, exc))
             return
-        runloom.yield_now()
+        stackweave.yield_now()
     if did:
         counts["mutated"][slot] += 1
 
@@ -220,7 +220,7 @@ def run_iterator(H, wid, lst, gate, counts, slot):
                 if not parked and seen >= 2:
                     # Park with the iterator's internal ob_item index LIVE.
                     parked = True
-                    runloom.yield_now()
+                    stackweave.yield_now()
             counts["iter_clean"][slot] += 1
         except RuntimeError as exc:
             if ITER_RACE_MSG in str(exc):
@@ -234,7 +234,7 @@ def run_iterator(H, wid, lst, gate, counts, slot):
                    "'changed size during iteration' outcome (M:N list "
                    "corruption)".format(type(exc).__name__, exc))
             return
-        runloom.yield_now()
+        stackweave.yield_now()
 
 
 def quiescent_check(H, wid, lst, counts, slot):
@@ -283,9 +283,9 @@ def worker(H, wid, rng, state):
         # gate: the sorter trips it the instant before its first sort; the mutator
         # and iterator wait on it, so their REPEAT loops begin overlapping the sort
         # loop from its start.
-        gate = runloom.WaitGroup()
+        gate = stackweave.WaitGroup()
         gate.add(1)
-        wg = runloom.WaitGroup()
+        wg = stackweave.WaitGroup()
         wg.add(3)
         mseed = rng.getrandbits(48)
 
@@ -308,7 +308,7 @@ def worker(H, wid, rng, state):
                 # of where the walk lands relative to a sort restore); a tight round
                 # walks immediately.
                 if not tight:
-                    runloom.yield_now()
+                    stackweave.yield_now()
                 run_iterator(H, wid, lst, gate, counts, slot)
             finally:
                 wg.done()

@@ -350,7 +350,7 @@ RUNLOOM_INLINE void runloom_winsock_init(void) {
 RUNLOOM_INLINE void runloom_timer_res_init(void) {
     static volatile LONG done = 0;
     if (InterlockedCompareExchange(&done, 1, 0) == 0) {
-        const char *res = getenv("RUNLOOM_WIN_TIMER_RES");
+        const char *res = getenv("STACKWEAVE_WIN_TIMER_RES");
         if (res == NULL || strcmp(res, "0") != 0) {
             timeBeginPeriod(1);
         }

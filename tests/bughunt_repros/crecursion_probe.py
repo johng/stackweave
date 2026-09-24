@@ -1,7 +1,7 @@
 """Deep C recursion (repr of nested lists) inside a fiber.
 Stock Python raises RecursionError; a 512KiB fiber stack may guard-page SEGV."""
 import sys
-import runloom
+import stackweave
 
 mode = sys.argv[1] if len(sys.argv) > 1 else "fiber"
 HUBS = int(sys.argv[2]) if len(sys.argv) > 2 else 1
@@ -29,6 +29,6 @@ else:
                 print("fiber: repr survived")
             except RecursionError:
                 print("fiber: RecursionError (clean)")
-        runloom.fiber(f)
-    runloom.run(HUBS, main)
+        stackweave.fiber(f)
+    stackweave.run(HUBS, main)
     print("run returned")

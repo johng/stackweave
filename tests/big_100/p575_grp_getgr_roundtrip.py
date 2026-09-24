@@ -31,13 +31,13 @@ single-owner test, not a racy probe:
     then re-reads the SAME object's fields and asserts they are unchanged -- and a
     FRESH getgrnam(name) taken after the yield must still equal the pre-yield
     snapshot.  A value that changed across the yield, or a fresh lookup that came
-    back as another fiber's group, is a runloom object/frame-isolation desync or a
+    back as another fiber's group, is a stackweave object/frame-isolation desync or a
     cross-fiber leak of the reentrant lookup buffer.
 
 WHERE M:N COULD BREAK IT (the gap probed).  getgrnam_r / getgrgid_r run inside
 Py_BEGIN_ALLOW_THREADS on the hub's OS thread; the fiber parks across the
-runloom.yield_now() at the hazard boundary and may resume on a DIFFERENT hub.  If
-runloom leaked the reentrant call's buffer across fibers, corrupted a saved
+stackweave.yield_now() at the hazard boundary and may resume on a DIFFERENT hub.  If
+stackweave leaked the reentrant call's buffer across fibers, corrupted a saved
 register holding the struct_group pointer across the hub migration, or lost the
 wakeup so the fiber never re-read, the fail-fast oracle catches it.  On a correct
 runtime every law holds and the program exits 0.
@@ -64,7 +64,7 @@ inside Py_BEGIN_ALLOW_THREADS, struct_group structseq field access across a yiel
 import grp
 
 import harness
-import runloom
+import stackweave
 
 
 def snapshot(name):
@@ -112,14 +112,14 @@ def check_entry(H, wid, name, expected):
 
     # ---- hazard boundary: park + likely resume on a different hub while a
     # sibling does its own conflicting getgrnam/getgrgid on another hub ----
-    runloom.yield_now()
+    stackweave.yield_now()
 
     # Single-owner stability: the SAME object's fields must be unchanged.
     if g.gr_name != pre_name or g.gr_passwd != pre_pw or g.gr_gid != pre_gid \
             or list(g.gr_mem) != pre_mem:
         H.fail("struct_group for {0!r} MUTATED across a yield: "
                "before=({1!r},{2!r},{3!r},{4!r}) after=({5!r},{6!r},{7!r},{8!r}) "
-               "-- single-owner object changed under hub migration (runloom "
+               "-- single-owner object changed under hub migration (stackweave "
                "isolation desync)".format(
                    name, pre_name, pre_pw, pre_gid, pre_mem,
                    g.gr_name, g.gr_passwd, g.gr_gid, list(g.gr_mem)))

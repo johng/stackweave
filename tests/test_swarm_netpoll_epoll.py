@@ -10,7 +10,7 @@ actually break a lock-free netpoll under free-threaded 3.13t:
 
   - the process-global arm-cache + fd-number-reuse poison, exercised through BOTH
     a raw close-without-unregister AND a GC'd-socket close, with the
-    RUNLOOM_DBG_NETPOLL tripwire self-heal asserted in a subprocess;
+    STACKWEAVE_DBG_NETPOLL tripwire self-heal asserted in a subprocess;
   - EPOLLERR/EPOLLHUP folding into BOTH directions (a peer RST must wake a WRITE
     waiter, a half-close must wake a READ waiter) -- not just "something woke";
   - register MOD-widen on a single live fd in BOTH orders (READ-then-WRITE and
@@ -31,7 +31,7 @@ actually break a lock-free netpoll under free-threaded 3.13t:
     which must raise out of the cooperative call through that fiber's stack;
   - slow-return: a never-ready park must not starve siblings (assert_faster_than);
   - the io_uring global-ring eventfd drain under CONCURRENT file I/O and under
-    RUNLOOM_IOURING_LOOP=1 (subprocess);
+    STACKWEAVE_IOURING_LOOP=1 (subprocess);
   - TCPConn connection-refused / EOF / large framed transfer / many concurrent
     connections, single-thread AND M:N; serve() M:N echo + its single-thread
     refusal.
@@ -50,8 +50,8 @@ import time
 
 import pytest
 
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 from adv_util import (hang_guard, assert_faster_than, raw_thread,
                       needs_free_threading)
 
@@ -101,7 +101,7 @@ def _run_single(fn):
 
 def _subproc(script, env_extra=None, timeout=40):
     env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src",
-               RUNLOOM_GOROUTINE_PANIC="silent")
+               STACKWEAVE_GOROUTINE_PANIC="silent")
     if env_extra:
         env.update(env_extra)
     return subprocess.run([sys.executable, "-c", script], cwd=REPO, env=env,
@@ -123,7 +123,7 @@ def _assert_no_signal_crash(p, label):
 # ==========================================================================
 _FD_VALIDATION_SCRIPT = r'''
 import sys, os; sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 RLIMIT = __import__("resource").getrlimit(__import__("resource").RLIMIT_NOFILE)
 hard = RLIMIT[1]
 bad = []
@@ -432,7 +432,7 @@ def test_deadline_heap_fires_in_order():
 # ==========================================================================
 _RAW_POISON_SCRIPT = r'''
 import sys, os; sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 READ = 1
 out = {}
 def main():
@@ -460,7 +460,7 @@ def test_raw_close_without_unregister_poisons_fd_subprocess():
     # closed WITHOUT unregister left the global arm cache stale, so the next
     # fiber handed that fd NUMBER skipped EPOLL_CTL_ADD and parked to its
     # ceiling ("HUNG") with data ready.  The stale-arm probe (2026-07-05,
-    # RUNLOOM_STALE_ARM_PROBE_MS; parker-struct comment in netpoll.c) now
+    # STACKWEAVE_STALE_ARM_PROBE_MS; parker-struct comment in netpoll.c) now
     # validates a predicted-skip park from the deadline heap and re-ADDs the
     # stale arm, so the reused fd WAKES within ~one probe interval -- well
     # inside the script's 1200 ms ceiling.  Assert the FIXED behavior.  Still a
@@ -473,7 +473,7 @@ def test_raw_close_without_unregister_poisons_fd_subprocess():
         assert "WOKE" in p.stdout, (
             "stale-arm probe did not heal the poisoned fd (got %r): the reused "
             "number's park should be probed and re-ADDed within "
-            "RUNLOOM_STALE_ARM_PROBE_MS, long before the 1200 ms ceiling"
+            "STACKWEAVE_STALE_ARM_PROBE_MS, long before the 1200 ms ceiling"
             % p.stdout)
         return
     pytest.skip("fd number never reused across 8 attempts")
@@ -481,30 +481,30 @@ def test_raw_close_without_unregister_poisons_fd_subprocess():
 
 # ==========================================================================
 # Stale-arm probe MODE COVERAGE (R7 item 4 -- close the fix's test gaps:
-# the probe's heal/re-key/validate paths under RUNLOOM_PERHUB_EPOLL, M:N hub
+# the probe's heal/re-key/validate paths under STACKWEAVE_PERHUB_EPOLL, M:N hub
 # pools, and the disable env-gate).  All reuse the raw-poison shape but drive
 # it through a different pool-routing / config path.
 # ==========================================================================
 @pytest.mark.skipif(rc.netpoll_backend() != "epoll", reason="probe is epoll-only")
 def test_stale_arm_probe_heals_under_perhub_epoll_subprocess():
-    # RUNLOOM_PERHUB_EPOLL routes the arm/validate to the OWNING hub's epoll,
+    # STACKWEAVE_PERHUB_EPOLL routes the arm/validate to the OWNING hub's epoll,
     # not the shared one -- validate_arm's owner-lookup + re-ADD must target the
     # right epoll.  Same poison, PERHUB on: must still WOKE.
     for _ in range(8):
         p = _subproc(_RAW_POISON_SCRIPT,
-                     env_extra={"RUNLOOM_PERHUB_EPOLL": "1"}, timeout=20)
+                     env_extra={"STACKWEAVE_PERHUB_EPOLL": "1"}, timeout=20)
         _assert_no_signal_crash(p, "perhub-poison")
         if "SKIP" in p.stdout:
             continue
         assert "WOKE" in p.stdout, (
-            "probe did not heal under RUNLOOM_PERHUB_EPOLL=1 (got %r)" % p.stdout)
+            "probe did not heal under STACKWEAVE_PERHUB_EPOLL=1 (got %r)" % p.stdout)
         return
     pytest.skip("fd number never reused across 8 attempts")
 
 
 _MN_POISON_SCRIPT = r'''
 import sys, os; sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 READ = 1
 out = {}
 rc.mn_init(2)
@@ -545,19 +545,19 @@ def test_stale_arm_probe_heals_under_mn_subprocess():
 
 @pytest.mark.skipif(rc.netpoll_backend() != "epoll", reason="probe is epoll-only")
 def test_stale_arm_probe_disabled_env_hangs_subprocess():
-    # RUNLOOM_STALE_ARM_PROBE_MS=0 DISABLES the probe -> the poison reverts to
+    # STACKWEAVE_STALE_ARM_PROBE_MS=0 DISABLES the probe -> the poison reverts to
     # the old sharp-edge behavior (park to the ceiling, wake_fd returns 0 =
     # HUNG).  This proves the env gate actually turns the probe off (a config
     # regression that ignored the env would keep healing and read WOKE).  The
     # 1200 ms ceiling bounds it so the test never actually hangs.
     for _ in range(8):
         p = _subproc(_RAW_POISON_SCRIPT,
-                     env_extra={"RUNLOOM_STALE_ARM_PROBE_MS": "0"}, timeout=20)
+                     env_extra={"STACKWEAVE_STALE_ARM_PROBE_MS": "0"}, timeout=20)
         _assert_no_signal_crash(p, "probe-disabled")
         if "SKIP" in p.stdout:
             continue
         assert "HUNG" in p.stdout, (
-            "RUNLOOM_STALE_ARM_PROBE_MS=0 did not disable the probe (got %r): "
+            "STACKWEAVE_STALE_ARM_PROBE_MS=0 did not disable the probe (got %r): "
             "with the probe off the poisoned fd must park to its ceiling"
             % p.stdout)
         return
@@ -566,15 +566,15 @@ def test_stale_arm_probe_disabled_env_hangs_subprocess():
 
 @pytest.mark.skipif(rc.netpoll_backend() != "epoll", reason="tripwire is epoll-only")
 def test_dbg_netpoll_tripwire_heals_gc_poison_subprocess():
-    # RUNLOOM_DBG_NETPOLL turns the silent stale-arm hang into a loud,
+    # STACKWEAVE_DBG_NETPOLL turns the silent stale-arm hang into a loud,
     # self-healing diagnostic: the register skip validates with EPOLL_CTL_MOD,
     # sees ENOENT, warns, and re-ADDs.  Drive a GC-closed socket (bypasses the
     # monkey close hook) so the arm goes stale, then prove the wait HEALS.
     script = r'''
 import sys, socket, gc; sys.path.insert(0, "src")
-import runloom.monkey as monkey
+import stackweave.monkey as monkey
 monkey.patch()
-import runloom_c as rc
+import stackweave_c as rc
 READ = 1
 out = {}
 def main():
@@ -599,7 +599,7 @@ rc.fiber(main); rc.run()
 sys.stdout.write("SKIP\n" if out.get("skip") else ("HEALED\n" if out.get("rv") else "HUNG\n"))
 '''
     for _ in range(6):
-        p = _subproc(script, env_extra={"RUNLOOM_DBG_NETPOLL": "1"}, timeout=30)
+        p = _subproc(script, env_extra={"STACKWEAVE_DBG_NETPOLL": "1"}, timeout=30)
         _assert_no_signal_crash(p, "dbg-tripwire")
         if "SKIP" in p.stdout:
             continue
@@ -622,10 +622,10 @@ def test_dbg_tripwire_dead_fd_at_register_raises_not_hangs_subprocess():
     # a dead verdict FAILS the register (errno = the epoll_ctl verdict), so
     # wait_fd raises OSError promptly.  Drive it: poison a pipe fd number,
     # reuse it with a REGULAR FILE (validate: MOD->ENOENT, heal-ADD->EPERM ->
-    # dead), park untimed under RUNLOOM_DBG_NETPOLL=1.
+    # dead), park untimed under STACKWEAVE_DBG_NETPOLL=1.
     script = r'''
 import sys, os; sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 READ = 1
 out = {}
 def main():
@@ -647,12 +647,12 @@ rc.fiber(main); rc.run()
 sys.stdout.write("SKIP\n" if out.get("skip") else out.get("res", "NORESULT") + "\n")
 '''
     for _ in range(6):
-        p = _subproc(script, env_extra={"RUNLOOM_DBG_NETPOLL": "1"}, timeout=15)
+        p = _subproc(script, env_extra={"STACKWEAVE_DBG_NETPOLL": "1"}, timeout=15)
         _assert_no_signal_crash(p, "dbg-dead-at-register")
         if "SKIP" in p.stdout:
             continue
         assert "OSERROR" in p.stdout, (
-            "untimed park on a dead-armed fd under RUNLOOM_DBG_NETPOLL=1 did "
+            "untimed park on a dead-armed fd under STACKWEAVE_DBG_NETPOLL=1 did "
             "not raise (got %r): the tripwire's dead verdict must fail the "
             "register, not park forever" % p.stdout)
         return
@@ -668,7 +668,7 @@ def test_fault_fd_read_eagain_parks_and_recovers():
     # path under fault injection rather than a trivially-ready read.
     script = r'''
 import sys, os; sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 out = {}
 def main():
     r, w = os.pipe()
@@ -686,7 +686,7 @@ def main():
 rc.fiber(main); rc.run()
 sys.stdout.write("OK %d %r\n" % (out.get("n", -1), out.get("buf")))
 '''
-    p = _subproc(script, env_extra={"RUNLOOM_FAULT_FD_READ": "once:11"}, timeout=20)
+    p = _subproc(script, env_extra={"STACKWEAVE_FAULT_FD_READ": "once:11"}, timeout=20)
     _assert_no_signal_crash(p, "fault fd_read eagain")
     assert "OK 3 b'abc'" in p.stdout, (p.stdout, p.stderr[-800:])
 
@@ -698,7 +698,7 @@ def test_fault_fd_write_eagain_parks_and_recovers():
     # (a trivially-ready write would skip the park).  No crash, all bytes written.
     script = r'''
 import sys, os; sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 out = {}
 def main():
     r, w = os.pipe()
@@ -716,7 +716,7 @@ def main():
 rc.fiber(main); rc.run()
 sys.stdout.write("OK %d\n" % out.get("n", -1))
 '''
-    p = _subproc(script, env_extra={"RUNLOOM_FAULT_FD_WRITE": "once:11"}, timeout=20)
+    p = _subproc(script, env_extra={"STACKWEAVE_FAULT_FD_WRITE": "once:11"}, timeout=20)
     _assert_no_signal_crash(p, "fault fd_write eagain")
     assert "OK 256" in p.stdout, (p.stdout, p.stderr[-800:])
 
@@ -725,7 +725,7 @@ def test_fault_fd_read_hard_errno_raises_clean():
     # A hard errno (EIO) is not EAGAIN/EINTR -> must surface as OSError, no crash.
     script = r'''
 import sys, os; sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 out = {}
 def main():
     r, w = os.pipe(); os.write(w, b"abc"); buf = bytearray(3)
@@ -738,17 +738,17 @@ def main():
 rc.fiber(main); rc.run()
 sys.stdout.write("RES=%r\n" % (out.get("res"),))
 '''
-    p = _subproc(script, env_extra={"RUNLOOM_FAULT_FD_READ": "always:5"}, timeout=20)
+    p = _subproc(script, env_extra={"STACKWEAVE_FAULT_FD_READ": "always:5"}, timeout=20)
     _assert_no_signal_crash(p, "fault fd_read hard")
     assert "RES=('OSError', 5)" in p.stdout, (p.stdout, p.stderr[-800:])
 
 
 @pytest.mark.parametrize("site,errno_code", [
-    ("RUNLOOM_FAULT_TCP_RECV", 104),    # ECONNRESET
-    ("RUNLOOM_FAULT_TCP_SEND", 32),     # EPIPE
-    ("RUNLOOM_FAULT_TCP_SOCKET", 24),   # EMFILE
-    ("RUNLOOM_FAULT_TCP_ACCEPT", 104),
-    ("RUNLOOM_FAULT_TCP_CONNECT", 111), # ECONNREFUSED
+    ("STACKWEAVE_FAULT_TCP_RECV", 104),    # ECONNRESET
+    ("STACKWEAVE_FAULT_TCP_SEND", 32),     # EPIPE
+    ("STACKWEAVE_FAULT_TCP_SOCKET", 24),   # EMFILE
+    ("STACKWEAVE_FAULT_TCP_ACCEPT", 104),
+    ("STACKWEAVE_FAULT_TCP_CONNECT", 111), # ECONNREFUSED
 ])
 def test_fault_tcp_sites_no_crash(site, errno_code):
     # Drive a TCPConn echo round-trip under each TCP_* fault (forced onto the
@@ -757,7 +757,7 @@ def test_fault_tcp_sites_no_crash(site, errno_code):
     # ONLY hard requirement is no segfault/abort.
     script = r'''
 import sys, os, socket; sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 out = {"err": None, "echo": None}
 def main():
     lstn = rc.TCPConn.listen("127.0.0.1", 0, 64, 0)
@@ -802,7 +802,7 @@ def test_signal_interrupts_parked_wait_fd():
     # parked fiber").  Subprocess: setitimer is process-global.
     script = r'''
 import sys, os, signal; sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 out = {}
 class Boom(Exception): pass
 def handler(signum, frame): raise Boom()
@@ -833,7 +833,7 @@ def test_signal_interrupts_parked_tcp_recv():
     # raises out of the call, not swallowed, not carried out of run().
     script = r'''
 import sys, os, socket, signal; sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 out = {}
 class Boom(Exception): pass
 def handler(signum, frame): raise Boom()
@@ -972,7 +972,7 @@ def test_iouring_concurrent_file_io_drains_eventfd():
 @pytest.mark.skipif(not (FT and rc.iouring_available()),
                     reason="io_uring loop mode needs M:N + io_uring")
 def test_iouring_loop_mode_file_io_subprocess():
-    # RUNLOOM_IOURING_LOOP=1: file_read parks on the global ring whose eventfd is
+    # STACKWEAVE_IOURING_LOOP=1: file_read parks on the global ring whose eventfd is
     # EPOLLEXCLUSIVE in the shared epoll (the documented hang hazard -- the loop
     # idle path must drain the global ring after loop_wait).  Bounded; assert it
     # completes, no hang.
@@ -983,8 +983,8 @@ def test_iouring_loop_mode_file_io_subprocess():
     # writer each, summed at the end (the race-free counter rule, CLAUDE.md).
     script = r'''
 import sys, os, tempfile; sys.path.insert(0, "src")
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 N = 12
 ok = bytearray(N)
 def main():
@@ -999,10 +999,10 @@ def main():
             finally:
                 os.close(fd); os.unlink(path)
         rc.mn_fiber(one)
-runloom.run(3, main)
+stackweave.run(3, main)
 sys.stdout.write("LOOP_OK %d\n" % sum(ok))
 '''
-    p = _subproc(script, env_extra={"RUNLOOM_IOURING_LOOP": "1"}, timeout=40)
+    p = _subproc(script, env_extra={"STACKWEAVE_IOURING_LOOP": "1"}, timeout=40)
     _assert_no_signal_crash(p, "iouring loop")
     assert "LOOP_OK 12" in p.stdout, (
         "io_uring loop mode lost a file completion / hung: %r / %r"
@@ -1114,7 +1114,7 @@ def test_tcpconn_many_concurrent_connections_mn():
             finally:
                 conn.close()
         port, listeners = rc.serve("127.0.0.1", 0, handler, 3)
-        from runloom.sync import WaitGroup
+        from stackweave.sync import WaitGroup
         wg = WaitGroup(); wg.add(N)
 
         def client(i):
@@ -1131,7 +1131,7 @@ def test_tcpconn_many_concurrent_connections_mn():
         for ln in listeners:
             ln.close()
     with hang_guard(60, "tcpconn many conns M:N"):
-        runloom.run(4, main)
+        stackweave.run(4, main)
     expected = {struct.pack(">Q", i) for i in range(N)}
     received = {g for g in got if g is not None}
     missing = expected - received
@@ -1147,7 +1147,7 @@ def test_tcpconn_many_concurrent_connections_mn():
 # while the Python-handler serve path with the IDENTICAL client load never does.
 # Reproduces standalone roughly 4-of-6 runs at N=20 acceptors=2 hubs=4 (and at
 # N=80 acceptors=3): wg.wait() never reaches N because some connections' echo
-# never returns, so runloom.run()/mn_run() hangs forever (the main thread sits in
+# never returns, so stackweave.run()/mn_run() hangs forever (the main thread sits in
 # mn_run; every hub thread is parked with no Python frame).  Run in a SUBPROCESS
 # with a hard timeout so the hang is CONTAINED + OBSERVED as a non-zero
 # returncode, never a wedged suite.  The xfail asserts the CORRECT behavior (all
@@ -1155,9 +1155,9 @@ def test_tcpconn_many_concurrent_connections_mn():
 # out / under-counts), recording the finding without touching the C source.
 _ALL_C_ECHO_SCRIPT = r'''
 import sys, struct; sys.path.insert(0, "src")
-import runloom
-import runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave
+import stackweave_c as rc
+from stackweave.sync import WaitGroup
 N = 40
 got = [None] * N
 def main():
@@ -1176,7 +1176,7 @@ def main():
     wg.wait()
     for ln in listeners:
         ln.close()
-runloom.run(4, main)
+stackweave.run(4, main)
 sys.stdout.write("ALL_C_ECHO_OK %d\n" % sum(1 for g in got if g is not None))
 '''
 
@@ -1273,7 +1273,7 @@ def test_serve_python_handler_echo_mn():
                     ln.close()
         rc.mn_fiber(client)
     with hang_guard(40, "serve python handler M:N"):
-        runloom.run(3, main)
+        stackweave.run(3, main)
     assert box.get("reply") == b"echo:hello", "serve python handler echo: %r" % box.get("reply")
 
 
@@ -1464,9 +1464,9 @@ def test_netpoll_unregister_from_foreign_thread_safe():
 # ==========================================================================
 _NETPOLL_WORKLOAD = r'''
 import sys, os, socket; sys.path.insert(0, "src")
-import runloom
-import runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave
+import stackweave_c as rc
+from stackweave.sync import WaitGroup
 def main():
     wg = WaitGroup()
     pairs = [socket.socketpair() for _ in range(40)]
@@ -1497,19 +1497,19 @@ def main():
         rc.netpoll_unregister(a.fileno()); a.close()
         rc.netpoll_unregister(b.fileno()); b.close()
     sys.stdout.write("WOKE %d\n" % sum(woke))
-runloom.run(4, main)
+stackweave.run(4, main)
 '''
 
 
 @pytest.mark.skipif(not FT, reason="M:N env modes need GIL-disabled build")
 @pytest.mark.parametrize("mode_env", [
-    {"RUNLOOM_SYSMON": "1", "RUNLOOM_SYSMON_QUIET": "1", "RUNLOOM_SYSMON_MS": "8"},
-    {"RUNLOOM_PREEMPT": "1", "RUNLOOM_PREEMPT_MS": "8"},
-    {"RUNLOOM_HANDOFF": "1", "RUNLOOM_HANDOFF_POOL": "2"},
-    {"RUNLOOM_HUB_IDLE_WAKE": "0"},
-    {"RUNLOOM_STACK_PARK_SWEEP": "1", "RUNLOOM_STACK_PARK_SWEEP_MS": "1"},
-    {"RUNLOOM_DEADLOCK_MS": "50"},
-    {"RUNLOOM_READY_STARVE_BOUND": "2"},
+    {"STACKWEAVE_SYSMON": "1", "STACKWEAVE_SYSMON_QUIET": "1", "STACKWEAVE_SYSMON_MS": "8"},
+    {"STACKWEAVE_PREEMPT": "1", "STACKWEAVE_PREEMPT_MS": "8"},
+    {"STACKWEAVE_HANDOFF": "1", "STACKWEAVE_HANDOFF_POOL": "2"},
+    {"STACKWEAVE_HUB_IDLE_WAKE": "0"},
+    {"STACKWEAVE_STACK_PARK_SWEEP": "1", "STACKWEAVE_STACK_PARK_SWEEP_MS": "1"},
+    {"STACKWEAVE_DEADLOCK_MS": "50"},
+    {"STACKWEAVE_READY_STARVE_BOUND": "2"},
 ])
 def test_netpoll_workload_under_env_mode_subprocess(mode_env):
     p = _subproc(_NETPOLL_WORKLOAD, env_extra=mode_env, timeout=50)
@@ -1520,11 +1520,11 @@ def test_netpoll_workload_under_env_mode_subprocess(mode_env):
 
 
 def test_netpoll_workload_under_gated_off_unsafe_flag_subprocess():
-    # RUNLOOM_PER_G_TSTATE is KNOWN-CRASH at hub-count>=2; set it WITHOUT
-    # RUNLOOM_ALLOW_UNSAFE_MIGRATION -> the runtime must WARN to stderr and run
+    # STACKWEAVE_PER_G_TSTATE is KNOWN-CRASH at hub-count>=2; set it WITHOUT
+    # STACKWEAVE_ALLOW_UNSAFE_MIGRATION -> the runtime must WARN to stderr and run
     # the default (safe) scheduler.  Assert: no crash, work completes, the warn
     # path was taken (default scheduler).  NEVER set the allow flag.
-    p = _subproc(_NETPOLL_WORKLOAD, env_extra={"RUNLOOM_PER_G_TSTATE": "1"}, timeout=50)
+    p = _subproc(_NETPOLL_WORKLOAD, env_extra={"STACKWEAVE_PER_G_TSTATE": "1"}, timeout=50)
     _assert_no_signal_crash(p, "gated-off per_g_tstate")
     assert "WOKE 40" in p.stdout, (
         "gated-off unsafe-flag workload did not complete: %r / %r"
@@ -1594,7 +1594,7 @@ def test_netpoll_poll_delivers_readiness_on_sleep0():
 #           WRITE for real (no fault injection);
 #       (k) a connect/accept/recv full round-trip through the raw module_tcp
 #           primitives under SIGALRM is already covered; add the gated-OFF
-#           RUNLOOM_STEAL_WOKEN unsafe-flag warn path over a netpoll workload
+#           STACKWEAVE_STEAL_WOKEN unsafe-flag warn path over a netpoll workload
 #           (the sibling of PER_G_TSTATE -- both KNOWN-CRASH at hub>=2, both must
 #           warn + run the default scheduler WITHOUT the allow flag).
 # ==========================================================================
@@ -2049,12 +2049,12 @@ def test_fd_read_partial_and_large_fd_write_real_park():
 
 
 def test_netpoll_workload_under_gated_off_steal_woken_subprocess():
-    # RUNLOOM_STEAL_WOKEN is the sibling of RUNLOOM_PER_G_TSTATE: KNOWN-CRASH at
-    # hub-count>=2.  Set it WITHOUT RUNLOOM_ALLOW_UNSAFE_MIGRATION -> the runtime
+    # STACKWEAVE_STEAL_WOKEN is the sibling of STACKWEAVE_PER_G_TSTATE: KNOWN-CRASH at
+    # hub-count>=2.  Set it WITHOUT STACKWEAVE_ALLOW_UNSAFE_MIGRATION -> the runtime
     # must WARN to stderr and run the DEFAULT (safe) scheduler over the netpoll
     # workload.  Assert: no crash, all wakes delivered.  NEVER set the allow flag.
     # The first pass covered the PER_G_TSTATE gated-off path; this is its twin.
-    p = _subproc(_NETPOLL_WORKLOAD, env_extra={"RUNLOOM_STEAL_WOKEN": "1"}, timeout=50)
+    p = _subproc(_NETPOLL_WORKLOAD, env_extra={"STACKWEAVE_STEAL_WOKEN": "1"}, timeout=50)
     _assert_no_signal_crash(p, "gated-off steal_woken")
     assert "WOKE 40" in p.stdout, (
         "gated-off STEAL_WOKEN workload did not complete: %r / %r"
@@ -2070,7 +2070,7 @@ def test_wait_fd_at_rlimit_minus_one_high_fd_no_crash_subprocess():
     # contained.
     script = r'''
 import sys, os; sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 import resource
 soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
 out = {}

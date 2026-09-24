@@ -20,8 +20,8 @@ import socket
 
 import harness
 import netutil
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
 
 def connected_pair(H, host, lport, lsock):
@@ -33,7 +33,7 @@ def connected_pair(H, host, lport, lsock):
     except OSError:
         netutil.close_quiet(cli)
         return None, None
-    if not (runloom_c.wait_fd(lsock.fileno(), 1, 1000) & 1):
+    if not (stackweave_c.wait_fd(lsock.fileno(), 1, 1000) & 1):
         netutil.close_quiet(cli)
         return None, None
     try:
@@ -65,7 +65,7 @@ def side_sequence(sock, rng):
                 # bounded: only recv if readable within 20ms, else treat as
                 # would-block (legal) so we never park waiting on a peer that is
                 # itself parked.
-                if runloom_c.wait_fd(sock.fileno(), 1, 20) & 1:
+                if stackweave_c.wait_fd(sock.fileno(), 1, 20) & 1:
                     try:
                         sock.recv(64)   # b'' (peer SHUT_WR/closed) or raise: legal
                     except OSError:
@@ -108,7 +108,7 @@ def worker(H, wid, rng, state):
             H.task_done(wid)
             continue
         result = [0, 0]
-        done = runloom.Chan(2)
+        done = stackweave.Chan(2)
         r1 = random.Random(rng.getrandbits(48))
         r2 = random.Random(rng.getrandbits(48))
         H.fiber(run_side, H, cli, result, 0, r1, done)

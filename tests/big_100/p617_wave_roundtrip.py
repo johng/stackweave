@@ -21,7 +21,7 @@ Under M:N many fibers run on a handful of hub OS-threads with the GIL OFF.  A
 fiber that is PARKED (yield/sleep) in the middle of writing frames -- between two
 writeframes() calls, or between the last writeframes() and the close() header
 patch -- lets a sibling fiber on the same hub run.  The hazard this program
-probes: if runloom did NOT properly isolate each fiber's Wave_write instance (a
+probes: if stackweave did NOT properly isolate each fiber's Wave_write instance (a
 torn _datawritten/_nframeswritten, a frame block written to the wrong stream
 cursor, a format parameter clobbered, or the close() header seek/patch landing on
 a sibling's buffer), the wave a fiber produces would read back with WRONG format
@@ -66,9 +66,9 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (a closed-world round-trip, single-owner):
   with wid-tagged PCM + a unique framerate, GIL ON and OFF): 100% of round-trips
   reproduce the exact bytes and parameters -- 0 mismatches.  Each thread's
   Wave_write/Wave_read instance is independent and properly isolated.  Under a
-  CORRECT runloom each fiber's round-trip MUST also be byte-exact.  If a fiber's
+  CORRECT stackweave each fiber's round-trip MUST also be byte-exact.  If a fiber's
   read-back bytes differ from what it wrote, the frame count is wrong, or a
-  sibling's framerate/bytes appear, that is a runloom M:N fiber-isolation bug (a
+  sibling's framerate/bytes appear, that is a stackweave M:N fiber-isolation bug (a
   torn _datawritten, a mis-cursored block write, a clobbered format parameter, or
   a header patch landing on the wrong buffer), and the load-bearing single-owner
   oracle FAILS -- otherwise it PASSES (exit 0).
@@ -77,7 +77,7 @@ ORACLES:
   * LOAD-BEARING -- WAVE ROUND-TRIP INTEGRITY (worker, HARD, fail-fast).  The
     closed-world (a)-(e) checks above on a fiber's OWN in-memory wave.  Single-
     owner: the BytesIO, the write wave, the read wave, and the expected payload
-    are all fiber-local, never shared.  A failure is a runloom isolation desync,
+    are all fiber-local, never shared.  A failure is a stackweave isolation desync,
     never documented Python semantics (an unsynchronized SHARED Wave_write would
     tear exactly like a shared file across OS threads -- documented behavior -- so
     we never share one).
@@ -109,7 +109,7 @@ import io
 import wave
 
 import harness
-import runloom
+import stackweave
 
 # Frames per fiber-owned clip band.  Small enough that build+read is cheap under
 # tens of thousands of fibers, large enough that _datawritten grows across several
@@ -169,7 +169,7 @@ def round_trip(H, wid, idx, rng, state):
     Builds a fiber-local in-memory wave with wid-tagged format + PCM (yielding
     between writeframes chunks so a sibling interleaves on a torn-offset stream),
     then re-opens the bytes read-only and asserts the closed-world round-trip law.
-    Every object here is fiber-local -- a mismatch is a runloom isolation bug."""
+    Every object here is fiber-local -- a mismatch is a stackweave isolation bug."""
     nchannels, sampwidth, framerate = fiber_format(wid)
     framesize = nchannels * sampwidth
     nframes = rng.randint(FRAMES_MIN, FRAMES_MAX)
@@ -198,9 +198,9 @@ def round_trip(H, wid, idx, rng, state):
             # Wave_write sits at a partially-written offset.  If _datawritten / the
             # BytesIO cursor / the format params are not fiber-isolated, the
             # sibling's writes bleed into this clip.
-            runloom.yield_now()
+            stackweave.yield_now()
             if c == 0:
-                runloom.sleep(0.0002)
+                stackweave.sleep(0.0002)
     finally:
         # close() SEEKS back and patches the RIFF/data length fields in place.
         ww.close()
@@ -333,5 +333,5 @@ if __name__ == "__main__":
                  "sampwidth/framerate exact, nframes exact, read-back PCM==the "
                  "known payload, no trailing data.  A mismatch (torn _datawritten, "
                  "mis-cursored block, clobbered format param, header patch on the "
-                 "wrong buffer, sibling PCM) is a runloom M:N isolation bug (0 "
+                 "wrong buffer, sibling PCM) is a stackweave M:N isolation bug (0 "
                  "under plain threads GIL on AND off)")

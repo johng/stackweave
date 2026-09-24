@@ -2,7 +2,7 @@
 
 The subject is the stock ``concurrent.futures.Future`` state machine -- the one
 a ThreadPoolExecutor drives -- under the GIL off and M:N scheduling.  No other
-program in the suite touches it; runloom's own ``runloom.Future`` has no
+program in the suite touches it; stackweave's own ``stackweave.Future`` has no
 cancel()/CancelledError, so the cancel-vs-start transition is entirely
 unexercised.  Under monkey.patch() the future's internal ``threading.Condition``
 becomes the cooperative CoCondition, so this drives that cooperative
@@ -52,7 +52,7 @@ result()-waiter wakeup, value identity under concurrent resolve.
 import concurrent.futures as cf
 
 import harness
-import runloom
+import stackweave
 
 # Futures submitted per round.  Enough that the table of runner/canceller fibers
 # spans several hubs and the cancel/run interleavings vary, but small enough that
@@ -79,7 +79,7 @@ def future_value(wid, rnd, idx):
 def run_future(H, fut, value):
     """The executor's own start dance, run as a fiber on whatever hub picks it
     up.  yield_now() first so the start races the canceller across hubs."""
-    runloom.yield_now()
+    stackweave.yield_now()
     try:
         if fut.set_running_or_notify_cancel():
             # We own the transition PENDING->RUNNING; the cancel lost.  Publish
@@ -101,7 +101,7 @@ def run_future(H, fut, value):
 
 def cancel_future(H, fut):
     """Race a cancel() against the runner's start, from a different hub."""
-    runloom.yield_now()
+    stackweave.yield_now()
     try:
         fut.cancel()                            # True if it won, False if RUNNING
     except Exception as exc:                     # noqa: BLE001
@@ -121,7 +121,7 @@ def worker(H, wid, rng, state):
             break
 
         futures = []
-        wg = runloom.WaitGroup()
+        wg = stackweave.WaitGroup()
         # One runner per future; one canceller for the deterministic subset.
         ncancel = sum(1 for i in range(NFUT) if (wid + i) % 2 == 0)
         wg.add(NFUT + ncancel)

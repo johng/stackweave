@@ -17,7 +17,7 @@ hubs + heavy concurrent wait_fd/close churn (pool.lock contention) + object
 allocation churn (STW pressure) maximise the interleaving.  With the fix the pump
 drops pool.lock before the wait, so the workload always completes; without it the
 run() eventually wedges and run_isolated's watchdog SIGABRTs the file (a timeout
-== the deadlock).  Backend is forced via RUNLOOM_NETPOLL (wsapoll | select); both
+== the deadlock).  Backend is forced via STACKWEAVE_NETPOLL (wsapoll | select); both
 were fixed, so the runner exercises each.
 """
 import os
@@ -32,8 +32,8 @@ pytestmark = pytest.mark.skipif(
     not sys.platform.startswith("win"),
     reason="WSAPoll/select idle-pump is the Windows netpoll backend")
 
-import runloom_c          # noqa: E402
-import runloom            # noqa: E402
+import stackweave_c          # noqa: E402
+import stackweave            # noqa: E402
 
 READ = 1
 WRITE = 2
@@ -61,9 +61,9 @@ DEADLINE_MS = 50    # READ park sits parked this long -> the pump actively polls
 
 def test_backend_is_windows_pump():
     """Guard: the inversion lives in the WSAPoll + select pump branches only."""
-    be = runloom_c.netpoll_backend()
+    be = stackweave_c.netpoll_backend()
     assert be in ("wsapoll", "select"), (
-        "force a Windows pump backend: set RUNLOOM_NETPOLL=wsapoll (or select); "
+        "force a Windows pump backend: set STACKWEAVE_NETPOLL=wsapoll (or select); "
         "got %r" % be)
 
 
@@ -91,7 +91,7 @@ def test_pump_lockorder_soak():
                         # READ never fires (no peer write) -> parks to the
                         # deadline, so the pump actively polls it; the return +
                         # next call re-registers under pool.lock.
-                        runloom_c.wait_fd(fd, READ, DEADLINE_MS)
+                        stackweave_c.wait_fd(fd, READ, DEADLINE_MS)
                     except Exception:        # noqa: BLE001
                         pass
                     churn.append([object() for _ in range(8)])   # STW pressure
@@ -100,11 +100,11 @@ def test_pump_lockorder_soak():
                 done[idx] = 1
 
             def main(done=done):
-                backend[0] = runloom_c.netpoll_backend()
+                backend[0] = stackweave_c.netpoll_backend()
                 for i in range(WORKERS):
-                    runloom.go(worker, done, fds[i], i)
+                    stackweave.go(worker, done, fds[i], i)
 
-            runloom.run(HUBS, main)
+            stackweave.run(HUBS, main)
             completed = sum(done)
             assert completed == WORKERS, (
                 "session %d/%d: only %d/%d workers finished -- run() wedged "

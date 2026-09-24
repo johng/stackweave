@@ -1,6 +1,6 @@
-# big_100 — 100 stress projects for the runloom (pygo) extension
+# big_100 — 100 stress projects for the stackweave (pygo) extension
 
-100 self-contained workloads that hammer the `runloom` Go-style-coroutine
+100 self-contained workloads that hammer the `stackweave` Go-style-coroutine
 extension in **M:N parallel mode** (`run(n>1)`, GIL off, free-threaded CPython
 3.13t), blocking-style code over `monkey.patch()` — **no `async`/`await`, no
 aio bridge**. Each one fields tens of thousands of lightweight goroutines and
@@ -60,12 +60,12 @@ Building and running the campaign surfaced **10 real bugs/limitations** in the
 extension — see [FINDINGS.md](FINDINGS.md) for the full writeups with repros.
 Headlines:
 
-- **#1 (fixed):** `monkey.patch()` broke every `runloom.fiber()` (the wrapper
-  dropped the stack-size positional arg). Fixed in `src/runloom/monkey/`.
+- **#1 (fixed):** `monkey.patch()` broke every `stackweave.fiber()` (the wrapper
+  dropped the stack-size positional arg). Fixed in `src/stackweave/monkey/`.
 - **#2:** the handoff rescue corrupts memory under high socket concurrency
-  (SIGSEGV/SIGBUS). The harness disables it by default (`RUNLOOM_HANDOFF=0`);
+  (SIGSEGV/SIGBUS). The harness disables it by default (`STACKWEAVE_HANDOFF=0`);
   pass `--handoff` to reproduce.
-- **#4:** high-rate `runloom.blocking` / subprocess offload deadlocks (a lost
+- **#4:** high-rate `stackweave.blocking` / subprocess offload deadlocks (a lost
   wakeup in the offload-result wait); worked around with `procutil`.
 - **#5:** `close()` doesn't wake a goroutine parked in `accept()` (latent server
   teardown hang); worked around with `netutil.serve_forever`.

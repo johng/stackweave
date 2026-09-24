@@ -17,7 +17,7 @@ import-lock false-deadlock (#9).
 import importlib
 
 import harness
-import runloom
+import stackweave
 
 # (module name, a callable taking the module that exercises a real entry point
 #  and returns something the test can verify).  Each must be a C extension whose
@@ -130,7 +130,7 @@ def worker(H, wid, rng, state):
             return
         # Migrate hubs between imports so the next import lands on a different
         # hub thread relative to the import lock state.
-        runloom.yield_now()
+        stackweave.yield_now()
         ok += 1
         H.op(wid)
         H.task_done(wid)

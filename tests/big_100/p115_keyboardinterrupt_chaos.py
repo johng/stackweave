@@ -20,7 +20,7 @@ WHY NOT raise DIRECTLY from the handler:  Under M:N the Python signal handler
 runs on the MAIN thread, which is the scheduler.  When it services a pending
 SIGINT at an idle/join point inside `mn_run()` (no goroutine parked to absorb
 it -- e.g. during teardown/drain), a handler that RAISES carries the
-KeyboardInterrupt OUT of `runloom.run()` -- the documented idle-Ctrl-C case
+KeyboardInterrupt OUT of `stackweave.run()` -- the documented idle-Ctrl-C case
 (CLAUDE.md "Signals deliver INTO the parked goroutine ... it carries one out of
 run() only when nothing is parked to take it").  That is CORRECT runtime
 behaviour, but it would fail the harness on a benign teardown signal.  So the
@@ -39,7 +39,7 @@ import time as _time
 import _thread as _real_thread          # captured before monkey.patch()
 
 import harness
-import runloom
+import stackweave
 
 REAL_SLEEP = _time.sleep
 
@@ -89,7 +89,7 @@ def worker(H, wid, rng, state):
             path = os.path.join(tmpdir, "w{0}.tmp".format(wid))
             f = open(path, "wb")
             f.write(b"x" * 8)
-            runloom.yield_now()        # migration point -- the KI lands here
+            stackweave.yield_now()        # migration point -- the KI lands here
             # Propagate a KeyboardInterrupt into THIS goroutine -- the finally
             # must then release the lock + close the fd under the exception.
             # Two triggers: (a) an OS SIGINT observed since we last looked (the
@@ -124,7 +124,7 @@ def setup(H):
     while nslots < max(1, H.funcs):
         nslots <<= 1
     H.state = {
-        "lock": threading.Lock(),       # patched -> cooperative under runloom
+        "lock": threading.Lock(),       # patched -> cooperative under stackweave
         "tmpdir": tmpdir,
         "shared": [0] * nslots,
         "nslots": nslots,

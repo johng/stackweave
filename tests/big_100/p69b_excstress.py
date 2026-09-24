@@ -9,7 +9,7 @@ rarely hit -> the bug needs ~an hour of 100k runtime to surface.
 This variant MAXIMIZES the window: each goroutine spends almost all its time
 INSIDE the except block with the exception live, entering thousands of Python
 frames (each frame entry is a preemption opportunity / eval-frame-wrapper point).
-With aggressive preemption (RUNLOOM_SYSMON_MS small) and RUNLOOM_DBG_EXCSTATE=1
+With aggressive preemption (STACKWEAVE_SYSMON_MS small) and STACKWEAVE_DBG_EXCSTATE=1
 the snap/load exception-state validator should trip FAST if the bug is real --
 turning a multi-hour repro into seconds.  No yield happens inside the except
 block, so (like the real bug) ONLY preemption can interrupt it there.
@@ -17,21 +17,21 @@ block, so (like the real bug) ONLY preemption can interrupt it there.
 import traceback
 
 import harness
-import runloom
+import stackweave
 
 
 def level3(H):
-    runloom.yield_now()
+    stackweave.yield_now()
     raise ValueError("deep")
 
 
 def level2(H):
-    runloom.yield_now()
+    stackweave.yield_now()
     level3(H)
 
 
 def level1(H):
-    runloom.yield_now()
+    stackweave.yield_now()
     level2(H)
 
 

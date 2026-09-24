@@ -78,7 +78,7 @@ void runloom_sched_madvise_datastack_idle(runloom_g_t *g)
              * -- this is just a cheap no-op madvise (measured: no throughput
              * cost); on the common deep-then-park shape it reclaims real
              * resident RAM.  Opt out with RUNLOOM_DATASTACK_SWEEP=0. */
-            const char *e = getenv("RUNLOOM_DATASTACK_SWEEP");
+            const char *e = getenv("STACKWEAVE_DATASTACK_SWEEP");
             v = (e != NULL && e[0] == '0') ? 0 : 1;
             __atomic_store_n(&on, v, __ATOMIC_RELAXED);
         }
@@ -104,7 +104,7 @@ void runloom_sched_madvise_datastack_idle(runloom_g_t *g)
     {
         int d = __atomic_load_n(&dbg, __ATOMIC_RELAXED);
         if (d < 0) {
-            const char *e = getenv("RUNLOOM_DATASTACK_DEBUG");
+            const char *e = getenv("STACKWEAVE_DATASTACK_DEBUG");
             d = (e != NULL && e[0] != '0') ? 1 : 0;
             __atomic_store_n(&dbg, d, __ATOMIC_RELAXED);
         }
@@ -275,7 +275,7 @@ void runloom_sched_ready_push(runloom_sched_t *s, runloom_g_t *g)
              * memory exhaustion, so fail loudly and immediately -- matching
              * runloom_sched_get's Py_FatalError on a failed sched allocation --
              * rather than degrading into a silent, undiagnosable permanent hang. */
-            Py_FatalError("runloom: out of memory growing the ready ring");
+            Py_FatalError("stackweave: out of memory growing the ready ring");
         }
     }
     s->ready_ring[s->ready_tail & s->ready_mask] = g;
@@ -327,7 +327,7 @@ static uint64_t runloom_pct_rand(void)      /* xorshift64 */
 
 static void runloom_pct_init(void)
 {
-    const char *seed = getenv("RUNLOOM_PCT_SEED");
+    const char *seed = getenv("STACKWEAVE_PCT_SEED");
     int i;
     long k;
     runloom_pct.inited = 1;
@@ -335,10 +335,10 @@ static void runloom_pct_init(void)
     runloom_pct.enabled = 1;
     runloom_pct.rng = strtoull(seed, NULL, 10);
     if (runloom_pct.rng == 0) runloom_pct.rng = 0x9E3779B97F4A7C15ULL;  /* xorshift fixpoint */
-    runloom_pct.depth = getenv("RUNLOOM_PCT_DEPTH") ? atoi(getenv("RUNLOOM_PCT_DEPTH")) : 3;
+    runloom_pct.depth = getenv("STACKWEAVE_PCT_DEPTH") ? atoi(getenv("STACKWEAVE_PCT_DEPTH")) : 3;
     if (runloom_pct.depth < 1) runloom_pct.depth = 1;
     if (runloom_pct.depth > PCT_MAX_DEPTH) runloom_pct.depth = PCT_MAX_DEPTH;
-    k = getenv("RUNLOOM_PCT_STEPS") ? atol(getenv("RUNLOOM_PCT_STEPS")) : 2000;
+    k = getenv("STACKWEAVE_PCT_STEPS") ? atol(getenv("STACKWEAVE_PCT_STEPS")) : 2000;
     if (k < 1) k = 1;
     for (i = 0; i < runloom_pct.depth - 1; i++)
         runloom_pct.change_at[i] = 1 + (long)(runloom_pct_rand() % (uint64_t)k);
@@ -352,7 +352,7 @@ static void runloom_pct_init(void)
     runloom_pct.steps = 0;
     runloom_pct.next_change = 0;
     runloom_pct.lo_ctr = 0;
-    if (getenv("RUNLOOM_PCT_DEBUG")) {
+    if (getenv("STACKWEAVE_PCT_DEBUG")) {
         fprintf(stderr, "[pct] seed=%s depth=%d steps<=%ld change_at=",
                 seed, runloom_pct.depth, k);
         for (i = 0; i < runloom_pct.depth - 1; i++)

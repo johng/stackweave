@@ -30,7 +30,7 @@ is names[i]; and the multiset of int values is exactly range(N).
 WHERE M:N COULD BREAK IT (the gap this program probes).  `_NamedIntConstant.__new__`
 does two writes that must both land and stay coupled: the immutable int payload
 (via int.__new__) and the mutable `.name` slot (an instance-__dict__ store).  Under
-free-threaded 3.14t with the GIL off and runloom migrating a fiber across hubs at a
+free-threaded 3.14t with the GIL off and stackweave migrating a fiber across hubs at a
 yield, a runtime bug (a torn instance-dict write, a cross-fiber attribute leak, an
 identity swap of a live object across a park/resume, or a corrupted int payload)
 would show up as: a constant whose .name no longer matches its value, a repr that
@@ -44,10 +44,10 @@ WHY THIS IS SINGLE-OWNER, NOT A SHARED-OBJECT RACE.  Each fiber calls the REAL
 and values, storing the resulting list in a fiber-local variable that no sibling
 can see.  This is NOT `globals().update()` -- we deliberately do NOT touch the
 module's shared namespace (that would be a documented shared-object mutation, not a
-runloom bug).  We only exercise the constructor + attribute machinery on private
+stackweave bug).  We only exercise the constructor + attribute machinery on private
 objects.  A plain-threads control (each OS thread minting its own private table of
 named constants, GIL on and off) returns 100% coupled, correct constants -- so
-under a correct runloom it must too.
+under a correct stackweave it must too.
 
 ORACLES:
   * LOAD-BEARING -- NAMED-CONSTANT PURITY (worker, HARD, fail-fast).  Each fiber
@@ -63,7 +63,7 @@ ORACLES:
       - the int identity laws hold: nic == i, hash(nic) == hash(i), and the
         int arithmetic payload is intact (nic + 1 == i + 1);
       - isinstance(nic, int) and isinstance(nic, _NamedIntConstant).
-    Any drift is a runloom single-owner-object corruption, not Python semantics.
+    Any drift is a stackweave single-owner-object corruption, not Python semantics.
 
   * CONSERVATION (worker, HARD, closed-form).  The `_makecodes` law: the set of
     int values across the fiber-local table is EXACTLY range(N), and the names are
@@ -90,7 +90,7 @@ across hub migration + yield under M:N.
 import warnings
 
 import harness
-import runloom
+import stackweave
 
 # sre_constants emits a DeprecationWarning on import (it is an alias of
 # re._constants); silence it once at import so the constructor + names we probe
@@ -143,9 +143,9 @@ def constant_check(H, wid, idx, state):
     base_id = [id(nic) for nic in items]
 
     # YIELD: let siblings mint/read their own tables; allow hub migration.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
 
     for i in range(TABLE_SIZE):
         nic = items[i]
@@ -281,4 +281,4 @@ if __name__ == "__main__":
                  "arithmetic, and type are bit-identical + match the closed-form "
                  "range(N) conservation law.  No shared state is touched.  A value/"
                  ".name/repr/id drift, a value != index, or a broken conservation "
-                 "set is a real runloom object-corruption / cross-fiber-leak bug")
+                 "set is a real stackweave object-corruption / cross-fiber-leak bug")

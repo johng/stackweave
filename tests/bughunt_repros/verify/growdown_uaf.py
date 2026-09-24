@@ -12,7 +12,7 @@ operates on a freed list -> UAF (crash, or garbage learned stack size).
 import sys
 import threading
 
-import runloom
+import stackweave
 
 K = "runloom_stack"
 FROZEN_SIZE = 1 << 16   # 64 KiB, valid learned size
@@ -30,20 +30,20 @@ def mutator():
         d[K] = [FROZEN_SIZE, FROZEN_CNT]
 
 def spawner(n):
-    f = runloom.fiber
+    f = stackweave.fiber
     for _ in range(n):
         f(fn)
 
 def main():
     fn.__dict__[K] = [FROZEN_SIZE, FROZEN_CNT]
     for _ in range(8):
-        runloom.fiber(lambda: spawner(200000))
+        stackweave.fiber(lambda: spawner(200000))
 
 muts = [threading.Thread(target=mutator, daemon=True) for _ in range(2)]
 for t in muts:
     t.start()
 try:
-    runloom.run(8, main)
+    stackweave.run(8, main)
 finally:
     STOP.set()
 print("completed without crash")

@@ -28,11 +28,11 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain threads):
   fixed source string is deterministic.  A standalone plain-threads control (8
   OS threads, GIL on AND off, each compiling its own distinct source and
   disassembling it in a tight loop) yields byte-identical instruction tuples
-  100% of the time -- 0 cross-thread divergence.  Under a CORRECT runloom it
+  100% of the time -- 0 cross-thread divergence.  Under a CORRECT stackweave it
   must also hold: a fiber's own code object, disassembled before and after a
   yield, MUST produce the identical instruction stream, and a freshly recompiled
   code object for the SAME source MUST disassemble identically to the first.  If
-  it does not, that is a dis/compiler isolation or torn-table bug in runloom.
+  it does not, that is a dis/compiler isolation or torn-table bug in stackweave.
 
 ORACLES:
   * LOAD-BEARING -- DISASSEMBLY PURITY (worker, HARD, fail-fast).  Each fiber:
@@ -50,7 +50,7 @@ ORACLES:
         across the yield -- no cross-fiber compiler-state leak).
     Single-owner: the source string, both code objects, and both instruction
     tuples live in fiber-local variables, never shared.  Any mismatch is a
-    runloom desync, not documented Python semantics.
+    stackweave desync, not documented Python semantics.
 
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber stranded mid-decode
     (inside get_instructions walking a torn table) never returns; the watchdog +
@@ -81,7 +81,7 @@ even fires.
 import dis
 
 import harness
-import runloom
+import stackweave
 
 
 # Small deterministic parameters woven into each fiber's source so distinct
@@ -203,9 +203,9 @@ def purity_check(H, wid, idx, state):
     # YIELD: let siblings on other hubs compile + disassemble their own distinct
     # code objects mid-flight.  If any shared dis/compiler state leaks across
     # fibers, the post-yield re-disassembly or recompile will diverge.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
 
     # (a) Re-disassemble the SAME code object -- pure function of a fixed object.
     again = canon(code_a)
@@ -311,4 +311,4 @@ if __name__ == "__main__":
                  "disassembles identically (compile determinism across the "
                  "yield).  A changed stream, an opcode/opname desync, or "
                  "non-monotonic offsets is a torn-table / cross-fiber dis "
-                 "isolation bug in runloom")
+                 "isolation bug in stackweave")

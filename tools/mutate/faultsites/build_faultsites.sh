@@ -11,9 +11,9 @@ set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 MAIN="$(cd "$HERE/../../.." && pwd)"
 TU="${1:?usage: build_faultsites.sh <TU e.g. netpoll>}"
-PY="${RUNLOOM_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
+PY="${STACKWEAVE_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
 PYINC="$("$PY" -c 'import sysconfig; print(sysconfig.get_path("include"))')"
-WT="${RUNLOOM_MUT_WORKTREE:-$HOME/projects/pygo-mutants}"
+WT="${STACKWEAVE_MUT_WORKTREE:-$HOME/projects/pygo-mutants}"
 RESDIR="$(clang-18 -print-resource-dir)"
 RM="$(command -v safe-rm || echo rm)"
 FLATTEN="$MAIN/tools/mutate/schemata/flatten.py"
@@ -44,7 +44,7 @@ cp "$INJ" "$SRC"
 $RM -f src/runloom_c*.so 2>/dev/null
 PYTHON_GIL=0 "$PY" setup.py build_ext --inplace > "$WT/faultsite_build.log" 2>&1 \
   || { echo "BUILD FAILED -- see $WT/faultsite_build.log"; tail -25 "$WT/faultsite_build.log"; exit 1; }
-PYTHON_GIL=0 PYTHONPATH=src "$PY" -c "import runloom_c" || { echo "IMPORT FAILED"; exit 1; }
+PYTHON_GIL=0 PYTHONPATH=src "$PY" -c "import stackweave_c" || { echo "IMPORT FAILED"; exit 1; }
 echo "OK: $TU instrumented + built.  $NSITES fallible call sites."
 echo "  sites: $SITES"
 echo "  sweep: tools/mutate/faultsites/fault_sweep.py $TU"

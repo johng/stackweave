@@ -29,7 +29,7 @@ pytestmark = pytest.mark.skipif(
 
 
 def run_snippet(code, seed=12345):
-    env = mn_digest.hermetic_env({"RUNLOOM_MN_SEED": str(seed)})
+    env = mn_digest.hermetic_env({"STACKWEAVE_MN_SEED": str(seed)})
     p = subprocess.run([sys.executable, "-c", code], cwd=REPO, env=env,
                        timeout=60, stdout=subprocess.PIPE,
                        stderr=subprocess.PIPE, text=True)
@@ -42,7 +42,7 @@ class TestMnNsClock:
         last advance -- 5_000_000 ns, no double round-trip error -- and the
         sleepers woke in deadline order."""
         p = run_snippet(
-            "import runloom_c as rc\n"
+            "import stackweave_c as rc\n"
             "order = []\n"
             "def s(k, secs):\n"
             "    def w():\n"
@@ -61,7 +61,7 @@ class TestMnNsClock:
         per-deadline advances, in order -- the census clock tracks sched_sleep
         boundaries and jumps equal the sleep deltas."""
         p = run_snippet(
-            "import runloom_c as rc\n"
+            "import stackweave_c as rc\n"
             "seen = []\n"
             "def s(secs):\n"
             "    def w():\n"
@@ -93,7 +93,7 @@ class TestMnNsClock:
             "print('R{n}', rc._logical_ns(), order)\n"
             "rc.mn_fini()\n")
         p = run_snippet(
-            "import runloom_c as rc\n" +
+            "import stackweave_c as rc\n" +
             body.format(n=1) +
             "rc.sim_reset()\n" +
             body.format(n=2))
@@ -109,7 +109,7 @@ class TestMnNsClock:
         EXACT (pre-I1 semantics) and derives ns from it; a mirrored
         ns->double clock stranded this sleeper forever."""
         p = run_snippet(
-            "import runloom_c as rc\n"
+            "import stackweave_c as rc\n"
             "rc.mn_init(2)\n"
             "rc.mn_fiber(lambda: rc.sched_sleep(1.0 / 3.0))\n"
             "rc.mn_run()\n"
@@ -123,7 +123,7 @@ class TestMnNsClock:
         ctrl_arm stranded the sleeper (hang ~iter 10 under jitter).  40
         jittered iterations must complete."""
         p = run_snippet(
-            "import time, runloom_c as rc\n"
+            "import time, stackweave_c as rc\n"
             "rc.mn_init(2)\n"
             "rc.mn_fiber(lambda: None)\n"
             "rc.mn_run()\n"
@@ -139,11 +139,11 @@ class TestMnNsClock:
         """I1-review regression 3 (plane leak): an H=1 logical-clock run AFTER
         mn_fini must start at 0 (ctrl_fini resets the global mirror); the
         leaked mirror made it start at the mn run's final instant."""
-        env = mn_digest.hermetic_env({"RUNLOOM_MN_SEED": "12345",
-                                      "RUNLOOM_LOGICAL_CLOCK": "1"})
+        env = mn_digest.hermetic_env({"STACKWEAVE_MN_SEED": "12345",
+                                      "STACKWEAVE_LOGICAL_CLOCK": "1"})
         p = subprocess.run(
             [sys.executable, "-c",
-             "import runloom_c as rc\n"
+             "import stackweave_c as rc\n"
              "rc.mn_init(2)\n"
              "rc.mn_fiber(lambda: rc.sched_sleep(0.005))\n"
              "rc.mn_run(); rc.mn_fini()\n"
@@ -156,12 +156,12 @@ class TestMnNsClock:
 
     def test_h1_legacy_plane_unchanged(self):
         """The single-thread logical clock still works standalone (no mn):
-        rc.run() under RUNLOOM_LOGICAL_CLOCK advances to the sleeper deadline
+        rc.run() under STACKWEAVE_LOGICAL_CLOCK advances to the sleeper deadline
         exactly as before the I1 mirror was added."""
-        env = mn_digest.hermetic_env({"RUNLOOM_LOGICAL_CLOCK": "1"})
+        env = mn_digest.hermetic_env({"STACKWEAVE_LOGICAL_CLOCK": "1"})
         p = subprocess.run(
             [sys.executable, "-c",
-             "import runloom_c as rc\n"
+             "import stackweave_c as rc\n"
              "def w(): rc.sched_sleep(0.004)\n"
              "rc.fiber(w)\n"
              "rc.run()\n"

@@ -1,7 +1,7 @@
 """Job generators ("engines") for the hang-hunter.
 
 Each engine, given an RNG, returns a Job: a self-contained subprocess invocation
-(a runloom workload run under the free-threaded interpreter) plus the metadata
+(a stackweave workload run under the free-threaded interpreter) plus the metadata
 needed to reproduce and time it.  The orchestrator launches Jobs in parallel and
 triages any that hang or crash.
 
@@ -51,16 +51,16 @@ def _knobs(rng):
     """Random scheduler env knobs -- exercise the recovery machinery on and off."""
     # Flight recorder (#1): record the scheduler event ring and install the
     # crash handler so any crash carries its recent per-thread timeline.
-    env = {"PYTHON_GIL": "0", "RUNLOOM_GIL": "0",
-           "RUNLOOM_DEBUG": "ring", "RUNLOOM_CRASH": "on"}
-    for k in ("RUNLOOM_SYSMON", "RUNLOOM_PREEMPT"):
+    env = {"PYTHON_GIL": "0", "STACKWEAVE_GIL": "0",
+           "STACKWEAVE_DEBUG": "ring", "STACKWEAVE_CRASH": "on"}
+    for k in ("STACKWEAVE_SYSMON", "STACKWEAVE_PREEMPT"):
         if rng.random() < 0.3:
             env[k] = "0"
     if rng.random() < 0.3:
         # vary the world-yield pause but never 0 -- 0 disables the stop-the-world
         # monopoly fix (a known deadlock), which would be a self-inflicted false
         # finding rather than a new bug.
-        env["RUNLOOM_WORLD_YIELD_NS"] = str(rng.choice([1000, 50000, 100000, 500000]))
+        env["STACKWEAVE_WORLD_YIELD_NS"] = str(rng.choice([1000, 50000, 100000, 500000]))
     return env
 
 
@@ -91,7 +91,7 @@ def stress_job(rng, py):
         env["HH_GC"] = rng.choice(["1", "1", "0"])
     argv = [py, os.path.join(WL, which + ".py")]
     repro = " ".join("{0}={1}".format(k, v) for k, v in sorted(env.items())
-                     if k.startswith(("HH_", "RUNLOOM_"))) + \
+                     if k.startswith(("HH_", "STACKWEAVE_"))) + \
         "  {0} {1}".format(py, os.path.join(WL, which + ".py"))
     # 120s >> a healthy capped run (seconds-to-~30s) but << "forever": alive at
     # 120s == a real deadlock.
@@ -100,8 +100,8 @@ def stress_job(rng, py):
 
 def hypo_job(rng, py):
     sd = rng.randrange(1, 2 ** 31)
-    env = {"PYTHON_GIL": "0", "RUNLOOM_GIL": "0",
-           "RUNLOOM_DEBUG": "ring", "RUNLOOM_CRASH": "on",
+    env = {"PYTHON_GIL": "0", "STACKWEAVE_GIL": "0",
+           "STACKWEAVE_DEBUG": "ring", "STACKWEAVE_CRASH": "on",
            "HH_MAX_EXAMPLES": str(rng.choice([50, 100, 150]))}
     argv = [py, os.path.join(WL, "hypo_model.py"), str(sd)]
     repro = "HH_MAX_EXAMPLES={0}  {1} {2} {3}".format(
@@ -112,19 +112,19 @@ def hypo_job(rng, py):
 def lifefuzz_job(rng, py):
     """One generative life-cycle program (tools/lifefuzz) under the hang/crash net.
     Reuses the scheduler-knob randomizer; adds the freed-state oracle + a pinned
-    RUNLOOM_MN_SEED so a finding replays.  The worker's INTERNAL watchdog is set
+    STACKWEAVE_MN_SEED so a finding replays.  The worker's INTERNAL watchdog is set
     high (600s) so a true wedge stays ALIVE past this Job's timeout -> the daemon's
     gdb-on-live-process hang triage fires (not the worker's own self-kill)."""
     seed = rng.randrange(1, 2 ** 31)
     mn_seed = rng.randrange(1, 2 ** 31)
     env = _knobs(rng)
     env["RUNLOOM_DBG_GSTATE"] = "1"                 # freed-state timer-entry oracle
-    env["RUNLOOM_MN_SEED"] = str(mn_seed)           # deterministic baton -> replay
+    env["STACKWEAVE_MN_SEED"] = str(mn_seed)           # deterministic baton -> replay
     if rng.random() < 0.5:
-        env["RUNLOOM_NETPOLL"] = rng.choice(NETPOLL_BACKENDS)
+        env["STACKWEAVE_NETPOLL"] = rng.choice(NETPOLL_BACKENDS)
     argv = [py, LIFEFUZZ, "worker", str(seed), str(mn_seed), "600"]
     repro = " ".join("{0}={1}".format(k, v) for k, v in sorted(env.items())
-                     if k.startswith("RUNLOOM_")) + \
+                     if k.startswith("STACKWEAVE_")) + \
         "  {0} {1} repro {2} --mn-seed {3}".format(py, LIFEFUZZ, seed, mn_seed)
     # life-cycle programs finish in ~1-2s; alive at 90s == a real wedge.
     return Job("lifefuzz", argv, env, 90, repro)
@@ -140,10 +140,10 @@ def _libtsan():
 
 
 def _ext_links_tsan():
-    """True iff the built runloom_c ext links libtsan (a TSan-rotation build)."""
+    """True iff the built stackweave_c ext links libtsan (a TSan-rotation build)."""
     try:
         import glob
-        sos = glob.glob(os.path.join(ROOT, "src", "runloom_c*.so"))
+        sos = glob.glob(os.path.join(ROOT, "src", "stackweave_c*.so"))
         if not sos:
             return False
         out = subprocess.check_output(["ldd", sos[0]], stderr=subprocess.DEVNULL).decode()
@@ -154,14 +154,14 @@ def _ext_links_tsan():
 
 def lifefuzz_tsan_job(rng, py):
     """lifefuzz under the gold-standard TSan ext: setarch -R (ASLR off, or TSan
-    aborts on 6.x high-entropy mmaps) + LD_PRELOAD=libtsan + the runloom CPython-
+    aborts on 6.x high-entropy mmaps) + LD_PRELOAD=libtsan + the stackweave CPython-
     only suppressions; a non-suppressed race exits 86 -> CRASH triage.  TSan is
     ~10-20x slower, so a bigger timeout."""
     seed = rng.randrange(1, 2 ** 31)
     mn_seed = rng.randrange(1, 2 ** 31)
     env = _knobs(rng)
     env["RUNLOOM_DBG_GSTATE"] = "1"
-    env["RUNLOOM_MN_SEED"] = str(mn_seed)
+    env["STACKWEAVE_MN_SEED"] = str(mn_seed)
     libtsan = _libtsan() or "libtsan.so"
     env["LD_PRELOAD"] = libtsan
     env["TSAN_OPTIONS"] = ("halt_on_error=0:exitcode=86:history_size=7:suppressions="
@@ -171,7 +171,7 @@ def lifefuzz_tsan_job(rng, py):
     repro = ("LD_PRELOAD={0} TSAN_OPTIONS={1} {2}  setarch {3} -R {4} {5} repro {6} --mn-seed {7}"
              .format(libtsan, env["TSAN_OPTIONS"],
                      " ".join("{0}={1}".format(k, v) for k, v in sorted(env.items())
-                              if k.startswith("RUNLOOM_")),
+                              if k.startswith("STACKWEAVE_")),
                      arch, py, LIFEFUZZ, seed, mn_seed))
     return Job("lifefuzz-tsan", argv, env, 240, repro)
 

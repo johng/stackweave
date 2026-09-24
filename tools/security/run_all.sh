@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Run the runloom security-verification checks (see FINDINGS.md). Free-threaded
+# Run the stackweave security-verification checks (see FINDINGS.md). Free-threaded
 # 3.13t, GIL forced off. Exits non-zero if any check fails.
 #
 # For the race checks (S2/S3) under ThreadSanitizer, build the whole ext with
@@ -34,10 +34,10 @@ else
 fi
 # Gate subset: S1-S4 are the DETERMINISTIC safety oracles (scrub / signal storm /
 # refcount race / valgrind).  S6-S9 are randomised fuzzers whose home is the
-# nightly daemon, not a merge gate -- RUNLOOM_SEC_FAST=1 stops here so the
+# nightly daemon, not a merge gate -- STACKWEAVE_SEC_FAST=1 stops here so the
 # extensive gate can run the deterministic subset without the fuzz budget.
-if [ "${RUNLOOM_SEC_FAST:-0}" = 1 ]; then
-    echo "== RUNLOOM_SEC_FAST: skipping fuzzers S6-S9 (deterministic subset only) =="
+if [ "${STACKWEAVE_SEC_FAST:-0}" = 1 ]; then
+    echo "== STACKWEAVE_SEC_FAST: skipping fuzzers S6-S9 (deterministic subset only) =="
     echo "== deterministic security subset (S1-S4) passed =="
     exit 0
 fi

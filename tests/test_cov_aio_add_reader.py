@@ -3,11 +3,11 @@
 These low-level selector-style callbacks had zero direct tests.  asyncio's
 contract: add_reader(fd, cb, *args) fires cb() (the callback does the recv)
 whenever fd is readable; remove_reader(fd) stops it.  add_writer/remove_writer
-mirror that for writability.  runloom implements them level-triggered via a
-single per-fd io-runner fiber (src/runloom/aio/loop_io.py::_pg_io_runner) that
+mirror that for writability.  stackweave implements them level-triggered via a
+single per-fd io-runner fiber (src/stackweave/aio/loop_io.py::_pg_io_runner) that
 parks on the union interest mask and re-arms after each dispatch.
 
-We drive everything through runloom.aio.run() (its asyncio.run drop-in) with a
+We drive everything through stackweave.aio.run() (its asyncio.run drop-in) with a
 hang_guard so a lost-wake regression fails as a timeout, not a wedged suite.
 """
 import asyncio
@@ -16,7 +16,7 @@ import sys
 
 import pytest
 
-import runloom.aio as aio
+import stackweave.aio as aio
 from adv_util import hang_guard
 
 

@@ -1,6 +1,6 @@
 """Channels — buffered, unbuffered, close, and range.
 
-A runloom.Chan is a Go channel: a typed-agnostic, fiber-safe queue.
+A stackweave.Chan is a Go channel: a typed-agnostic, fiber-safe queue.
 Buffered channels hold up to `capacity` values before a send blocks;
 an unbuffered channel (capacity 0) is a rendezvous — each send blocks
 until a receiver takes the value.  `recv()` returns (value, ok); `ok`
@@ -13,14 +13,14 @@ Run:
 
 import os
 
-import runloom
+import stackweave
 
 # Free-threaded build: fan fibers across all cores (M:N scheduler).
 HUBS = os.cpu_count() or 4
 
 def main():
     # --- Buffered: sends up to capacity don't block, no receiver yet. ---
-    buf = runloom.Chan(3)
+    buf = stackweave.Chan(3)
     buf.send("a")
     buf.send("b")
     buf.send("c")
@@ -29,19 +29,19 @@ def main():
         print("buffered:", v)
 
     # --- Unbuffered: each send rendezvous with a receiver. ---
-    pipe = runloom.Chan()    # capacity 0
+    pipe = stackweave.Chan()    # capacity 0
 
     def producer():
         for i in range(3):
             pipe.send(i)       # blocks until main's loop receives
         pipe.close()
 
-    runloom.fiber(producer)
+    stackweave.fiber(producer)
     for v in pipe:             # receives 0, 1, 2 then sees the close
         print("unbuffered:", v)
 
     # --- recv() spells out the (value, ok) close signal explicitly. ---
-    done = runloom.Chan(1)
+    done = stackweave.Chan(1)
     done.send(99)
     done.close()
     value, ok = done.recv()
@@ -50,4 +50,4 @@ def main():
     print("recv ->", value, ok)        # None False  (closed + drained)
 
 if __name__ == "__main__":
-    runloom.run(HUBS, main)
+    stackweave.run(HUBS, main)

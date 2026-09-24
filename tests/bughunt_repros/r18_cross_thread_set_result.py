@@ -1,12 +1,12 @@
 """run_until_complete(fut) where fut is resolved DIRECTLY from a foreign
 thread (works under stock asyncio when the loop is otherwise active).
 Suspect: _stop_on_done is _runloom_fire_sync and runs on the FOREIGN thread ->
-runloom_c.sched_stop() targets the foreign thread's scheduler -> the loop
+stackweave_c.sched_stop() targets the foreign thread's scheduler -> the loop
 thread never stops if background fibers keep the scheduler non-empty."""
 import sys, threading, time, asyncio
-import runloom.aio as aio
+import stackweave.aio as aio
 
-loop = aio.RunloomEventLoop()
+loop = aio.StackweaveEventLoop()
 asyncio.set_event_loop(loop)
 
 async def bg():

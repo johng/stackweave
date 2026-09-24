@@ -9,7 +9,7 @@ native streaming state machine (a zlib z_stream, a bz_stream, an lzma_stream) --
 a mutable C object carrying the codec's window/dictionary/bit-buffer between
 calls.
 
-WHERE M:N COULD BREAK IT (the gap this program probes).  runloom multiplexes
+WHERE M:N COULD BREAK IT (the gap this program probes).  stackweave multiplexes
 tens of thousands of goroutines onto a handful of hubs with the GIL OFF.  A fiber
 that owns an incremental compressor feeds it a chunk, then YIELDS mid-stream --
 its half-built z_stream/bz_stream/lzma_stream sits parked while sibling fibers on
@@ -32,7 +32,7 @@ the yield (a redundant closed-form checksum that catches any silent single-byte
 corruption the length/equality check might race past).  Verified against a
 plain-threads control (8 OS threads each round-tripping fiber-local data through
 all codecs, GIL on AND off): 100% bit-identical, 0 checksum mismatches.  Under a
-correct runloom it must also hold; a mismatch means the codec's native stream
+correct stackweave it must also hold; a mismatch means the codec's native stream
 state leaked or was clobbered across a hub-migrating yield -- a runtime bug, not a
 documented codec semantic (the compressor objects are single-owner here, never
 shared, so this is NOT the "shared mutable object races" case).
@@ -47,7 +47,7 @@ ORACLES:
     stream is parked mid-frame.  Asserts: recovered length == original length,
     recovered bytes == original bytes, and CRC32(recovered) == the pre-yield CRC32.
     Single-owner: the input, the compressor, the decompressor, and both blobs are
-    all fiber-local; a failure is a runloom codec-state desync.
+    all fiber-local; a failure is a stackweave codec-state desync.
 
   * CONSERVATION / NON-VACUITY (post, HARD): per-wid race-free slots tally the
     round-trips completed and bytes conserved; require > 0 (else the round-trip
@@ -79,7 +79,7 @@ import compression.lzma
 import compression.zlib
 
 import harness
-import runloom
+import stackweave
 
 # zlib.crc32 is the closed-form checksum used as the redundant round-trip oracle.
 # It is a pure function of the bytes; recomputing it on the recovered data must
@@ -130,7 +130,7 @@ def roundtrip_oneshot(compress, decompress, original):
     compressed blob is fiber-local; the yield parks this fiber so siblings run
     their own codec calls before this fiber decompresses.  Returns recovered bytes."""
     blob = compress(original)
-    runloom.yield_now()
+    stackweave.yield_now()
     return decompress(blob)
 
 
@@ -144,7 +144,7 @@ def roundtrip_incremental(make_comp, make_decomp, chunks, original):
     parts = []
     for ch in chunks:
         parts.append(comp.compress(ch))
-        runloom.yield_now()                # native compressor stream parked mid-frame
+        stackweave.yield_now()                # native compressor stream parked mid-frame
     parts.append(comp.flush())
     blob = b"".join(parts)
 
@@ -156,7 +156,7 @@ def roundtrip_incremental(make_comp, make_decomp, chunks, original):
     pos = 0
     while pos < len(blob):
         out.append(decomp.decompress(blob[pos:pos + step]))
-        runloom.yield_now()                # native decompressor stream parked mid-frame
+        stackweave.yield_now()                # native decompressor stream parked mid-frame
         pos += step
     # Some decompressors expose flush(); the incremental ones here finish on the
     # last decompress() call, but join whatever was produced.

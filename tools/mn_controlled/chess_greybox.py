@@ -12,9 +12,9 @@ corpus toward schedules that exercise NEW scheduling decisions -- so feedback
 reaches interleavings the bounded explorer can't afford, with no exhaustive blowup.
 
 It reuses chess_explore.run_prefix verbatim, so it needs NO new C: the baton hook
-already exposes run(prefix) -> (fan-out trace, outcome) via RUNLOOM_MN_SCHEDULE +
-RUNLOOM_MN_FANOUT.  A found bug is reported WITH its reproducing
-RUNLOOM_MN_SCHEDULE (deterministic replay -- the whole point of the baton).
+already exposes run(prefix) -> (fan-out trace, outcome) via STACKWEAVE_MN_SCHEDULE +
+STACKWEAVE_MN_FANOUT.  A found bug is reported WITH its reproducing
+STACKWEAVE_MN_SCHEDULE (deterministic replay -- the whole point of the baton).
 
 Coverage fingerprint: the set of PREEMPTION EDGES exercised -- each grant where
 the chosen hub != the continue-same-hub default contributes
@@ -177,7 +177,7 @@ def main(argv):
         # No grant points: the workload did not engage the controlled baton.
         # Refuse to report a false green -- this is a setup error, not "no bugs".
         print("chess_greybox: workload produced 0 grant points -- it must use "
-              "mn_init(>1)+mn_fiber+sched_sleep under RUNLOOM_MN_SEED and be "
+              "mn_init(>1)+mn_fiber+sched_sleep under STACKWEAVE_MN_SEED and be "
               "REPLAYABLE (no offload/real-IO). last output: {0!r}".format(last[:80]))
         return 2
     coverage |= schedule_cover(trace)
@@ -200,7 +200,7 @@ def main(argv):
         if outcome != "OK":
             findings.append((mp, outcome, last))
             print("  FOUND {0} at iter {1}: {2}".format(outcome, iters, last[:80]))
-            print("    REPRO: RUNLOOM_MN_SEED=1 RUNLOOM_MN_SCHEDULE={0} {1}"
+            print("    REPRO: STACKWEAVE_MN_SEED=1 STACKWEAVE_MN_SCHEDULE={0} {1}"
                   .format(",".join(str(k) for k in mp),
                           " ".join("{0}={1}".format(k, v) for k, v in extra_env.items())))
             if args.teeth:

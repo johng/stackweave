@@ -22,9 +22,9 @@ def main():
     print("initializer call count:", calls[0], "(max_workers=4, 100 submits)")
 
 if USE_PATCH:
-    import runloom
-    from runloom import monkey
+    import stackweave
+    from stackweave import monkey
     monkey.patch()
-    runloom.run(1, main)
+    stackweave.run(1, main)
 else:
     main()

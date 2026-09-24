@@ -12,7 +12,7 @@ OUT=/tmp/hunt_capture.txt
 
 echo "hunt: N=$N H=$H M=$M seeds=[$START..$((START+COUNT-1))] watchdog=${WD}s"
 for ((s=START; s<START+COUNT; s++)); do
-    RUNLOOM_DEBUG_DIAG=ring,gstate "$BIN" "$N" "$H" "$M" "$s" >/tmp/hunt_run.txt 2>&1 &
+    STACKWEAVE_DEBUG_DIAG=ring,gstate "$BIN" "$N" "$H" "$M" "$s" >/tmp/hunt_run.txt 2>&1 &
     pid=$!
     # Poll for completion.
     done=0

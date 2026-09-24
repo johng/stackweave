@@ -9,9 +9,9 @@ Stresses: simultaneous recv/send, half-close, backpressure, 3 hops of sockets.
 """
 import socket
 
-import harness          # sets up sys.path so `runloom` imports
+import harness          # sets up sys.path so `stackweave` imports
 import netutil
-import runloom
+import stackweave
 
 
 def pipe(src, dst, done):
@@ -44,7 +44,7 @@ def proxy_conn(H, client_sock, backend_addr):
         netutil.close_quiet(client_sock)
         netutil.close_quiet(backend)
         return
-    done = runloom.Chan(2)
+    done = stackweave.Chan(2)
     H.fiber(pipe, client_sock, backend, done)
     H.fiber(pipe, backend, client_sock, done)
     # Join both halves (each ends on a network FIN, never a forced close)

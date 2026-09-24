@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Performance benchmark orchestrator: req/s and bandwidth for the 5 runloom
+"""Performance benchmark orchestrator: req/s and bandwidth for the 5 stackweave
 tiers + asyncio + uvloop + gevent + go.
 
 For each server config and each metric (small-payload req/s, 1.5 MB bandwidth) it
@@ -66,31 +66,31 @@ def build_specs():
                 "-port", str(port), "-gomaxprocs", str(GO), "-token", token]
 
     return [
-        dict(name="runloom_sync", label="Runloom sync wrappers (epoll, py handler)",
+        dict(name="runloom_sync", label="Stackweave sync wrappers (epoll, py handler)",
              interp="3.13t FT", cores=HUBS, cpus=many, gil_off=True, env={},
              make=rl("runloom_epoll_py_sync.py")),
-        dict(name="runloom_c", label="Runloom C scaffold (py handler, C TCPConn)",
+        dict(name="stackweave_c", label="Stackweave C scaffold (py handler, C TCPConn)",
              interp="3.13t FT", cores=HUBS, cpus=many, gil_off=True, env={},
              make=rl("runloom_epoll_py_tcpcon.py")),
-        dict(name="runloom_c_cython", label="Runloom C scaffold + Cython C handler (epoll)",
+        dict(name="runloom_c_cython", label="Stackweave C scaffold + Cython C handler (epoll)",
              interp="3.13t FT", cores=HUBS, cpus=many, gil_off=True, env={},
              make=rl("runloom_iouring_cython_tcpcon.py", ("--optimize", "none"))),
-        dict(name="runloom_iouring", label="Runloom io_uring loop (py handler)",
+        dict(name="runloom_iouring", label="Stackweave io_uring loop (py handler)",
              interp="3.13t FT", cores=HUBS, cpus=many, gil_off=True,
-             env={"RUNLOOM_IOURING_LOOP": "1"}, make=rl("runloom_epoll_py_sync.py")),
-        dict(name="runloom_cython", label="Runloom io_uring + Cython C handler",
+             env={"STACKWEAVE_IOURING_LOOP": "1"}, make=rl("runloom_epoll_py_sync.py")),
+        dict(name="runloom_cython", label="Stackweave io_uring + Cython C handler",
              interp="3.13t FT", cores=HUBS, cpus=many, gil_off=True,
-             env={"RUNLOOM_IOURING_LOOP": "1"},
+             env={"STACKWEAVE_IOURING_LOOP": "1"},
              make=rl("runloom_iouring_cython_tcpcon.py", ("--optimize", "none"))),
-        dict(name="runloom_cython_opt", label="Runloom io_uring + Cython + optimize(throughput)",
+        dict(name="runloom_cython_opt", label="Stackweave io_uring + Cython + optimize(throughput)",
              interp="3.13t FT", cores=HUBS, cpus=many, gil_off=True,
-             env={"RUNLOOM_IOURING_LOOP": "1"},
+             env={"STACKWEAVE_IOURING_LOOP": "1"},
              make=rl("runloom_iouring_cython_tcpcon.py", ("--optimize", "throughput"))),
-        dict(name="runloom_cdef", label="Runloom io_uring + Cython cdef handler (tstate-free c_entry)",
+        dict(name="runloom_cdef", label="Stackweave io_uring + Cython cdef handler (tstate-free c_entry)",
              interp="3.13t FT", cores=HUBS, cpus=many, gil_off=True,
-             env={"RUNLOOM_IOURING_LOOP": "1"},
+             env={"STACKWEAVE_IOURING_LOOP": "1"},
              make=rl("runloom_iouring_cdef_tcpcon.py")),
-        dict(name="runloom_cdef_epoll", label="Runloom epoll + Cython cdef handler (tstate-free c_entry)",
+        dict(name="runloom_cdef_epoll", label="Stackweave epoll + Cython cdef handler (tstate-free c_entry)",
              interp="3.13t FT", cores=HUBS, cpus=many, gil_off=True, env={},
              make=rl("runloom_iouring_cdef_tcpcon.py")),
         dict(name="asyncio", label="asyncio Protocol (GIL, 1 core)",

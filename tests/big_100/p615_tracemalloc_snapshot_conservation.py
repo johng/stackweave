@@ -20,7 +20,7 @@ a `stats` dict and a `tracebacks` cache dict, mutates Statistic.size/.count via
 read-modify-write while iterating the trace tuple, then statistics() sorts the
 grouped list; filter_traces rebuilds a trace list under a comprehension;
 compare_to runs _group_by over TWO snapshots and pops from one group dict while
-iterating the other; pickle walks the object graph.  If runloom's M:N scheduler
+iterating the other; pickle walks the object graph.  If stackweave's M:N scheduler
 leaked another fiber's grouping dict / Statistic accumulator into this fiber across
 a yield, or tore the frozen trace tuple, the reduction would stop conserving:
 group sizes would no longer sum to the total, a domain filter would admit an alien
@@ -81,7 +81,7 @@ import pickle
 import tracemalloc
 
 import harness
-import runloom
+import stackweave
 
 # Synthetic frame universe.  16 files x lineno 1..49 => 784 possible frames, so a
 # traceback of up to 4 DISTINCT frames is always constructible (the cumulative law
@@ -195,9 +195,9 @@ def snapshot_oracle(H, wid, idx, rng, state):
     frozen_id = id(frozen)
 
     # ---- YIELD: let siblings reduce their own snapshots on other hubs ---------
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
 
     # ---- AFTER the yield: stability + the remaining conservation laws ---------
     # The frozen trace tuple must be the SAME object and value.

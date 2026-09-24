@@ -10,19 +10,19 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "src"))
-import runloom_c
+import stackweave_c
 
 import os as _crashos
-if _crashos.environ.get("RUNLOOM_CRASH"):
-    runloom_c.install_crash_handler(_crashos.environ["RUNLOOM_CRASH"],
-                                 _crashos.environ.get("RUNLOOM_CRASH_FILE"))
+if _crashos.environ.get("STACKWEAVE_CRASH"):
+    stackweave_c.install_crash_handler(_crashos.environ["STACKWEAVE_CRASH"],
+                                 _crashos.environ.get("STACKWEAVE_CRASH_FILE"))
 
 NHUB = int(os.environ.get("HH_NHUB", "4"))
 NWORK = int(os.environ.get("HH_NWORK", "48"))
 ROUNDS = int(os.environ.get("HH_ROUNDS", "200"))
 NCOLL = int(os.environ.get("HH_NCOLL", "1"))           # how many collector goroutines
 
-done = runloom_c.Chan(NWORK + NCOLL)
+done = stackweave_c.Chan(NWORK + NCOLL)
 stop = [False]
 
 
@@ -31,7 +31,7 @@ def worker():
         a = {}; b = {}
         a["b"] = b; b["a"] = a; a["self"] = a
         del a, b
-        runloom_c.sched_yield_classic()
+        stackweave_c.sched_yield_classic()
     done.send(1)
 
 
@@ -40,7 +40,7 @@ def collector():
     while not stop[0]:
         gc.collect()
         n += 1
-        runloom_c.sched_yield_classic()
+        stackweave_c.sched_yield_classic()
     done.send(("gc", n))
 
 
@@ -52,13 +52,13 @@ def stopper():
         done.recv()
 
 
-runloom_c.mn_init(NHUB)
+stackweave_c.mn_init(NHUB)
 for _ in range(NCOLL):
-    runloom_c.mn_fiber(collector)
+    stackweave_c.mn_fiber(collector)
 for _ in range(NWORK):
-    runloom_c.mn_fiber(worker)
-runloom_c.mn_fiber(stopper)
-runloom_c.mn_run()
-runloom_c.mn_fini()
-assert runloom_c._self_check(0) == 0, "self_check failed"
+    stackweave_c.mn_fiber(worker)
+stackweave_c.mn_fiber(stopper)
+stackweave_c.mn_run()
+stackweave_c.mn_fini()
+assert stackweave_c._self_check(0) == 0, "self_check failed"
 print("PASS")

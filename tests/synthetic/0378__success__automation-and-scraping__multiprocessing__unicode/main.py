@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 """Automation and scraping -- a automation and scraping toy using the multiprocessing primitive with a unicode payload, expecting success.
 
-Synthetic runloom toy program (auto-generated).
+Synthetic stackweave toy program (auto-generated).
   test type : success
   category  : automation and scraping
   primitive : multiprocessing
   format    : unicode (utf-8)
-  scheduler : M:N via runloom.run(8, root), free-threaded 3.13t, GIL off
+  scheduler : M:N via stackweave.run(8, root), free-threaded 3.13t, GIL off
 
-Exercises runloom's main API -- the root goroutine spawns workers with
-runloom.fiber(...) onto 8 hub threads, using the monkey-patched cooperative
+Exercises stackweave's main API -- the root goroutine spawns workers with
+stackweave.fiber(...) onto 8 hub threads, using the monkey-patched cooperative
 multiprocessing primitive to carry a unicode payload.  Prints PASS and exits 0 when
 healthy; FAIL / hang / crash signals a bug.
 """
@@ -37,8 +37,8 @@ import multiprocessing as mp
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "..", "src"))
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
 THEME = "automation and scraping"
 CATSLUG = "automation-and-scraping"
@@ -96,8 +96,8 @@ def mp_echo(in_q, out_q):
     out_q.put(in_q.get())
 
 def main():
-    runloom.monkey.patch()
-    GO = runloom.fiber
+    stackweave.monkey.patch()
+    GO = stackweave.fiber
     payload = mk_payload()
     enc = encode(payload)
     assert decode(enc) == payload
@@ -117,7 +117,7 @@ def main():
 
     def __root():
         GO(driver)
-    runloom.run(NHUB, __root)
+    stackweave.run(NHUB, __root)
     in_q.close()
     out_q.close()
     finish(state.get("ok") is True and state.get("exit") == 0, state)

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# rr_chaos.sh -- record/replay chaos testing of a runloom workload with rr.
+# rr_chaos.sh -- record/replay chaos testing of a stackweave workload with rr.
 #
 # Mozilla rr's chaos mode (rr record --chaos) actively perturbs thread
 # scheduling to provoke rare races, and gives PERFECT deterministic replay
@@ -26,7 +26,7 @@ if ! rr record true >/dev/null 2>&1; then
     echo "[rr] rr present but cannot record here (need ptrace / perf_event_paranoid<=1)"; exit 0
 fi
 
-echo "[rr] $N chaos recordings of the runloom workload; first crash/hang is kept for replay"
+echo "[rr] $N chaos recordings of the stackweave workload; first crash/hang is kept for replay"
 for i in $(seq 1 "$N"); do
     dir="/tmp/runloom_rr_$i"
     if ! PYTHON_GIL=0 PYTHONPATH="$ROOT/src" timeout 30 \

@@ -1,6 +1,6 @@
 """big_100 / 225 -- cross-hub wake-eventfd coalescing fan-in storm.
 
-WAKE_DEDUP (RUNLOOM_WAKE_DEDUP, default ON) coalesces the redundant per-hub
+WAKE_DEDUP (STACKWEAVE_WAKE_DEDUP, default ON) coalesces the redundant per-hub
 wake-eventfd writes that a burst of concurrent cross-hub wakes would otherwise
 generate: a waker writes the kick eventfd only on the 0->1 transition of the
 hub's wake_pending flag, and the pump clears-then-rechecks it (a Dekker-shaped
@@ -19,10 +19,10 @@ A coalesced-but-dropped kick = the consumer never wakes = no forward progress =
 watchdog HANG (exit 3).  A spurious double-resume = the consumer observes a
 token with no matching pending send = a sequence/accounting break (exit 1).
 
-The two modes (RUNLOOM_WAKE_DEDUP=1 coalescing vs =0 every-write) must BOTH
+The two modes (STACKWEAVE_WAKE_DEDUP=1 coalescing vs =0 every-write) must BOTH
 pass; this module re-execs itself once per mode (a tiny sub-mode driver) when
 the env var is unset, so a single invocation asserts =0 vs =1 parity.  The race
-window is widened with RUNLOOM_WAKE_SKEW / RUNLOOM_DELAY if those are set.
+window is widened with STACKWEAVE_WAKE_SKEW / STACKWEAVE_DELAY if those are set.
 
 The feature is netpoll-internal and present on every backend (epoll eventfd /
 kqueue+select self-pipe), so there is no hard skip -- it runs everywhere; the
@@ -37,24 +37,24 @@ spurious double-resume; =0 vs =1 parity.
 import os
 import sys
 
-# RUNLOOM_WAKE_DEDUP is read ONCE per process (getenv cached at first park), so
+# STACKWEAVE_WAKE_DEDUP is read ONCE per process (getenv cached at first park), so
 # the =0/=1 parity cannot be exercised in one scheduler.  When the operator has
 # NOT pinned a mode, re-exec ourselves once per mode as child processes and
 # require BOTH to pass -- that is the "=0 vs =1 parity" assertion.  Each child
-# sets the env BEFORE importing runloom (mandatory: mn_init/getenv caches it).
-# A sentinel guards against a re-exec loop.  This must happen before any runloom
+# sets the env BEFORE importing stackweave (mandatory: mn_init/getenv caches it).
+# A sentinel guards against a re-exec loop.  This must happen before any stackweave
 # import below.
-_SUBMODE = os.environ.get("RUNLOOM_WAKE_DEDUP")
+_SUBMODE = os.environ.get("STACKWEAVE_WAKE_DEDUP")
 if _SUBMODE is None and os.environ.get("BIG100_DEDUP_PARITY_CHILD") != "1":
     import subprocess
     rc = 0
     for mode in ("1", "0"):
         env = dict(os.environ)
-        env["RUNLOOM_WAKE_DEDUP"] = mode
+        env["STACKWEAVE_WAKE_DEDUP"] = mode
         env["BIG100_DEDUP_PARITY_CHILD"] = "1"
         sys.stderr.write(
             "[p225_wake_dedup_fanin_storm] === sub-mode "
-            "RUNLOOM_WAKE_DEDUP={0} ===\n".format(mode))
+            "STACKWEAVE_WAKE_DEDUP={0} ===\n".format(mode))
         sys.stderr.flush()
         cp = subprocess.run([sys.executable] + sys.argv, env=env)
         if cp.returncode != 0:
@@ -66,10 +66,10 @@ if _SUBMODE is None and os.environ.get("BIG100_DEDUP_PARITY_CHILD") != "1":
     sys.exit(rc)
 
 # A single mode is now pinned in the env; default to ON if somehow still unset.
-os.environ.setdefault("RUNLOOM_WAKE_DEDUP", "1")
+os.environ.setdefault("STACKWEAVE_WAKE_DEDUP", "1")
 
 import harness        # noqa: E402
-import runloom        # noqa: E402
+import stackweave        # noqa: E402
 
 # Producers per fan-in round: a meaty burst of simultaneous cross-hub kicks at
 # the one idle consumer.  Bounded so memory/channel count stay flat at scale.
@@ -82,8 +82,8 @@ PRODUCERS = 64
 def setup(H):
     # One consumer; PRODUCERS producer->consumer rendezvous channels; one
     # release barrier channel per round so the burst is near-simultaneous.
-    feeds = [runloom.Chan(0) for _ in range(PRODUCERS)]
-    barrier = runloom.Chan(0)        # broadcast-by-N: producers each recv once
+    feeds = [stackweave.Chan(0) for _ in range(PRODUCERS)]
+    barrier = stackweave.Chan(0)        # broadcast-by-N: producers each recv once
     for ch in feeds:
         H.register_close(ch)
     H.register_close(barrier)
@@ -96,7 +96,7 @@ def setup(H):
         # spurious-resume / cross-talk guard: per (round,producer) one-bit seen
         # map is too big; instead the consumer tallies tokens per round and
         # asserts == PRODUCERS, and checks each token's round field matches.
-        "dedup": os.environ.get("RUNLOOM_WAKE_DEDUP", "1"),
+        "dedup": os.environ.get("STACKWEAVE_WAKE_DEDUP", "1"),
     }
 
 
@@ -266,4 +266,4 @@ if __name__ == "__main__":
                  default_funcs=PRODUCERS + 1,
                  describe="fan-in storm at one idle hub: N cross-hub wakes kick "
                           "a single parker; assert no lost/dropped/duplicated "
-                          "wake under RUNLOOM_WAKE_DEDUP=1 and =0")
+                          "wake under STACKWEAVE_WAKE_DEDUP=1 and =0")

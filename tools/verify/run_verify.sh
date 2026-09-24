@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# run_verify.sh -- run every runloom formal-verification check and report.
+# run_verify.sh -- run every stackweave formal-verification check and report.
 #
 # Two engines:
 #   SPIN  -- exhaustive interleaving model checker (Promela models of the
@@ -27,7 +27,7 @@ set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 # Interpreter for the Python lints below.  These are SOURCE-analysis tools --
-# they read this checkout's files and never import runloom -- so the interpreter
+# they read this checkout's files and never import stackweave -- so the interpreter
 # under test is irrelevant to them; all they need is a working python3 that has
 # their optional deps (tstate_manifest wants libclang).  Hence: prefer a system
 # python3, and fall back to the interpreter under test.
@@ -393,7 +393,7 @@ eng_bg coq       coq/run_coq.sh
 eng_bg iris      iris/run_iris.sh
 eng_bg rc11      iris/rc11/run_rc11.sh
 
-echo "================ runloom formal verification ================"
+echo "================ stackweave formal verification ================"
 if [ "$FAST" = 1 ]; then
   echo "  (worker pool: VERIFY_JOBS=$JOBS;  VERIFY_FAST=1 -- skipping 3 slow CBMC proofs)"
 else
@@ -415,7 +415,7 @@ if have spin && have cc; then
     launch netpoll_commit check_spin netpoll_commit "netpoll park/wake commit (Go netpollblockcommit): no lost wake, resumed at most once"
     launch netpoll_rearm  check_spin netpoll_rearm  "netpoll register-once LEVEL arm (shipped scheme): LEVEL re-reports a still-ready fd so a late-linking parker is never edge-dropped -> no lost wake"
     launch netpoll_multipool check_spin netpoll_multipool "netpoll multi-pool dispatch: pool->sub lock hierarchy is deadlock-free, parker claimed once"
-    launch netpoll_pump_kick check_spin netpoll_pump_kick "cross-hub pump-wake DEDUP (RUNLOOM_WAKE_DEDUP): coalesced kick never loses a wake (Dekker clear-then-recheck)"
+    launch netpoll_pump_kick check_spin netpoll_pump_kick "cross-hub pump-wake DEDUP (STACKWEAVE_WAKE_DEDUP): coalesced kick never loses a wake (Dekker clear-then-recheck)"
     launch hub_fanout     check_spin hub_fanout   "hub_submit 3-way waker-route fanout COMPOSITION: whichever wait mode (running/idle/ring/pump) the target hub is in, some route reaches it -- no lost wake"
     launch iouring_msclose check_spin iouring_msclose "io_uring multishot handle lifetime: no use-after-free under single-owner recv/close"
     launch iouring_msclose-cc check_spin_variant iouring_msclose BUG_CONCURRENT_CLOSE "handle refcount makes a CONCURRENT close-vs-parked-recv (shared conn) memory-safe -- no UAF"
@@ -510,7 +510,7 @@ fi
 # Until then these two proofs are downgraded to a LOUD, non-fatal KNOWN-ISSUE so
 # the gate does not perpetually red on a tooling bug.  They STILL hard-fail on a
 # genuine property violation (a completed run that prints VERIFICATION FAILED),
-# so a real regression is not masked.  Set RUNLOOM_VERIFY_CLDEQUE_STRICT=1 to make
+# so a real regression is not masked.  Set STACKWEAVE_VERIFY_CLDEQUE_STRICT=1 to make
 # any non-pass fatal again (use once CBMC is fixed).
 # ============================================================================
 cldeque_known_issue() {   # $1 = log file, $2 = cbmc exit code
@@ -518,14 +518,14 @@ cldeque_known_issue() {   # $1 = log file, $2 = cbmc exit code
     if grep -q "VERIFICATION FAILED" "$log" 2>/dev/null; then
         red "FAIL"; echo " -- REAL property violation (VERIFICATION FAILED), see $log"; return 1
     fi
-    if [ "${RUNLOOM_VERIFY_CLDEQUE_STRICT:-0}" = 1 ]; then
+    if [ "${STACKWEAVE_VERIFY_CLDEQUE_STRICT:-0}" = 1 ]; then
         red "FAIL"; echo " -- CBMC did not complete (exit $rc), see $log (STRICT)"; return 1
     fi
     printf '\033[33mKNOWN-ISSUE\033[0m'
     echo " -- CBMC did not complete (exit $rc, no verdict): a CBMC-5.95.1"
     echo "             crash on the concurrent harness, NOT a proof failure (see the KNOWN"
     echo "             TOOLING ISSUE note in run_verify.sh; deque covered by spin live_deque"
-    echo "             + tests_c stress; RUNLOOM_VERIFY_CLDEQUE_STRICT=1 to fail)."
+    echo "             + tests_c stress; STACKWEAVE_VERIFY_CLDEQUE_STRICT=1 to fail)."
     return 0
 }
 
@@ -579,7 +579,7 @@ cbmc_sched() {
 }
 
 cbmc_wakestate() {
-    # per-g wake_state FSM (RUNLOOM_PER_G_TSTATE global runq): totality (every
+    # per-g wake_state FSM (STACKWEAVE_PER_G_TSTATE global runq): totality (every
     # ENABLED event has a defined transition) + no-lost-wake (a remembered wake
     # is always enqueued, never returns to PARKED unenqueued).  Teeth: the
     # -DBUG_LOSE_WAKE config drops a remembered wake at release and MUST fail.

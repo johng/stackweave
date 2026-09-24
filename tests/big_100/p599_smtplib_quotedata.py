@@ -13,7 +13,7 @@ READ-ONLY during matching (documented thread-safe) -- exactly like colorsys touc
 the math tables.  So each is a legitimate single-owner PURITY oracle when the input
 is fiber-local.
 
-WHERE M:N COULD BREAK IT (the gap this program probes).  Under runloom, thousands of
+WHERE M:N COULD BREAK IT (the gap this program probes).  Under stackweave, thousands of
 fibers call quotedata()/quote_periods()/quoteaddr() across hubs with the GIL off,
 parking on a cooperative yield mid-workload.  A pure transform MUST return a value
 that (a) exactly equals the closed-form expected computed independently, and (b) is
@@ -30,7 +30,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY.  quotedata/_quote_periods/quoteaddr are t
 documented public interface and are referentially transparent.  We verified against
 a plain-threads control (8 OS threads, GIL on AND off, each transforming its own
 fiber-local body): 100% of results equal the closed form and are stable -- 0
-divergences.  Under a CORRECT runloom it must also hold, so the single-owner oracle
+divergences.  Under a CORRECT stackweave it must also hold, so the single-owner oracle
 PASSES on a correct runtime (exits 0 when there is no bug).  Every input is built in
 a fiber-local variable and never shared, so a divergence cannot be "shared mutable
 container raced" -- it can only be a runtime corruption.
@@ -51,7 +51,7 @@ ORACLES:
         (the DATA-transparency conservation law: no byte lost/gained);
       - quoteaddr(addr) MUST be deterministic across the yield (a1 == a2 == a
         fresh recompute) for each fiber-local address.
-    Single-owner: the body/address are fiber-local; a failure is a runloom purity
+    Single-owner: the body/address are fiber-local; a failure is a stackweave purity
     or framing-conservation desync.
 
   * NON-VACUITY (post, HARD): the load-bearing arm actually ran (checks > 0).
@@ -79,7 +79,7 @@ corruption before the closed-form comparison even fires.
 import smtplib
 
 import harness
-import runloom
+import stackweave
 
 # CRLF, per RFC 5321 -- the canonical line ending quotedata normalizes to.
 CRLF = "\r\n"
@@ -231,9 +231,9 @@ def one_check(H, wid, idx, rng, state):
     qa1 = smtplib.quoteaddr(addr)
 
     # YIELD: park so siblings run their own transforms on this + other hubs.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
 
     # 4) STABILITY across the yield: same fiber-local input -> bit-identical out.
     got2 = smtplib.quotedata(body)
@@ -321,4 +321,4 @@ if __name__ == "__main__":
                  "exactly (framing conservation); quoteaddr must be deterministic "
                  "across the yield.  A divergence from the closed form, a value "
                  "that changes across the yield, or a lost/duplicated byte on the "
-                 "round-trip is the runloom bug the shared re-engine could cause")
+                 "round-trip is the stackweave bug the shared re-engine could cause")

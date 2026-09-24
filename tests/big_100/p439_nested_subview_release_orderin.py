@@ -101,7 +101,7 @@ ba->ob_exports localizes the torn count before the universe assert or the
 BufferError gate even fires.
 """
 import harness
-import runloom
+import stackweave
 
 
 # Finite BYTE universe.  ba[i] = f(i) draws from a recognizable spread (not the
@@ -263,9 +263,9 @@ def run_round_impl(H, wid, rng, order, case, slot, state):
     # while a link is live.  The sibling makes THREE attempts (3 links, then 2,
     # then 1 live); each MUST be refused.  The owner sets the live-link state, then
     # signals, then blocks on the result before releasing the next link.
-    go = [runloom.Chan(1) for _ in range(3)]
-    res = [runloom.Chan(1) for _ in range(3)]
-    wg = runloom.WaitGroup()
+    go = [stackweave.Chan(1) for _ in range(3)]
+    res = [stackweave.Chan(1) for _ in range(3)]
+    wg = stackweave.WaitGroup()
     wg.add(1)
 
     # Per-sibling RNG seeded from this fiber's rng (a SHARED random.Random corrupts
@@ -295,7 +295,7 @@ def run_round_impl(H, wid, rng, order, case, slot, state):
     if not check_deep_values(H, mv2):
         fault = True
     go[0].send(True)
-    runloom.yield_now()                            # park with all 3 links LIVE
+    stackweave.yield_now()                            # park with all 3 links LIVE
     if not fault and not check_deep_values(H, mv2):  # re-verify across the park
         fault = True
     # Chan.recv() returns Go-style (value, ok); unpack the bool the sibling sent.
@@ -330,7 +330,7 @@ def run_round_impl(H, wid, rng, order, case, slot, state):
         if 2 in live and not check_deep_values(H, mv2):
             fault = True
         go[step + 1].send(True)
-        runloom.yield_now()         # park with the remaining links LIVE
+        stackweave.yield_now()         # park with the remaining links LIVE
         resized_step, _ = res[step + 1].recv()   # Go-style (value, ok); take the bool
         if resized_step:
             H.fail("sibling RESIZE SUCCEEDED after releasing link {0} (order "

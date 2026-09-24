@@ -11,10 +11,10 @@ itself is not shared, so hub migrations are transparent.
 This is a NEGATIVE CONTROL / EXPECTED PASS (no runloom-specific hazard expected).
 Pathlib has no module-level state that would be corrupted by hub fiber sharing or
 migration, so the load-bearing oracle MUST pass 100% of the time under both GIL-on
-plain threads and runloom M:N.  If it fails, it indicates either:
+plain threads and stackweave M:N.  If it fails, it indicates either:
   (a) a deeper corruption in Python's object model or garbage collection
   (b) a pathlib regression or bug independent of M:N (also 0 under plain threads)
-  (c) a real runloom fiber-context desynchronization (very unlikely; pathlib is
+  (c) a real stackweave fiber-context desynchronization (very unlikely; pathlib is
       pure Python and holds no interpreter state)
 
 WHICH ORACLE IS LOAD-BEARING, AND WHY:
@@ -39,7 +39,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY:
   A failure (snapshot != re-read, or a torn/corrupt parts tuple) would indicate
   that a sibling's Path operation corrupted this fiber's object (impossible with
   immutable semantics), or pathlib itself has a bug.  This is expected to PASS
-  on a correct runtime (plain threads GIL on/off AND runloom M:N).
+  on a correct runtime (plain threads GIL on/off AND stackweave M:N).
 
 ARMS:
   * LOAD-BEARING -- PATH IMMUTABILITY across yields (worker, HARD, fail-fast).
@@ -63,7 +63,7 @@ import pathlib
 from pathlib import Path, PurePath
 
 import harness
-import runloom
+import stackweave
 
 
 def canonical_path_for(wid, idx):
@@ -104,7 +104,7 @@ def setup(H):
 # unique deterministic Path, snapshots immutable fields, yields, re-reads,
 # and asserts they are unchanged.  Pathlib is pure Python with no shared
 # state, so this MUST pass 100% on a correct runtime (plain threads GIL
-# on/off AND runloom M:N).
+# on/off AND stackweave M:N).
 # --------------------------------------------------------------------------
 def immutability_check(H, wid, idx, state):
     """Construct a unique Path, snapshot it, yield, re-read, and verify
@@ -122,9 +122,9 @@ def immutability_check(H, wid, idx, state):
     # YIELD + SLEEP: let the scheduler potentially migrate this fiber to a
     # different hub, run a sibling on the hub, preempt, etc.  All operations
     # on OTHER Path objects cannot affect THIS one (no shared state).
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
 
     # Re-read the same fields after the yield and verify they are unchanged.
     reread_parts = path.parts
@@ -322,6 +322,6 @@ if __name__ == "__main__":
                  "creates a unique deterministic Path, snapshots immutable "
                  "fields, yields (scheduler may migrate hub), re-reads, and "
                  "asserts the snapshot is unchanged (0 failures expected under "
-                 "plain threads GIL on/off AND runloom M:N; a failure indicates "
+                 "plain threads GIL on/off AND stackweave M:N; a failure indicates "
                  "a deeper object-model corruption or pathlib regression)"
     )

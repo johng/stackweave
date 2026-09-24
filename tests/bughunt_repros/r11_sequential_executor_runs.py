@@ -1,6 +1,6 @@
 """Historical bug: sequential run_in_executor-heavy runs hanging."""
 import sys, asyncio, time
-import runloom.aio as aio
+import stackweave.aio as aio
 
 def blocking(n):
     time.sleep(0.001)

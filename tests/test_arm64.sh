@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Phase E validation: cross-compile runloom's asm context switch + coro
+# Phase E validation: cross-compile stackweave's asm context switch + coro
 # trampoline for aarch64, run under qemu-aarch64 user-mode emulation.
 #
 # Requires: aarch64-linux-gnu-gcc and qemu-aarch64 (or -static).

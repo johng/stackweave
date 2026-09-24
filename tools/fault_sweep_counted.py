@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """fault_sweep_counted.py -- SQLite-style counted-exhaustive anomaly sweep.
 
-For each runloom fault site, fail the Nth reach of that site (the runtime's
+For each stackweave fault site, fail the Nth reach of that site (the runtime's
 RUNLOOM_FAULT_<SITE>="nth:N:CODE" mode, netpoll_init.c.inc) for N = 1, 2, 3...
 and STOP when a clean run reports _fault_count(site) == 0: the workload reached
 the site fewer than N times, so EVERY reachable failure point in this workload
 has now been exercised -- the fixpoint that makes the sweep exhaustive rather
-than sampled.  Injection counting is scoped to runloom's OWN sites, so CPython's
+than sampled.  Injection counting is scoped to stackweave's OWN sites, so CPython's
 allocator churn never skews N (the reason an Nth-libc-malloc sweep can't work).
 
 Verdicts per run (mirrors tools/fault_sweep.py):
@@ -52,7 +52,7 @@ LINUX_SITES = [
 WORKLOAD = r"""
 import errno, os, socket, sys
 sys.path.insert(0, "src")
-import runloom_c
+import stackweave_c
 SITE = os.environ["SWEEP_SITE"]
 def eat(fn):
     try:
@@ -63,13 +63,13 @@ def eat(fn):
 done = [0]
 def child(): done[0] += 1
 for _ in range(24):
-    eat(lambda: runloom_c.fiber(child))
-runloom_c.run()
+    eat(lambda: stackweave_c.fiber(child))
+stackweave_c.run()
 def mn_body():
     for _ in range(8):
-        eat(lambda: runloom_c.mn_fiber(child))
-eat(lambda: (runloom_c.mn_init(2), runloom_c.mn_fiber(mn_body),
-             runloom_c.mn_run(), runloom_c.mn_fini()))
+        eat(lambda: stackweave_c.mn_fiber(child))
+eat(lambda: (stackweave_c.mn_init(2), stackweave_c.mn_fiber(mn_body),
+             stackweave_c.mn_run(), stackweave_c.mn_fini()))
 # --- TCP sites (TCPConn: socket/connect/accept/recv/send) ---
 # INJECTION-SAFE round: a failed spawn must never strand its already-queued
 # sibling (a stranded srv parks in accept() forever -> the NEXT round's run()
@@ -77,7 +77,7 @@ eat(lambda: (runloom_c.mn_init(2), runloom_c.mn_fiber(mn_body),
 # If either spawn fails, close the listener BEFORE run(): the surviving fiber
 # then fails fast (accept -> closed; connect -> refused / recv -> reset).
 def tcp_round():
-    L = runloom_c.TCPConn.listen("127.0.0.1", 0)
+    L = stackweave_c.TCPConn.listen("127.0.0.1", 0)
     fd = L.fileno(); sk = socket.socket(fileno=socket.dup(fd))
     port = sk.getsockname()[1]; sk.close()
     def srv():
@@ -88,18 +88,18 @@ def tcp_round():
         except (OSError, MemoryError): pass
     def cli():
         try:
-            c = runloom_c.TCPConn.connect("127.0.0.1", port)
+            c = stackweave_c.TCPConn.connect("127.0.0.1", port)
             c.send(b"x"); c.recv(64); c.close()
         except (OSError, MemoryError): pass
     both = True
     for fn in (srv, cli):
         try:
-            runloom_c.fiber(fn)
+            stackweave_c.fiber(fn)
         except (OSError, MemoryError):
             both = False
     if not both:
         L.close()
-    runloom_c.run()
+    stackweave_c.run()
     L.close()          # idempotent (close() no-ops when already closed)
 for _ in range(4):
     eat(tcp_round)
@@ -118,20 +118,20 @@ def fd_round():
             wopen[0] = False
             os.close(w)
     def wr():
-        try: runloom_c.fd_write(w, b"y")
+        try: stackweave_c.fd_write(w, b"y")
         except (OSError, MemoryError): pass
         finally: close_w()
     def rd():
-        try: runloom_c.fd_read(r, bytearray(1), 1)
+        try: stackweave_c.fd_read(r, bytearray(1), 1)
         except (OSError, MemoryError): pass
     wr_ok = True
-    try: runloom_c.fiber(wr)
+    try: stackweave_c.fiber(wr)
     except (OSError, MemoryError): wr_ok = False
-    try: runloom_c.fiber(rd)
+    try: stackweave_c.fiber(rd)
     except (OSError, MemoryError): pass
     if not wr_ok:
         close_w()
-    runloom_c.run()
+    stackweave_c.run()
     close_w()
     try: os.close(r)
     except OSError: pass
@@ -142,11 +142,11 @@ for _ in range(4):
 # survived fault (graceful/ok) that leaks a g or fd is a bug the survival-only
 # verdict misses.
 try:
-    _gs = runloom_c.fiber_count()
+    _gs = stackweave_c.fiber_count()
 except Exception:
     _gs = -1
 print("FIRED=%d GS=%d FD=%d" % (
-    runloom_c._fault_count(SITE), _gs, len(os.listdir("/proc/self/fd"))),
+    stackweave_c._fault_count(SITE), _gs, len(os.listdir("/proc/self/fd"))),
     flush=True)
 """
 
@@ -154,7 +154,7 @@ print("FIRED=%d GS=%d FD=%d" % (
 def run_one(site, nth, code, timeout):
     env = dict(os.environ,
                PYTHON_GIL="0", PYTHONPATH="src", SWEEP_SITE=site)
-    env["RUNLOOM_FAULT_" + site] = "nth:%d:%d" % (nth, code)
+    env["STACKWEAVE_FAULT_" + site] = "nth:%d:%d" % (nth, code)
     try:
         p = subprocess.run([PY, "-c", WORKLOAD], cwd=ROOT, env=env,
                            capture_output=True, text=True, timeout=timeout)

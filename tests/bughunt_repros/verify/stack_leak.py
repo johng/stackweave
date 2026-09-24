@@ -1,6 +1,6 @@
-import sys, runloom_c
-h = runloom_c.fiber(lambda: None)
-runloom_c.run()
+import sys, stackweave_c
+h = stackweave_c.fiber(lambda: None)
+stackweave_c.run()
 for _ in range(1000):
     h.stack()
 before = sys.getallocatedblocks()

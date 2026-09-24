@@ -9,7 +9,7 @@ on the goroutine's stack across those switches.
 Stresses: coroutine object state + the goroutine scheduler, no event loop.
 """
 import harness
-import runloom
+import stackweave
 
 
 class Doubler(object):
@@ -44,7 +44,7 @@ def worker(H, wid, rng, state):
                 got = e.value
                 break
             send = yielded * 2          # "process" the awaited value
-            runloom.yield_now()          # park the coroutine across a switch
+            stackweave.yield_now()          # park the coroutine across a switch
         if not H.check(got == expected,
                        "coroutine result wrong wid={0}: {1} != {2}".format(
                            wid, got, expected)):

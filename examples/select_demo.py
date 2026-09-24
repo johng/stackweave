@@ -1,6 +1,6 @@
 """select — wait on several channel operations at once.
 
-runloom.select takes a list of cases: ("recv", ch) or
+stackweave.select takes a list of cases: ("recv", ch) or
 ("send", ch, value).  It blocks until exactly one is ready, then
 returns (index, payload) — payload is (value, ok) for a recv, or None
 for a send.  With default=True it never blocks: it returns (-1, None)
@@ -12,21 +12,21 @@ Run:
 
 import os
 
-import runloom
+import stackweave
 
 # Free-threaded build: fan fibers across all cores (M:N scheduler).
 HUBS = os.cpu_count() or 4
 
 def main():
-    a = runloom.Chan(1)
-    b = runloom.Chan(1)
+    a = stackweave.Chan(1)
+    b = stackweave.Chan(1)
 
-    runloom.fiber(lambda: a.send("from a"))
-    runloom.fiber(lambda: b.send("from b"))
+    stackweave.fiber(lambda: a.send("from a"))
+    stackweave.fiber(lambda: b.send("from b"))
 
     # Receive from whichever is ready first; do it twice to drain both.
     for _ in range(2):
-        idx, payload = runloom.select([
+        idx, payload = stackweave.select([
             ("recv", a),
             ("recv", b),
         ])
@@ -34,15 +34,15 @@ def main():
         print("case {0} fired -> {1}".format(idx, value))
 
     # A send case: parks until a receiver shows up, then completes.
-    sink = runloom.Chan()            # unbuffered
-    runloom.fiber(lambda: print("received:", sink.recv()[0]))
-    idx, payload = runloom.select([("send", sink, "hello")])
+    sink = stackweave.Chan()            # unbuffered
+    stackweave.fiber(lambda: print("received:", sink.recv()[0]))
+    idx, payload = stackweave.select([("send", sink, "hello")])
     print("send case {0} completed (payload={1})".format(idx, payload))
 
     # Non-blocking probe with default — nothing is ready here.
-    empty = runloom.Chan(1)
-    idx, _ = runloom.select([("recv", empty)], default=True)
+    empty = stackweave.Chan(1)
+    idx, _ = stackweave.select([("recv", empty)], default=True)
     print("default fired" if idx == -1 else "got a value")
 
 if __name__ == "__main__":
-    runloom.run(HUBS, main)
+    stackweave.run(HUBS, main)

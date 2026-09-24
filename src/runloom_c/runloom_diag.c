@@ -47,11 +47,11 @@ static unsigned int parse_one_token(const char *t, size_t n)
 
 static void parse_runloom_debug_env(void)
 {
-    const char *env = getenv("RUNLOOM_DEBUG_DIAG");
+    const char *env = getenv("STACKWEAVE_DEBUG_DIAG");
     if (env == NULL || *env == '\0') {
         /* Fall back to RUNLOOM_DEBUG, but ignore the legacy "=1" form
          * (that's the build-style debug flag, not a diag selector). */
-        env = getenv("RUNLOOM_DEBUG");
+        env = getenv("STACKWEAVE_DEBUG");
         if (env == NULL || *env == '\0') return;
         /* Skip if it looks like the build-style "1"/"0"/"true"/etc.
          * value -- we don't want RUNLOOM_DEBUG=1 to enable runtime
@@ -269,7 +269,7 @@ void runloom_diag_dump(int fd)
 void runloom_evt_crash_dump(int fd, unsigned max_per_thread)
 {
     static const char banner[] =
-        "\n[runloom] flight recorder -- recent scheduler events (newest first):\n";
+        "\n[stackweave] flight recorder -- recent scheduler events (newest first):\n";
     runloom_ring_t *r = (runloom_ring_t *)__atomic_load_n((void **)&runloom_ring_list, __ATOMIC_ACQUIRE);
     if (r == NULL) return;   /* ring never enabled / no events */
     emit(fd, banner, sizeof banner - 1);
@@ -281,7 +281,7 @@ void runloom_evt_crash_dump(int fd, unsigned max_per_thread)
         int n;
         if (count == 0) continue;
         if (count > max_per_thread) count = max_per_thread;
-        n = snprintf(hdr, sizeof hdr, "[runloom]   tid=%u (last %lu of %lu):\n",
+        n = snprintf(hdr, sizeof hdr, "[stackweave]   tid=%u (last %lu of %lu):\n",
                      r->tid, count, head);
         if (n > 0) emit(fd, hdr, (size_t)n);
         for (i = 0; i < count; i++) {
@@ -289,7 +289,7 @@ void runloom_evt_crash_dump(int fd, unsigned max_per_thread)
             const runloom_evt_t *e = &r->slots[idx];
             char line[160];
             int m = snprintf(line, sizeof line,
-                "[runloom]     %-13s p1=%p p2=%p aux=%lld\n",
+                "[stackweave]     %-13s p1=%p p2=%p aux=%lld\n",
                 op_name(e->op), (void *)e->p1, (void *)e->p2, e->aux);
             if (m > 0) emit(fd, line, (size_t)m);
         }
@@ -565,34 +565,34 @@ void runloom_diag_init(void)
     runloom_ring_list_lock_inited = 1;
     parse_runloom_debug_env();
     {
-        const char *gt = getenv("RUNLOOM_GILSTATE_TRACE");
+        const char *gt = getenv("STACKWEAVE_GILSTATE_TRACE");
         if (gt != NULL && gt[0] != '\0') {
             runloom_mutex_init(&runloom_gil_trace_lock);
             runloom_gil_trace_fp = fopen(gt, "w");
         }
         {
-            const char *mt = getenv("RUNLOOM_MN_EVENTS");
+            const char *mt = getenv("STACKWEAVE_MN_EVENTS");
             if (mt != NULL && mt[0] != '\0') {
                 runloom_mutex_init(&runloom_mn_trace_lock);
                 runloom_mn_trace_fp = fopen(mt, "w");
             }
         }
         {
-            const char *wt = getenv("RUNLOOM_WAKE_TRACE");
+            const char *wt = getenv("STACKWEAVE_WAKE_TRACE");
             if (wt != NULL && wt[0] != '\0') {
                 runloom_mutex_init(&runloom_wake_trace_lock);
                 runloom_wake_trace_fp = fopen(wt, "w");
             }
         }
         {
-            const char *mw = getenv("RUNLOOM_MNWAKE_TRACE");
+            const char *mw = getenv("STACKWEAVE_MNWAKE_TRACE");
             if (mw != NULL && mw[0] != '\0') {
                 runloom_mutex_init(&runloom_mnwake_trace_lock);
                 runloom_mnwake_trace_fp = fopen(mw, "w");
             }
         }
         {
-            const char *iw = getenv("RUNLOOM_IOUWAKE_TRACE");
+            const char *iw = getenv("STACKWEAVE_IOUWAKE_TRACE");
             if (iw != NULL && iw[0] != '\0') {
                 runloom_mutex_init(&runloom_iouwake_trace_lock);
                 runloom_iouwake_trace_fp = fopen(iw, "w");
@@ -667,14 +667,14 @@ static unsigned long long runloom_splitmix64(unsigned long long x)
 
 static void runloom_delay_init_once(void)
 {
-    const char *e = getenv("RUNLOOM_DELAY");
+    const char *e = getenv("STACKWEAVE_DELAY");
     if (e == NULL || e[0] == '\0') {
         __atomic_store_n(&runloom_delay_on, 0, __ATOMIC_RELEASE);
         return;
     }
     runloom_delay_seed = strtoull(e, NULL, 0);
     {
-        const char *m = getenv("RUNLOOM_DELAY_MAX_NS");
+        const char *m = getenv("STACKWEAVE_DELAY_MAX_NS");
         if (m != NULL && m[0] != '\0') {
             long long v = atoll(m);
             if (v >= 0) runloom_delay_max_ns = v;
@@ -685,14 +685,14 @@ static void runloom_delay_init_once(void)
 
 static void runloom_buggify_init_once(void)
 {
-    const char *e = getenv("RUNLOOM_BUGGIFY");
+    const char *e = getenv("STACKWEAVE_BUGGIFY");
     if (e == NULL || e[0] == '\0') {
         __atomic_store_n(&runloom_buggify_on, 0, __ATOMIC_RELEASE);
         return;
     }
     runloom_buggify_seed = strtoull(e, NULL, 0);
     {   /* BUGGIFY reuses the delay machinery (RUNLOOM_DELAY_MAX_NS honored). */
-        const char *m = getenv("RUNLOOM_DELAY_MAX_NS");
+        const char *m = getenv("STACKWEAVE_DELAY_MAX_NS");
         if (m != NULL && m[0] != '\0') {
             long long v = atoll(m);
             if (v >= 0) runloom_delay_max_ns = v;

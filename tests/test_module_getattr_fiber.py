@@ -8,7 +8,7 @@ than a whole default fiber stack -- so an ordinary attribute miss
 (hasattr / getattr feature-detection, a namespace __getattr__ proxy) inside a
 fiber used to overflow the stack and SIGSEGV.
 
-runloom replaces PyModule_Type's getattr slot to skip that hint while running on a
+stackweave replaces PyModule_Type's getattr slot to skip that hint while running on a
 fiber's small stack (the AttributeError itself -- type, .name/.obj, message
 core -- is unchanged).  See src/runloom_c/module_init.c.inc.
 """
@@ -18,7 +18,7 @@ import tempfile
 import types
 import unittest
 
-import runloom_c
+import stackweave_c
 
 MODNAME = "runloom_modmiss_mod"
 
@@ -33,8 +33,8 @@ def _drive(fn):
         except BaseException as e:   # noqa: BLE001
             box[1] = e
 
-    runloom_c.fiber(runner)
-    runloom_c.run()
+    stackweave_c.fiber(runner)
+    stackweave_c.run()
     if box[1] is not None:
         raise box[1]
     return box[0]
@@ -97,12 +97,12 @@ class TestModuleGetattrGoroutine(unittest.TestCase):
             except AttributeError:
                 box[0] = "ok"
 
-        runloom_c.mn_init(2)
+        stackweave_c.mn_init(2)
         try:
-            runloom_c.mn_fiber(runner)
-            runloom_c.mn_run()
+            stackweave_c.mn_fiber(runner)
+            stackweave_c.mn_run()
         finally:
-            runloom_c.mn_fini()
+            stackweave_c.mn_fini()
         self.assertEqual(box[0], "ok")
 
     def test_subclass_getattr_miss(self):

@@ -4,7 +4,7 @@ Darwin/BSD have no syscall-injecting tracer (dtruss/ktrace observe but cannot
 inject; DYLD_INSERT_LIBRARIES is SIP-fragile), so the kqueue backend carries
 compiled-in, env-gated fault points -- RUNLOOM_FAULT_<SITE>="<mode>:<errno>",
 mode in {once, always}; see netpoll.c.  This harness drives every kqueue
-syscall runloom issues and asserts the runtime handles each errno the Darwin
+syscall stackweave issues and asserts the runtime handles each errno the Darwin
 kevent(2)/kqueue(2) man pages permit:
 
   KQUEUE_CREATE -- kqueue() at netpoll init.  A hard init failure (ENOMEM /
@@ -56,7 +56,7 @@ def _run(site, spec, timeout=40):
     env["PYTHON_GIL"] = "0"                       # focus: free-threaded only
     env["FAULT_SITE"] = site
     env["FAULT_TIMEOUT_MS"] = str(TIMEOUT_MS)
-    env["RUNLOOM_FAULT_" + site] = spec
+    env["STACKWEAVE_FAULT_" + site] = spec
     return subprocess.run(
         [sys.executable, WORKLOAD], cwd=REPO, env=env, timeout=timeout,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)

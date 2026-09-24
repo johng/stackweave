@@ -1,4 +1,4 @@
-"""Adversarial QA: runloom.time (Timer/Ticker/After/Tick) + runloom.context.
+"""Adversarial QA: stackweave.time (Timer/Ticker/After/Tick) + stackweave.context.
 
 Timer/Ticker prevent stale fires with a generation counter + a _stopped flag;
 we attack exactly that: Stop() / Reset() must guarantee the OLD deadline never
@@ -12,9 +12,9 @@ import time
 
 import pytest
 
-import runloom_c as rc
-import runloom.time as rt
-import runloom.context as rctx
+import stackweave_c as rc
+import stackweave.time as rt
+import stackweave.context as rctx
 from adv_util import hang_guard
 
 

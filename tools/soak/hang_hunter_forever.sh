@@ -12,7 +12,7 @@
 #   HH_ITER        per-iteration hunt seconds        (default 1800)
 #   HH_LOAD_FRAC   skip an iter while 1-min load > FRAC*cores (default 0.8)
 #   HH_JOBS        parallel hunt jobs (0=auto)       (default 0)
-#   RUNLOOM_PYTHON interpreter
+#   STACKWEAVE_PYTHON interpreter
 #
 # Findings -> tools/soak/inbox.py + docs/dev/soak/inbox_artifacts/hang_hunter_forever/<date>/.
 # Detach:  setsid nice -n 10 tools/soak/hang_hunter_forever.sh >/dev/null 2>&1 &
@@ -25,14 +25,14 @@ set +e
 renice -n 19 $$ >/dev/null 2>&1
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
-PY="${RUNLOOM_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
+PY="${STACKWEAVE_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
 NCPU="$(nproc 2>/dev/null || echo 8)"
 HH_ITER="${HH_ITER:-1800}"
 HH_LOAD_FRAC="${HH_LOAD_FRAC:-0.8}"
 HH_JOBS="${HH_JOBS:-0}"
-OUTBASE="${RUNLOOM_SOAK_DIR:-$HOME/runloom-soak}/inbox_artifacts/hang_hunter_forever"
-SUM="${RUNLOOM_SOAK_DIR:-$HOME/runloom-soak}/forever_hanghunter_SUMMARY.txt"
-LOCK="${RUNLOOM_SOAK_DIR:-$HOME/runloom-soak}/.hang_hunter_inbox.lock"
+OUTBASE="${STACKWEAVE_SOAK_DIR:-$HOME/runloom-soak}/inbox_artifacts/hang_hunter_forever"
+SUM="${STACKWEAVE_SOAK_DIR:-$HOME/runloom-soak}/forever_hanghunter_SUMMARY.txt"
+LOCK="${STACKWEAVE_SOAK_DIR:-$HOME/runloom-soak}/.hang_hunter_inbox.lock"
 
 load_ok() {
   local l1; l1="$(cut -d' ' -f1 /proc/loadavg 2>/dev/null || echo 0)"
@@ -46,10 +46,10 @@ while true; do
   if ! load_ok; then sleep 30; continue; fi          # self-throttle vs the other loops
   DATE="$(date +%F)"
   OUT="$OUTBASE/$DATE/iter${iter}"; mkdir -p "$OUT"
-  # RUNLOOM_TLBC=1: keep TLBC ON (the GC frames anchor makes it safe -> real
-  # multi-core parallelism) AND guarantee runloom.run() never self-re-execs (stable
+  # STACKWEAVE_TLBC=1: keep TLBC ON (the GC frames anchor makes it safe -> real
+  # multi-core parallelism) AND guarantee stackweave.run() never self-re-execs (stable
   # daemon pids); PYTHON_GIL=0 for M:N.
-  nice -n 10 env PYTHON_GIL=0 RUNLOOM_TLBC=1 PYTHONPATH="$ROOT/src" \
+  nice -n 10 env PYTHON_GIL=0 STACKWEAVE_TLBC=1 PYTHONPATH="$ROOT/src" \
       "$PY" -m tools.hang_hunter.daemon --duration "$HH_ITER" \
       --load-frac "$HH_LOAD_FRAC" --jobs "$HH_JOBS" --python "$PY" \
       --report-dir "$OUT" >"$OUT/run.log" 2>&1

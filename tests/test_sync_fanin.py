@@ -1,7 +1,7 @@
-"""runloom.sync fan-in primitives: WaitGroup / Future / gather.
+"""stackweave.sync fan-in primitives: WaitGroup / Future / gather.
 
 These ride directly on the GenMC-verified park() / G.wake (wake_safe) handshake
-with a runloom_c.Mutex guard held only for O(1) bookkeeping.  park() (NOT park_self,
+with a stackweave_c.Mutex guard held only for O(1) bookkeeping.  park() (NOT park_self,
 which busy-spins on an M:N hub) means an awaiter genuinely blocks.  The tests pin
 the contract, the fiber-resolution contract (foreign-thread resolve raises a
 clean error, never a SIGSEGV), that an await does not peg a hub, AND -- the failure
@@ -14,9 +14,9 @@ import threading
 
 import pytest
 
-import runloom
-import runloom_c
-from runloom import sync
+import stackweave
+import stackweave_c
+from stackweave import sync
 
 
 def _wait_until(pred, budget_s=10.0):
@@ -35,7 +35,7 @@ def _wait_until(pred, budget_s=10.0):
     """
     deadline = time.monotonic() + budget_s
     while not pred() and time.monotonic() < deadline:
-        runloom.sleep(0.001)
+        stackweave.sleep(0.001)
 
 
 def _drive(fn, hubs=8):
@@ -47,7 +47,7 @@ def _drive(fn, hubs=8):
         except BaseException as e:  # noqa: BLE001
             box[1] = e
 
-    runloom.run(hubs, runner)
+    stackweave.run(hubs, runner)
     if box[1] is not None:
         raise box[1]
     return box[0]
@@ -61,7 +61,7 @@ def test_waitgroup_waits_for_all():
         done = bytearray(100)
         wg.add(100)
         for i in range(100):
-            runloom.fiber(lambda i=i: (done.__setitem__(i, 1), wg.done()))
+            stackweave.fiber(lambda i=i: (done.__setitem__(i, 1), wg.done()))
         wg.wait()
         return sum(done)
     assert _drive(body) == 100
@@ -73,8 +73,8 @@ def test_waitgroup_multiple_waiters():
         wg.add(3)
         woke = bytearray(10)
         for w in range(10):
-            runloom.fiber(lambda w=w: (wg.wait(), woke.__setitem__(w, 1)))
-        runloom.sleep(0.02)
+            stackweave.fiber(lambda w=w: (wg.wait(), woke.__setitem__(w, 1)))
+        stackweave.sleep(0.02)
         for _ in range(3):
             wg.done()
         _wait_until(lambda: sum(woke) == 10)
@@ -90,7 +90,7 @@ def test_waitgroup_reusable():
             wg.add(5)
             c = bytearray(5)
             for i in range(5):
-                runloom.fiber(lambda i=i: (c.__setitem__(i, 1), wg.done()))
+                stackweave.fiber(lambda i=i: (c.__setitem__(i, 1), wg.done()))
             wg.wait()
             total += sum(c)
         return total
@@ -125,8 +125,8 @@ def test_future_result_and_many_awaiters():
         fut = sync.Future()
         got = bytearray(40)
         for i in range(40):
-            runloom.fiber(lambda i=i: got.__setitem__(i, 1 if fut.result() == 7 else 0))
-        runloom.sleep(0.02)
+            stackweave.fiber(lambda i=i: got.__setitem__(i, 1 if fut.result() == 7 else 0))
+        stackweave.sleep(0.02)
         fut.set_result(7)
         _wait_until(lambda: sum(got) == 40)
         # a late awaiter returns immediately
@@ -150,7 +150,7 @@ def test_future_exception():
                 fut.result()
             except ValueError as e:
                 seen.append(str(e))
-        runloom.fiber(aw)
+        stackweave.fiber(aw)
         _wait_until(lambda: len(seen) == 1)
         return seen
     assert _drive(body) == ["boom"]
@@ -196,7 +196,7 @@ def test_gather_runs_concurrently():
     def body():
         order = []
         def slow():
-            runloom.sleep(0.05); order.append("slow")
+            stackweave.sleep(0.05); order.append("slow")
             return "s"
         def fast():
             order.append("fast")
@@ -223,7 +223,7 @@ def test_repeated_fanin_no_lost_wakeup():
             slots = bytearray(n)
             wg.add(n)
             for i in range(n):
-                runloom.fiber(lambda i=i: (slots.__setitem__(i, 1), wg.done()))
+                stackweave.fiber(lambda i=i: (slots.__setitem__(i, 1), wg.done()))
             wg.wait()
             total += sum(slots)
             # interleave a gather round too
@@ -237,13 +237,13 @@ def test_repeated_fanin_no_lost_wakeup():
 def test_sync_park_is_mn_park():
     # The fan-in primitives must use the M:N park (blocks on a hub), not park_self
     # (busy-spins on a hub).  Pin the export so a regression to park_self is loud.
-    assert sync.park is runloom_c.park
-    assert sync.park is not runloom_c.park_self
+    assert sync.park is stackweave_c.park
+    assert sync.park is not stackweave_c.park_self
 
 
 def test_future_resolution_from_foreign_thread_raises():
     """A foreign OS thread resolving a Future gets a clean RuntimeError, NOT a
-    SIGSEGV.  The guard (runloom_c.Mutex) wakes a contending fiber awaiter via
+    SIGSEGV.  The guard (stackweave_c.Mutex) wakes a contending fiber awaiter via
     mn_wake_g, which a foreign thread can't route safely; _resolve rejects the
     foreign caller BEFORE taking the guard (current_g() is a lock-free peek)."""
     def body():
@@ -297,17 +297,17 @@ def test_future_await_does_not_peg_a_hub():
         return resource.getrusage(resource.RUSAGE_SELF).ru_utime
 
     a = utime()
-    runloom.run(8, lambda: runloom.sleep(0.3))   # idle baseline, same window
+    stackweave.run(8, lambda: stackweave.sleep(0.3))   # idle baseline, same window
     base = utime() - a
 
     def runner():
         fut = sync.Future()
-        runloom.fiber(lambda: fut.result())         # awaiter parks for the window
-        runloom.sleep(0.3)
+        stackweave.fiber(lambda: fut.result())         # awaiter parks for the window
+        stackweave.sleep(0.3)
         fut.set_result(1)
-        runloom.sleep(0.02)
+        stackweave.sleep(0.02)
     a = utime()
-    runloom.run(8, runner)
+    stackweave.run(8, runner)
     got = utime() - a
 
     assert got - base < 0.15, (base, got)        # busy-loop would be ~+0.28

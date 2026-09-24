@@ -6,7 +6,7 @@ order (parent <= children).  Multiple fibers can each construct a SEPARATE heap
 fibers share one hub OS-thread, so they compete for Python's GIL-free interpreter
 atomicity.  If a fiber yields mid-heap-operation (during heappush or heappop),
 a sibling fiber on the same hub can simultaneously mutate a DIFFERENT heap list,
-and if runloom's fiber isolation is weak, the shared hub memory can leak one
+and if stackweave's fiber isolation is weak, the shared hub memory can leak one
 fiber's heap mutations into another's.
 
 WHERE M:N BREAKS IT (the gap this program probes).  heapq's operations on a list
@@ -18,8 +18,8 @@ are NOT atomic across fiber yields:
      "bubbles down" the new root (many mutations to the list).
 
 Each fiber maintains its OWN SEPARATE heap (a distinct list object).  If
-runloom's fiber isolation is correct, a sibling fiber's heap operations run on a
-DIFFERENT list object and cannot corrupt this fiber's heap.  But if runloom leaks
+stackweave's fiber isolation is correct, a sibling fiber's heap operations run on a
+DIFFERENT list object and cannot corrupt this fiber's heap.  But if stackweave leaks
 memory or shares hub state incorrectly, a sibling's concurrent push/pop can race
 and corrupt this fiber's heap: reordered elements, lost elements, or a heap
 invariant violation (parents > children).  The next pop then dequeues in wrong
@@ -32,7 +32,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified empirically):
   siblings run their own heaps (no cross-fiber heap mutation possible -- each has
   its own list), then pops all N events and asserts they come out in the SAME
   order they were pushed (heap order preserved).  Corruption of heap order
-  (out-of-sequence pop) or lost events (fewer than N popped) indicates a runloom
+  (out-of-sequence pop) or lost events (fewer than N popped) indicates a stackweave
   heap-corruption or sibling-mutation leak, which should NOT happen with separate
   instances.  The test then runs a SECOND PHASE with a SHARED heap: all fibers
   push events into ONE shared heap, then drain.  The shared phase is MEASURED +
@@ -53,7 +53,7 @@ ORACLES:
       - events came out in push order (heap order preserved);
       - no event is duplicated;
       - the heap is exactly empty (no residue).
-    A pop out of order or < N events suggests a runloom heap-corruption (sibling
+    A pop out of order or < N events suggests a stackweave heap-corruption (sibling
     mutation on a supposedly private heap list, or fiber resuming with a torn
     heap state after a yield).  FAIL fast.  (On plain threads GIL on AND off,
     the private-instance oracle NEVER fires, so the program exits 0 when there is
@@ -93,11 +93,11 @@ oracle fires.
 import heapq
 
 import harness
-import runloom
+import stackweave
 
 # Primes for unique event IDs across the entire run.
 _EVENT_COUNTER = [0]
-_EVENT_LOCK = runloom.sync.Lock()
+_EVENT_LOCK = stackweave.sync.Lock()
 
 
 def next_event_id():
@@ -172,12 +172,12 @@ def private_phase(H, wid, r, rng, state):
 
     # YIELD: let siblings run their OWN heaps (no contention on this one's list).
     # A sibling cannot mutate our heap because they have their own list object.
-    # If runloom leaks a sibling's heap mutation into our list, that is the
-    # runloom bug.
-    runloom.sleep(0.0001)
-    runloom.yield_now()
+    # If stackweave leaks a sibling's heap mutation into our list, that is the
+    # stackweave bug.
+    stackweave.sleep(0.0001)
+    stackweave.yield_now()
     if rng.random() < 0.5:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
 
     # Pop all events and verify order.
     popped = []
@@ -193,7 +193,7 @@ def private_phase(H, wid, r, rng, state):
         if state["sample"][0] is None:
             state["sample"][0] = (wid, "priv-loss", len(popped), n_events)
         H.fail("private heap LOST EVENTS: pushed {0} but popped {1} (wid {2}) -- "
-               "heap corruption or event loss mid-yield, runloom leaked a sibling's "
+               "heap corruption or event loss mid-yield, stackweave leaked a sibling's "
                "list mutation into this private heap".format(n_events, len(popped), wid))
         return
 
@@ -204,7 +204,7 @@ def private_phase(H, wid, r, rng, state):
             if state["sample"][0] is None:
                 state["sample"][0] = (wid, "priv-order", i, evt_p[1], evt_e[1])
             H.fail("private heap OUT-OF-ORDER: event {0} at pop index {1} has id {2}, "
-                   "expected {3} (wid {4}) -- heap order corrupted, runloom leaked "
+                   "expected {3} (wid {4}) -- heap order corrupted, stackweave leaked "
                    "a sibling's heap mutation".format(evt_p, i, evt_p[1], evt_e[1], wid))
             return
         if evt_p != evt_e:  # full tuple mismatch (payload or priority)
@@ -258,8 +258,8 @@ def shared_phase(H, wid, r, rng, state):
     state["shared_events_pushed"][wid & 1023] += n_events
 
     # YIELD: let siblings push/pop the SAME heap list.  Contention is expected.
-    runloom.sleep(0.0001)
-    runloom.yield_now()
+    stackweave.sleep(0.0001)
+    stackweave.yield_now()
 
     # Pop events: we expect to see SOME of our events, but not necessarily all
     # (siblings may have taken them first), and not necessarily in order (the
@@ -323,7 +323,7 @@ def run_shared_phase(H, state):
     if nshared <= 0:
         return
 
-    wg = runloom.WaitGroup()
+    wg = stackweave.WaitGroup()
     wg.add(nshared)
 
     def run_one(wid):
@@ -381,14 +381,14 @@ def post(H):
     # LOAD-BEARING: the private-instance arm must never corrupt heap order or
     # lose events.  Each fiber's heap is a private list; no cross-fiber mutation
     # is possible.  If the private arm shows out-of-order or lost events, that is
-    # a runloom heap-corruption or sibling-list-leak (the runloom bug).
+    # a stackweave heap-corruption or sibling-list-leak (the stackweave bug).
     if priv_oo or priv_lost or priv_wrong:
         H.fail("heapq PRIVATE-INSTANCE CORRUPTED: the LOAD-BEARING arm observed "
                "out-of-order={0} lost={1} wrong={2} events -- each fiber owns its "
                "private heap (a distinct list object), so cross-fiber mutation is "
-               "NOT possible.  A corruption here is a runloom heap-tear (sibling's "
+               "NOT possible.  A corruption here is a stackweave heap-tear (sibling's "
                "list mutation leaked into a private heap, or a fiber resumed with a "
-               "torn heap after a yield) -- a runloom M:N bug, NOT a documented "
+               "torn heap after a yield) -- a stackweave M:N bug, NOT a documented "
                "caveat.".format(priv_oo, priv_lost, priv_wrong))
 
     # NON-VACUITY: the load-bearing private-instance hazard was exercised.
@@ -404,7 +404,7 @@ def post(H):
         H.log("note: the shared-instance arm observed out-of-order={0} and "
               "lost={1} events across {2} shared pushes -- many fibers contended "
               "on ONE shared heap list, so cross-fiber event loss / disorder is "
-              "documented-unsafe (a caveat, NOT a runloom bug); this measured "
+              "documented-unsafe (a caveat, NOT a stackweave bug); this measured "
               "drift was isolated to the shared-phase pre-run and never reached "
               "the private-instance oracle.".format(
                   shared_oo, shared_lost, shared_enq))
@@ -418,10 +418,10 @@ if __name__ == "__main__":
                           "private heap list and pushes unique events at a common "
                           "priority.  After yield (so siblings run their own heaps), "
                           "events pop in push order; out-of-order or lost events = "
-                          "runloom heap-tear (sibling's list mutation leaked into "
+                          "stackweave heap-tear (sibling's list mutation leaked into "
                           "private heap, or torn heap resume after yield) -- the M:N "
                           "bug.  0 under plain threads GIL on AND off; a private-"
-                          "instance oracle firing is a true runloom signal.  MEASURED: "
+                          "instance oracle firing is a true stackweave signal.  MEASURED: "
                           "a shared-instance arm (documented-unsafe, contention "
                           "expected) runs in pre-phase isolation and reports order "
                           "drift, never fails")

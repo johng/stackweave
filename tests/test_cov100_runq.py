@@ -22,14 +22,14 @@ That mode is set in exactly ONE place -- mn_sched_init_fini.c.inc:66:
     runloom_set_per_g_tstate_mode(runloom_resolve_migratable_mode());
 and runloom_resolve_migratable_mode() (this fragment, L232-244) returns 1 ONLY
 when a migratable flag is requested AND runloom_unsafe_migration_acked() is true,
-i.e. ONLY when RUNLOOM_ALLOW_UNSAFE_MIGRATION=1 is in the environment.
+i.e. ONLY when STACKWEAVE_ALLOW_UNSAFE_MIGRATION=1 is in the environment.
 
-RUNLOOM_ALLOW_UNSAFE_MIGRATION is a hard-forbidden knob for this QA work: per-g
+STACKWEAVE_ALLOW_UNSAFE_MIGRATION is a hard-forbidden knob for this QA work: per-g
 tstate / steal-woken are KNOWN-CRASH migration modes (a per-g PyThreadState's
 mimalloc heap migrates across hub OS threads -> SEGV under churn at H>=2). A
 crashing subprocess does NOT flush gcov counters anyway, so even setting it would
-not legitimately *cover* the lines. There is no safe trigger: RUNLOOM_PER_G_TSTATE
-(or RUNLOOM_STEAL_WOKEN) WITHOUT the ack is gated OFF -- the runtime warns and
+not legitimately *cover* the lines. There is no safe trigger: STACKWEAVE_PER_G_TSTATE
+(or STACKWEAVE_STEAL_WOKEN) WITHOUT the ack is gated OFF -- the runtime warns and
 runs the default per-hub-tstate scheduler, which routes woken gs through
 runloom_mn_hub_submit and NEVER touches push/pull. (Confirmed empirically below:
 the warn fires and a cross-hub channel wake is still delivered correctly.)
@@ -58,7 +58,7 @@ import sys
 
 import pytest
 
-import runloom
+import stackweave
 
 from adv_util import hang_guard, needs_free_threading
 
@@ -70,16 +70,16 @@ PY = sys.executable
 # L237-243). If the interlock ever silently flipped to ON, this line would
 # vanish AND the workload would crash -- either way the test fails loudly.
 _WARN_NEEDLE = "GATED OFF"
-_ACK_HINT = "RUNLOOM_ALLOW_UNSAFE_MIGRATION=1 to enable anyway"
+_ACK_HINT = "STACKWEAVE_ALLOW_UNSAFE_MIGRATION=1 to enable anyway"
 
 # Whether the interpreter carries BOTH migration patches (src/patches/).  When it
 # does, requesting migration is a SUPPORTED configuration: the interlock enables
 # it and prints nothing, so the gated-off warn must NOT be asserted.  The
 # invariants that hold either way -- no crash, and every cross-hub wake delivered
 # -- are asserted unconditionally.
-_MIGRATION_OK = runloom.migration_available()
+_MIGRATION_OK = stackweave.migration_available()
 _GATE_REASON = ("interpreter has both migration patches (%r); the gated-off warn "
-                "branch is unreachable here" % (runloom.migration_status(),))
+                "branch is unreachable here" % (stackweave.migration_status(),))
 
 
 # A self-contained child program. It runs a workload that, under the *default*
@@ -92,13 +92,13 @@ _GATE_REASON = ("interpreter has both migration patches (%r); the gated-off warn
 # It asserts every value/byte arrived (no lost/dup/stranded wake) and prints
 # CHILD_OK. The parent asserts the warn fired (gated-off branch taken) AND the
 # work completed -- i.e. the default path carried the wakes, the global runq did
-# not. NEVER sets RUNLOOM_ALLOW_UNSAFE_MIGRATION.
+# not. NEVER sets STACKWEAVE_ALLOW_UNSAFE_MIGRATION.
 _CHILD = r'''
 import os, sys, socket
 sys.path.insert(0, "src")
-import runloom
-import runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave
+import stackweave_c as rc
+from stackweave.sync import WaitGroup
 
 HUBS = int(sys.argv[1])
 PAIRS = 64
@@ -162,7 +162,7 @@ def main():
         except Exception: pass
         a.close(); b.close()
 
-runloom.run(HUBS, main)
+stackweave.run(HUBS, main)
 
 assert sum(recv_ok) == PAIRS, "channel recv not ok: %d/%d" % (sum(recv_ok), PAIRS)
 assert sorted(recv_val) == list(range(PAIRS)), (
@@ -180,7 +180,7 @@ def _run_child(env_extra, hubs, timeout=60):
 
 
 # --------------------------------------------------------------------------
-# 1. RUNLOOM_PER_G_TSTATE requested WITHOUT the unsafe ack.
+# 1. STACKWEAVE_PER_G_TSTATE requested WITHOUT the unsafe ack.
 #    Drives runloom_resolve_migratable_mode()'s gated-off branch (L234-243):
 #    runloom_per_g_tstate_flag()==1, runloom_unsafe_migration_acked()==0 ->
 #    warn + return 0 -> per_g_tstate_mode stays 0 -> runloom_use_global_runq()
@@ -191,7 +191,7 @@ def _run_child(env_extra, hubs, timeout=60):
 @pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_per_g_tstate_gated_off_uses_default_sched():
     with hang_guard(70, "per_g_tstate gated-off"):
-        p = _run_child({"RUNLOOM_PER_G_TSTATE": "1"}, hubs=4)
+        p = _run_child({"STACKWEAVE_PER_G_TSTATE": "1"}, hubs=4)
     assert p.returncode == 0, (
         "gated-off per-g-tstate child crashed (rc=%d) -- the interlock must run "
         "the DEFAULT scheduler, never the known-crash migration mode.\nstderr=%s"
@@ -208,22 +208,22 @@ def test_per_g_tstate_gated_off_uses_default_sched():
 
 
 # --------------------------------------------------------------------------
-# 2. RUNLOOM_STEAL_WOKEN requested WITHOUT the unsafe ack.
+# 2. STACKWEAVE_STEAL_WOKEN requested WITHOUT the unsafe ack.
 #    Same gated-off branch via the OTHER flag: runloom_steal_woken_flag()==1
 #    feeds the `want` in runloom_resolve_migratable_mode (L234). Proves the
-#    redirect (steal-woken -> per-g-tstate) is ALSO gated, so RUNLOOM_STEAL_WOKEN
+#    redirect (steal-woken -> per-g-tstate) is ALSO gated, so STACKWEAVE_STEAL_WOKEN
 #    never reaches the unsound snap branch and never engages push/pull.
 # --------------------------------------------------------------------------
 @pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_steal_woken_gated_off_uses_default_sched():
     with hang_guard(70, "steal_woken gated-off"):
-        p = _run_child({"RUNLOOM_STEAL_WOKEN": "1"}, hubs=4)
+        p = _run_child({"STACKWEAVE_STEAL_WOKEN": "1"}, hubs=4)
     assert p.returncode == 0, (
         "gated-off steal-woken child crashed (rc=%d).\nstderr=%s"
         % (p.returncode, p.stderr[-2000:]))
     if not _MIGRATION_OK:
         assert _WARN_NEEDLE in p.stderr and _ACK_HINT in p.stderr, (
-            "resolve_migratable_mode did NOT warn for RUNLOOM_STEAL_WOKEN "
+            "resolve_migratable_mode did NOT warn for STACKWEAVE_STEAL_WOKEN "
             "(its flag must feed the same gated-off branch).\nstderr=%s"
             % p.stderr[-2000:])
     assert "CHILD_OK" in p.stdout, (
@@ -232,7 +232,7 @@ def test_steal_woken_gated_off_uses_default_sched():
 
 
 # --------------------------------------------------------------------------
-# 3. BOTH migratable flags + a benign falsy RUNLOOM_ALLOW_UNSAFE_MIGRATION="0".
+# 3. BOTH migratable flags + a benign falsy STACKWEAVE_ALLOW_UNSAFE_MIGRATION="0".
 #    runloom_unsafe_migration_acked (L213-223) treats e[0]=='0' as NOT acked, so
 #    the interlock STILL gates off. This asserts the ack parser rejects "0"
 #    (a real adversarial input: a user who set the var to "0" must NOT trip the
@@ -242,7 +242,7 @@ def test_steal_woken_gated_off_uses_default_sched():
 def test_unsafe_ack_zero_is_not_acked():
     with hang_guard(70, " unsafe-ack=0 gated-off"):
         p = _run_child(
-            {"RUNLOOM_PER_G_TSTATE": "1", "RUNLOOM_ALLOW_UNSAFE_MIGRATION": "0"},
+            {"STACKWEAVE_PER_G_TSTATE": "1", "STACKWEAVE_ALLOW_UNSAFE_MIGRATION": "0"},
             hubs=4)
     assert p.returncode == 0, (
         "ack='0' child crashed (rc=%d) -- '0' must be read as NOT acked, "
@@ -253,7 +253,7 @@ def test_unsafe_ack_zero_is_not_acked():
         # interlock returns 1 before it ever consults the ack, so the parser is
         # not exercised here.  See _GATE_REASON.
         assert _WARN_NEEDLE in p.stderr, (
-            "RUNLOOM_ALLOW_UNSAFE_MIGRATION='0' was wrongly treated as acked: the "
+            "STACKWEAVE_ALLOW_UNSAFE_MIGRATION='0' was wrongly treated as acked: the "
             "gated-off warn did not fire -> the known-crash migration mode would "
             "have engaged.\nstderr=%s" % p.stderr[-2000:])
     assert "CHILD_OK" in p.stdout, (

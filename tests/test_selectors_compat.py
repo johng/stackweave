@@ -2,14 +2,14 @@
 
 Adapted from CPython's Lib/test/test_selectors.py (BaseSelectorTestCase)
 and the readiness-event matrix in libuv's test/test-poll.c.  The point is to
-prove that runloom.monkey's `selectors` category makes the high-level selector
+prove that stackweave.monkey's `selectors` category makes the high-level selector
 API cooperative *without changing its observable contract*: the same
 (key, events) return shape, the same EVENT_READ / EVENT_WRITE / POLLHUP
 return codes, the same KeyError / ValueError fault behaviour -- but a
 fiber blocked in select() now yields the OS thread to its siblings
 instead of freezing the scheduler.
 
-Run under the C scheduler (runloom_c.fiber / runloom_c.run), which is the path
+Run under the C scheduler (stackweave_c.fiber / stackweave_c.run), which is the path
 the monkey-patches target.
 """
 import errno
@@ -21,9 +21,9 @@ import socket
 import time
 import unittest
 
-import runloom
-import runloom.monkey
-import runloom_c
+import stackweave
+import stackweave.monkey
+import stackweave_c
 
 _IS_WINDOWS = platform.system() == "Windows"
 
@@ -38,19 +38,19 @@ def _drive(fn):
         except BaseException as e:   # noqa: BLE001 - propagate to the test
             box[1] = e
 
-    runloom_c.fiber(runner)
-    runloom_c.run()
+    stackweave_c.fiber(runner)
+    stackweave_c.run()
     if box[1] is not None:
         raise box[1]
     return box[0]
 
 
 def setUpModule():
-    runloom.monkey.patch()
+    stackweave.monkey.patch()
 
 
 def tearDownModule():
-    runloom.monkey.unpatch()
+    stackweave.monkey.unpatch()
 
 
 def _pair():
@@ -146,7 +146,7 @@ class TestSelectorsReadiness(unittest.TestCase):
                 order.append("write")
                 b.send(b"payload")
 
-            runloom_c.fiber(writer)
+            stackweave_c.fiber(writer)
             t0 = time.monotonic()
             ready = sel.select(timeout=2.0)
             dt = time.monotonic() - t0
@@ -264,7 +264,7 @@ class TestSelectorsConcurrency(unittest.TestCase):
                     time.sleep(0.05)
                     b.send(b"go")
 
-                runloom_c.fiber(w)
+                stackweave_c.fiber(w)
                 t_in = time.monotonic()
                 sel.select(timeout=2.0)
                 a.recv(4)
@@ -275,10 +275,10 @@ class TestSelectorsConcurrency(unittest.TestCase):
             t0 = time.monotonic()
             g_done = []
             for i in range(2):
-                runloom_c.fiber(lambda i=i: (one(i), g_done.append(1)))
+                stackweave_c.fiber(lambda i=i: (one(i), g_done.append(1)))
             # Spin the driving fiber until both children finish.
             while len(g_done) < 2:
-                runloom.sleep(0.005)
+                stackweave.sleep(0.005)
             return time.monotonic() - t0
 
         elapsed = _drive(body)
@@ -316,7 +316,7 @@ class TestSelectPollDirect(unittest.TestCase):
                 time.sleep(0.02)
                 b.send(b"data")
 
-            runloom_c.fiber(w)
+            stackweave_c.fiber(w)
             evts = p.poll(2000)         # milliseconds
             d = a.recv(8)
             a.close(); b.close()
@@ -383,7 +383,7 @@ class TestSelectEpollDirect(unittest.TestCase):
                 time.sleep(0.02)
                 b.send(b"epoll")
 
-            runloom_c.fiber(w)
+            stackweave_c.fiber(w)
             evts = ep.poll(timeout=2.0)   # seconds
             d = a.recv(8)
             ep.close(); a.close(); b.close()

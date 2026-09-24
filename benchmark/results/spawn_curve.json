@@ -11,8 +11,8 @@
   ],
   "reps": 2,
   "labels": {
-    "runloom_py": "Runloom (M:N) \u2014 Python fiber",
-    "runloom_c": "Runloom (M:N) \u2014 pure C fiber (c_entry)",
+    "runloom_py": "Stackweave (M:N) \u2014 Python fiber",
+    "stackweave_c": "Stackweave (M:N) \u2014 pure C fiber (c_entry)",
     "go": "Go (GOMAXPROCS=8)",
     "asyncio": "asyncio (1 core)",
     "uvloop": "uvloop (1 core)",
@@ -28,7 +28,7 @@
       "300000": 1726744.879790728,
       "1000000": 1991670.8682431262
     },
-    "runloom_c": {
+    "stackweave_c": {
       "1000": 210062.41327064607,
       "3000": 392392.2433284093,
       "10000": 484981.08248850284,

@@ -9,7 +9,7 @@ get_interpreter() is a pure read of a byte stream.  Every buffer it touches is
 passed in by the caller (the source/target file-like objects) -- there is no
 process-global scratch buffer that a sibling call could scribble on.
 
-WHERE M:N BREAKS IT (the gap this program probes).  runloom runs tens of
+WHERE M:N BREAKS IT (the gap this program probes).  stackweave runs tens of
 thousands of goroutines across >1 hubs with the GIL off.  If zipapp / zipfile /
 shutil.copyfileobj / pathlib held ANY shared mutable state (a module-level
 scratch bytearray, a cached ZipInfo, a reused compression object, an offset
@@ -39,7 +39,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (all single-owner / closed-form):
     ZipFile-writing loop.  The zip body's central-directory offsets DO include
     the shebang length, so this arm does NOT use the copy-path closed form;
     instead it asserts (a) PURITY across a yield -- two builds with the same
-    interpreter, straddling a runloom.yield_now() so a sibling reliably
+    interpreter, straddling a stackweave.yield_now() so a sibling reliably
     interleaves, are BIT-IDENTICAL; (b) get_interpreter() round-trips I; and
     (c) CONTENT round-trip -- the produced archive is a valid zip whose entry
     names are exactly the known UNIVERSE and whose __main__.py / data bytes equal
@@ -77,7 +77,7 @@ import zipapp
 import zipfile
 
 import harness
-import runloom
+import stackweave
 
 # Filesystem encoding zipapp uses for the shebang (utf-8 on Linux).  The closed
 # form in ARM A encodes the interpreter with exactly this codec, matching
@@ -126,7 +126,7 @@ def check_copy_path(H, wid, idx, state):
 
     # YIELD at the hazard boundary: siblings run their own create_archive between
     # our write and our verify, so a shared internal buffer would leak here.
-    runloom.yield_now()
+    stackweave.yield_now()
 
     out = tgt.getvalue()
     if out != expected:
@@ -169,7 +169,7 @@ def check_dir_build(H, wid, idx, state):
     out1 = build_dir(source_dir, interp)
 
     # YIELD: a sibling builds its own archive from the same shared dir here.
-    runloom.yield_now()
+    stackweave.yield_now()
 
     out2 = build_dir(source_dir, interp)
 

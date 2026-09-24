@@ -8,7 +8,7 @@ hub thread; its values and final StopIteration must come out exactly right.
 Stresses: generator frame state and ownership across goroutine switches.
 """
 import harness
-import runloom
+import stackweave
 
 
 def squares(n):
@@ -32,9 +32,9 @@ def worker(H, wid, rng, state):
                 return
             # Block between next() calls.
             if rng.random() < 0.5:
-                runloom.yield_now()
+                stackweave.yield_now()
             else:
-                runloom.sleep(0.0003)
+                stackweave.sleep(0.0003)
         # Generator must be exhausted now.
         try:
             next(g)

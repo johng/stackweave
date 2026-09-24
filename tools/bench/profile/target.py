@@ -1,4 +1,4 @@
-"""profile/target.py -- a sustained, scheduler-bound runloom workload to profile.
+"""profile/target.py -- a sustained, scheduler-bound stackweave workload to profile.
 
 Unlike the one-shot tools/faultinj/workload.py, this runs a *bounded but
 sustained* load (many channel ping-pong rounds) so a sampling profiler
@@ -18,7 +18,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "..", "..", "src"))
-import runloom_c
+import stackweave_c
 
 try:
     import coz
@@ -43,8 +43,8 @@ def mark_end():
 
 
 def ping_pong(n):
-    a = runloom_c.Chan()
-    b = runloom_c.Chan()
+    a = stackweave_c.Chan()
+    b = stackweave_c.Chan()
 
     def pinger():
         for i in range(n):
@@ -56,16 +56,16 @@ def ping_pong(n):
             v, _ = a.recv()
             b.send(v)
 
-    runloom_c.fiber(pinger)
-    runloom_c.fiber(ponger)
-    runloom_c.run()
+    stackweave_c.fiber(pinger)
+    stackweave_c.fiber(ponger)
+    stackweave_c.run()
 
 
 def main():
     units = int(os.environ.get("PROFILE_UNITS", "2000"))
     pings = int(os.environ.get("PROFILE_PINGS", "500"))
-    if hasattr(runloom_c, "warmup"):
-        runloom_c.warmup(2000)
+    if hasattr(stackweave_c, "warmup"):
+        stackweave_c.warmup(2000)
     for _ in range(units):
         mark_begin()
         ping_pong(pings)

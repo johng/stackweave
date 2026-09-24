@@ -69,7 +69,7 @@ import queue
 import random
 
 import harness
-import runloom
+import stackweave
 
 # Closed universe per round: enough items to push the heap list through several
 # growth/realloc boundaries (the realloc is what moves ob_item out from under a
@@ -168,7 +168,7 @@ def producer(H, wid, q, seqs, rng):
         # hubs (drives the park/notify + heap churn concurrently rather than
         # front-loading all puts before any get).
         if (seq & 7) == 0:
-            runloom.yield_now()
+            stackweave.yield_now()
 
 
 def consumer(H, wid, q, mode, mine):
@@ -244,9 +244,9 @@ def run_round(H, wid, rng, mode, counts, slot):
     # shared container from multiple hubs.
     cons_lists = [[] for _ in range(NCONS)]
 
-    wg = runloom.WaitGroup()                           # joins ALL fibers this round
+    wg = stackweave.WaitGroup()                           # joins ALL fibers this round
     wg.add(NPROD + NCONS + 1)                          # +1 for the sentinel-pusher
-    prod_done = runloom.WaitGroup()                    # producers -> sentinel-pusher
+    prod_done = stackweave.WaitGroup()                    # producers -> sentinel-pusher
     prod_done.add(NPROD)
 
     def run_prod(seqs, pseed):

@@ -2,9 +2,9 @@
 
 Beyond raw file_read/file_write coverage, this flips the file-I/O
 *implementation* and re-asserts a baseline file invariant across both backends:
-the io_uring file path (runloom_c.file_read / file_write, used on Linux >=5.1)
+the io_uring file path (stackweave_c.file_read / file_write, used on Linux >=5.1)
 vs the blockpool pread/pwrite offload path that p16-p23 ride
-(runloom_c.blocking(os.pread / os.pwrite, ...)).  Each goroutine owns a source
+(stackweave_c.blocking(os.pread / os.pwrite, ...)).  Each goroutine owns a source
 file pre-filled with a deterministic per-file pattern and copies it to a dest in
 fixed-size chunks, advancing an explicit offset and looping over short
 reads/writes.  It runs the IDENTICAL workload through BOTH backends and asserts:
@@ -21,14 +21,14 @@ holds trivially -- we log that and still run the correctness half.  If the
 file_read attribute is missing entirely the program SKIPs clean (exit 0).
 
 Stresses: Stresses: file-I/O backend parity -- the same large-file copy+verify
-workload run through runloom_c.file_read/file_write (io_uring on >=5.1) and
+workload run through stackweave_c.file_read/file_write (io_uring on >=5.1) and
 re-asserted against the blockpool/os.pread path, checking identical bytes,
 offset semantics, and partial-read/write handling.
 """
 import os
 
 import harness
-import runloom_c
+import stackweave_c
 
 
 # Per-file deterministic pattern: a wid-keyed byte stream so a wrong offset or a
@@ -70,14 +70,14 @@ def copy_iouring(src_fd, dst_fd, size):
     while off < size:
         want = min(CHUNK, size - off)
         # Read up to `want` at offset `off`; loop on short reads.
-        got = runloom_c.file_read(src_fd, buf, want, off)
+        got = stackweave_c.file_read(src_fd, buf, want, off)
         if got <= 0:
             raise OSError("short/EOF read at off={0} (got {1})".format(off, got))
         # Write exactly the bytes we read at the same offset; loop on shorts.
         wtotal = 0
         while wtotal < got:
             mv = bytes(buf[wtotal:got])
-            wrote = runloom_c.file_write(dst_fd, mv, off + wtotal)
+            wrote = stackweave_c.file_write(dst_fd, mv, off + wtotal)
             if wrote <= 0:
                 raise OSError("short write at off={0}".format(off + wtotal))
             wtotal += wrote
@@ -86,16 +86,16 @@ def copy_iouring(src_fd, dst_fd, size):
 
 def copy_blockpool(src_fd, dst_fd, size):
     """Same copy via the blockpool offload path (os.pread / os.pwrite run
-    through runloom_c.blocking so they don't stall a hub thread)."""
+    through stackweave_c.blocking so they don't stall a hub thread)."""
     off = 0
     while off < size:
         want = min(CHUNK, size - off)
-        chunk = runloom_c.blocking(os.pread, src_fd, want, off)
+        chunk = stackweave_c.blocking(os.pread, src_fd, want, off)
         if not chunk:
             raise OSError("short/EOF pread at off={0}".format(off))
         wtotal = 0
         while wtotal < len(chunk):
-            wrote = runloom_c.blocking(os.pwrite, dst_fd, chunk[wtotal:], off + wtotal)
+            wrote = stackweave_c.blocking(os.pwrite, dst_fd, chunk[wtotal:], off + wtotal)
             if wrote <= 0:
                 raise OSError("short pwrite at off={0}".format(off + wtotal))
             wtotal += wrote
@@ -109,7 +109,7 @@ def read_back_iouring(fd, size):
     off = 0
     while off < size:
         want = min(CHUNK, size - off)
-        got = runloom_c.file_read(fd, buf, want, off)
+        got = stackweave_c.file_read(fd, buf, want, off)
         if got <= 0:
             raise OSError("short/EOF readback at off={0}".format(off))
         out[off:off + got] = buf[:got]
@@ -125,7 +125,7 @@ def setup(H):
         "base": base,
         # If file_read is missing entirely we SKIP (handled in body); record the
         # io_uring availability so workers can log/relax the parity expectation.
-        "iouring": bool(getattr(runloom_c, "iouring_available", lambda: False)()),
+        "iouring": bool(getattr(stackweave_c, "iouring_available", lambda: False)()),
     }
 
 
@@ -144,7 +144,7 @@ def worker(H, wid, rng, state):
             src_fd = os.open(src, os.O_RDWR | os.O_CREAT | os.O_TRUNC, 0o644)
             woff = 0
             while woff < size:
-                w = runloom_c.file_write(src_fd, pattern[woff:woff + CHUNK], woff)
+                w = stackweave_c.file_write(src_fd, pattern[woff:woff + CHUNK], woff)
                 if w <= 0:
                     H.fail("src seed short write wid={0} off={1}".format(wid, woff))
                     return
@@ -159,7 +159,7 @@ def worker(H, wid, rng, state):
             # --- backend B: blockpool os.pread/os.pwrite ---
             blk_fd = os.open(blk, os.O_RDWR | os.O_CREAT | os.O_TRUNC, 0o644)
             copy_blockpool(src_fd, blk_fd, size)
-            blk_bytes = runloom_c.blocking(os.pread, blk_fd, size, 0) if size else b""
+            blk_bytes = stackweave_c.blocking(os.pread, blk_fd, size, 0) if size else b""
             blk_real = os.fstat(blk_fd).st_size
 
             # --- invariants ---
@@ -199,12 +199,12 @@ def worker(H, wid, rng, state):
 
 def body(H):
     # Availability guard.  file_read missing entirely -> SKIP clean.
-    if not hasattr(runloom_c, "file_read") or not hasattr(runloom_c, "file_write"):
-        H.log("SKIP: runloom_c.file_read/file_write not available "
+    if not hasattr(stackweave_c, "file_read") or not hasattr(stackweave_c, "file_write"):
+        H.log("SKIP: stackweave_c.file_read/file_write not available "
               "(no io_uring file path built); nothing to compare")
         return
     if not H.state.get("iouring"):
-        H.log("NOTE: io_uring not available; runloom_c.file_read falls back to "
+        H.log("NOTE: io_uring not available; stackweave_c.file_read falls back to "
               "pread, so both modes exercise pread/pwrite and the parity oracle "
               "holds trivially -- still running the correctness half")
     H.run_pool(H.funcs, worker, H.state)

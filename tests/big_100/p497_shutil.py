@@ -60,7 +60,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY:
   This is the SAME cache-isolation corruption the old per-fiber design detected
   (N distinct cache/registry entries, exercised by all fibers), now without the
   unbounded disk footprint.  It PASSES on a correct runtime (plain threads GIL
-  on/off AND runloom M:N) and fires RED only on real corruption.
+  on/off AND stackweave M:N) and fires RED only on real corruption.
 
 ORACLES:
   * LOAD-BEARING (worker, HARD, fail-fast): copyfileobj-into-memory AND
@@ -72,7 +72,7 @@ ORACLES:
   * NON-VACUITY (post, HARD): the hazard was exercised (ops > 0).
   * SECONDARY (report-only, NEVER fails): per-arm op + mismatch counts.
 
-EXPECTED RESULT: PASS (exit 0) under plain threads (GIL on/off) and runloom M:N.
+EXPECTED RESULT: PASS (exit 0) under plain threads (GIL on/off) and stackweave M:N.
 A FAIL indicates a real fd leak, tempfile/linecache corruption, or cache cross-
 contamination under M:N.
 
@@ -90,7 +90,7 @@ import tempfile
 import zipfile as _zipfile_module
 
 import harness
-import runloom
+import stackweave
 
 # Module-level bounded pool (the whole point of the redesign).
 _TMPDIR = None
@@ -159,7 +159,7 @@ def setup(H):
     # entries; the lock only makes the destination READBACK deterministic.
     for i in range(n):
         _DSTS.append(os.path.join(_TMPDIR, "dst_{0}.bin".format(i)))
-        _DST_LOCKS.append(runloom.sync.Lock())
+        _DST_LOCKS.append(stackweave.sync.Lock())
 
     # Bounded rotating make_archive slots: a few source dirs (created once) and a
     # few reused archive base paths.  make_archive(base, "zip", srcdir) writes
@@ -174,7 +174,7 @@ def setup(H):
             f.write(_content_for(i))
         _ARCH_SRCDIRS.append((srcdir, hashlib.sha256(_content_for(i)).digest()))
         _ARCH_BASES.append(os.path.join(_TMPDIR, "arch_{0}".format(i)))
-        _ARCH_LOCKS.append(runloom.sync.Lock())
+        _ARCH_LOCKS.append(stackweave.sync.Lock())
 
     H.state = {
         "n": n,
@@ -238,9 +238,9 @@ def mem_copy_check(H, wid, state):
             return
 
         # YIELD + SLEEP: migrate/deschedule, then RE-COPY and re-verify.
-        runloom.yield_now()
+        stackweave.yield_now()
         if wid & 1:
-            runloom.sleep(0.0002)
+            stackweave.sleep(0.0002)
 
         buf2 = io.BytesIO()
         with open(src, "rb") as f:
@@ -469,5 +469,5 @@ if __name__ == "__main__":
                  "mismatch is linecache/file-op cache cross-contamination under "
                  "M:N. Temp-file count is bounded to ~N regardless of --funcs (the "
                  "old per-fiber design filled the disk at funcs=500000). Expected "
-                 "PASS on plain threads (GIL on/off) AND runloom M:N."
+                 "PASS on plain threads (GIL on/off) AND stackweave M:N."
     )

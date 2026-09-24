@@ -1,6 +1,6 @@
 """GC checkmark: a parked fiber's frame locals MUST stay GC roots across collect.
 
-The one correctness surface runloom's 80-model formal stack structurally cannot
+The one correctness surface stackweave's 80-model formal stack structurally cannot
 cover: CPython owns the GC, and ~94% of a parked fiber is its swapped-out C stack
 / suspended frame.  If the free-threaded GC's stop-the-world mark misses a root
 that lives only on a PARKED fiber's frame, an object still reachable from that
@@ -30,8 +30,8 @@ import unittest
 import weakref
 
 sys.path.insert(0, __file__.rsplit("/tests/", 1)[0] + "/src")
-import runloom
-import runloom.sync as rsync
+import stackweave
+import stackweave.sync as rsync
 
 
 class Sentinel(object):
@@ -46,9 +46,9 @@ def _run_checkmark(n, hubs, rounds):
     refs = [None] * n            # published weakrefs (do NOT keep the objects alive)
     cleared_max = [0]
     bad_stamp = [0]
-    ready = runloom.WaitGroup()
+    ready = stackweave.WaitGroup()
     ready.add(n)
-    done = runloom.WaitGroup()
+    done = stackweave.WaitGroup()
     done.add(n)
     release = rsync.Event()
 
@@ -65,22 +65,22 @@ def _run_checkmark(n, hubs, rounds):
 
     def collector():
         ready.wait()                      # all N created + (about to) park
-        runloom.sleep(0.01)               # let the last few reach the park
+        stackweave.sleep(0.01)               # let the last few reach the park
         for _ in range(rounds):
             gc.collect()                  # STW mark over the parked-fiber roots
             c = sum(1 for wr in refs if wr is not None and wr() is None)
             if c > cleared_max[0]:
                 cleared_max[0] = c
-            runloom.sleep(0)
+            stackweave.sleep(0)
         release.set()
 
     def main():
         for i in range(n):
-            runloom.fiber(holder, i)
-        runloom.fiber(collector)
+            stackweave.fiber(holder, i)
+        stackweave.fiber(collector)
         done.wait()
 
-    runloom.run(hubs, main)
+    stackweave.run(hubs, main)
     return cleared_max[0], bad_stamp[0]
 
 

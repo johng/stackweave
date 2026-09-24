@@ -1,4 +1,4 @@
-import runloom_c as rc
+import stackweave_c as rc
 
 N = 100000
 out = rc.Chan(N + 10)   # send case is ready on every call (buffer space)

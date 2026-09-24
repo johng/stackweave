@@ -5,11 +5,11 @@
 > README and `spawn_cost.md` originally claimed. A patched CPython (mimalloc
 > `purge_delay=-1`, and even a no-op'd `unix_madvise`) did **not** reproduce it, and an
 > `strace -k` backtrace showed the per-fiber madvise is
-> **`runloom_coro_destroy → runloom_stack_scrub → madvise(MADV_DONTNEED)`** — runloom's
+> **`runloom_coro_destroy → runloom_stack_scrub → madvise(MADV_DONTNEED)`** — stackweave's
 > own **security stack-scrub** (full-512KB wipe of each recycled stack). This shim was
 > silently **disabling that security feature**. The native equivalent is
-> **`RUNLOOM_STACK_SCRUB=0`** (same speedup, no LD_PRELOAD); the *secure* fix that keeps
-> the wipe AND most of the speedup is **`RUNLOOM_STACK_SCRUB_RESIDENT=1`** (mincore +
+> **`STACKWEAVE_STACK_SCRUB=0`** (same speedup, no LD_PRELOAD); the *secure* fix that keeps
+> the wipe AND most of the speedup is **`STACKWEAVE_STACK_SCRUB_RESIDENT=1`** (mincore +
 > userspace memset of only the touched pages). Prefer those. This shim is kept only as
 > the blunt-instrument record of the investigation.
 
@@ -19,7 +19,7 @@ keep-resident strategy.
 
 ## Why
 
-On a spawn-heavy free-threaded (3.13t) runloom workload, CPython's mimalloc QSBR
+On a spawn-heavy free-threaded (3.13t) stackweave workload, CPython's mimalloc QSBR
 collector purges a heap segment **~once per fiber completion**
 (`madvise(MADV_DONTNEED)`). Each purge broadcasts a **TLB-shootdown IPI to every
 hub CPU** (`smp_call_function_many → flush_tlb_mm_range`). That dominates spawn

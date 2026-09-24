@@ -11,7 +11,7 @@
 #   2. wake-skew injection    -- build with -DRUNLOOM_WAKE_SKEW so a few
 #      sched_yield()s widen the park/wake Dekker store..fence..load window; a
 #      logical handshake race that would normally interleave once in a billion
-#      now interleaves on nearly every park.  Intensity = RUNLOOM_WAKE_SKEW (yields
+#      now interleaves on nearly every park.  Intensity = STACKWEAVE_WAKE_SKEW (yields
 #      per skew point, default 4).
 #   3. TSan (separate)        -- tools/run_sanitizers_ext.sh / check_all exttsan
 #      exposes the fences the hardware otherwise hides; run that too.
@@ -30,10 +30,10 @@ REPS="${2:-3}"
 TIMEOUT="${WAKE_SKEW_TIMEOUT:-60}"
 
 echo "== Layer-3 wake-skew test policy =="
-echo "   padding: ON (default build)   skew: RUNLOOM_WAKE_SKEW=$SKEW   reps: $REPS   per-test timeout: ${TIMEOUT}s"
+echo "   padding: ON (default build)   skew: STACKWEAVE_WAKE_SKEW=$SKEW   reps: $REPS   per-test timeout: ${TIMEOUT}s"
 
 echo "-- building with -DRUNLOOM_WAKE_SKEW --"
-RUNLOOM_EXTRA_CFLAGS="-DRUNLOOM_WAKE_SKEW" PYTHON_GIL=0 "$PY" setup.py build_ext --inplace --force >/tmp/wake_skew_build.log 2>&1 \
+STACKWEAVE_EXTRA_CFLAGS="-DRUNLOOM_WAKE_SKEW" PYTHON_GIL=0 "$PY" setup.py build_ext --inplace --force >/tmp/wake_skew_build.log 2>&1 \
     || { echo "BUILD FAILED -- see /tmp/wake_skew_build.log"; exit 1; }
 
 # The wake-sensitive surface: park/wake, M:N scheduling, blockpool offload,
@@ -49,8 +49,8 @@ while [ "$rep" -le "$REPS" ]; do
     echo "-- rep $rep/$REPS --"
     for t in $TESTS; do
         [ -f "tests/$t.py" ] || continue
-        # RUNLOOM_STEAL_WOKEN=1 exercises the global-runq wake_state path too.
-        if timeout "$TIMEOUT" env RUNLOOM_WAKE_SKEW="$SKEW" RUNLOOM_STEAL_WOKEN=1 \
+        # STACKWEAVE_STEAL_WOKEN=1 exercises the global-runq wake_state path too.
+        if timeout "$TIMEOUT" env STACKWEAVE_WAKE_SKEW="$SKEW" STACKWEAVE_STEAL_WOKEN=1 \
                PYTHON_GIL=0 "$PY" tests/run_isolated.py "tests/$t.py" >/tmp/wake_skew_$t.log 2>&1; then
             : # passed
         else

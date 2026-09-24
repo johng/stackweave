@@ -1,6 +1,6 @@
 """offloadfuzz -- conservation + leak fuzzer for the blockpool OFFLOAD geometry.
 
-Hammers runloom_c.blocking (submit -> park -> worker drains off-hub -> wake ->
+Hammers stackweave_c.blocking (submit -> park -> worker drains off-hub -> wake ->
 result) at scale across many hubs, in submit shapes and shard/worker geometries
 the existing soak never varies.  The offload/blockpool handoff is the most
 bug-dense subsystem historically -- the stealable wake queue, sweeper/thief
@@ -84,8 +84,8 @@ def fd_count():
 
 def run_program(spec, timeout=30.0):
     """Run one offload-geometry program under the watchdog; return (ok, reason)."""
-    import runloom
-    import runloom_c
+    import stackweave
+    import stackweave_c
     from tools.watchdog import run_guarded
 
     nsub, ops = spec["nsub"], spec["ops"]
@@ -120,7 +120,7 @@ def run_program(spec, timeout=30.0):
             dur = 0
             if spin_max:
                 dur = spin_max if (not mixed or (k & 1)) else 0
-            got = runloom.blocking(make_job(tok, dur))
+            got = stackweave.blocking(make_job(tok, dur))
             if not rec:
                 continue
             if got != tok:
@@ -136,20 +136,20 @@ def run_program(spec, timeout=30.0):
         # mn_fiber/fiber take (callable, [stack_size]) -- the 2nd positional is a
         # stack size, NOT a forwarded arg, so bind sid via a default-arg closure.
         def root():
-            spawn = runloom_c.mn_fiber if spec["mode"] == "mn" else runloom_c.fiber
+            spawn = stackweave_c.mn_fiber if spec["mode"] == "mn" else stackweave_c.fiber
             for sid in range(n_sub):
                 spawn(lambda s=sid: submitter(s, n_ops, rec))
         if spec["mode"] == "mn":
-            runloom_c.mn_init(spec["nhubs"])
-            runloom_c.mn_fiber(root)
-            completed = runloom_c.mn_run()
-            st = dict(runloom_c.stats())        # snapshot BEFORE fini
-            runloom_c.mn_fini()
+            stackweave_c.mn_init(spec["nhubs"])
+            stackweave_c.mn_fiber(root)
+            completed = stackweave_c.mn_run()
+            st = dict(stackweave_c.stats())        # snapshot BEFORE fini
+            stackweave_c.mn_fini()
         else:
-            runloom_c.fiber(root)
-            runloom_c.run()
+            stackweave_c.fiber(root)
+            stackweave_c.run()
             completed = None
-            st = dict(runloom_c.stats())
+            st = dict(stackweave_c.stats())
         return completed, st
 
     def driver():
@@ -183,9 +183,9 @@ def run_program(spec, timeout=30.0):
         return False, "PARKED_LEAK residue={0} stats={1}".format(residue, st)
     if end_fd > base_fd + 2:
         return False, "FD_LEAK {0}->{1}".format(base_fd, end_fd)
-    v = runloom_c._self_check(0)
+    v = stackweave_c._self_check(0)
     if v:
-        runloom_c._self_check(1)
+        stackweave_c._self_check(1)
         return False, "SELF_CHECK {0}".format(v)
     return True, "ok submitted={0} completed={1}".format(nsub * ops, completed)
 
@@ -206,9 +206,9 @@ def run_worker_subprocess(seed, mn_seed, timeout):
     """Run one program as an isolated subprocess.  Returns a finding dict or None."""
     from tools.lifefuzz.lifefuzz import worker_env
     spec = build_spec(seed)
-    extra = {"RUNLOOM_BLOCKPOOL_SHARDS": str(spec["shards"])}
+    extra = {"STACKWEAVE_BLOCKPOOL_SHARDS": str(spec["shards"])}
     if spec["workers"]:
-        extra["RUNLOOM_BLOCKPOOL_WORKERS"] = str(spec["workers"])
+        extra["STACKWEAVE_BLOCKPOOL_WORKERS"] = str(spec["workers"])
     env = worker_env(seed, mn_seed, extra=extra)
     wrap = os.environ.get("OFFLOADFUZZ_WORKER_WRAP", "").split()
     argv = wrap + [sys.executable, os.path.abspath(__file__), "worker",

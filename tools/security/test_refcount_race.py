@@ -1,7 +1,7 @@
 """Cross-hub PyObject refcount race (S3).
 
 Free-threaded CPython makes refcounts on *shared* objects atomic; this checks
-that runloom's C scheduler paths don't bypass that. Many goroutines spread across
+that stackweave's C scheduler paths don't bypass that. Many goroutines spread across
 hubs hammer one shared object's refcount concurrently (bind/unbind a local in
 a tight loop = incref/decref). A non-atomic refcount race would crash, or
 leave the object over-freed (segfault) or leaked (refcount drift).
@@ -14,7 +14,7 @@ import gc
 import sys
 
 sys.path.insert(0, "src")
-import runloom_c
+import stackweave_c
 
 SHARED = None          # module global -> goroutines read it without a closure
                        # cell so the only refs are accountable.
@@ -39,11 +39,11 @@ def main():
     gc.collect()
     base = sys.getrefcount(SHARED)
 
-    runloom_c.mn_init(N_HUBS)
+    stackweave_c.mn_init(N_HUBS)
     for _ in range(N_GOROUTINES):
-        runloom_c.mn_fiber(worker)
-    runloom_c.mn_run()
-    runloom_c.mn_fini()
+        stackweave_c.mn_fiber(worker)
+    stackweave_c.mn_run()
+    stackweave_c.mn_fini()
 
     gc.collect()
     final = sys.getrefcount(SHARED)

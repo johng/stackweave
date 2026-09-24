@@ -7,7 +7,7 @@ and read by `gettext.gettext(msg)` -> `dgettext(_current_domain, msg)`.  It also
 keeps a module-global `_translations` dict (the catalog cache, keyed by
 (class_, abspath) for real .mo files) and a module-global `_localedirs` map.
 NONE of these are contextvar-backed or keyed to anything per-execution-context:
-they are plain module globals.  So under runloom M:N -- where many fibers share a
+they are plain module globals.  So under stackweave M:N -- where many fibers share a
 hub OS-thread (and its PyThreadState) -- every fiber on a hub sees the SAME
 `_current_domain` and the SAME `_translations` dict.  A fiber that sets its domain,
 yields, and reads the global back can get a SIBLING's domain (exactly p67's
@@ -35,7 +35,7 @@ NOT assumed):
   documented save/restore: prior = textdomain(); textdomain(mine); ...; textdomain
   (prior).  That save/restore assumes STRICT LIFO / SERIALIZED use of the single
   process-global -- it is NOT thread-safe for OVERLAPPING blocks.  We verified with
-  a standalone plain-threads control (64 threads, the same hazard, NO runloom):
+  a standalone plain-threads control (64 threads, the same hazard, NO stackweave):
 
     * SERIALIZED arm (every block holds ONE shared lock around its whole
       save/set/translate/restore, so the blocks are globally strict-LIFO -- the
@@ -43,18 +43,18 @@ NOT assumed):
       baseline with PYTHON_GIL=1 AND PYTHON_GIL=0 (32000 checks each).  Stock
       CPython serializes the global access the same way; this is genuinely safe
       for any GIL setting.  An oracle that fired here would be a FALSE-POSITIVE
-      detector -- it does NOT fire here.  Under a CORRECT runloom it MUST also hold
+      detector -- it does NOT fire here.  Under a CORRECT stackweave it MUST also hold
       (the per-block save/restore of the process-global survives a hub
-      migration/preempt between blocks).  If runloom desyncs the save/restore across
+      migration/preempt between blocks).  If stackweave desyncs the save/restore across
       a migration -- the global does not return to baseline, or a block reads a
-      domain it did not set -- THAT is the runloom bug, and the serialized arm
+      domain it did not set -- THAT is the stackweave bug, and the serialized arm
       PASSES on a correct runtime (the program exits 0 when there is no bug).
 
     * UNSERIALIZED arm (set the process-global, yield, read it back through the
       global -- NO lock): leaks a sibling's domain in 31886/32000 checks even with
       PYTHON_GIL=1 (and the global never returns to baseline).  That is
       documented-unsafe overlapping use of a single process-global for ANY
-      concurrency model / GIL setting, NOT a runloom bug.  So it is MEASURED +
+      concurrency model / GIL setting, NOT a stackweave bug.  So it is MEASURED +
       REPORTED, never failed -- like p67's TLS leak rate.
 
 ORACLES:
@@ -68,10 +68,10 @@ ORACLES:
       restore.  Workers PARK / yield / migrate hubs OUTSIDE the lock between blocks.
       post() asserts the process-global `_current_domain` == the captured baseline.
     A block that reads a sibling's domain, or a global that does not restore to
-    baseline after the serialized arm quiesces, is a runloom save/restore desync
+    baseline after the serialized arm quiesces, is a stackweave save/restore desync
     across a hub migration / preempt-mid-restore -- it does NOT reproduce under
     stock serialized LIFO use (verified GIL-on AND GIL-off), so it is a true
-    runloom signal.
+    stackweave signal.
   * NON-VACUITY (post, HARD): the serialized arm actually ran (ser_blocks > 0) and
     every fiber registered its catalog in the shared `_translations` dict.
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber stranded mid-restore on a
@@ -110,7 +110,7 @@ import socket
 import gettext
 
 import harness
-import runloom
+import stackweave
 
 # Modest population.  Most workers run the LOAD-BEARING serialized strict-LIFO
 # arm; a separate, fully-drained pre-phase runs the report-only UNSERIALIZED arm.
@@ -158,7 +158,7 @@ def resolve_current_catalog(state):
 # cooperative Lock, so the process-global save/restore is globally strict-LIFO
 # (never two open at once = the documented-SAFE usage).  Workers PARK / yield /
 # migrate hubs OUTSIDE the lock between blocks.  Each block must read ITS OWN
-# domain back and the global MUST restore -- the run(1)/GIL behaviour a runloom
+# domain back and the global MUST restore -- the run(1)/GIL behaviour a stackweave
 # save/restore desync across a hub migration / preempt-mid-restore would break.
 # --------------------------------------------------------------------------
 def serialized_block(H, wid, state):
@@ -168,8 +168,8 @@ def serialized_block(H, wid, state):
     # Park / migrate hub OUTSIDE the critical section so the goroutine can be on a
     # different hub each time it takes the lock (exercises migration around the
     # save/restore), without ever overlapping another block.
-    runloom.sleep(0.0003)
-    runloom.yield_now()
+    stackweave.sleep(0.0003)
+    stackweave.yield_now()
     with lock:
         saved = gettext.textdomain()           # SAVE the process-global domain
         gettext.textdomain(dom)                # SET mine
@@ -179,14 +179,14 @@ def serialized_block(H, wid, state):
         gettext.textdomain(saved)              # RESTORE the prior global domain
     # (A) IDENTITY: the global I set inside the lock named MY domain, and the
     # catalog it resolved to was MINE -- a sibling did not leak in across the
-    # set/resolve (the lock makes this strict-LIFO; a break is a runloom
+    # set/resolve (the lock makes this strict-LIFO; a break is a stackweave
     # save/restore desync, NOT documented-unsafe overlap).
     if cur_dom != dom:
         H.fail("gettext serialized-arm DOMAIN IDENTITY break: inside the lock "
                "textdomain()=={0!r} != {1!r} this fiber just set (wid {2}) -- the "
                "process-global _current_domain was overwritten by a sibling between "
                "this fiber's textdomain(set) and its read-back, across a hub "
-               "migration/preempt (a runloom save/restore desync; _current_domain "
+               "migration/preempt (a stackweave save/restore desync; _current_domain "
                "is a plain module global, NOT contextvar-isolated)".format(
                    cur_dom, dom, wid))
         return
@@ -199,7 +199,7 @@ def serialized_block(H, wid, state):
     if got != want:
         H.fail("gettext serialized-arm WRONG TRANSLATION: gettext({0!r}) -> {1!r} "
                "!= {2!r} for this fiber's own domain {3!r} (wid {4}) -- a sibling's "
-               "catalog answered through the shared process-global, a runloom "
+               "catalog answered through the shared process-global, a stackweave "
                "domain save/restore desync under M:N".format(
                    MSG_KEY, got, want, dom, wid))
         return
@@ -253,7 +253,7 @@ def unser_block(H, wid, state):
         except OSError:
             pass
     else:
-        runloom.yield_now()
+        stackweave.yield_now()
     cur, cat = resolve_current_catalog(state)  # read the process-global back
     got = cat.gettext(MSG_KEY) if cat is not None else None
     # MEASURED: did the global name SOMEONE ELSE's domain across the yield/overlap?
@@ -275,7 +275,7 @@ def run_unser_phase(H, state):
     nunser = state["nunser"]
     if nunser <= 0:
         return
-    wg = runloom.WaitGroup()
+    wg = stackweave.WaitGroup()
     wg.add(nunser)
 
     def run_one(wid):
@@ -336,7 +336,7 @@ def setup(H):
 
     H.state = {
         "baseline_domain": baseline_domain,    # the process-global domain at start
-        "lock": runloom.sync.Lock(),           # serializes the load-bearing arm
+        "lock": stackweave.sync.Lock(),           # serializes the load-bearing arm
         "nworkers": nworkers,
         "nunser": nunser,                      # report-only pre-phase population
         "pairs": pairs,
@@ -383,7 +383,7 @@ def post(H):
     # LOAD-BEARING: the PROCESS-GLOBAL `_current_domain` MUST be the exact baseline
     # after the run.  The unserialized arm self-reset, so a residual non-baseline
     # domain is a SERIALIZED-arm save/restore desync under M:N (hub migration /
-    # preempt-mid-restore) -- a runloom bug, NOT a documented caveat (serialized
+    # preempt-mid-restore) -- a stackweave bug, NOT a documented caveat (serialized
     # strict-LIFO use always restores under run(1)/GIL -- verified GIL-on AND off).
     H.check(now_domain == base,
             "gettext PROCESS-GLOBAL DOMAIN NOT RESTORED: _current_domain=={0!r} != "
@@ -406,7 +406,7 @@ def post(H):
         H.log("note: the unserialized arm observed {0} cross-fiber domain leaks "
               "across {1} overlapping blocks -- documented-unsafe overlapping use "
               "of the single process-global gettext._current_domain (reproduces "
-              "under plain GIL threads with PYTHON_GIL=1), NOT a runloom bug; the "
+              "under plain GIL threads with PYTHON_GIL=1), NOT a stackweave bug; the "
               "pre-phase drained and reset the global so this never reaches the "
               "load-bearing check".format(leaks, uns))
 
@@ -429,6 +429,6 @@ if __name__ == "__main__":
                  "derived catalog registered under its own domain) MUST read its "
                  "OWN domain's catalog and MUST restore the process-global to its "
                  "exact baseline under M:N -- a textdomain save/restore desync "
-                 "across hub migration is the real runloom bug.  The UNSERIALIZED "
+                 "across hub migration is the real stackweave bug.  The UNSERIALIZED "
                  "overlapping-global leak is documented-unsafe (reproduces under "
                  "plain GIL threads) -- measured, report-only")

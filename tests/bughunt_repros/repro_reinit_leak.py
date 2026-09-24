@@ -1,4 +1,4 @@
-import runloom_c as rc
+import stackweave_c as rc
 ch = rc.Chan(1)
 ch.send("x")
 print("len before reinit:", len(ch))

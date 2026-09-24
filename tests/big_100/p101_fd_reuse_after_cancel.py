@@ -17,8 +17,8 @@ import struct
 
 import harness
 import netutil
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
 
 def round_trip(addr, tag):
@@ -42,7 +42,7 @@ def abandon(addr, payload):
         s.connect(addr)
         s.sendall(payload)
         # Park for readability with a short timeout (the "recv" we then cancel).
-        runloom_c.wait_fd(s.fileno(), 1, 5)
+        stackweave_c.wait_fd(s.fileno(), 1, 5)
         # Deliberately DO NOT recv -- abandon the reply and recycle the fd.
     except OSError:
         pass

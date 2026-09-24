@@ -1,5 +1,5 @@
 import socket, asyncio
-import runloom.aio as aio
+import stackweave.aio as aio
 real=socket.socket; calls=[]
 class FailFirst(socket.socket):
     def __init__(self, family=-1, type=-1, proto=-1, fileno=None):
@@ -10,7 +10,7 @@ async def main():
     loop=asyncio.get_event_loop()
     srv=real(); srv.bind(('127.0.0.1',0)); srv.listen(1)
     host,port=srv.getsockname()
-    import runloom.aio.loop_net as ln
+    import stackweave.aio.loop_net as ln
     orig=ln._resolve
     ln._resolve=lambda *a: orig(*a)*2   # ensure a fallback entry exists
     socket.socket=FailFirst

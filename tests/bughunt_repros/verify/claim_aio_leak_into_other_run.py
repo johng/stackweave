@@ -1,6 +1,6 @@
 import threading, time
-import runloom.aio as aio
-loop = aio.RunloomEventLoop()
+import stackweave.aio as aio
+loop = aio.StackweaveEventLoop()
 results = []
 async def initial_task(): results.append('task')
 loop.call_soon(lambda: results.append('cb'))

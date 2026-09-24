@@ -1,6 +1,6 @@
 """net_echo_forever.py -- continuous pygo echo client soak over the REAL internet.
 
-THIS machine runs runloom (M:N) client fibers that connect to a remote TCP echo
+THIS machine runs stackweave (M:N) client fibers that connect to a remote TCP echo
 server (default ovh1.p2pd.net:7, the inetd echo service) OVER THE INTERNET, send
 a payload, read it echoed back, and verify it byte-for-byte -- forever, in ONE
 long-lived process.  Unlike the loopback cserve_echo soak this exercises pygo's
@@ -16,14 +16,14 @@ finding.  faulthandler dumps a traceback on a fatal signal; `kill -USR1 <pid>`
 dumps every fiber-thread's live stack (a HANG is then as visible as a crash).
 
 Env knobs:
-  RUNLOOM_ECHO_HOST    target host      (default ovh1.p2pd.net)
-  RUNLOOM_ECHO_PORT    target port      (default 7)
-  RUNLOOM_ECHO_FAM     4 | 6 | any      (default 6 -- v6 is the faster path)
-  RUNLOOM_ECHO_HUBS    M:N hubs         (default 4)
-  RUNLOOM_ECHO_CONC    concurrent client fibers   (default 16)
-  RUNLOOM_ECHO_RTRIPS  echo round-trips per connection before reconnect (default 32)
-  RUNLOOM_ECHO_PAYLOAD payload bytes    (default 64)
-  RUNLOOM_ECHO_REPORT  seconds between progress lines (default 15)
+  STACKWEAVE_ECHO_HOST    target host      (default ovh1.p2pd.net)
+  STACKWEAVE_ECHO_PORT    target port      (default 7)
+  STACKWEAVE_ECHO_FAM     4 | 6 | any      (default 6 -- v6 is the faster path)
+  STACKWEAVE_ECHO_HUBS    M:N hubs         (default 4)
+  STACKWEAVE_ECHO_CONC    concurrent client fibers   (default 16)
+  STACKWEAVE_ECHO_RTRIPS  echo round-trips per connection before reconnect (default 32)
+  STACKWEAVE_ECHO_PAYLOAD payload bytes    (default 64)
+  STACKWEAVE_ECHO_REPORT  seconds between progress lines (default 15)
 """
 import faulthandler
 import os
@@ -34,17 +34,17 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
-HOST = os.environ.get("RUNLOOM_ECHO_HOST", "ovh1.p2pd.net")
-PORT = int(os.environ.get("RUNLOOM_ECHO_PORT", "7"))
-FAM = os.environ.get("RUNLOOM_ECHO_FAM", "6")
-HUBS = int(os.environ.get("RUNLOOM_ECHO_HUBS", "4"))
-CONC = int(os.environ.get("RUNLOOM_ECHO_CONC", "16"))
-RTRIPS = int(os.environ.get("RUNLOOM_ECHO_RTRIPS", "32"))
-PAYLEN = int(os.environ.get("RUNLOOM_ECHO_PAYLOAD", "64"))
-REPORT = float(os.environ.get("RUNLOOM_ECHO_REPORT", "15"))
+HOST = os.environ.get("STACKWEAVE_ECHO_HOST", "ovh1.p2pd.net")
+PORT = int(os.environ.get("STACKWEAVE_ECHO_PORT", "7"))
+FAM = os.environ.get("STACKWEAVE_ECHO_FAM", "6")
+HUBS = int(os.environ.get("STACKWEAVE_ECHO_HUBS", "4"))
+CONC = int(os.environ.get("STACKWEAVE_ECHO_CONC", "16"))
+RTRIPS = int(os.environ.get("STACKWEAVE_ECHO_RTRIPS", "32"))
+PAYLEN = int(os.environ.get("STACKWEAVE_ECHO_PAYLOAD", "64"))
+REPORT = float(os.environ.get("STACKWEAVE_ECHO_REPORT", "15"))
 
 
 def resolve_target():
@@ -78,10 +78,10 @@ def client(i):
     mv = memoryview(buf)
     while not STOP[0]:
         try:
-            c = runloom_c.TCPConn.connect(ADDR, PORT)
+            c = stackweave_c.TCPConn.connect(ADDR, PORT)
         except OSError:
             neterr[i] += 1
-            runloom_c.sched_sleep(0.5)          # brief backoff, then retry
+            stackweave_c.sched_sleep(0.5)          # brief backoff, then retry
             continue
         try:
             for _ in range(RTRIPS):
@@ -120,7 +120,7 @@ def reporter(t_start):
     last_total = 0
     last_t = t_start
     while not STOP[0]:
-        runloom_c.sched_sleep(REPORT)
+        stackweave_c.sched_sleep(REPORT)
         now = time.monotonic()
         total = sum(rts)
         dt = now - last_t
@@ -140,13 +140,13 @@ def reporter(t_start):
 
 def root():
     t_start = time.monotonic()
-    runloom.fiber(lambda: reporter(t_start))
+    stackweave.fiber(lambda: reporter(t_start))
     for i in range(CONC):
-        runloom.fiber(lambda i=i: client(i))
+        stackweave.fiber(lambda i=i: client(i))
     # Clients loop forever, so root must never return (a return tears the run
     # down) -- park it until a signal flips STOP.
     while not STOP[0]:
-        runloom_c.sched_sleep(3600)
+        stackweave_c.sched_sleep(3600)
 
 
 def request_stop(signum, frame):
@@ -164,7 +164,7 @@ def main():
         "crashed so it is visible)\n".format(
             os.getpid(), ADDR, PORT, FAM, HUBS, CONC, RTRIPS, PAYLEN))
     sys.stderr.flush()
-    runloom.run(HUBS, main_fn=root)
+    stackweave.run(HUBS, main_fn=root)
 
 
 if __name__ == "__main__":

@@ -15,7 +15,7 @@ key || message) and an OUTER hash (over opad-keyed key || inner-digest).  On thi
 
 Cookie / token / webhook signing hammers HMAC: a request handler keys an HMAC
 with a per-route secret and streams the body in through `.update()`.  Under
-runloom M:N a fiber that opens an HMAC on one hub can be PREEMPTED / MIGRATED to
+stackweave M:N a fiber that opens an HMAC on one hub can be PREEMPTED / MIGRATED to
 another hub mid-MAC -- between two of its own `.update()` chunks, or between the
 last chunk and `.hexdigest()`.  The C HMAC_CTX (or the Python _inner/_outer HASH
 objects) lives on the heap and travels with the fiber, NOT with the OS thread, so
@@ -33,14 +33,14 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain threads):
   for `.hexdigest()` MUST equal the reference single-threaded HMAC of (its key,
   its message), no matter how many times it was descheduled.  We verified with a
   standalone plain-threads control (64 threads, the SAME chunked-update hazard, NO
-  runloom): 0 mismatches in 25600 MACs on the OpenSSL path AND 0 in 25600 on the
+  stackweave): 0 mismatches in 25600 MACs on the OpenSSL path AND 0 in 25600 on the
   Python _inner/_outer path, under PYTHON_GIL=1 AND PYTHON_GIL=0.  Stock CPython
   keeps each owned HMAC object's context private to whichever thread holds the
   reference, so a chunked MAC is exact for any GIL setting; an oracle that fired
   there would be a false-positive detector -- it does NOT fire there.  Under a
-  correct runloom it must ALSO hold (the per-fiber heap object migrates intact).
-  If runloom tears the inner/outer state across a hub migration, the recomputed
-  `.hexdigest()` won't match the reference -- THAT is the runloom bug, and the
+  correct stackweave it must ALSO hold (the per-fiber heap object migrates intact).
+  If stackweave tears the inner/outer state across a hub migration, the recomputed
+  `.hexdigest()` won't match the reference -- THAT is the stackweave bug, and the
   single-owner arm PASSES on a correct runtime (the program exits 0 with no bug).
 
 ORACLES:
@@ -55,7 +55,7 @@ ORACLES:
         (the inner/outer state is cleanly snapshotable across a migration);
       - a deliberately WRONG key/message does NOT verify (compare_digest is live,
         so the equality check is non-vacuous, not "always True").
-    Single-owner: a mismatch is a runloom inner/outer-state tear across migration.
+    Single-owner: a mismatch is a stackweave inner/outer-state tear across migration.
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber stranded mid-MAC (parked
     between two .update() chunks and never re-woken) never returns; the watchdog +
     require_no_lost catch it.
@@ -71,7 +71,7 @@ ORACLES:
     MEASURE how often the shared object's running digest fails to equal what THIS
     fiber alone would have produced (an interleave/contention rate) and REPORT it;
     we NEVER fail on it -- a shared mutable HMAC is unsafe for any concurrency
-    model, so failing would mislabel documented-unsafe usage as a runloom bug.  The
+    model, so failing would mislabel documented-unsafe usage as a stackweave bug.  The
     shared path NEVER touches the load-bearing owned-HMAC checks (those are
     self-contained against a freshly computed reference), so it cannot poison the
     oracle.
@@ -94,7 +94,7 @@ import hashlib
 import hmac
 
 import harness
-import runloom
+import stackweave
 
 # The reference digest constructor for the OpenSSL/load-bearing path.
 DIGEST = hashlib.sha256
@@ -165,7 +165,7 @@ def _key_for(wid):
 # --------------------------------------------------------------------------
 # LOAD-BEARING arm: an HMAC object this fiber alone OWNS, fed in chunks across
 # yields/parks, verified against the reference single-threaded HMAC.  Single-owner;
-# a mismatch is a runloom inner/outer-state tear across a hub migration.  Verified
+# a mismatch is a stackweave inner/outer-state tear across a hub migration.  Verified
 # 0/25600 under plain threads GIL on AND off (both code paths).
 # --------------------------------------------------------------------------
 def owned_mac(H, wid, idx, state):
@@ -197,12 +197,12 @@ def owned_mac(H, wid, idx, state):
             mid_rest = chunks[ci + 1:]
         # YIELD / SLEEP-PARK BETWEEN chunks so the fiber is descheduled mid-MAC and
         # the scheduler can migrate it to another hub before the next .update().
-        runloom.yield_now()
+        stackweave.yield_now()
         if ci & 1:
-            runloom.sleep(0.0002)
+            stackweave.sleep(0.0002)
 
     # One more park between the final chunk and the digest (migrate before finalize).
-    runloom.yield_now()
+    stackweave.yield_now()
     got = h.hexdigest()
 
     # (1) The chunked, migration-spanning MAC must equal the reference, compared
@@ -219,7 +219,7 @@ def owned_mac(H, wid, idx, state):
     if mid_copy is not None:
         for ch in mid_rest:
             mid_copy.update(ch)
-            runloom.yield_now()
+            stackweave.yield_now()
         cpy = mid_copy.hexdigest()
         if not hmac.compare_digest(cpy, ref):
             H.fail("HMAC mid-stream copy DIVERGED across migration: copy "
@@ -252,7 +252,7 @@ def shared_check(H, wid, idx, state):
     # context, so the read reflects sibling state -- a documented shared-object
     # interleave, exactly like p67's TLS leak.  Measured, never asserted.
     SHARED_HMAC.update(tag)
-    runloom.yield_now()
+    stackweave.yield_now()
     running = SHARED_HMAC.hexdigest()
     state["shared_checks"][wid & 1023] += 1
     # The running digest reflects ALL fibers' bytes, so it ~never equals this
@@ -306,7 +306,7 @@ def post(H):
         H.log("note: the shared global HMAC object observed {0} interleaves across "
               "{1} reads -- many hub fibers update ONE HMAC context without a lock, "
               "so its running digest reflects sibling bytes.  Documented-unsafe "
-              "shared-mutable-object usage (NOT a runloom bug); it never touches "
+              "shared-mutable-object usage (NOT a stackweave bug); it never touches "
               "the load-bearing owned-HMAC oracle (which verifies a private object "
               "against a freshly computed reference)".format(sinter, schecks))
     # NON-VACUITY: the load-bearing owned-HMAC hazard was actually exercised, and
@@ -334,7 +334,7 @@ if __name__ == "__main__":
                  "interleaved with yields/sleeps so it is preempted/migrated "
                  "mid-MAC, MUST get .hexdigest() == the reference single-threaded "
                  "HMAC (0 mismatches under plain threads GIL on AND off, both paths; "
-                 "a torn inner/outer state = a forged signature = the runloom bug).  "
+                 "a torn inner/outer state = a forged signature = the stackweave bug).  "
                  "A SHARED global HMAC many fibers update without a lock is "
                  "documented-unsafe shared-object usage -- measured interleave rate, "
                  "report-only")

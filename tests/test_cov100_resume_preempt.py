@@ -1,23 +1,23 @@
 """Adversarial coverage suite for src/runloom_c/mn_sched_hub_resume_preempt.c.inc.
 
-This fragment is the CONTROLLED M:N scheduler ("baton") gated by RUNLOOM_MN_SEED:
+This fragment is the CONTROLLED M:N scheduler ("baton") gated by STACKWEAVE_MN_SEED:
 a seeded controller serializes every hub's fiber-execution segment through one
 baton so scheduling-order bugs become reproducible.  Its sub-features are gated
 behind further env vars that the normal corpus never sets:
 
-  * the SEEDED-UNIFORM choose path  (RUNLOOM_MN_SEED, *without* RUNLOOM_MN_PCT)
+  * the SEEDED-UNIFORM choose path  (STACKWEAVE_MN_SEED, *without* STACKWEAVE_MN_PCT)
         -> runloom_mn_ctrl_rand (L130-135) + the non-PCT branch of
            runloom_mn_ctrl_choose (L254-259), plus the early-return of
            runloom_mn_pct_init (L166).
-  * the in-memory GRANT TRACE       (RUNLOOM_MN_TRACE=<path>)
+  * the in-memory GRANT TRACE       (STACKWEAVE_MN_TRACE=<path>)
         -> trace-buf alloc/path copy in init (L363-367), the per-grant ring
            write in try_grant (L309-311) and the dump-at-fini (L401-409).
-  * the BARRIER-OFF baton           (RUNLOOM_MN_BARRIER=0)
+  * the BARRIER-OFF baton           (STACKWEAVE_MN_BARRIER=0)
         -> the preempt_frames=0 else-branch in init (L354).
-  * the PCT_STEPS override          (RUNLOOM_MN_PCT_STEPS=<k>)
+  * the PCT_STEPS override          (STACKWEAVE_MN_PCT_STEPS=<k>)
         -> the strtoull branch of the pct_k ternary in pct_init (L171).
 
-Because the parent pytest process imports runloom_c exactly ONCE, every one of
+Because the parent pytest process imports stackweave_c exactly ONCE, every one of
 these env modes is latched at import / first-run; a test that needs a mode MUST
 set it in a fresh SUBPROCESS.  We reuse tests/cov_workload.py (a diverse,
 self-terminating run(N) workload) as the body and assert on its WORKLOAD_OK
@@ -67,7 +67,7 @@ def _assert_ok(p, label):
 
 
 # ---------------------------------------------------------------------------
-# 1. Seeded-UNIFORM baton (RUNLOOM_MN_SEED, barrier on, NO PCT).
+# 1. Seeded-UNIFORM baton (STACKWEAVE_MN_SEED, barrier on, NO PCT).
 #
 # Drives runloom_mn_ctrl_choose's NON-PCT branch (L254-259): pct_enabled is 0,
 # so choose() counts the wanters (L254), and -- with several hubs concurrently
@@ -78,13 +78,13 @@ def _assert_ok(p, label):
 # returns -1.  Also drives runloom_mn_pct_init's early return L166 (pct env is
 # unset, so the very first guard `pct==NULL` is true).
 #
-# The existing tests/test_cov_mn.py "barrier_pct" mode sets RUNLOOM_MN_PCT, which
+# The existing tests/test_cov_mn.py "barrier_pct" mode sets STACKWEAVE_MN_PCT, which
 # makes choose() take the PCT branch (L243-252) and NEVER reach L254-259 or the
 # baton's own rand -- so this distinct no-PCT run is what colours those lines.
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize("hubs", [2, 4])
 def test_seeded_uniform_baton_no_pct(hubs):
-    p = _run_workload({"RUNLOOM_MN_SEED": "7", "RUNLOOM_MN_BARRIER": "1"},
+    p = _run_workload({"STACKWEAVE_MN_SEED": "7", "STACKWEAVE_MN_BARRIER": "1"},
                       hubs=hubs)
     _assert_ok(p, "seeded-uniform baton hubs=%d" % hubs)
 
@@ -95,7 +95,7 @@ def test_seeded_uniform_baton_is_deterministic():
     # mean the non-PCT choose draw (L256) is NOT a pure function of the seed --
     # i.e. the xorshift rng (L130-135) or the wanter-walk (L257-258) leaked
     # nondeterminism.  We assert the WORKLOAD_OK count is identical across runs.
-    env = {"RUNLOOM_MN_SEED": "12345", "RUNLOOM_MN_BARRIER": "1"}
+    env = {"STACKWEAVE_MN_SEED": "12345", "STACKWEAVE_MN_BARRIER": "1"}
     p1 = _run_workload(env, hubs=3)
     p2 = _run_workload(env, hubs=3)
     _assert_ok(p1, "seeded run #1")
@@ -108,21 +108,21 @@ def test_seeded_uniform_baton_is_deterministic():
 # ---------------------------------------------------------------------------
 # 2. Barrier OFF -- the timing-dependent immediate-handoff baton.
 #
-# RUNLOOM_MN_BARRIER=0 takes the else-branch in runloom_mn_ctrl_init that sets
+# STACKWEAVE_MN_BARRIER=0 takes the else-branch in runloom_mn_ctrl_init that sets
 # preempt_frames = 0 (L354): with the barrier off there is no deterministic
 # frame-count preemption, so the wall-clock watchdog drives preemption instead.
 # This is the A/B-comparison path; it shares the non-PCT choose, so it also
 # re-exercises L254-259 under the no-census immediate handoff.
 # ---------------------------------------------------------------------------
 def test_baton_barrier_off_immediate_handoff():
-    p = _run_workload({"RUNLOOM_MN_SEED": "9", "RUNLOOM_MN_BARRIER": "0"}, hubs=4)
+    p = _run_workload({"STACKWEAVE_MN_SEED": "9", "STACKWEAVE_MN_BARRIER": "0"}, hubs=4)
     _assert_ok(p, "baton barrier=off")
 
 
 # ---------------------------------------------------------------------------
-# 3. In-memory GRANT TRACE (RUNLOOM_MN_TRACE=<path>).
+# 3. In-memory GRANT TRACE (STACKWEAVE_MN_TRACE=<path>).
 #
-# Setting RUNLOOM_MN_TRACE turns on the trace-buf in runloom_mn_ctrl_init: it
+# Setting STACKWEAVE_MN_TRACE turns on the trace-buf in runloom_mn_ctrl_init: it
 # mallocs the 1 MiB ring (L363-364), guards malloc failure (L365), and copies
 # the path with strncpy + NUL terminate (L366-367).  Every baton GRANT then
 # writes one hub-id digit into the ring in try_grant (L309-311).  At mn_fini the
@@ -138,13 +138,13 @@ def test_baton_barrier_off_immediate_handoff():
 def test_grant_trace_ring_dump(tmp_path, hubs):
     trace = tmp_path / ("mn_grant_trace_%d.txt" % hubs)
     p = _run_workload(
-        {"RUNLOOM_MN_SEED": "5", "RUNLOOM_MN_BARRIER": "1",
-         "RUNLOOM_MN_TRACE": str(trace)},
+        {"STACKWEAVE_MN_SEED": "5", "STACKWEAVE_MN_BARRIER": "1",
+         "STACKWEAVE_MN_TRACE": str(trace)},
         hubs=hubs)
     _assert_ok(p, "grant trace hubs=%d" % hubs)
 
     # L401-405: the dump file must have been written at fini.
-    assert trace.exists(), "RUNLOOM_MN_TRACE dump file was never written"
+    assert trace.exists(), "STACKWEAVE_MN_TRACE dump file was never written"
     data = trace.read_bytes()
     # L309-311: at least one grant must have been recorded (the workload spawns
     # ~25 fibers across hubs -> many baton handoffs).
@@ -166,8 +166,8 @@ def test_grant_trace_only_at_fini_not_per_grant(tmp_path):
     # f) dumped the raw ring, not a formatted per-event log.
     trace = tmp_path / "mn_trace_raw.txt"
     p = _run_workload(
-        {"RUNLOOM_MN_SEED": "11", "RUNLOOM_MN_BARRIER": "1",
-         "RUNLOOM_MN_TRACE": str(trace)},
+        {"STACKWEAVE_MN_SEED": "11", "STACKWEAVE_MN_BARRIER": "1",
+         "STACKWEAVE_MN_TRACE": str(trace)},
         hubs=3)
     _assert_ok(p, "grant trace raw")
     data = trace.read_bytes()
@@ -177,18 +177,18 @@ def test_grant_trace_only_at_fini_not_per_grant(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 4. PCT with an explicit RUNLOOM_MN_PCT_STEPS override.
+# 4. PCT with an explicit STACKWEAVE_MN_PCT_STEPS override.
 #
-# runloom_mn_pct_init reads RUNLOOM_MN_PCT_STEPS; when it is set+non-empty the
+# runloom_mn_pct_init reads STACKWEAVE_MN_PCT_STEPS; when it is set+non-empty the
 # pct_k ternary takes its strtoull branch (L171) instead of the 4096 default.
-# The existing "barrier_pct" mode never sets RUNLOOM_MN_PCT_STEPS, so the
+# The existing "barrier_pct" mode never sets STACKWEAVE_MN_PCT_STEPS, so the
 # strtoull side of that ternary is otherwise never evaluated.  We exercise it
 # with a small step bound (the change points are then drawn from [1, k]).
 # ---------------------------------------------------------------------------
 def test_pct_steps_override():
     p = _run_workload(
-        {"RUNLOOM_MN_SEED": "7", "RUNLOOM_MN_BARRIER": "1",
-         "RUNLOOM_MN_PCT": "4", "RUNLOOM_MN_PCT_STEPS": "64"},
+        {"STACKWEAVE_MN_SEED": "7", "STACKWEAVE_MN_BARRIER": "1",
+         "STACKWEAVE_MN_PCT": "4", "STACKWEAVE_MN_PCT_STEPS": "64"},
         hubs=4)
     _assert_ok(p, "pct steps override")
 
@@ -198,8 +198,8 @@ def test_pct_steps_override_deterministic():
     # PCT_STEPS must reproduce.  A differing total across two runs would mean the
     # strtoull-sourced pct_k (L171) perturbed the priority schedule
     # nondeterministically.
-    env = {"RUNLOOM_MN_SEED": "42", "RUNLOOM_MN_BARRIER": "1",
-           "RUNLOOM_MN_PCT": "3", "RUNLOOM_MN_PCT_STEPS": "32"}
+    env = {"STACKWEAVE_MN_SEED": "42", "STACKWEAVE_MN_BARRIER": "1",
+           "STACKWEAVE_MN_PCT": "3", "STACKWEAVE_MN_PCT_STEPS": "32"}
     p1 = _run_workload(env, hubs=3)
     p2 = _run_workload(env, hubs=3)
     _assert_ok(p1, "pct steps run #1")
@@ -220,8 +220,8 @@ def test_pct_steps_override_deterministic():
 # ---------------------------------------------------------------------------
 def test_pct_depth_one_no_change_points():
     p = _run_workload(
-        {"RUNLOOM_MN_SEED": "7", "RUNLOOM_MN_BARRIER": "1",
-         "RUNLOOM_MN_PCT": "1"},
+        {"STACKWEAVE_MN_SEED": "7", "STACKWEAVE_MN_BARRIER": "1",
+         "STACKWEAVE_MN_PCT": "1"},
         hubs=4)
     _assert_ok(p, "pct depth=1")
 

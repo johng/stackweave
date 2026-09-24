@@ -16,7 +16,7 @@ import os
 import sys
 
 import pytest
-import runloom_c
+import stackweave_c
 
 if not os.path.exists("/proc/self/maps"):
     pytest.skip("needs /proc/self/maps (Linux)", allow_module_level=True)
@@ -35,25 +35,25 @@ def test_stack_pool_plateaus_under_fanout():
 
     def worker(ch):
         buf = bytearray(2048)        # touch some stack
-        runloom_c.sched_sleep(0.0)   # yield so it runs on / completes on a hub
+        stackweave_c.sched_sleep(0.0)   # yield so it runs on / completes on a hub
         buf[0] = 1
         ch.send(1)
 
     def acceptor():
         for r in range(ROUNDS):
-            ch = runloom_c.Chan(WORKERS)
+            ch = stackweave_c.Chan(WORKERS)
             for _ in range(WORKERS):
-                runloom_c.mn_fiber(lambda c=ch: worker(c))
+                stackweave_c.mn_fiber(lambda c=ch: worker(c))
             for _ in range(WORKERS):
                 ch.recv()
             samples.append(maps_count())
 
-    runloom_c.mn_init(4)
+    stackweave_c.mn_init(4)
     try:
-        runloom_c.mn_fiber(acceptor)
-        runloom_c.mn_run()
+        stackweave_c.mn_fiber(acceptor)
+        stackweave_c.mn_run()
     finally:
-        runloom_c.mn_fini()
+        stackweave_c.mn_fini()
 
     mid = samples[ROUNDS // 2]
     end = samples[-1]

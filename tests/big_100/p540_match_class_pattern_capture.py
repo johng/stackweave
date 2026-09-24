@@ -16,7 +16,7 @@ Mapping patterns `case {"mx": mx, ...}` (MATCH_KEYS) and sequence patterns
 `case [s0, s1, s2]` (MATCH_SEQUENCE / UNPACK_SEQUENCE) bind the same way -- into
 frame locals of the fiber currently executing the match.
 
-WHERE M:N COULD BREAK IT (the gap this program probes).  runloom runs each
+WHERE M:N COULD BREAK IT (the gap this program probes).  stackweave runs each
 goroutine on its OWN Python frame stack, and a cooperative yield can migrate the
 fiber to a DIFFERENT hub before it resumes.  If a `yield` occurs INSIDE a case
 GUARD -- i.e. AFTER MATCH_CLASS/MATCH_KEYS/MATCH_SEQUENCE has half-bound the
@@ -49,7 +49,7 @@ We make this a SINGLE-OWNER, falsifiable oracle -- not a shared-object probe:
       hazard describes: names get bound, the fiber yields mid-guard, a sibling
       runs, the guard rejects, and the NEXT arm re-binds), then
     * the four real arms (PosPoint / KwPoint / mapping / sequence), EACH with a
-      guard that calls runloom.yield_now() before returning True -- so for EVERY
+      guard that calls stackweave.yield_now() before returning True -- so for EVERY
       kind the fiber yields AFTER its captures are bound and BEFORE its arm body
       reads them.
 
@@ -74,7 +74,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY:
   overwritten by a sibling across the mid-guard yield -- exactly the M:N frame
   isolation failure this program exists to catch.  Verified against plain threads
   (each OS thread running the same match on its own subject, GIL on and off):
-  100% correct-arm + correct-capture, 0 cross-thread leaks; a correct runloom
+  100% correct-arm + correct-capture, 0 cross-thread leaks; a correct stackweave
   must match that.
 
 ORACLES:
@@ -103,7 +103,7 @@ deterministic-replay that resumes the frame with a sibling's captured int, is th
 cleanest signal before the value oracle even fires.
 """
 import harness
-import runloom
+import stackweave
 
 # Per-fiber field values are drawn far apart so a leaked sibling value is a
 # DIFFERENT, non-interned int (never a cached-small-int coincidence): fiber wid's
@@ -152,7 +152,7 @@ def guard_true():
     """A winning arm's guard: yield (exposing the just-bound frame locals to a
     hub migration) BEFORE returning True, so a sibling reliably interleaves while
     this fiber's captures sit half-bound in its frame."""
-    runloom.yield_now()
+    stackweave.yield_now()
     return True
 
 
@@ -160,7 +160,7 @@ def guard_reject(a, b, c):
     """A losing arm's guard: the pattern has TENTATIVELY bound a,b,c into the
     frame; yield mid-guard, then reject so the NEXT arm must re-bind.  References
     a,b,c so they are genuinely captured, not elided."""
-    runloom.yield_now()
+    stackweave.yield_now()
     return (a is None) and (b is None) and (c is None)   # always False for our ints
 
 
@@ -305,4 +305,4 @@ if __name__ == "__main__":
                  "correct arm MUST fire and every captured binding MUST equal the "
                  "fiber-local field value.  A captured value that becomes a "
                  "sibling's across the yield, or the wrong case firing, is the "
-                 "runloom frame-local capture-isolation bug")
+                 "stackweave frame-local capture-isolation bug")

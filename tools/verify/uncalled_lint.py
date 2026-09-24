@@ -35,7 +35,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
-SRC = os.path.join(ROOT, "src", "runloom_c")
+SRC = os.path.join(ROOT, "src", "stackweave_c")
 
 # Deliberately uncalled symbols.  EMPTY IS THE CORRECT STATE -- see the ratchet
 # note above.  Format: "name": "why it is uncalled and who is expected to call it".
@@ -71,7 +71,7 @@ ALLOWED = {
     # wire it up, or delete it.
     #
     # runloom_park_until is the most interesting, and it is the same shape as
-    # the bug that motivated this lint: the RUNLOOM_FAULT_SPURIOUS_PARK note in
+    # the bug that motivated this lint: the STACKWEAVE_FAULT_SPURIOUS_PARK note in
     # runloom_sched_parkwake.c.inc says "Every consumer in-tree does
     # (runloom_blocking_call, runloom_park_until, the io_uring waits, ...)" --
     # naming it as a live consumer of the park_safe contract when it has no

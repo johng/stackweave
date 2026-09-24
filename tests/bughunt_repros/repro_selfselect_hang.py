@@ -3,8 +3,8 @@ unbuffered channel.  Every rendezvous consumes one round from each party, so
 both always finish together -- Go equivalent never deadlocks.  Hunt for
 lost-rendezvous hang."""
 import sys
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 
 HUBS = int(sys.argv[1]) if len(sys.argv) > 1 else 2
 ROUNDS = int(sys.argv[2]) if len(sys.argv) > 2 else 300
@@ -25,7 +25,7 @@ def main():
     rc.mn_fiber(lambda: party(0))
     rc.mn_fiber(lambda: party(1))
 
-runloom.run(HUBS, main)
+stackweave.run(HUBS, main)
 print("done flags:", done, "progress:", progress)
 assert done == [1, 1]
 print("OK")

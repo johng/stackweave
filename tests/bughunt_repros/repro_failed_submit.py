@@ -8,7 +8,7 @@ read's completion (data lands in the previous call's buffer).
 Run under: strace -e inject=io_uring_enter:error=EBUSY:when=<N> (see .sh)
 """
 import os, sys, tempfile
-import runloom_c as rc
+import stackweave_c as rc
 
 assert rc.iouring_available()
 

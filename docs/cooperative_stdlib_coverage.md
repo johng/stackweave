@@ -1,7 +1,7 @@
 # Cooperative stdlib coverage under the M:N scheduler
 
 What of the Python standard library cooperates (parks the fiber) vs blocks
-an OS hub, under `runloom.monkey.patch()` + the M:N scheduler (`mn_init`/
+an OS hub, under `stackweave.monkey.patch()` + the M:N scheduler (`mn_init`/
 `mn_fiber`/`mn_run`, free-threaded 3.13t, GIL off).  Built by scanning CPython
 `Lib/` for the leaf blocking primitives and empirically probing each under a
 single-hub canary (a 5 ms ticker fiber: if the op parks the canary keeps
@@ -32,7 +32,7 @@ routes through it cooperates transparently.  e.g. `urllib`/`http.client`/
 | `getpass.getpass()` | **COOP** | offloaded to a worker (its `/dev/tty` read is opened internally) |
 | `time.sleep`, `time.After`/`Tick`/`Timer`/`Ticker` | **COOP** | timers spawn on the active scheduler |
 | `signal.sigwait`/`sigtimedwait`/`pause` | **COOP** | |
-| `threading` Lock/RLock/Event/Condition/Semaphore/Barrier | **COOP** | M:N-safe (Lock backed by `runloom_c.Mutex`) |
+| `threading` Lock/RLock/Event/Condition/Semaphore/Barrier | **COOP** | M:N-safe (Lock backed by `stackweave_c.Mutex`) |
 | `queue.Queue`/`SimpleQueue`/Lifo/Priority | **COOP** | built on the cooperative Condition |
 | `context.WithCancel`/`WithTimeout`/`WithDeadline` | **COOP** | deadline timer on the active scheduler |
 | regular-file buffered reads | **FAST** locally | block only on slow media (NFS/FUSE); `open()` syscall is offloaded |
@@ -61,7 +61,7 @@ CPython's own C code assumes the main thread's ~8 MB stack, and a few functions
 allocate **a single fat C frame** that overflows a small stack — the
 `-fstack-clash-protection` probe then walks straight into the guard page →
 deterministic SIGSEGV (a clean crash, not corruption, thanks to the guard).
-This is *not* a depth problem: Python→Python recursion lives on runloom's
+This is *not* a depth problem: Python→Python recursion lives on stackweave's
 growable datastack (proven safe to 1M deep), and C↔Python recursion is bounded
 by CPython's `c_recursion_remaining` counter (clean `RecursionError`, proven to
 100K deep).  Only a single oversized frame is unguarded — and the whole stdlib
@@ -86,7 +86,7 @@ has just two:
   of the heavier offload.  Falls back to a pool-thread offload only on a
   non-epollable fd (regular file) or a no-epoll platform (Windows; `*BSD`/macOS
   could grow a kqueue path).  `select.poll` (no backing fd) stays on offload.
-* first `ssl` use is **warmed on the main thread**: `runloom.monkey` imports
+* first `ssl` use is **warmed on the main thread**: `stackweave.monkey` imports
   `ssl` on the main thread and `_patch_ssl` forces OpenSSL init there (8 MB
   stack), so the fat init is pre-paid off any fiber.
 
@@ -97,16 +97,16 @@ leaf must fit the default stack, so a *new* fat frame is caught), and the
 ssl-warmed-so-fiber-is-safe check.  A fiber that calls into arbitrary
 third-party C with a single >32 KB frame remains the one residual: it fails as
 a clean guard-page crash and is fixed by sizing that fiber
-(`runloom_c.fiber(fn, stack_size=…)`) or offloading it.
+(`stackweave_c.fiber(fn, stack_size=…)`) or offloading it.
 
 Reproducer (now exits cleanly; SEGV'd before the fix):
 
 ```python
-import select, runloom, runloom_c
-runloom.monkey.patch(); GO = runloom_c.mn_fiber
+import select, stackweave, stackweave_c
+stackweave.monkey.patch(); GO = stackweave_c.mn_fiber
 def worker():
     select.select([], [], [], 0)       # cooperative epoll path; no 51 KB frame
-runloom.mn_init(2); GO(worker); runloom.mn_run(); runloom.mn_fini()
+stackweave.mn_init(2); GO(worker); stackweave.mn_run(); stackweave.mn_fini()
 ```
 
 ### Deep C-recursion residual (`ast` / `compile`)
@@ -138,14 +138,14 @@ compilation is untouched.
 There is no clean shared-counter fix that would make this general (lowering the
 counter to make `ast` safe would force `json`/`pickle` to `RecursionError` at
 ~14, breaking ordinary nested data); the general fix is CPython 3.14's
-stack-pointer-based recursion check, at which point runloom can set each
+stack-pointer-based recursion check, at which point stackweave can set each
 fiber's `c_stack_*` bounds and drop the offload.
 
 **Residual:** `eval(str)`/`exec(str)` compile *internally in C* (not via
 `builtins.compile`) and need the caller's namespace, so they are not offloaded.
 A fiber that `eval`/`exec`s deeply-nested untrusted source should use
-`runloom.monkey.offload()` / `runloom_c.blocking()` for the compile, or a
-roomier g-stack (`runloom_c.fiber(fn, stack_size=…)`).
+`stackweave.monkey.offload()` / `stackweave_c.blocking()` for the compile, or a
+roomier g-stack (`stackweave_c.fiber(fn, stack_size=…)`).
 
 ### Re-scan summary (stdlib C-frame sweep)
 

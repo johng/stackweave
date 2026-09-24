@@ -1,4 +1,4 @@
-"""S8 -- adversarial fuzzing of the runloom_c PUBLIC C-API boundary.
+"""S8 -- adversarial fuzzing of the stackweave_c PUBLIC C-API boundary.
 
 Threat model: a buggy or hostile *Python caller*.  Every prior security check
 targets the scheduler internals or the network transport; nothing systematically
@@ -25,7 +25,7 @@ import random
 import sys
 
 sys.path.insert(0, "src")
-import runloom_c  # noqa: E402
+import stackweave_c  # noqa: E402
 
 
 # ---- hostile value pool -----------------------------------------------------
@@ -33,7 +33,7 @@ import runloom_c  # noqa: E402
 def _reentrant_spawn():
     # a callback that re-enters the API from inside a goroutine
     try:
-        runloom_c.fiber(lambda: None)
+        stackweave_c.fiber(lambda: None)
     except Exception:  # noqa: BLE001
         pass
 
@@ -95,7 +95,7 @@ def _log(target, args):
 
 def sweep_once(rng):
     name = rng.choice(SWEEP_NAMES)
-    fn = getattr(runloom_c, name, None)
+    fn = getattr(stackweave_c, name, None)
     if fn is None or not callable(fn):
         return
     arity = rng.randint(0, 3)
@@ -116,11 +116,11 @@ def targeted(rng):
     for v in (-1, 0, 2**63, _WeirdInt()):
         _log("set_max_goroutines", (v,))
         try:
-            runloom_c.set_max_goroutines(v)
+            stackweave_c.set_max_goroutines(v)
         except OK_EXC:
             pass
     try:
-        runloom_c.set_max_goroutines(100000)
+        stackweave_c.set_max_goroutines(100000)
     except OK_EXC:
         pass
 
@@ -128,14 +128,14 @@ def targeted(rng):
     for bad in (None, 5, "f", object(), _Boom()):
         _log("go", (bad,))
         try:
-            runloom_c.fiber(bad)
+            stackweave_c.fiber(bad)
         except OK_EXC:
             pass
     _log("go+run", ("raiser/reentrant",))
     try:
-        runloom_c.fiber(_raiser)
-        runloom_c.fiber(_reentrant_spawn)
-        runloom_c.run()
+        stackweave_c.fiber(_raiser)
+        stackweave_c.fiber(_reentrant_spawn)
+        stackweave_c.run()
     except OK_EXC:
         pass
 
@@ -144,14 +144,14 @@ def targeted(rng):
         for ev in (-1, 0, 1, 2, 3, 99, 1 << 40):
             _log("wait_fd", (fd, ev, 0))
             try:
-                runloom_c.wait_fd(fd, ev, 0)
+                stackweave_c.wait_fd(fd, ev, 0)
             except OK_EXC:
                 pass
 
     # introspection with hostile indices
     for v in (-1, 0, 1 << 62, _WeirdInt(), None, "x"):
         for nm in ("goroutine_stack", "mn_hub_states"):
-            fn = getattr(runloom_c, nm, None)
+            fn = getattr(stackweave_c, nm, None)
             if not callable(fn):
                 continue
             _log(nm, (v,))

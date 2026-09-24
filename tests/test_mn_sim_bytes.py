@@ -1,6 +1,6 @@
 """MN_SIM_DST_PLAN.md I2 -- the sim byte plane, native on the M:N scheduler.
 
-Under RUNLOOM_SIM + RUNLOOM_SIM_MN + RUNLOOM_MN_SEED the netpoll pump no-ops
+Under STACKWEAVE_SIM + STACKWEAVE_SIM_MN + STACKWEAVE_MN_SEED the netpoll pump no-ops
 for hubs (bounded detached nap) and the ready ledger is dispatched by the
 quiescent census (try_grant c<0): dispatch-before-advance, ledger total order,
 wakes via the standard claim/unlink/mn_wake_g primitive, cross-hub interleave
@@ -28,12 +28,12 @@ pytestmark = pytest.mark.skipif(
     not needs_free_threading(),
     reason="the M:N scheduler is only real on free-threaded builds")
 
-SIM_ENV = {"RUNLOOM_SIM": "1", "RUNLOOM_SIM_MN": "1"}
+SIM_ENV = {"STACKWEAVE_SIM": "1", "STACKWEAVE_SIM_MN": "1"}
 
 
 def run_sim(code, seed=12345, extra=None, timeout=60):
     env_extra = dict(SIM_ENV)
-    env_extra["RUNLOOM_MN_SEED"] = str(seed)
+    env_extra["STACKWEAVE_MN_SEED"] = str(seed)
     if extra:
         env_extra.update(extra)
     env = mn_digest.hermetic_env(env_extra)
@@ -50,7 +50,7 @@ def run_sim(code, seed=12345, extra=None, timeout=60):
 # found empirically); the yielders keep both hubs wanting the baton so the
 # seeded cross-hub interleave is actually exercised.
 BYTES_WORKLOAD = r"""
-import socket, runloom_c as rc
+import socket, stackweave_c as rc
 K = 6
 order = []
 conns = []
@@ -107,7 +107,7 @@ class TestMnSimBytes:
         H=2 is woken by the census-dispatched ledger with the right mask and
         the exact bytes (not a silent timeout-collapse)."""
         p = run_sim(
-            "import socket, runloom_c as rc\n"
+            "import socket, stackweave_c as rc\n"
             "a, b = socket.socketpair()\n"
             "a.setblocking(False); b.setblocking(False)\n"
             "cid = rc.sim_conn_register(a.fileno(), b.fileno())\n"
@@ -143,7 +143,7 @@ class TestMnSimBytes:
         """mn_init(1): the dispatching hub owns the woken parker (the one
         unsimulated corner in the design trace) -- must complete, not wedge."""
         p = run_sim(
-            "import socket, runloom_c as rc\n"
+            "import socket, stackweave_c as rc\n"
             "a, b = socket.socketpair()\n"
             "a.setblocking(False); b.setblocking(False)\n"
             "cid = rc.sim_conn_register(a.fileno(), b.fileno())\n"
@@ -167,7 +167,7 @@ class TestMnSimBytes:
         order vs a competing same-deadline sleeper is census-decided and
         stable across runs."""
         code = (
-            "import socket, time, runloom_c as rc\n"
+            "import socket, time, stackweave_c as rc\n"
             "a, b = socket.socketpair()\n"
             "a.setblocking(False); b.setblocking(False)\n"
             "cid = rc.sim_conn_register(a.fileno(), b.fileno())\n"
@@ -205,7 +205,7 @@ class TestMnSimBytes:
         """gate [11a]: wait_fd on an fd outside the sim registry raises
         (EPERM) instead of parking forever."""
         p = run_sim(
-            "import socket, runloom_c as rc\n"
+            "import socket, stackweave_c as rc\n"
             "a, b = socket.socketpair()\n"
             "def w():\n"
             "    try:\n"
@@ -223,7 +223,7 @@ class TestMnSimBytes:
         logical clock (was: EINVAL between I2 and I4 -- the temporary guard
         against the silent parked-forever wedge)."""
         p = run_sim(
-            "import socket, runloom_c as rc\n"
+            "import socket, stackweave_c as rc\n"
             "a, b = socket.socketpair()\n"
             "a.setblocking(False); b.setblocking(False)\n"
             "cid = rc.sim_conn_register(a.fileno(), b.fileno())\n"
@@ -241,7 +241,7 @@ class TestMnSimBytes:
         must not wedge a stop-the-world -- gc churn + collections from fibers
         while a sim conn is mid-traffic completes cleanly."""
         p = run_sim(
-            "import gc, socket, runloom_c as rc\n"
+            "import gc, socket, stackweave_c as rc\n"
             "a, b = socket.socketpair()\n"
             "a.setblocking(False); b.setblocking(False)\n"
             "cid = rc.sim_conn_register(a.fileno(), b.fileno())\n"
@@ -274,7 +274,7 @@ class TestTimedParksI4:
         regression healed end-to-end (the I2 EINVAL guard is retired).  Order
         vs a 4999ms sleeper is deterministic across runs."""
         code = (
-            "import socket, time, runloom_c as rc\n"
+            "import socket, time, stackweave_c as rc\n"
             "a, b = socket.socketpair()\n"
             "a.setblocking(False); b.setblocking(False)\n"
             "cid = rc.sim_conn_register(a.fileno(), b.fileno())\n"
@@ -308,7 +308,7 @@ class TestTimedParksI4:
         the shuttler runs only after; its delivery lands as a stashed wake on
         a dead parker).  Pinned explicitly: 'TIE 0 None'."""
         code = (
-            "import socket, runloom_c as rc\n"
+            "import socket, stackweave_c as rc\n"
             "a, b = socket.socketpair()\n"
             "a.setblocking(False); b.setblocking(False)\n"
             "cid = rc.sim_conn_register(a.fileno(), b.fileno())\n"
@@ -339,7 +339,7 @@ class TestTimedParksI4:
         Swapping that order would flip this to a timeout -- the load-bearing
         ordering finally has teeth."""
         code = (
-            "import socket, runloom_c as rc\n"
+            "import socket, stackweave_c as rc\n"
             "a, b = socket.socketpair()\n"
             "a.setblocking(False); b.setblocking(False)\n"
             "cid = rc.sim_conn_register(a.fileno(), b.fileno())\n"
@@ -368,7 +368,7 @@ class TestTimedParksI4:
         compares declared a logical deadline expired-at-birth -- 9ms wall,
         logical 0.)"""
         p = run_sim(
-            "import time, runloom_c as rc\n"
+            "import time, stackweave_c as rc\n"
             "out = {}\n"
             "def parker():\n"
             "    out['r'] = rc.park(timeout=2.5)\n"
@@ -382,7 +382,7 @@ class TestTimedParksI4:
 
     def test_park_woken_before_logical_timeout(self):
         p = run_sim(
-            "import runloom_c as rc\n"
+            "import stackweave_c as rc\n"
             "out = {}\n"
             "def parker():\n"
             "    out['h'] = rc.current_g()\n"
@@ -400,8 +400,8 @@ class TestTimedParksI4:
 
 
 class TestReviewRegressions:
-    # TODO(runloom): the late-parker stashed wake is never delivered.  Pre-existing
-    # runloom bug -- reproduces identically on STOCK CPython, so it is not a
+    # TODO(stackweave): the late-parker stashed wake is never delivered.  Pre-existing
+    # stackweave bug -- reproduces identically on STOCK CPython, so it is not a
     # patched-interpreter regression.  Skipped to keep the required CI
     # gate green; fix and remove this skip.
     def test_late_parker_gets_stashed_wake(self):
@@ -411,7 +411,7 @@ class TestReviewRegressions:
         consumed at the receiver's pre-park points -- dropping it was a
         silent permanent hang with all H=1 self-heals gated off."""
         p = run_sim(
-            "import socket, runloom_c as rc\n"
+            "import socket, stackweave_c as rc\n"
             "a, b = socket.socketpair()\n"
             "a.setblocking(False); b.setblocking(False)\n"
             "cid = rc.sim_conn_register(a.fileno(), b.fileno())\n"
@@ -431,17 +431,17 @@ class TestReviewRegressions:
         assert "LATE_PARKER b'x'" in p.stdout, (p.stdout, p.stderr[-800:])
 
     def test_barrier_zero_fenced(self):
-        """I2-review fence regression: RUNLOOM_MN_BARRIER=0 under the mn-sim
+        """I2-review fence regression: STACKWEAVE_MN_BARRIER=0 under the mn-sim
         opt-in must raise -- without the barrier the census never arms, every
         gate goes dark, and the P4 silent corruption returns."""
         p = run_sim(
-            "import runloom_c as rc\n"
+            "import stackweave_c as rc\n"
             "try:\n"
             "    rc.mn_init(2)\n"
             "    print('FENCE_MISSING')\n"
             "except RuntimeError as e:\n"
             "    print('BARRIER_FENCED' if 'BARRIER' in str(e) else 'WRONG_MSG')\n",
-            extra={"RUNLOOM_MN_BARRIER": "0"}, seed=1)
+            extra={"STACKWEAVE_MN_BARRIER": "0"}, seed=1)
         assert "BARRIER_FENCED" in p.stdout, (p.stdout, p.stderr[-800:])
 
 
@@ -458,7 +458,7 @@ class TestCrossPlane:
         even under a broken global-armed gate) -- this wait_fd park is woken
         only by the H=1 sim pump's ledger dispatch, exercising both gates."""
         p = run_sim(
-            "import socket, runloom_c as rc\n"
+            "import socket, stackweave_c as rc\n"
             "rc.mn_init(2)\n"
             "rc.mn_fiber(lambda: None)\n"
             "rc.mn_run()\n"                     # pool stays live + armed
@@ -483,17 +483,17 @@ class TestCrossPlane:
 
 class TestSimMnFenceExtension:
     def test_optin_without_seed_raises(self):
-        """RUNLOOM_SIM_MN without RUNLOOM_MN_SEED: no census exists to
+        """STACKWEAVE_SIM_MN without STACKWEAVE_MN_SEED: no census exists to
         dispatch the ledger -- mn_init must raise naming the seed."""
         env = mn_digest.hermetic_env(dict(SIM_ENV))   # note: NO seed
         p = subprocess.run(
             [sys.executable, "-c",
-             "import runloom_c as rc\n"
+             "import stackweave_c as rc\n"
              "try:\n"
              "    rc.mn_init(2)\n"
              "    print('FENCE_MISSING')\n"
              "except RuntimeError as e:\n"
-             "    print('SEED_FENCE' if 'RUNLOOM_MN_SEED' in str(e)\n"
+             "    print('SEED_FENCE' if 'STACKWEAVE_MN_SEED' in str(e)\n"
              "          else 'WRONG_MSG', str(e)[:100])\n"],
             cwd=REPO, env=env, timeout=60,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)

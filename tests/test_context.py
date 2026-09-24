@@ -1,9 +1,9 @@
-"""Tests for runloom.context (Go-style cancellation)."""
+"""Tests for stackweave.context (Go-style cancellation)."""
 import time as _time
 import unittest
 
-import runloom_c
-import runloom.context as ctxmod
+import stackweave_c
+import stackweave.context as ctxmod
 
 
 class TestBackground(unittest.TestCase):
@@ -23,16 +23,16 @@ class TestWithCancel(unittest.TestCase):
         got = []
 
         def waiter():
-            idx, _ = runloom_c.select([("recv", ctx.done)])
+            idx, _ = stackweave_c.select([("recv", ctx.done)])
             got.append(("woken", idx, ctx.err()))
 
         def canceller():
-            runloom_c.sched_sleep(0.01)
+            stackweave_c.sched_sleep(0.01)
             cancel()
 
-        runloom_c.fiber(waiter)
-        runloom_c.fiber(canceller)
-        runloom_c.run()
+        stackweave_c.fiber(waiter)
+        stackweave_c.fiber(canceller)
+        stackweave_c.run()
 
         self.assertEqual(len(got), 1)
         self.assertEqual(got[0][2], ctxmod.CANCELED)
@@ -44,16 +44,16 @@ class TestWithCancel(unittest.TestCase):
         got = []
 
         def child_waiter():
-            runloom_c.select([("recv", child.done)])
+            stackweave_c.select([("recv", child.done)])
             got.append(child.err())
 
         def cancel_parent():
-            runloom_c.sched_sleep(0.01)
+            stackweave_c.sched_sleep(0.01)
             p_cancel()
 
-        runloom_c.fiber(child_waiter)
-        runloom_c.fiber(cancel_parent)
-        runloom_c.run()
+        stackweave_c.fiber(child_waiter)
+        stackweave_c.fiber(cancel_parent)
+        stackweave_c.run()
 
         self.assertEqual(got, [ctxmod.CANCELED])
 
@@ -70,11 +70,11 @@ class TestWithTimeout(unittest.TestCase):
         outcome = []
 
         def waiter():
-            runloom_c.select([("recv", ctx.done)])
+            stackweave_c.select([("recv", ctx.done)])
             outcome.append(ctx.err())
 
-        runloom_c.fiber(waiter)
-        runloom_c.run()
+        stackweave_c.fiber(waiter)
+        stackweave_c.run()
 
         self.assertEqual(outcome, [ctxmod.DEADLINE_EXCEEDED])
 
@@ -84,7 +84,7 @@ class TestWithTimeout(unittest.TestCase):
         outcome = []
 
         def waiter():
-            runloom_c.select([("recv", ctx.done)])
+            stackweave_c.select([("recv", ctx.done)])
             outcome.append(ctx.err())
 
         def early_cancel():
@@ -97,9 +97,9 @@ class TestWithTimeout(unittest.TestCase):
             # it immediately removes the load-dependence by construction.
             cancel()
 
-        runloom_c.fiber(waiter)
-        runloom_c.fiber(early_cancel)
-        runloom_c.run()
+        stackweave_c.fiber(waiter)
+        stackweave_c.fiber(early_cancel)
+        stackweave_c.run()
 
         self.assertEqual(outcome, [ctxmod.CANCELED])
 
@@ -112,11 +112,11 @@ class TestWithTimeout(unittest.TestCase):
         outcome = []
 
         def waiter():
-            runloom_c.select([("recv", child.done)])
+            stackweave_c.select([("recv", child.done)])
             outcome.append((child.err(), _time.monotonic() - t0))
 
-        runloom_c.fiber(waiter)
-        runloom_c.run()
+        stackweave_c.fiber(waiter)
+        stackweave_c.run()
 
         err, elapsed = outcome[0]
         self.assertEqual(err, ctxmod.DEADLINE_EXCEEDED)

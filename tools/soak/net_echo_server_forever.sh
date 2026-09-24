@@ -9,7 +9,7 @@
 # net_echo_server_forever/EXITED (rc=139 SIGSEGV, 134 SIGABRT, 137 SIGKILL/OOM,
 # 0 clean stop, else unhandled exception).
 #
-# Launch detached:  RUNLOOM_PYTHON=~/py314t/bin/python3.14t setsid nice -n 5 \
+# Launch detached:  STACKWEAVE_PYTHON=~/py314t/bin/python3.14t setsid nice -n 5 \
 #                     tools/soak/net_echo_server_forever.sh >/dev/null 2>&1 &
 # Watch:            tail -f docs/dev/soak/net_echo_server_forever/net_echo_srv.log
 # Live fiber stacks:kill -USR1 $(cat docs/dev/soak/net_echo_server_forever/PID)
@@ -17,14 +17,14 @@
 set +e
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
-PY="${RUNLOOM_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
-OUT="${RUNLOOM_SOAK_DIR:-$HOME/runloom-soak}/net_echo_server_forever"
+PY="${STACKWEAVE_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
+OUT="${STACKWEAVE_SOAK_DIR:-$HOME/runloom-soak}/net_echo_server_forever"
 mkdir -p "$OUT"
 LOG="$OUT/net_echo_srv.log"
 
-echo "=== net_echo_server_forever START $(date '+%F %T') bind=${RUNLOOM_ECHO_BIND:-::}:${RUNLOOM_ECHO_PORT:-7777} ===" >> "$LOG"
-# RUNLOOM_TLBC=1: TLBC ON (safe via the GC frames anchor), no self-re-exec (stable pid).
-env PYTHON_GIL=0 RUNLOOM_TLBC=1 PYTHONPATH="$ROOT/src" \
+echo "=== net_echo_server_forever START $(date '+%F %T') bind=${STACKWEAVE_ECHO_BIND:-::}:${STACKWEAVE_ECHO_PORT:-7777} ===" >> "$LOG"
+# STACKWEAVE_TLBC=1: TLBC ON (safe via the GC frames anchor), no self-re-exec (stable pid).
+env PYTHON_GIL=0 STACKWEAVE_TLBC=1 PYTHONPATH="$ROOT/src" \
     "$PY" "$ROOT/tools/soak/net_echo_server_forever.py" >> "$LOG" 2>&1 &
 child=$!
 echo "$child" > "$OUT/PID"

@@ -39,7 +39,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY:
   with a plain-threads control (8 OS threads each `_create_tree`-parsing their own
   wid-tagged source in a tight loop, GIL on AND off) that 100% of parses produce
   the closed-form-expected tree with 0 cross-thread name leaks and 0 structural
-  drift.  Under a correct runloom it must also hold.  A parse that returns another
+  drift.  Under a correct stackweave it must also hold.  A parse that returns another
   fiber's names, a missing/extra top-level name, a changed lineno/methods/super/
   children set, or a structure that differs across a yield, is a runtime parse-
   isolation bug -- and on a correct runtime the oracle PASSES (exit 0).
@@ -59,7 +59,7 @@ ORACLES:
       - parses AGAIN into another fresh tree and asserts its snapshot is byte-
         identical to the pre-yield snapshot AND still matches the closed form.
     Single-owner: every tree, every `Class`/`Function`, and the `_ModuleBrowser`
-    are created and read by ONE fiber; nothing is shared.  A failure is a runloom
+    are created and read by ONE fiber; nothing is shared.  A failure is a stackweave
     parse-isolation desync (cross-fiber name leak / torn tree / structural drift).
 
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber stranded inside the ast
@@ -88,7 +88,7 @@ the closed-form structural oracle even fires.
 import ast
 
 import harness
-import runloom
+import stackweave
 import pyclbr
 
 
@@ -301,9 +301,9 @@ def worker(H, wid, rng, state):
             return
 
         # YIELD at the hazard boundary so siblings parse/interleave on this hub.
-        runloom.yield_now()
+        stackweave.yield_now()
         if jitter:
-            runloom.sleep(0.0002)
+            stackweave.sleep(0.0002)
 
         # Parse #2 (byte-identical source) -- must be structurally identical.
         t2 = parse_tree(module_name, source)
@@ -371,4 +371,4 @@ if __name__ == "__main__":
                  "is_async/lineno), yields, and re-parses -- the two trees must be "
                  "structurally identical and match the closed form.  A foreign/"
                  "missing name, wrong structure, or cross-yield drift is the "
-                 "runloom parse-isolation bug")
+                 "stackweave parse-isolation bug")

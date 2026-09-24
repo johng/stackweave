@@ -12,12 +12,12 @@ self-contained):
   gated by runloom_use_global_runq() / runloom_get_per_g_tstate_mode().  mn_init
   resolves that mode through runloom_resolve_migratable_mode(), which returns 0
   (default scheduler -- global runq never populated, from_runq never set, the
-  per-g block never entered) UNLESS RUNLOOM_ALLOW_UNSAFE_MIGRATION=1 is ALSO set.
+  per-g block never entered) UNLESS STACKWEAVE_ALLOW_UNSAFE_MIGRATION=1 is ALSO set.
   The task forbids that ack (a KNOWN-CRASH migration mode) and the gate is
   UNCONDITIONAL on it -- INDEPENDENT of hub count.  Verified empirically in this
-  session: `RUNLOOM_PER_G_TSTATE=1` alone prints the GATED-OFF warning and runs
+  session: `STACKWEAVE_PER_G_TSTATE=1` alone prints the GATED-OFF warning and runs
   the default scheduler to completion (the per-g block is never reached); only
-  `+RUNLOOM_ALLOW_UNSAFE_MIGRATION=1` enters it.  There is therefore NO safe
+  `+STACKWEAVE_ALLOW_UNSAFE_MIGRATION=1` enters it.  There is therefore NO safe
   (non-ack) trigger -- not even at hub-count==1.  Classified unreachable.
 
   GROUP B -- hard error/cleanup paths with NO fault hook:
@@ -41,7 +41,7 @@ self-contained):
                deque in ONE pass, runloom_cldeque_push returns -1 and the g falls
                back to the growable local ready FIFO instead of being silently
                dropped (the old hang).  Three independent triggers below.
-    * L1256 -- the RUNLOOM_GILSTATE_DELETE_ON_MAIN negative-control hub-exit:
+    * L1256 -- the STACKWEAVE_GILSTATE_DELETE_ON_MAIN negative-control hub-exit:
                each hub thread takes the ELSE branch and calls PyEval_SaveThread()
                at exit (leaving its tstate for the main thread to delete) instead
                of deleting its own.  Driven in a subprocess with the env set.
@@ -55,8 +55,8 @@ import sys
 
 import pytest
 
-import runloom  # noqa: F401  (ensures runloom_c is importable / on path)
-import runloom_c as rc
+import stackweave  # noqa: F401  (ensures stackweave_c is importable / on path)
+import stackweave_c as rc
 from adv_util import hang_guard, needs_free_threading
 
 FT = needs_free_threading()
@@ -92,7 +92,7 @@ DEQUE_CAP = 4096
 def test_deque_overflow_fallback_no_drop():
     N = DEQUE_CAP + 1200          # 5296: comfortably past the 4096 cap
     ran = bytearray(N)            # one single-writer slot per child: race-free
-    from runloom.sync import WaitGroup
+    from stackweave.sync import WaitGroup
 
     def main():
         wg = WaitGroup()
@@ -212,7 +212,7 @@ def test_deque_overflow_fallback_channel_work():
 
 
 # --------------------------------------------------------------------------
-# L1256 -- RUNLOOM_GILSTATE_DELETE_ON_MAIN negative-control hub-exit path.
+# L1256 -- STACKWEAVE_GILSTATE_DELETE_ON_MAIN negative-control hub-exit path.
 #
 # With this env set, the hub-exit code takes the ELSE branch (L1251-1256):
 # instead of deleting its own tstate on its own thread (the normal fix path at
@@ -230,8 +230,8 @@ def test_deque_overflow_fallback_channel_work():
 _DELETE_ON_MAIN_PROG = r'''
 import sys
 sys.path.insert(0, "src")
-import runloom, runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave, stackweave_c as rc
+from stackweave.sync import WaitGroup
 
 HUBS = 4
 N = 64
@@ -250,7 +250,7 @@ def main():
 
 # Multiple hubs so MORE THAN ONE hub thread exercises the L1256 exit branch; each
 # hub takes the else-branch and PyEval_SaveThread()s on the way out.
-runloom.run(HUBS, main)
+stackweave.run(HUBS, main)
 assert sum(ran) == N, "lost %d/%d" % (N - sum(ran), N)
 assert rc.mn_hub_count() == 0, "hubs not torn down"   # mn_fini ran the L1256-leftover deletes
 sys.stdout.write("DELETE_ON_MAIN_OK hubs=%d work=%d\n" % (HUBS, sum(ran)))
@@ -261,7 +261,7 @@ sys.stdout.flush()
 @pytest.mark.skipif(not FT, reason="M:N hub_main only runs with the GIL disabled")
 def test_gilstate_delete_on_main_exit_path():
     env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src",
-               RUNLOOM_GILSTATE_DELETE_ON_MAIN="1")
+               STACKWEAVE_GILSTATE_DELETE_ON_MAIN="1")
     p = subprocess.run([PY, "-c", _DELETE_ON_MAIN_PROG],
                        cwd=REPO, env=env, capture_output=True, text=True, timeout=60)
     # A clean exit is REQUIRED both for the assertion and for gcov to flush the
@@ -269,7 +269,7 @@ def test_gilstate_delete_on_main_exit_path():
     # crash/abort here would mean the negative-control tstate-on-main delete is
     # unsafe on this build -- a real finding, not a flaky timeout.
     assert p.returncode == 0, (
-        "RUNLOOM_GILSTATE_DELETE_ON_MAIN run did not exit cleanly (rc=%s).\n"
+        "STACKWEAVE_GILSTATE_DELETE_ON_MAIN run did not exit cleanly (rc=%s).\n"
         "stderr=%s" % (p.returncode, p.stderr[-1500:]))
     assert "DELETE_ON_MAIN_OK hubs=4 work=64" in p.stdout, (
         "hub exit path did not complete the workload under the negative control."
@@ -280,18 +280,18 @@ def test_gilstate_delete_on_main_exit_path():
 # REACHABILITY GUARD -- pin the GROUP A gate empirically so the central
 # measurement (and any future maintainer) can SEE that the per-g-tstate block is
 # unreachable without the forbidden ack, rather than taking the docstring on
-# faith.  This is itself a real assertion: RUNLOOM_PER_G_TSTATE=1 ALONE must run
+# faith.  This is itself a real assertion: STACKWEAVE_PER_G_TSTATE=1 ALONE must run
 # the DEFAULT scheduler (emit the GATED-OFF warning, complete the workload, exit
 # 0) -- i.e. it must NOT enter the per-g block.  If a future change ever made the
 # gate honor the flag without the ack, this test would start FAILING (the warning
 # would vanish), flagging that Group A just became reachable and the suite should
-# be extended.  We deliberately do NOT set RUNLOOM_ALLOW_UNSAFE_MIGRATION.
+# be extended.  We deliberately do NOT set STACKWEAVE_ALLOW_UNSAFE_MIGRATION.
 # --------------------------------------------------------------------------
 _GATED_OFF_PROG = r'''
 import sys
 sys.path.insert(0, "src")
-import runloom, runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave, stackweave_c as rc
+from stackweave.sync import WaitGroup
 N = 48
 ran = bytearray(N)
 def main():
@@ -304,7 +304,7 @@ def main():
     for i in range(N):
         rc.mn_fiber(lambda i=i: w(i))
     wg.wait()
-runloom.run(3, main)
+stackweave.run(3, main)
 assert sum(ran) == N, "lost %d/%d" % (N - sum(ran), N)
 sys.stdout.write("GATED_OFF_DEFAULT_OK %d\n" % sum(ran))
 sys.stdout.flush()
@@ -313,9 +313,9 @@ sys.stdout.flush()
 
 @pytest.mark.skipif(not FT, reason="M:N hub_main only runs with the GIL disabled")
 def test_per_g_tstate_is_gated_off_without_ack():
-    # No RUNLOOM_ALLOW_UNSAFE_MIGRATION on purpose.
+    # No STACKWEAVE_ALLOW_UNSAFE_MIGRATION on purpose.
     env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src",
-               RUNLOOM_PER_G_TSTATE="1")
+               STACKWEAVE_PER_G_TSTATE="1")
     p = subprocess.run([PY, "-c", _GATED_OFF_PROG],
                        cwd=REPO, env=env, capture_output=True, text=True, timeout=60)
     assert p.returncode == 0, (
@@ -330,7 +330,7 @@ def test_per_g_tstate_is_gated_off_without_ack():
     # present (src/patches/) the request is supported, so the interlock enables
     # the migratable block and prints nothing.  The no-crash + work-completes
     # assertions above hold either way and are the real invariant.
-    if not runloom.migration_available():
+    if not stackweave.migration_available():
         assert "GATED OFF" in p.stderr, (
             "expected the migratable-mode GATED-OFF warning (proves Group A stayed "
             "unreachable without the ack); stderr=%s" % p.stderr[-1500:])

@@ -19,9 +19,9 @@ sibling fiber could stomp across a hub migration, then a fiber that compiles its
 OWN fiber-local pattern, yields, and recompiles would get a DIFFERENT opcode list
 the second time -- or an opcode list that disagrees with the closed-form reference
 computed single-threaded before the hubs ever started.  That divergence is the
-runloom bug this program hunts.
+stackweave bug this program hunts.
 
-WHERE M:N BREAKS IT (the gap this program probes).  runloom runs tens of thousands
+WHERE M:N BREAKS IT (the gap this program probes).  stackweave runs tens of thousands
 of goroutines across >1 hubs with the GIL off.  Each fiber owns a fiber-local
 pattern string (drawn deterministically by wid from a fixed corpus).  It compiles
 that pattern to its opcode list, PARKS across a cooperative yield so siblings
@@ -38,7 +38,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY.
   by (pattern, flags); we precompute the exact expected opcode list and match span
   for every corpus pattern ONCE, single-threaded, in setup() before any hub is
   live -- that precomputed value is the closed-form reference.  Under a CORRECT
-  runloom, every fiber recomputing its own pattern (before and after a yield) must
+  stackweave, every fiber recomputing its own pattern (before and after a yield) must
   reproduce that reference bit-for-bit.  This mirrors a plain-threads control (N OS
   threads each compiling patterns from the same corpus, GIL on AND off) which
   returns byte-identical opcode lists 100% of the time -- 0 divergences.  So on a
@@ -56,14 +56,14 @@ ORACLES:
     (pattern, flags, subject):
       - code0  = tuple(sre_compile._code(parse(pattern, flags), flags))  [baseline]
       - span0  = sre_compile.compile(pattern, flags).search(subject) span/None
-      - YIELD (runloom.yield_now / sleep) so siblings compile their own patterns.
+      - YIELD (stackweave.yield_now / sleep) so siblings compile their own patterns.
       - code1  = tuple(sre_compile._code(parse(pattern, flags), flags))  [recompute]
       - span1  = sre_compile.compile(pattern, flags).search(subject) span/None
       - assert code1 == code0 == reference_code   (bit-identical opcode list)
       - assert span1 == span0 == reference_span    (compiled Pattern matches same)
     A mismatch means sre_compile produced a different compilation for the same
     fiber-local input across a yield, or diverged from the single-threaded
-    reference -- a runloom corruption of the compile pipeline.
+    reference -- a stackweave corruption of the compile pipeline.
 
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber stranded mid-compile
     (parked inside _optimize_charset / _compile over a torn shared table) never
@@ -91,7 +91,7 @@ localizes the corruption before the opcode-list / span equality oracle even fire
 import warnings
 
 import harness
-import runloom
+import stackweave
 
 # sre_compile (and the sre_parse module it aliases as _parser) emit a
 # DeprecationWarning on import/use; silence it so the soak log stays clean.  The
@@ -185,9 +185,9 @@ def compile_check(H, wid, idx, state):
 
     # YIELD: siblings compile their (different) patterns on this and other hubs,
     # racing the shared read-only compile tables while this fiber is parked.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0003)
+        stackweave.sleep(0.0003)
 
     # Recompute AFTER the yield.
     code1 = compile_code(pattern, flags)
@@ -308,7 +308,7 @@ if __name__ == "__main__":
                  "identical across the yield and equal the single-threaded "
                  "reference precomputed before the hubs started.  A differing "
                  "opcode int, a changed/wrong match span, or a crash inside the "
-                 "compile pipeline is a runloom corruption (torn read of a shared "
+                 "compile pipeline is a stackweave corruption (torn read of a shared "
                  "compile table or a cross-fiber scratch leak).  No shared-mutable "
                  "arm: sre_compile's tables are read-only, so the whole probe is a "
                  "clean single-owner purity law")

@@ -24,7 +24,7 @@
 #
 # Free-threading is load-bearing: without it most of the suite silently SKIPS
 # and still exits 0 (measured 96 passed vs 12 passed / 84 skipped on three
-# files).  RUNLOOM_TEST_NORETRY=1 likewise -- the retry re-runs a failing file
+# files).  STACKWEAVE_TEST_NORETRY=1 likewise -- the retry re-runs a failing file
 # ALONE and unloaded, a different experiment that rescues precisely the
 # load-sensitive failures this lane exists to catch.
 #
@@ -84,7 +84,7 @@ jobs:
           source: build
           github-token: ${{ github.token }}
 
-      - name: Build runloom extension
+      - name: Build stackweave extension
         run: tools/ci/test_patched_cpython.sh "${{ inputs.version }}" --only=build-ext
 
       - name: Resolve interpreter
@@ -103,10 +103,10 @@ jobs:
       - name: Loop
         env:
           PYTHON_GIL: "0"
-          RUNLOOM_GIL: "0"
-          RUNLOOM_TEST_JOBS: "4"
-          RUNLOOM_TIMEOUT_MULT: "2"
-          RUNLOOM_TEST_NORETRY: "1"
+          STACKWEAVE_GIL: "0"
+          STACKWEAVE_TEST_JOBS: "4"
+          STACKWEAVE_TIMEOUT_MULT: "2"
+          STACKWEAVE_TEST_NORETRY: "1"
         run: |
           # NO errexit.  Actions runs `run:` steps under `bash -eo pipefail`, so
           # a failing iteration would abort the whole job -- which is precisely

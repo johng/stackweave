@@ -1,5 +1,5 @@
-import sys, runloom
-from runloom.sync import Semaphore
+import sys, stackweave
+from stackweave.sync import Semaphore
 state = {"b": False}
 def main():
     sem = Semaphore(2)
@@ -9,10 +9,10 @@ def main():
     def b():
         sem.acquire(1)                   # fits, but queued behind a
         state["b"] = True
-    runloom.fiber(a)
-    runloom.sleep(0.05)
-    runloom.fiber(b)
-    runloom.sleep(1.0)
+    stackweave.fiber(a)
+    stackweave.sleep(0.05)
+    stackweave.fiber(b)
+    stackweave.sleep(1.0)
     print("b_acquired =", state["b"], "(expected True)")
     sem.release(1)  # unwedge for clean exit
-runloom.run(1, main)
+stackweave.run(1, main)

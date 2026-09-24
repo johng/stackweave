@@ -1,9 +1,9 @@
 # Custom Semgrep rules: BACKDOOR SHAPES, not generic style.
 #
-# runloom is systems code -- it uses subprocess, exec, sockets and signals
+# stackweave is systems code -- it uses subprocess, exec, sockets and signals
 # legitimately everywhere -- so a naive "no exec / no subprocess" rule would be a
 # wall of false positives.  These rules instead target the shapes a PLANTED
-# BACKDOOR takes that legitimate runloom code does not: obfuscated code execution
+# BACKDOOR takes that legitimate stackweave code does not: obfuscated code execution
 # (base64/marshal/zlib decode fed to exec/eval), fetch-and-run, a hardcoded
 # external C2 endpoint, deserialization RCE gadgets on untrusted input, and
 # network calls at BUILD time (setup.py exfil).  Covers Python and C.
@@ -18,7 +18,7 @@ rules:
     severity: ERROR
     message: >
       exec()/eval() of base64/zlib/marshal-decoded data -- the classic
-      obfuscated-payload backdoor.  Legitimate runloom code never execs a decoded
+      obfuscated-payload backdoor.  Legitimate stackweave code never execs a decoded
       blob.
     patterns:
       - pattern-either:

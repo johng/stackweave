@@ -13,7 +13,7 @@ same process.  The internal logic is:
     _last_timestamp = timestamp (or incremented value)
     _last_node = node
 
-WHERE M:N BREAKS IT (the gap this program probes).  Under runloom's M:N scheduler
+WHERE M:N BREAKS IT (the gap this program probes).  Under stackweave's M:N scheduler
 many fibers ("goroutines") share ONE hub OS-thread and share the SAME process-global
 _last_timestamp/_last_node state.  If two fibers call uuid.uuid1() concurrently (one
 yields mid-function), a torn read of _last_timestamp can occur: the first fiber reads
@@ -30,23 +30,23 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain threads):
   successive call produces a UUID with a timestamp >= the previous) is NOT
   guaranteed across interrupts or threads but IS the EXPECTED behavior for a
   single execution context.  We verified with a standalone plain-threads control
-  (8 OS threads, same hazard, NO runloom) that this holds with PYTHON_GIL=1 AND
+  (8 OS threads, same hazard, NO stackweave) that this holds with PYTHON_GIL=1 AND
   PYTHON_GIL=0: over 100k concurrent uuid.uuid1() calls, 0 duplicates and 0
   out-of-order UUIDs.  Each OS thread has its OWN process-global state read
   (the C internals snapshot _last_timestamp at thread entry, then manipulate it
   locally before writing back), so uuid1 is genuinely atomic for any GIL setting
   under real OS threads.  An oracle that fired there would be a false-positive
-  detector; it does NOT fire there.  Under a CORRECT runloom it must ALSO hold
-  (each fiber a private timestamp snapshot at entry).  If runloom leaks a sibling's
+  detector; it does NOT fire there.  Under a CORRECT stackweave it must ALSO hold
+  (each fiber a private timestamp snapshot at entry).  If stackweave leaks a sibling's
   incremented _last_timestamp into this fiber's UUID -- a duplicate UUID, or a
-  UUID with a timestamp stale vs the one the fiber computed -- that is the runloom
+  UUID with a timestamp stale vs the one the fiber computed -- that is the stackweave
   M:N isolation bug, and the LOAD-BEARING oracle PASSES on a correct runtime
   (program exits 0 when there is no bug).
 
 ORACLES:
   * LOAD-BEARING -- uuid.uuid1() UNIQUENESS & MONOTONICITY (worker, HARD,
     fail-fast).  Each fiber calls uuid.uuid1() multiple times inside a sustained
-    loop (parked/yielded between calls via runloom.sleep).  The fiber collects its
+    loop (parked/yielded between calls via stackweave.sleep).  The fiber collects its
     UUIDs into a set and also tracks them in order.  At the end of each fiber's
     run:
       - Check that all UUIDs are UNIQUE (no duplicates across all fibers' UUIDs).
@@ -54,7 +54,7 @@ ORACLES:
         INCREASING or EQUAL (each timestamp >= the previous).  A strictly
         decreasing timestamp or a duplicate UUID is a torn _last_timestamp read.
     Single-owner per fiber: nothing but THIS fiber touches this fiber's UUID
-    stream.  A failure is a runloom per-fiber uuid state isolation desync.
+    stream.  A failure is a stackweave per-fiber uuid state isolation desync.
 
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber that crashed mid-
     uuid1() call (or hung inside the C code) never returns; the watchdog +
@@ -95,7 +95,7 @@ import uuid
 from uuid import UUID
 
 import harness
-import runloom
+import stackweave
 
 # A modest sustained loop bound per worker so many fibers stay simultaneously
 # mid-uuid1 call, increasing the chance of interleaved state corruption.  With
@@ -120,13 +120,13 @@ def setup(H):
 # calls uuid.uuid1() multiple times, yields between calls, and verifies that:
 #   (1) Its own UUIDs are MONOTONICALLY INCREASING by timestamp.
 #   (2) No UUID is a global duplicate (checked in post()).
-# A decreasing timestamp or duplicate UUID => torn _last_timestamp read (runloom bug).
+# A decreasing timestamp or duplicate UUID => torn _last_timestamp read (stackweave bug).
 # --------------------------------------------------------------------------
 def worker(H, wid, rng, state):
     """Each fiber sustains a UUID generation loop: call uuid.uuid1(), store it,
     yield/sleep, and repeat.  The yield-between-calls is critical: it forces the
     fiber to park and release the hub, allowing siblings to interleave and corrupt
-    the shared _last_timestamp if runloom doesn't isolate it.  At the end, verify
+    the shared _last_timestamp if stackweave doesn't isolate it.  At the end, verify
     this fiber's UUIDs are monotonic by timestamp."""
     uuids = []  # this fiber's UUIDs
     for _ in H.round_range():
@@ -145,9 +145,9 @@ def worker(H, wid, rng, state):
             # sleep with netpoll park is what reliably deschedules this fiber long
             # enough that the scheduler runs a sibling mid-uuid1 call.
             if idx % 3 == 0:
-                runloom.sleep(0.0001)
+                stackweave.sleep(0.0001)
             else:
-                runloom.yield_now()
+                stackweave.yield_now()
 
             H.op(wid)
             idx += 1
@@ -170,7 +170,7 @@ def worker(H, wid, rng, state):
                     "with timestamps in reverse order (index {1}: time={2}, index "
                     "{3}: time={4} < {2}) -- torn read of _last_timestamp across a "
                     "yield (sibling fiber's increment was visible mid-call).  "
-                    "uuid1({1})={5}, uuid1({3})={6}. This is a runloom M:N state "
+                    "uuid1({1})={5}, uuid1({3})={6}. This is a stackweave M:N state "
                     "isolation bug.".format(
                         wid, i - 1, prev_ts, i, curr_ts, uuids[i - 1], uuids[i]
                     )
@@ -235,7 +235,7 @@ def post(H):
     if collision_count > 0:
         H.log(
             "note: the global UUID collision rate observed {0} duplicate UUIDs "
-            "across {1} total calls -- runloom hub fibers share the process-global "
+            "across {1} total calls -- stackweave hub fibers share the process-global "
             "_last_timestamp/_last_node state, so an interleaved uuid.uuid1() call "
             "can see a partially-updated state and produce a duplicate.  This is "
             "documented M:N shared-state behavior (0 under plain threads GIL on/off "
@@ -267,15 +267,15 @@ if __name__ == "__main__":
         default_funcs=8000,
         describe="uuid.uuid1() maintains process-global _last_timestamp/_last_node "
         "state to ensure UUIDs are unique and monotonically increasing.  Under "
-        "runloom M:N many fibers share one hub thread and the same _last_timestamp/"
+        "stackweave M:N many fibers share one hub thread and the same _last_timestamp/"
         "_last_node state.  LOAD-BEARING: each fiber's uuid1() stream MUST have "
         "monotonically non-decreasing timestamps (curr_ts >= prev_ts); a "
         "decreasing timestamp or duplicate UUID is a torn read of _last_timestamp "
         "across a yield (a sibling's increment was visible mid-call) -- the "
-        "runloom M:N state isolation bug.  0 monotonicity failures under plain "
+        "stackweave M:N state isolation bug.  0 monotonicity failures under plain "
         "threads GIL on/off (each OS thread snapshots state independently).  "
         "MEASURED: global collision rate (expected under unprotected shared state "
         "under M:N -- report-only, never fails; a collision does not violate "
         "per-fiber monotonicity, which is the load-bearing check).  Same class as "
-        "p66/p67/p460/p468; fix is per-fiber state isolation in runloom.",
+        "p66/p67/p460/p468; fix is per-fiber state isolation in stackweave.",
     )

@@ -17,7 +17,7 @@ single threading.Event flag (CPython Lib/threading.py)::
 The hazard is the cross-hub race between cancel()'s flag write (A) and the timer
 fiber's wait()-returns-then-is_set()-check (B->C->D).  This is NOT the scheduler
 timer-HEAP (p119 After()/select boundary, p120 heap churn, p219 NewTimer
-arm/Stop, p213/p213 heap conservation all test the runloom timer OBJECT and its
+arm/Stop, p213/p213 heap conservation all test the stackweave timer OBJECT and its
 sift-down) -- it is a DIFFERENT mechanism: a threading.Event _flag race, the
 canonical check-then-act, on the threading.Timer OBJECT, which nothing in the
 suite drives.  Two mutually-exclusive corruption modes, BOTH made falsifiable:
@@ -94,7 +94,7 @@ under replay, localizes the gate break before the conservation sum even closes.
 import threading
 
 import harness
-import runloom
+import stackweave
 
 # Per-worker tallies are sized [0]*H.funcs and indexed by wid DIRECTLY (one
 # writer per slot, summed in post()).  run_pool(H.funcs, ...) spawns wids
@@ -248,14 +248,14 @@ def run_one_timer(H, wid, rng, state, slot, case):
     # cancel just means the timer-won branch.
     interval = FIRE_INTERVAL
     timer = threading.Timer(interval, fire_fn)
-    cwg = runloom.WaitGroup()
+    cwg = stackweave.WaitGroup()
     cwg.add(1)
 
     def canceller(timer=timer):
         try:
             # Cancel at ~the interval boundary so (A) the _flag write races (C)
             # the timer fiber's is_set() read.
-            runloom.sleep(RACE_DELAY)
+            stackweave.sleep(RACE_DELAY)
             timer.cancel()               # (A) Event._flag set + _unpark_all
         finally:
             cwg.done()

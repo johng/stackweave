@@ -2,7 +2,7 @@
 """WHY do Python fibers cost so much per yield? -- the shared-object contention
 probe. Run pinned at a hub count, e.g.:
 
-    taskset -c 16-59 env PYTHON_GIL=0 PYTHONPATH=src RUNLOOM_SYSMON=0 \
+    taskset -c 16-59 env PYTHON_GIL=0 PYTHONPATH=src STACKWEAVE_SYSMON=0 \
         python3.13t benchmark/suite/speed/ctxswitch_sharing_probe.py --hubs 44
 
 It de-shares the loaded-yield benchmark one layer at a time and prints aggregate
@@ -27,10 +27,10 @@ import functools
 import statistics
 import time
 
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
-SYC = runloom_c.sched_yield
+SYC = stackweave_c.sched_yield
 
 
 def main():
@@ -55,15 +55,15 @@ def main():
                 sy()
         def root():
             for _ in range(G):
-                runloom.fiber(worker)
-        t0 = time.perf_counter(); runloom.run(HUBS, root); return time.perf_counter() - t0
+                stackweave.fiber(worker)
+        t0 = time.perf_counter(); stackweave.run(HUBS, root); return time.perf_counter() - t0
 
     def run_distinct(make_yield):
         workers = [worker_with(make_yield()) for _ in range(G)]
         def root():
             for w in workers:
-                runloom.fiber(w)
-        t0 = time.perf_counter(); runloom.run(HUBS, root); return time.perf_counter() - t0
+                stackweave.fiber(w)
+        t0 = time.perf_counter(); stackweave.run(HUBS, root); return time.perf_counter() - t0
 
     cases = [
         ("shared worker + shared yield", run_shared_worker),

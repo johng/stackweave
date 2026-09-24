@@ -26,7 +26,7 @@ another fiber's file entirely.
 WE DELIBERATELY USE fileinput.FileInput INSTANCES, NOT the module-level
 fileinput.input().  fileinput.input() drives a single process-global _state object
 (the classic shared-mutable container); many fibers sharing it would race EXACTLY
-like sharing it across OS threads -- documented Python behavior, NOT a runloom bug,
+like sharing it across OS threads -- documented Python behavior, NOT a stackweave bug,
 and off-limits for a fail-fast oracle (HARD RULE 2).  Each fiber here constructs its
 OWN FileInput over its OWN temp files -> single-owner, closed-world.
 
@@ -57,7 +57,7 @@ CLOSED-WORLD CONSERVATION LAW (single-owner, fail-fast -- THE LOAD-BEARING ORACL
   After the loop it asserts the fiber read EXACTLY N lines (no early stop = a lost
   line under the park; no over-read = a doubled/adopted line).  All five are
   properties of a SINGLE-OWNER object touched by ONE fiber, so on a correct runtime
-  the oracle PASSES (program exits 0); a failure is a real runloom cursor-isolation
+  the oracle PASSES (program exits 0); a failure is a real stackweave cursor-isolation
   or lost/torn-read bug.
 
 WHY THIS IS NOT A FALSE-POSITIVE GENERATOR (verified against plain threads):
@@ -66,7 +66,7 @@ WHY THIS IS NOT A FALSE-POSITIVE GENERATOR (verified against plain threads):
   own files, GIL on AND off -- reads every line in order with lineno() 1..N,
   filelineno() resetting per file, and content matching, 100% of the time with 0
   cross-thread adoptions.  The instance cursor IS thread-private; under a correct
-  runloom it must also be fiber-private.  There is no shared-mutable container in the
+  stackweave it must also be fiber-private.  There is no shared-mutable container in the
   fail-fast arm (each FileInput + its files belong to one fiber), so nothing here can
   mislabel documented Python semantics as a bug.
 
@@ -98,7 +98,7 @@ import os
 import fileinput
 
 import harness
-import runloom
+import stackweave
 
 # Each fiber owns this many tiny files.  Fixed, small (HARD RULE 5): 2-3 files.
 # Distinct, non-uniform line counts so the file-boundary reset of filelineno() is
@@ -204,9 +204,9 @@ def iterate_and_check(H, wid, paths, state):
 
             # PARK at the hazard boundary so a sibling reliably interleaves between
             # our readline()s (single readline barely overlaps and does not repro).
-            runloom.yield_now()
+            stackweave.yield_now()
             if step & 3 == 0:
-                runloom.sleep(0.0002)
+                stackweave.sleep(0.0002)
     finally:
         fi.close()
 

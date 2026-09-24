@@ -47,7 +47,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (a true closed-world conservation law):
   single-owner (fiber-local, never shared), a reconstruction MISMATCH, an
   out-of-range opcode index, an 'equal' block whose a[i1:i2] != b[j1:j2], a
   matching-block element-sum that disagrees with the 'equal' opcode span sum, or
-  a second get_opcodes() returning a non-identical list, can ONLY be a runloom
+  a second get_opcodes() returning a non-identical list, can ONLY be a stackweave
   cache-isolation / half-built-publish desync -- NOT documented Python behavior.
   The load-bearing oracle PASSES on a correct runtime (program exits 0).
 
@@ -68,7 +68,7 @@ ORACLES:
         (i2-i1) over 'equal' opcodes (both count matched positions); final
         matching block is exactly (len(a), len(b), 0).
     Single-owner: the matcher and (a, b) live only in this fiber's frame; a
-    failure is a runloom SequenceMatcher-cache desync.
+    failure is a stackweave SequenceMatcher-cache desync.
 
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber stranded inside a
     half-built find_longest_match / opcode fill never returns; the watchdog +
@@ -100,7 +100,7 @@ closes.
 import difflib
 
 import harness
-import runloom
+import stackweave
 
 # Each fiber's sequence elements are integers drawn ONLY from
 # [wid*STRIDE, wid*STRIDE + SPAN).  STRIDE > SPAN guarantees the per-wid
@@ -204,9 +204,9 @@ def diff_check(H, wid, idx, state):
     # YIELD: let siblings force their own lazy fills on this / another hub while
     # this instance's cache slots are populated.  If cache slots were not isolated,
     # a resume could observe a rebuilt or spliced list.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
 
     # Re-request: on a correct runtime the cache is returned verbatim -- SAME
     # object (identity) -- and never rebuilt.

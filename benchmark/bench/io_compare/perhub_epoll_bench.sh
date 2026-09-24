@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Per-hub epoll (RUNLOOM_PERHUB_EPOLL) throughput A/B via the io_compare loadgen.
+# Per-hub epoll (STACKWEAVE_PERHUB_EPOLL) throughput A/B via the io_compare loadgen.
 #
 # THE methodology that exposes the netpoll win: an EXTERNAL Go loadgen saturating
 # an ISOLATED server_runloom.py.  In-process client+server benches bottleneck on
@@ -27,8 +27,8 @@ sudo -n prlimit --pid $$ --nofile=8388608:8388608 2>/dev/null
 
 run() {  # hubs mode port -> prints rps
     local H=$1 M=$2 PORT=$3 SRV
-    RUNLOOM_SYSMON_QUIET=1 PYTHON_GIL=0 PYTHONPATH=src RUNLOOM_PER_G_TSTATE=0 \
-        RUNLOOM_PERHUB_EPOLL=$M \
+    STACKWEAVE_SYSMON_QUIET=1 PYTHON_GIL=0 PYTHONPATH=src STACKWEAVE_PER_G_TSTATE=0 \
+        STACKWEAVE_PERHUB_EPOLL=$M \
         "$PY" benchmark/bench/io_compare/server_runloom.py 127.0.0.1 "$PORT" 0 "$H" \
         >"/tmp/perhub_srv_$PORT.log" 2>&1 &
     SRV=$!

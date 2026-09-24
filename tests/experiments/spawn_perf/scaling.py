@@ -6,8 +6,8 @@ fiber (producers + workers) has run AND completed -- so this measures the full
 spawn -> run -> destroy cycle, which is where the per-fiber stack mmap/mprotect
 (creation) AND the CPython mimalloc QSBR purge madvise (completion) both land.
 
-The experiments toggle behaviour purely through env (RUNLOOM_STACK_ARENA,
-RUNLOOM_STACK_ARENA_HUGE, RUNLOOM_STACK_POPULATE, ...) + LD_PRELOAD; this harness
+The experiments toggle behaviour purely through env (STACKWEAVE_STACK_ARENA,
+STACKWEAVE_STACK_ARENA_HUGE, STACKWEAVE_STACK_POPULATE, ...) + LD_PRELOAD; this harness
 sets none of them, so a sweep is honest A/B.  Pin cores + GIL-off in the launcher
 (see run_baseline.sh) -- NOT here.
 
@@ -20,7 +20,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "src"))
-import runloom
+import stackweave
 
 
 def noop():
@@ -33,17 +33,17 @@ def run_once(hubs, issuers, n, stack_size):
     def producer(count):
         if stack_size > 0:
             for _ in range(count):
-                runloom.fiber(noop, stack_size=stack_size)
+                stackweave.fiber(noop, stack_size=stack_size)
         else:
             for _ in range(count):
-                runloom.fiber(noop)
+                stackweave.fiber(noop)
 
     def root():
         for i in range(issuers):
-            runloom.fiber(producer, base + (1 if i < rem else 0))
+            stackweave.fiber(producer, base + (1 if i < rem else 0))
 
     t0 = time.perf_counter()
-    runloom.run(hubs, root)
+    stackweave.run(hubs, root)
     return time.perf_counter() - t0
 
 
@@ -64,9 +64,9 @@ def main():
     rec = {"label": args.label, "hubs": args.hubs, "issuers": args.issuers,
            "n": args.n, "stack_size": args.stack_size, "reps": args.reps,
            "seconds": best, "spawn_per_s": rate,
-           "arena": os.environ.get("RUNLOOM_STACK_ARENA", ""),
-           "arena_huge": os.environ.get("RUNLOOM_STACK_ARENA_HUGE", ""),
-           "populate": os.environ.get("RUNLOOM_STACK_POPULATE", ""),
+           "arena": os.environ.get("STACKWEAVE_STACK_ARENA", ""),
+           "arena_huge": os.environ.get("STACKWEAVE_STACK_ARENA_HUGE", ""),
+           "populate": os.environ.get("STACKWEAVE_STACK_POPULATE", ""),
            "ld_preload": "keep_resident" if "keep_resident" in os.environ.get("LD_PRELOAD", "") else ""}
     print("%-22s issuers=%d  %8.0f spawn/s  (%.3fs / %d)" %
           (args.label or "run", args.issuers, rate, best, args.n), file=sys.stderr)

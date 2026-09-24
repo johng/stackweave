@@ -9,7 +9,7 @@ never re-armed it in the kernel, and wait_fd parked forever -- the long-standing
 test_asyncio_conformance::test_recvfrom flake (and a hang for any asyncio program
 doing low-level sock_* + close + fd reuse).
 
-The fix: loop.sock_* call runloom_c.netpoll_release_if_idle(fd) on completion,
+The fix: loop.sock_* call stackweave_c.netpoll_release_if_idle(fd) on completion,
 which DELs + clears the arm for an fd no fiber is parked on, so a later raw
 close + reuse re-registers cleanly.  A regression HANGS here (caught by the suite
 timeout); a clean finish IS the assertion.  Mirrors the deterministic repro: each
@@ -19,7 +19,7 @@ import socket
 
 import pytest
 
-import runloom.aio as paio
+import stackweave.aio as paio
 
 
 def _roundtrip(loop):
@@ -49,7 +49,7 @@ def _roundtrip(loop):
 def test_lowlevel_sock_fd_reuse_no_hang():
     # Many round-trips, each closing its sockets so the next reuses the fd
     # numbers via low-level sock_* (the path the bridge can't close-hook).
-    loop = paio.RunloomEventLoop()
+    loop = paio.StackweaveEventLoop()
     try:
         for i in range(30):
             assert _roundtrip(loop) == b"x" * 64, i
@@ -65,7 +65,7 @@ def test_udp_recvfrom_after_tcp_churn_no_hang():
         s.bind(("127.0.0.1", 0))
         return s, s.getsockname()
 
-    loop = paio.RunloomEventLoop()
+    loop = paio.StackweaveEventLoop()
     try:
         # churn: open/close several TCP client+server pairs to register+close fds
         for _ in range(6):

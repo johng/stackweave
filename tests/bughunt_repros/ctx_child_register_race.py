@@ -2,8 +2,8 @@
 Aligns a WithCancel(parent) call against pcancel() on two hubs and sweeps
 relative offsets; a child that observes err() is None after the parent was
 cancelled proves a lost cancellation."""
-import runloom
-import runloom.context as ctx
+import stackweave
+import stackweave.context as ctx
 
 TRIALS = 800
 
@@ -19,7 +19,7 @@ def main():
 
         def creator(parent=parent, go=go, child_box=child_box, done=done, k=off_a):
             while not go[0]:
-                runloom.yield_now()
+                stackweave.yield_now()
             x = 0
             for _ in range(k):
                 x += 1
@@ -28,19 +28,19 @@ def main():
 
         def canceller(pcancel=pcancel, go=go, done=done, k=off_b):
             while not go[0]:
-                runloom.yield_now()
+                stackweave.yield_now()
             x = 0
             for _ in range(k):
                 x += 1
             pcancel()
             done[0] += 1
 
-        runloom.fiber(creator)
-        runloom.fiber(canceller)
-        runloom.sleep(0.0002)
+        stackweave.fiber(creator)
+        stackweave.fiber(canceller)
+        stackweave.sleep(0.0002)
         go[0] = True
         while done[0] < 2:
-            runloom.yield_now()
+            stackweave.yield_now()
         child = child_box[0]
         if child.err() is None:
             missed += 1
@@ -49,4 +49,4 @@ def main():
     if missed:
         print("BUG confirmed: lost cancellation (child.done never closes)")
 
-runloom.run(4, main)
+stackweave.run(4, main)

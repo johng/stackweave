@@ -95,7 +95,7 @@ even closes.
 import codeop
 
 import harness
-import runloom
+import stackweave
 
 # Empty-builtins namespace factory: every eval expression in the catalog is pure
 # arithmetic / literal syntax that needs NO builtins, so evaluating in a locked-
@@ -206,9 +206,9 @@ def eval_purity_check(H, wid, idx, ns):
     v1 = eval(c1, ns)
 
     # YIELD across the hazard boundary so a sibling parser reliably interleaves.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
 
     c2 = codeop.compile_command(src, "<b>", "eval")
     if c2 is None:
@@ -240,7 +240,7 @@ def classify_check(H, wid, idx):
     src, symbol, kind0 = CLASSIFY_CASES[idx % len(CLASSIFY_CASES)]
 
     k1 = classify(src, symbol)
-    runloom.yield_now()
+    stackweave.yield_now()
     k2 = classify(src, symbol)
 
     if k1 != kind0:
@@ -272,14 +272,14 @@ def future_memory_check(H, wid, idx):
                "leaked INTO this fiber's instance (wid {1})".format(before, wid))
         return
 
-    runloom.yield_now()
+    stackweave.yield_now()
 
     # Feed the future statement to THIS instance; it must remember it.
     cc("from __future__ import barry_as_FLUFL", "<f>", "single")
 
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
 
     # After: the same instance must now accept `1 <> 2` and eval it to True.
     after_c = cc("1 <> 2\n", "<f>", "eval")
@@ -373,4 +373,4 @@ if __name__ == "__main__":
                  "barry_as_FLUFL future flag neither leaks IN (fresh instance "
                  "already FLUFL-active) nor is LOST (our instance forgot the future "
                  "we fed it).  A torn/non-pure compile, a classification flip, or a "
-                 "cross-fiber future-flag leak is the runloom bug")
+                 "cross-fiber future-flag leak is the stackweave bug")

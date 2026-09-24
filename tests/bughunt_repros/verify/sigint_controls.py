@@ -1,5 +1,5 @@
 import os, signal, sys, threading, time
-import runloom
+import stackweave
 
 mode = sys.argv[1]
 
@@ -17,27 +17,27 @@ try:
                 i = 0
                 while True:
                     i += 1
-                    if i % 10000 == 0: runloom.yield_now()
-            for _ in range(3): runloom.fiber(busy)
+                    if i % 10000 == 0: stackweave.yield_now()
+            for _ in range(3): stackweave.fiber(busy)
         killer(3)
-        runloom.run(4, main)
+        stackweave.run(4, main)
     elif mode == 'run1_parked':
         def main():
             def sleeper():
-                while True: runloom.sleep(0.1)
-            for _ in range(3): runloom.fiber(sleeper)
+                while True: stackweave.sleep(0.1)
+            for _ in range(3): stackweave.fiber(sleeper)
         killer(3)
-        runloom.run(1, main)
+        stackweave.run(1, main)
     elif mode == 'run1_one_sigint':
         def main():
             def busy():
                 i = 0
                 while True:
                     i += 1
-                    if i % 10000 == 0: runloom.yield_now()
-            for _ in range(8): runloom.fiber(busy)
+                    if i % 10000 == 0: stackweave.yield_now()
+            for _ in range(8): stackweave.fiber(busy)
         killer(1)
-        runloom.run(1, main)
+        stackweave.run(1, main)
     print('%s: run returned normally after %.1fs' % (mode, time.time()-t0))
 except KeyboardInterrupt:
     print('%s: KeyboardInterrupt propagated after %.1fs' % (mode, time.time()-t0))

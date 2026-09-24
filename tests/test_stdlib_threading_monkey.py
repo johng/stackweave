@@ -1,4 +1,4 @@
-"""CPython's OWN Lib/test/lock_tests.py, run verbatim against runloom.monkey's
+"""CPython's OWN Lib/test/lock_tests.py, run verbatim against stackweave.monkey's
 cooperative threading primitives.
 
 monkey.patch() replaces threading.Lock / RLock / Event / Condition / Semaphore
@@ -14,7 +14,7 @@ into the hosted classes' ``locktype``/``eventtype``/... attributes.
 import pytest
 
 from _monkey_stdlib import (HAVE_CPYTHON_TESTS, REALTHREAD, REALTHREAD_REASON, hosted)
-import runloom.monkey
+import stackweave.monkey
 
 pytestmark = [
     pytest.mark.skipif(
@@ -24,7 +24,7 @@ pytestmark = [
 ]
 
 if HAVE_CPYTHON_TESTS:
-    runloom.monkey.patch()
+    stackweave.monkey.patch()
     import threading
     from test import lock_tests as _L
 

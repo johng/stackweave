@@ -4,8 +4,8 @@ On macos-14 CI both interpreters fail
 test_mn_sim_bytes::TestReviewRegressions::test_late_parker_gets_stashed_wake
 with the receiver never seeing its byte, and this on stderr:
 
-    [runloom] fd 4 exceeds preallocated netpoll capacity 0; raise
-              RUNLOOM_NETPOLL_MAXFD (event dropped)
+    [stackweave] fd 4 exceeds preallocated netpoll capacity 0; raise
+              STACKWEAVE_NETPOLL_MAXFD (event dropped)
     OSError: [Errno 89] Operation canceled          <- ECANCELED (125 on Linux)
 
 Capacity 0 cannot come from sizing.  runloom_fd_cap_target() starts at 65536,
@@ -18,7 +18,7 @@ So the hypothesis is an INIT-ORDERING bug on the kqueue path -- the sim wake is
 stashed before netpoll has been brought up, the per-fd arrays do not exist, the
 event is dropped, and the parker is cancelled.
 
-The test runs the snippet in SIMULATION mode (RUNLOOM_SIM=1, RUNLOOM_SIM_MN=1
+The test runs the snippet in SIMULATION mode (STACKWEAVE_SIM=1, STACKWEAVE_SIM_MN=1
 via mn_digest.hermetic_env), and that matters: the first version of this probe
 omitted it, exercised the REAL netpoll path, and PASSED on macos-14 while the
 test failed 5/5 on the same runner.  A probe that does not carry the failing
@@ -35,7 +35,7 @@ Four variants, run under the target interpreter:
                  runloom_netpoll_init() -> runloom_fd_arrays_init(). If `sim`
                  FAILS and this PASSES, the arrays simply were not allocated
                  yet: an ordering bug, fixed on the sim-delivery path.
-  sim+maxfd   -- sim with RUNLOOM_NETPOLL_MAXFD forced. Only informative if it
+  sim+maxfd   -- sim with STACKWEAVE_NETPOLL_MAXFD forced. Only informative if it
                  changes the outcome: that would mean capacity was computed and
                  merely too small (sizing), not skipped (ordering).
 
@@ -50,7 +50,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 
 # The CI snippet, verbatim from test_mn_sim_bytes, with an optional preamble.
 BODY = """
-import socket, runloom_c as rc
+import socket, stackweave_c as rc
 %(preamble)s
 a, b = socket.socketpair()
 a.setblocking(False); b.setblocking(False)
@@ -72,14 +72,14 @@ print('BACKEND', rc.netpoll_backend())
 """
 
 # The test runs this in SIMULATION mode -- test_mn_sim_bytes sets
-#   SIM_ENV = {"RUNLOOM_SIM": "1", "RUNLOOM_SIM_MN": "1"}
+#   SIM_ENV = {"STACKWEAVE_SIM": "1", "STACKWEAVE_SIM_MN": "1"}
 # and passes it through mn_digest.hermetic_env (which strips every inherited
 # RUNLOOM_* knob first, then pins PYTHON_GIL / PYTHONHASHSEED / PYTHONPATH).
 # The FIRST version of this probe omitted that and therefore exercised the REAL
 # netpoll path: it passed on macos-14 (run 33943464165) while the test failed
 # 5/5 there, which told us only that the probe was wrong.  Sim mode is the
 # configuration under test, so every meaningful variant carries it.
-SIM = {"RUNLOOM_SIM": "1", "RUNLOOM_SIM_MN": "1", "RUNLOOM_MN_SEED": "12345"}
+SIM = {"STACKWEAVE_SIM": "1", "STACKWEAVE_SIM_MN": "1", "STACKWEAVE_MN_SEED": "12345"}
 
 
 def _sim(**extra):
@@ -100,14 +100,14 @@ VARIANTS = [
     ("sim+preinit", "rc.netpoll_poll()", _sim()),
     # Only informative if it changes the outcome: that would mean capacity was
     # computed and merely too small (sizing), not skipped (ordering).
-    ("sim+maxfd", "", _sim(RUNLOOM_NETPOLL_MAXFD="65536")),
+    ("sim+maxfd", "", _sim(STACKWEAVE_NETPOLL_MAXFD="65536")),
 ]
 
 
 def run(name, preamble, extra_env):
     # Mirror hermetic_env: strip inherited RUNLOOM_* so the parent's knobs
     # cannot contaminate the child, then pin exactly what the test pins.
-    env = {k: v for k, v in os.environ.items() if not k.startswith("RUNLOOM_")}
+    env = {k: v for k, v in os.environ.items() if not k.startswith("STACKWEAVE_")}
     env["PYTHON_GIL"] = "0"
     env["PYTHONHASHSEED"] = "0"
     env["PYTHONPATH"] = os.path.join(REPO, "src")
@@ -178,7 +178,7 @@ def probe_dead_fd_wake():
     Two fixes for that hang have now failed on macos-14 (the probe itself in
     00ccba5a, then the fcntl liveness switch in c156a4bd) -- both reasoned from
     source, neither measured.  This runs the scenario with
-    RUNLOOM_DBG_NETPOLL=1, which makes the kqueue validate_arm print
+    STACKWEAVE_DBG_NETPOLL=1, which makes the kqueue validate_arm print
     "DEAD ARM cleared" if it ever reaches its dead branch.  That splits the
     remaining chain:
 
@@ -200,7 +200,7 @@ def probe_dead_fd_wake():
     child = """
 import os, sys, time
 sys.path.insert(0, SRC)
-import runloom_c as rc
+import stackweave_c as rc
 READ = 1
 def f():
     r, w = os.pipe()
@@ -225,11 +225,11 @@ rc.fiber(f)
 rc.run()
 """
     child = child.replace("SRC", repr(os.path.join(REPO, "src")))
-    env = {k: v for k, v in os.environ.items() if not k.startswith("RUNLOOM_")}
+    env = {k: v for k, v in os.environ.items() if not k.startswith("STACKWEAVE_")}
     env["PYTHON_GIL"] = "0"
     env["PYTHONPATH"] = os.path.join(REPO, "src")
-    env["RUNLOOM_DBG_NETPOLL"] = "1"
-    env["RUNLOOM_STALE_ARM_PROBE_MS"] = "100"   # well inside the 3 s cap
+    env["STACKWEAVE_DBG_NETPOLL"] = "1"
+    env["STACKWEAVE_STALE_ARM_PROBE_MS"] = "100"   # well inside the 3 s cap
     try:
         p = subprocess.run([sys.executable, "-c", child], cwd=REPO, env=env,
                            timeout=20, stdout=subprocess.PIPE,

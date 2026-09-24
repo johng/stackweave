@@ -1,7 +1,7 @@
 """big_100 / 229 -- immortalize a hot shared object graph (cross-hub refcount elision).
 
 ONE immutable object graph (a nested tuple/dict of constants) is built in
-setup() and frozen with runloom_c.immortalize(graph).  A pool of N goroutines
+setup() and frozen with stackweave_c.immortalize(graph).  A pool of N goroutines
 fans out across --hubs 16 and, for the whole run, hammers that single shared
 graph: each op walks its fields and folds them into a deterministic checksum.
 Touching the shared object hard would normally drive a cross-hub
@@ -21,12 +21,12 @@ Oracle (correctness, the point of the test -- immortalize must be transparent):
     checksums -- proving immortalize is correctness-transparent, only perf differs.
   * peak ops must equal expected (every goroutine's op() landed).
 
-Stresses: Stresses: runloom_c.immortalize freezing a hot shared object graph so cross-hub incref/decref are no-ops under a pure-compute fan-out across many hubs; correctness (immortal object still readable/usable, refcount does not change) and the _Py_DecRefShared elision.
+Stresses: Stresses: stackweave_c.immortalize freezing a hot shared object graph so cross-hub incref/decref are no-ops under a pure-compute fan-out across many hubs; correctness (immortal object still readable/usable, refcount does not change) and the _Py_DecRefShared elision.
 """
 import sys
 
 import harness
-import runloom_c
+import stackweave_c
 
 
 # How hard each round touches the shared graph.  Bounded per-worker work
@@ -83,14 +83,14 @@ def setup(H):
 
     do_immortal = getattr(H.args, "immortalize", True)
     if do_immortal:
-        runloom_c.immortalize(graph)
+        stackweave_c.immortalize(graph)
         # Freeze the hot sub-objects too: the checksum walks into them every
         # touch, so each leaf/row push is itself a cross-hub refcount.
-        runloom_c.immortalize(graph[1][1])     # leaves tuple
-        runloom_c.immortalize(graph[2][1])     # nested tuple
+        stackweave_c.immortalize(graph[1][1])     # leaves tuple
+        stackweave_c.immortalize(graph[2][1])     # nested tuple
         for _, row in graph[2][1]:
-            runloom_c.immortalize(row)
-        runloom_c.immortalize(graph[3][1])     # frozenset
+            stackweave_c.immortalize(row)
+        stackweave_c.immortalize(graph[3][1])     # frozenset
 
     # Refcount-stability oracle: capture BEFORE the storm.  sys.getrefcount may
     # be absent/unreliable on some builds; guard it.  An immortal object's
@@ -173,9 +173,9 @@ if __name__ == "__main__":
         gil_on = sys._is_gil_enabled()
     except AttributeError:
         gil_on = True
-    if gil_on or not hasattr(runloom_c, "immortalize"):
+    if gil_on or not hasattr(stackweave_c, "immortalize"):
         why = ("GIL enabled (immortalize is a free-threaded lever)"
-               if gil_on else "runloom_c.immortalize missing")
+               if gil_on else "stackweave_c.immortalize missing")
         sys.stdout.write("SKIP: " + why + "\n")
         sys.stdout.flush()
         sys.exit(0)

@@ -24,7 +24,7 @@ That is the point of these tests rather than an argument against them.  The
 branch is latent, not absent: the claim CAS is unconditional, so the first
 caller or ownership change that does walk an ARMED parker eats a signal
 silently.  It went through three fix attempts and two reverts without once
-being executed, on reasoning alone.  RUNLOOM_FAULT_SIGWAKE_AT_ARM=N (test-only,
+being executed, on reasoning alone.  STACKWEAVE_FAULT_SIGWAKE_AT_ARM=N (test-only,
 inert unless set) executes it: on the Nth reach of the site it raises a SIGALRM
 and collects it right there, inside the ARMED window, running the scheduler's
 own delivery block at that point instead of at the scheduler's poll.
@@ -55,7 +55,7 @@ needs_sigalrm = pytest.mark.skipif(
 _ARMED = r'''
 import signal, sys, faulthandler
 sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 
 box = {}
 def raiser(signum, frame):
@@ -99,7 +99,7 @@ def test_signal_delivered_to_armed_parker():
     "SystemError: ... returned a result with an exception set", because
     wait_fd's abort path returned the RUNLOOM_NETPOLL_SIGNALED sentinel raw.
     """
-    p = _run(_ARMED, {"RUNLOOM_FAULT_SIGWAKE_AT_ARM": "1"})
+    p = _run(_ARMED, {"STACKWEAVE_FAULT_SIGWAKE_AT_ARM": "1"})
     assert p.returncode == 0, (p.stdout, p.stderr[-1500:])
     assert "SystemError" not in p.stderr, (
         "the sentinel escaped wait_fd as a return value with an exception "
@@ -121,7 +121,7 @@ def test_armed_fault_site_is_inert_when_unset():
     """
     p = _run(_ARMED, timeout=90)
     assert "sigwake-fault" not in p.stderr, (
-        "the fault site fired with RUNLOOM_FAULT_SIGWAKE_AT_ARM unset\n%s"
+        "the fault site fired with STACKWEAVE_FAULT_SIGWAKE_AT_ARM unset\n%s"
         % p.stderr[-800:])
     assert "ARMED" not in p.stdout, (
         "the fiber returned from a connect() that can never complete\n%s"

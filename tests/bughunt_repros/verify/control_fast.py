@@ -4,7 +4,7 @@ version does, the crash is attributable to the borrowed store read in
 m_fiber_grow, not to concurrent dict mutation per se.
 """
 import threading
-import runloom
+import stackweave
 
 K = "runloom_stack"
 
@@ -19,20 +19,20 @@ def mutator():
         d[K] = [1 << 16, 64]
 
 def spawner(n):
-    f = runloom.fiber_fast
+    f = stackweave.fiber_fast
     for _ in range(n):
         f(fn)
 
 def main():
     fn.__dict__[K] = [1 << 16, 64]
     for _ in range(8):
-        runloom.fiber_fast(lambda: spawner(200000))
+        stackweave.fiber_fast(lambda: spawner(200000))
 
 muts = [threading.Thread(target=mutator, daemon=True) for _ in range(2)]
 for t in muts:
     t.start()
 try:
-    runloom.run(8, main)
+    stackweave.run(8, main)
 finally:
     STOP.set()
 print("control completed without crash")

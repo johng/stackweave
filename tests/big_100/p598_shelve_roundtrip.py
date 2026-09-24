@@ -40,7 +40,7 @@ WHY THIS IS A LEGITIMATE SINGLE-OWNER / CLOSED-WORLD ORACLE (HARD RULE 2):
 
   Verified against plain threads: 8 OS threads each driving its own Shelf at its own
   path (GIL on and off) round-trips 100% -- 0 mismatches, 0 lost keys.  So under a
-  correct runloom the single-owner oracle PASSES (exit 0) when there is no bug.
+  correct stackweave the single-owner oracle PASSES (exit 0) when there is no bug.
 
 ORACLES:
   * LOAD-BEARING -- ROUND-TRIP + CONSERVATION (worker, HARD, fail-fast).  Each
@@ -49,7 +49,7 @@ ORACLES:
     reliably interleaves its own file I/O on this hub), sync()s, yields, and verifies
     both laws on the same handle; then close()s, yields, reopen()s read-only, and
     verifies both laws again on the persisted copy.  Single-owner: no Shelf, path, or
-    value is ever shared.  A failure is a runloom desync (torn/lost/crossed value or
+    value is ever shared.  A failure is a stackweave desync (torn/lost/crossed value or
     key across a park/hub-migration), not shelve semantics.
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber stranded mid-offload inside
     a dbm read/write/open (parked on a blocking-worker completion that never comes)
@@ -77,7 +77,7 @@ import os
 import shelve
 
 import harness
-import runloom
+import stackweave
 
 # Each fiber's values are keyed off base = wid * VALUE_SCALE so a cross-fiber Shelf
 # leak (fetching a sibling's file/handle) decodes a visibly different wid and trips
@@ -195,9 +195,9 @@ def run_shelf_round(H, wid, base_dir, state):
         for i, k in enumerate(keys):
             sh[k] = expected[k]            # pickle dump + dbm write (offloaded)
             if (i & 3) == 3:
-                runloom.yield_now()        # sibling stores/fetches during our write
+                stackweave.yield_now()        # sibling stores/fetches during our write
         sh.sync()                          # flush to the dbm file (offloaded)
-        runloom.yield_now()                # park across the store/verify boundary
+        stackweave.yield_now()                # park across the store/verify boundary
         # ---- verify on the LIVE handle (same-handle round-trip) ------------------
         if not verify(H, wid, sh, expected, "live"):
             return
@@ -206,7 +206,7 @@ def run_shelf_round(H, wid, base_dir, state):
 
     # ---- reopen phase: force a full persist -> reopen -> reload cycle across more
     # park/hub-migration boundaries, then verify the persisted copy read-only.
-    runloom.yield_now()
+    stackweave.yield_now()
     sh2 = shelve.open(path, flag="r")      # read-only reopen of the persisted file
     try:
         if not verify(H, wid, sh2, expected, "reopened"):
@@ -237,7 +237,7 @@ def setup(H):
     # and caches it in the module global dbm._defaultmod.  Under M:N those first-use
     # imports would run concurrently across hundreds of fibers, and a concurrent
     # import exposing a PARTIALLY-INITIALIZED module (dbm.open not yet bound) is
-    # DOCUMENTED CPython import semantics -- NOT a runloom bug.  Doing one full
+    # DOCUMENTED CPython import semantics -- NOT a stackweave bug.  Doing one full
     # open/store/close here, single-threaded in the root, forces `import dbm`, the
     # backend detection (dbm.sqlite3), dbm._defaultmod caching, and the pickle
     # machinery to complete up front, so the fibers exercise only the (thread-safe,
@@ -289,4 +289,4 @@ if __name__ == "__main__":
                  "after close()+reopen().  Single-owner + closed-world: a value "
                  "not equal to what was stored, a missing/foreign key, or a value "
                  "decoding a different wid (cross-fiber Shelf-handle leak) across a "
-                 "park/hub-migration is the runloom bug; no shared Shelf exists.")
+                 "park/hub-migration is the stackweave bug; no shared Shelf exists.")

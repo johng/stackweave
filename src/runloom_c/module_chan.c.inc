@@ -225,7 +225,7 @@ static PySequenceMethods RunloomChan_seq = {
 
 static PyTypeObject RunloomChanType = {
     PyVarObject_HEAD_INIT(NULL, 0)
-    .tp_name = "runloom_c.Chan",
+    .tp_name = "stackweave_c.Chan",
     .tp_basicsize = sizeof(RunloomChan),
     .tp_dealloc = (destructor)RunloomChan_dealloc,
     .tp_as_sequence = &RunloomChan_seq,
@@ -379,7 +379,7 @@ static PyMethodDef RunloomMutex_methods[] = {
 
 static PyTypeObject RunloomMutexType = {
     PyVarObject_HEAD_INIT(NULL, 0)
-    .tp_name = "runloom_c.Mutex",
+    .tp_name = "stackweave_c.Mutex",
     .tp_basicsize = sizeof(RunloomMutex),
     .tp_dealloc = (destructor)RunloomMutex_dealloc,
     .tp_flags = Py_TPFLAGS_DEFAULT,

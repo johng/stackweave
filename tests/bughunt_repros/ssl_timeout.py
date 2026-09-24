@@ -1,5 +1,5 @@
 """ssl socket with settimeout() must raise socket.timeout on a stalled peer.
-Patched runloom's SSL recv loop never consults the timeout -> hangs forever."""
+Patched stackweave's SSL recv loop never consults the timeout -> hangs forever."""
 import socket, ssl, sys, threading, os
 
 D = os.path.dirname(os.path.abspath(__file__))
@@ -39,8 +39,8 @@ def scenario(tag):
 if sys.argv[1] == "stock":
     scenario("stock:")
 else:
-    import runloom
+    import stackweave
     def main():
-        runloom.fiber(lambda: scenario("patched-fiber:"))
-    runloom.monkey.patch()
-    runloom.run(2, main)
+        stackweave.fiber(lambda: scenario("patched-fiber:"))
+    stackweave.monkey.patch()
+    stackweave.run(2, main)

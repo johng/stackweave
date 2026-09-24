@@ -3,17 +3,17 @@
 
 There are two TSan tiers (tools/run_sanitizers_ext.sh):
 
-  ext-only   instruments only runloom_c and force-loads libtsan into a stock
+  ext-only   instruments only stackweave_c and force-loads libtsan into a stock
              interpreter.  Cheap, needs no special CPython, and is BLIND to
              the interpreter's internals -- so a race that crosses the
              ext <-> CPython boundary is attributed poorly or not at all.
-  gold       RUNLOOM_TSAN_PYTHON=<a --with-thread-sanitizer CPython>.  Both
+  gold       STACKWEAVE_TSAN_PYTHON=<a --with-thread-sanitizer CPython>.  Both
              sides instrumented, so cross-boundary races land precisely.
 
 Gold is the one that can go quietly stale, because running it needs an
 interpreter most checkouts do not have -- and a claim of "TSan-clean" ages
 badly without anything to say so.  That is not hypothetical: the header of
-run_sanitizers_ext.sh carried "Verified: runloom's C is TSan-clean under it"
+run_sanitizers_ext.sh carried "Verified: stackweave's C is TSan-clean under it"
 from a run against **3.13t**, while RUNLOOM_GCFRAMES_ANCHOR is gated
 `Py_GIL_DISABLED && PY_VERSION_HEX >= 0x030E0000` -- 3.14+ ONLY.  The whole
 GC-frames anchor compiles to nothing on 3.13, so the clean bill of health had
@@ -58,7 +58,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
-SRC_C = os.path.join(ROOT, "src", "runloom_c")
+SRC_C = os.path.join(ROOT, "src", "stackweave_c")
 BASELINE = os.path.join(HERE, "tsan_gold_baseline.json")
 
 # What TSan actually instruments when it builds the extension.
@@ -153,10 +153,10 @@ def main(argv):
             "sources_hash": cur,
             "commit": head,
             "date": _git("log", "-1", "--format=%cI") or "",
-            "python": os.environ.get("RUNLOOM_TSAN_PYTHON", "") or "(unrecorded)",
+            "python": os.environ.get("STACKWEAVE_TSAN_PYTHON", "") or "(unrecorded)",
             "note": ("Set by tsan_gold_drift.py --update after a clean "
                      "gold-standard run (tools/run_sanitizers_ext.sh with "
-                     "RUNLOOM_TSAN_PYTHON). Records WHICH sources were "
+                     "STACKWEAVE_TSAN_PYTHON). Records WHICH sources were "
                      "verified, so the warning keys on content rather than "
                      "commit count."),
         }
@@ -212,13 +212,13 @@ def main(argv):
               % (GOLD_COMMITS, GOLD_DAYS))
 
     print("")
-    print("  The ext-only TSan lane instruments runloom_c but NOT the")
+    print("  The ext-only TSan lane instruments stackweave_c but NOT the")
     print("  interpreter, so races crossing the ext <-> CPython boundary are")
     print("  attributed poorly. Gold instruments both. Run it with:")
     print("")
     print("    tools/build_tsan_cpython.sh          # once; PY_VER matters --")
     print("                                         # build the version you SHIP")
-    print("    RUNLOOM_TSAN_PYTHON=~/cpython-tsan/bin/python3 \\")
+    print("    STACKWEAVE_TSAN_PYTHON=~/cpython-tsan/bin/python3 \\")
     print("      tools/run_sanitizers_ext.sh")
     print("    tools/verify/tsan_gold_drift.py --update   # after it comes back clean")
     print("")

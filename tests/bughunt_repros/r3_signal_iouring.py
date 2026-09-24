@@ -1,6 +1,6 @@
 """R3: does a Python signal handler exception (SIGALRM -> raise) interrupt a
 fiber blocked in TCPConn.recv()?  Compare default epoll path vs
-RUNLOOM_TCPCONN_IOURING=1.  On epoll the netpoll signal-wake path restores the
+STACKWEAVE_TCPCONN_IOURING=1.  On epoll the netpoll signal-wake path restores the
 exception; suspect the iouring park has no such path -> recv never returns
 until socket activity, so the alarm exception is delayed/lost.
 """
@@ -9,8 +9,8 @@ import socket
 import sys
 import time
 
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 
 
 def _port(lst):
@@ -41,7 +41,7 @@ def main():
     def server():
         conn = lst.accept()
         # never send anything; close after 8s so the test always terminates
-        runloom.sleep(8.0)
+        stackweave.sleep(8.0)
         conn.close()
         lst.close()
 

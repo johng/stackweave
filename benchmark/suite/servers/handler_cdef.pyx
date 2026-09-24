@@ -1,19 +1,19 @@
 # cython: language_level=3, boundscheck=False, wraparound=False, freethreading_compatible=True
-"""Tstate-free Cython `cdef` handler for runloom_c.serve(handler=<capsule>).
+"""Tstate-free Cython `cdef` handler for stackweave_c.serve(handler=<capsule>).
 
 This is the *c_entry* fast path with custom logic. Unlike handler_cy (a Python
 `def`, so serve() spawns it as a full Python fiber that carries a PyThreadState
 and pays tstate_save/restore on every park), this handler is exposed to serve()
-as a `runloom_c.c_handler` PyCapsule wrapping a `cdef` C function. serve() spawns
+as a `stackweave_c.c_handler` PyCapsule wrapping a `cdef` C function. serve() spawns
 it via runloom_mn_fiber_c -> the `g->c_entry` path in runloom_g_entry, which skips
 ALL Python-frame / tstate setup. So the request loop has:
   * zero PyObjects (like handler_cy), AND
   * zero tstate save/restore per park (unlike handler_cy) -- the all-C echo's
     advantage, now available to a custom handler.
 
-It runs entirely `nogil` (there is no tstate to hold), calling runloom's raw-fd
-cooperative recv/send via the runloom_c.__tcp_capi__ capsule (the proactor when
-RUNLOOM_IOURING_LOOP is on, else readiness + wait_fd).
+It runs entirely `nogil` (there is no tstate to hold), calling stackweave's raw-fd
+cooperative recv/send via the stackweave_c.__tcp_capi__ capsule (the proactor when
+STACKWEAVE_IOURING_LOOP is on, else readiness + wait_fd).
 """
 from libc.stdint cimport intptr_t
 from cpython.pycapsule cimport PyCapsule_GetPointer, PyCapsule_New
@@ -40,7 +40,7 @@ cdef fd_close_t _fd_close = NULL
 # work_cy / py_fnv / goFnv, but here it runs INSIDE the tstate-free nogil cdef
 # handler -- so unlike srv_runloom_work.py's Python `def` handler (which wraps the
 # compiled work in interpreted recv_into/send_all/fold), the ENTIRE request path
-# is native C. This is the "fully-native runloom handler" line for the
+# is native C. This is the "fully-native stackweave handler" line for the
 # Cython-vs-cdef-vs-Go comparison. _work is set once via set_work() before serve()
 # spawns any fiber, so the nogil read needs no lock. work=0 -> plain echo.
 cdef int _work = 0
@@ -63,11 +63,11 @@ cdef unsigned int _fnv(const unsigned char *buf, Py_ssize_t n, int passes) noexc
 
 cdef int _load() except -1:
     global _fd_recv, _fd_send_all, _fd_close
-    import runloom_c
+    import stackweave_c
     cdef RunloomTCPCAPI *capi = <RunloomTCPCAPI *>PyCapsule_GetPointer(
-        runloom_c.__tcp_capi__, RUNLOOM_TCP_CAPI_CAPSULE_NAME)
+        stackweave_c.__tcp_capi__, RUNLOOM_TCP_CAPI_CAPSULE_NAME)
     if capi is NULL:
-        raise ImportError("runloom_c.__tcp_capi__ capsule pointer is NULL")
+        raise ImportError("stackweave_c.__tcp_capi__ capsule pointer is NULL")
     _fd_recv = capi.fd_recv
     _fd_send_all = capi.fd_send_all
     _fd_close = capi.fd_close
@@ -81,7 +81,7 @@ cdef void echo_handler(void *arg) noexcept nogil:
     """serve() hands us the accepted fd (via intptr_t). recv -> (optional FNV
     work) -> send, until EOF. No tstate, no Python objects, no GIL -- the c_entry
     fast path. With _work>0 the ENTIRE request path is native C (the fully-native
-    runloom handler line vs Go); _work==0 is the plain echo."""
+    stackweave handler line vs Go); _work==0 is the plain echo."""
     cdef int fd = <int><intptr_t>arg
     cdef char buf[16384]
     cdef Py_ssize_t n
@@ -98,5 +98,5 @@ cdef void echo_handler(void *arg) noexcept nogil:
     _fd_close(fd)
 
 
-# The capsule serve() detects (RUNLOOM_C_HANDLER_CAPSULE_NAME = "runloom_c.c_handler").
+# The capsule serve() detects (RUNLOOM_C_HANDLER_CAPSULE_NAME = "stackweave_c.c_handler").
 handler = PyCapsule_New(<void *>echo_handler, RUNLOOM_C_HANDLER_CAPSULE_NAME, NULL)

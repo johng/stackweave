@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # racerd.sh -- compositional STATIC race + memory-safety analysis with Infer.
 #
-# runloom already hunts races dynamically (ThreadSanitizer on the whole ext, real
+# stackweave already hunts races dynamically (ThreadSanitizer on the whole ext, real
 # threads) and proves the lock-free algorithms in tools/verify/.  Infer adds a third
 # angle that needs neither a running binary nor the racy interleaving to occur:
 #
@@ -34,7 +34,7 @@ if ! command -v infer >/dev/null 2>&1; then
 fi
 
 OUT="${INFER_OUT:-$ROOT/infer-out}"
-echo "[infer] capturing the runloom_c ext build and running RacerD + Pulse"
+echo "[infer] capturing the stackweave_c ext build and running RacerD + Pulse"
 # A clean rebuild so Infer's compiler wrapper captures every translation unit.
 "$(command -v safe-rm || echo rm)" -rf build "$OUT" 2>/dev/null
 if ! infer run --racerd --pulse --results-dir "$OUT" -- \

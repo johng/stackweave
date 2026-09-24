@@ -27,7 +27,7 @@ program probes:
     instead of the computed value), or the counter could see a value inconsistent
     with the number of accesses THIS fiber performed.
 
-WHERE M:N COULD BREAK IT (the gap this program probes).  runloom gives each fiber
+WHERE M:N COULD BREAK IT (the gap this program probes).  stackweave gives each fiber
 its own Python frame stack; a correctly-implemented descriptor protocol reads
 `self` from the frame's locals and resolves the MRO/instance-dict deterministically
 regardless of which hub runs the frame.  But if `self` were torn across a
@@ -49,7 +49,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain threads):
   distinct backing + a planted decoy, GIL on AND off) that 100% of accesses return
   the correct per-thread computed value and never the decoy, and the per-instance
   `__getattribute__` counter always equals that thread's own access count -- 0
-  cross-thread leaks.  Under a CORRECT runloom it must hold identically: the
+  cross-thread leaks.  Under a CORRECT stackweave it must hold identically: the
   single-owner load-bearing oracle PASSES on a correct runtime (exit 0 when there
   is no bug).
 
@@ -67,7 +67,7 @@ ORACLES:
       - asserts the per-instance `__getattribute__` counter equals EXACTLY the
         number of `value` accesses THIS fiber performed (self-consistent count).
     Single-owner: the Probe, its backing, its decoy, and its access counter are
-    all fiber-local, never shared.  A failure is a runloom descriptor-chain /
+    all fiber-local, never shared.  A failure is a stackweave descriptor-chain /
     attribute-protocol desync.
 
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber stranded inside the
@@ -97,7 +97,7 @@ attribute-lookup fast path across a hub-migration yield, per-instance state
 (`self.backing`, access counter) read/written by one fiber under M:N churn.
 """
 import harness
-import runloom
+import stackweave
 
 # The property getter computes a PURE FUNCTION of the instance's backing slot.
 # Distinct fibers get distinct backings (wid*VALUE_SCALE + idx), so the computed
@@ -185,9 +185,9 @@ def prop_check(H, wid, idx, state):
         return
 
     # YIELD: let siblings run and potentially migrate this fiber across hubs.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0003)
+        stackweave.sleep(0.0003)
 
     # Re-read after the yield: value must be stable, still the descriptor's, still
     # this fiber's own unique value.  (gac: 1 -> 2)
@@ -248,7 +248,7 @@ def shared_probe_check(H, wid, idx, state):
     p = pool[idx % len(pool)]
     mine = (wid * VALUE_SCALE + idx) % 2147480000
     p.backing = mine                       # racy shared write
-    runloom.yield_now()                    # sibling may overwrite backing here
+    stackweave.yield_now()                    # sibling may overwrite backing here
     got = p.value                          # racy shared read
     expected_if_uncontended = mine * MULT + ADD
     state["shared_checks"][wid & 1023] += 1
@@ -318,7 +318,7 @@ def post(H):
               "disagreements across {1} checks -- fibers write a shared instance's "
               "backing and a sibling overwrites it before the read.  The getter "
               "still returns a VALID computed value of whatever backing is present; "
-              "this is documented M:N shared-object behavior, NOT a runloom bug, "
+              "this is documented M:N shared-object behavior, NOT a stackweave bug, "
               "and never reaches the load-bearing single-owner oracle".format(
                   sleaks, schecks))
 
@@ -346,6 +346,6 @@ if __name__ == "__main__":
                  "across a hub-migration yield, and the per-instance access "
                  "counter MUST equal this fiber's own access tally.  A decoy leak, "
                  "a value that changes across a yield, a vanished dict decoy, or "
-                 "an inconsistent counter is the runloom descriptor-chain bug.  "
+                 "an inconsistent counter is the stackweave descriptor-chain bug.  "
                  "MEASURED shared-instance arm (expected cross-fiber disagreement, "
                  "report-only) proves the hazard exists")

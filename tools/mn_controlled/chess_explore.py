@@ -2,12 +2,12 @@
 """chess_explore.py -- CHESS/Coyote-style SYSTEMATIC, context-bounded schedule
 explorer over the controlled M:N baton.
 
-The baton (RUNLOOM_MN_SEED + barrier) reduces ALL M:N scheduling nondeterminism
+The baton (STACKWEAVE_MN_SEED + barrier) reduces ALL M:N scheduling nondeterminism
 to a single serialized choice point -- runloom_mn_ctrl_choose(): hand the baton
 to one of the wanting hubs.  The seeded version draws that index from an RNG (one
 random interleaving per seed).  This driver instead ENUMERATES the choices: the
-C hook (RUNLOOM_MN_SCHEDULE) drives each grant's index from a caller-supplied
-sequence and logs each grant's fan-out (RUNLOOM_MN_FANOUT), so the runtime becomes
+C hook (STACKWEAVE_MN_SCHEDULE) drives each grant's index from a caller-supplied
+sequence and logs each grant's fan-out (STACKWEAVE_MN_FANOUT), so the runtime becomes
 a black-box transition function  run(prefix) -> (fanout_trace, outcome)  and the
 schedule space is a tree we can walk.
 
@@ -51,7 +51,7 @@ DEFAULT_WORKLOAD = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 def run_prefix(workload, prefix, timeout, extra_env):
     """Run the workload once with the baton driven by `prefix` (a list of chosen
     indices).  Returns (trace, outcome, hubseq):
-      trace  = list of {g,cnt,def,k,hub} grant records (RUNLOOM_MN_FANOUT)
+      trace  = list of {g,cnt,def,k,hub} grant records (STACKWEAVE_MN_FANOUT)
       outcome in {OK, BUG, CRASH, WEDGE}
       hubseq = tuple of granted hub ids (the realized schedule identity)
     """
@@ -60,9 +60,9 @@ def run_prefix(workload, prefix, timeout, extra_env):
     fo.close()
     env = dict(os.environ)
     env.update(PYTHON_GIL="0", PYTHONPATH=os.path.join(ROOT, "src"),
-               RUNLOOM_MN_SEED="1",
-               RUNLOOM_MN_SCHEDULE=",".join(str(k) for k in prefix),
-               RUNLOOM_MN_FANOUT=fo.name)
+               STACKWEAVE_MN_SEED="1",
+               STACKWEAVE_MN_SCHEDULE=",".join(str(k) for k in prefix),
+               STACKWEAVE_MN_FANOUT=fo.name)
     env.update(extra_env)
     timed_out = False
     rc = None
@@ -211,11 +211,11 @@ def run_pct_tail(workload, depth, k, reps, timeout, extra_env, cmax, pruned):
     for seed in range(1, reps + 1):
         e = dict(os.environ)
         e.update(PYTHON_GIL="0", PYTHONPATH=os.path.join(ROOT, "src"),
-                 RUNLOOM_MN_SEED=str(seed), RUNLOOM_MN_PCT=str(depth),
-                 RUNLOOM_MN_PCT_STEPS=str(k))
+                 STACKWEAVE_MN_SEED=str(seed), STACKWEAVE_MN_PCT=str(depth),
+                 STACKWEAVE_MN_PCT_STEPS=str(k))
         e.update(extra_env)
-        e.pop("RUNLOOM_MN_SCHEDULE", None)   # PCT path, not the schedule drive
-        e.pop("RUNLOOM_MN_FANOUT", None)
+        e.pop("STACKWEAVE_MN_SCHEDULE", None)   # PCT path, not the schedule drive
+        e.pop("STACKWEAVE_MN_FANOUT", None)
         try:
             r = subprocess.run([PY, workload], env=e, cwd=ROOT, timeout=timeout,
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT)

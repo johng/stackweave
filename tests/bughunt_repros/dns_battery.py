@@ -20,8 +20,8 @@ def battery(prefix):
 if sys.argv[1] == "stock":
     battery("stock")
 else:
-    import runloom
+    import stackweave
     def main():
-        runloom.fiber(lambda: battery("patched-fiber"))
-    runloom.monkey.patch()
-    runloom.run(2, main)
+        stackweave.fiber(lambda: battery("patched-fiber"))
+    stackweave.monkey.patch()
+    stackweave.run(2, main)

@@ -20,7 +20,7 @@ Stresses: JoinSet spawn/join_all, gather-style fan-out, exception propagation
 out of a child goroutine, no orphan goroutine.
 """
 import harness
-import runloom
+import stackweave
 
 
 class ChildBoom(Exception):
@@ -33,7 +33,7 @@ def child(kind, payload):
         if kind == "value":
             return ("ok", payload)
         if kind == "sleep":
-            runloom.sleep(payload[1])
+            stackweave.sleep(payload[1])
             return ("ok", payload[0])
         if kind == "raise":
             raise ChildBoom(payload)
@@ -51,7 +51,7 @@ def worker(H, wid, rng, state):
         if not H.running():
             break
         n = rng.randint(2, 6)
-        js = runloom.sync.JoinSet()
+        js = stackweave.sync.JoinSet()
         expect = []         # what each child should produce, in spawn order
         n_err = 0
         for i in range(n):

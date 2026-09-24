@@ -18,11 +18,11 @@ import multiprocessing as mp          # must be imported BEFORE patch()
 import _thread
 import time as _t
 
-import runloom.monkey as monkey
+import stackweave.monkey as monkey
 monkey.patch()
 
 import time
-import runloom_c as rc
+import stackweave_c as rc
 
 l = mp.RLock()
 out = {}

@@ -236,7 +236,7 @@ else
     tlc_why iouwkbug; echo "FAIL -- no overflow flush should violate AllWoken (liveness)"; fail=$((fail+1))
 fi
 
-# ---- Controlled M:N scheduler (RUNLOOM_MN_SEED experiment): the baton +
+# ---- Controlled M:N scheduler (STACKWEAVE_MN_SEED experiment): the baton +
 # rendezvous protocol.  Correct = mutual-exclusion + deadlock-free +
 # deterministic grant.  Two negative controls model the two real obstacles:
 # no preemption -> a CPU-bound hub starves all (the deadlock fixed by keeping
@@ -277,7 +277,7 @@ else
     tlc_why mnlc; echo "FAIL -- no logical clock should violate DeterministicTick"; fail=$((fail+1))
 fi
 
-# ---- CPython STW boundary (RunloomCPythonSTW): the contract between runloom's
+# ---- CPython STW boundary (RunloomCPythonSTW): the contract between stackweave's
 # hubs and free-threaded CPython's stop-the-world machinery (M1 attach/detach +
 # M2 stop_the_world, read from Python/pystate.c -- see docs/dev/cpython_boundary.md).
 # Correct = STWExclusive (no non-requester hub is ATTACHED while the world is

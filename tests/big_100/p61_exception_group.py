@@ -9,7 +9,7 @@ machinery on the goroutine scheduler.
 Stresses: ExceptionGroup construction/splitting, traceback integrity.
 """
 import harness
-import runloom
+import stackweave
 
 KIDS = 12
 
@@ -37,7 +37,7 @@ def child(idx, kind, out):
 
 def worker(H, wid, rng, state):
     while H.running():
-        out = runloom.Chan(KIDS)
+        out = stackweave.Chan(KIDS)
         kinds = [rng.randrange(3) for _ in range(KIDS)]
         exp_alpha = kinds.count(0)
         exp_beta = kinds.count(1)

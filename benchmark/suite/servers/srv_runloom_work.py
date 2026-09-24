@@ -7,7 +7,7 @@ payload), three handler implementations spanning interpreted -> state-of-the-art
                     Cython handler (handler_cy) with the FNV INLINE -- capi recv,
                     native FNV, fold, capi send. No Python def wrapper, no
                     per-call boxing; the whole request path is native. This is
-                    runloom's state of the art (the line that competes with Go).
+                    stackweave's state of the art (the line that competes with Go).
   --handler cdef    handler_cdef: the same native work but on the tstate-free
                     c_entry path (no Python frame at all) -- the extreme.
 
@@ -22,8 +22,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # find handler_cy/cdef *.so
 
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
 CHUNK = 65536
 FNV_OFF = 2166136261        # 0x811c9dc5
@@ -89,12 +89,12 @@ def main():
         srv_handler = make_handle(py_fnv, args.work)   # interpreted baseline
 
     def root():
-        port, listeners = runloom_c.serve(args.host, args.port, srv_handler,
+        port, listeners = stackweave_c.serve(args.host, args.port, srv_handler,
                                           acceptors=args.hubs, backlog=4096)
         print("LISTENING %d" % port, flush=True)
-        runloom.sleep(float("inf"))
+        stackweave.sleep(float("inf"))
 
-    runloom.run(args.hubs, main_fn=root)
+    stackweave.run(args.hubs, main_fn=root)
 
 
 if __name__ == "__main__":

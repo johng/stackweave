@@ -1,4 +1,4 @@
-import time, runloom_c as rc
+import time, stackweave_c as rc
 ch = rc.Chan()
 t0=time.time()
 try: ch.recv()

@@ -44,8 +44,8 @@ import time
 
 import pytest
 
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 from adv_util import (
     hang_guard,
     OverlapTracker,
@@ -93,15 +93,15 @@ def run_child(body, extra_env=None, timeout=60, panic_silent=True):
     A negative returncode is a fatal SIGNAL -- the containment we want for the
     crash tests (a SIGSEGV here is OBSERVED, not propagated into this process).
     """
-    src = "import runloom, runloom_c, ctypes, sys, os, time\n" + textwrap.dedent(body)
+    src = "import stackweave, stackweave_c, ctypes, sys, os, time\n" + textwrap.dedent(body)
     env = dict(os.environ)
     env["PYTHON_GIL"] = "0"
     env["PYTHONPATH"] = _SRC + os.pathsep + env.get("PYTHONPATH", "")
-    env.pop("RUNLOOM_CRASH", None)
-    env.pop("RUNLOOM_CRASH_FILE", None)
+    env.pop("STACKWEAVE_CRASH", None)
+    env.pop("STACKWEAVE_CRASH_FILE", None)
     if panic_silent:
         # Keep fiber-panic noise off stderr unless a test wants it.
-        env.setdefault("RUNLOOM_GOROUTINE_PANIC", "silent")
+        env.setdefault("STACKWEAVE_GOROUTINE_PANIC", "silent")
     if extra_env:
         env.update(extra_env)
     p = subprocess.run(
@@ -265,11 +265,11 @@ class TestBlockingOverlap:
 
         def main():
             for i in range(N):
-                runloom.fiber(lambda i=i: w(i))
+                stackweave.fiber(lambda i=i: w(i))
             while len(done) < N:
-                runloom.sleep(0.005)
+                stackweave.sleep(0.005)
         with hang_guard(30, "mn overlap"):
-            runloom.run(4, main)
+            stackweave.run(4, main)
         assert sorted(done) == list(range(N))
         ov.assert_peak_at_least(2, "concurrent offload (mn)")
 
@@ -287,15 +287,15 @@ class TestBlockingOverlap:
         def burner():
             for i in range(30):
                 progress.append(("burn", i))
-                runloom.sleep(0.005)
+                stackweave.sleep(0.005)
 
         def main():
-            runloom.fiber(offloader)
-            runloom.fiber(burner)
+            stackweave.fiber(offloader)
+            stackweave.fiber(burner)
             while "off-done" not in progress:
-                runloom.sleep(0.005)
+                stackweave.sleep(0.005)
         with hang_guard(30, "sibling-runs"):
-            runloom.run(4, main)
+            stackweave.run(4, main)
         done_idx = progress.index("off-done")
         burns_before = sum(1 for p in progress[:done_idx]
                            if isinstance(p, tuple) and p[0] == "burn")
@@ -321,11 +321,11 @@ class TestBlockingPoolStress:
 
         def main():
             for i in range(N):
-                runloom.fiber(lambda i=i: w(i))
+                stackweave.fiber(lambda i=i: w(i))
             while any(r is None for r in results):
-                runloom.sleep(0.002)
+                stackweave.sleep(0.002)
         with hang_guard(60, "pool stress 200"):
-            runloom.run(4, main)
+            stackweave.run(4, main)
         assert results == [i * i + 1 for i in range(N)]
         assert rc._self_check(0) == 0
 
@@ -345,11 +345,11 @@ class TestBlockingPoolStress:
 
         def main():
             for i in range(N):
-                runloom.fiber(lambda i=i: w(i))
+                stackweave.fiber(lambda i=i: w(i))
             while any(g is None for g in got):
-                runloom.sleep(0.002)
+                stackweave.sleep(0.002)
         with hang_guard(60, "storm crosstalk"):
-            runloom.run(4, main)
+            stackweave.run(4, main)
         assert got == [("id", i) for i in range(N)]
 
     @mn_only
@@ -364,11 +364,11 @@ class TestBlockingPoolStress:
                 out.append(rc.blocking(lambda k=k: k * 3))
 
         def main():
-            runloom.fiber(w)
+            stackweave.fiber(w)
             while len(out) < 50:
-                runloom.sleep(0.002)
+                stackweave.sleep(0.002)
         with hang_guard(40, "repeated offload"):
-            runloom.run(2, main)
+            stackweave.run(2, main)
         assert out == [k * 3 for k in range(50)]
 
 
@@ -385,20 +385,20 @@ class TestBlockingTeardownRace:
         rc2, out = run_child("""
             done = []
             def w(i):
-                runloom_c.blocking(time.sleep, 0.02)
+                stackweave_c.blocking(time.sleep, 0.02)
                 done.append(i)
             def main():
                 for i in range(40):
-                    runloom.fiber(lambda i=i: w(i))
+                    stackweave.fiber(lambda i=i: w(i))
                 # Wait for MOST but not necessarily all -- main may return with
                 # a few still in flight; the runtime must still drain cleanly.
                 t0 = time.monotonic()
                 while len(done) < 35 and time.monotonic() - t0 < 5:
-                    runloom.sleep(0.002)
-            runloom.run(4, main)
+                    stackweave.sleep(0.002)
+            stackweave.run(4, main)
             # By the time run() returns every offloaded fiber must have completed.
             print("DONE", len(done))
-            assert runloom_c._self_check(0) == 0
+            assert stackweave_c._self_check(0) == 0
             print("SELFCHECK_OK")
         """, timeout=40)
         assert rc2 == 0, out
@@ -406,20 +406,20 @@ class TestBlockingTeardownRace:
 
     @mn_only
     def test_offload_then_immediate_fini_cycle(self):
-        # Tight runloom.run() cycles each spawning offloads, in a subprocess.
+        # Tight stackweave.run() cycles each spawning offloads, in a subprocess.
         # A teardown that joined the pool workers wrong (or freed a stack job a
         # worker still touches) would crash or hang across the cycles.
         rc2, out = run_child("""
             for cyc in range(5):
                 results = []
                 def w(i):
-                    results.append(runloom_c.blocking(lambda i=i: i + cyc))
+                    results.append(stackweave_c.blocking(lambda i=i: i + cyc))
                 def main():
                     for i in range(20):
-                        runloom.fiber(lambda i=i: w(i))
+                        stackweave.fiber(lambda i=i: w(i))
                     while len(results) < 20:
-                        runloom.sleep(0.002)
-                runloom.run(4, main)
+                        stackweave.sleep(0.002)
+                stackweave.run(4, main)
                 assert sorted(results) == sorted(i + cyc for i in range(20)), (cyc, results)
             print("ALL_CYCLES_OK")
         """, timeout=60)
@@ -433,21 +433,21 @@ class TestBlockingTeardownRace:
 class TestBlockingEnvModes:
     @mn_only
     def test_single_worker_pool_still_completes(self):
-        # RUNLOOM_BLOCKPOOL_WORKERS=1 -> all offloads SERIALIZE through one worker.
+        # STACKWEAVE_BLOCKPOOL_WORKERS=1 -> all offloads SERIALIZE through one worker.
         # Correctness must hold (only the concurrency bound is lost); no deadlock.
         rc2, out = run_child("""
             done = []
             def w(i):
-                runloom_c.blocking(time.sleep, 0.02)
+                stackweave_c.blocking(time.sleep, 0.02)
                 done.append(i)
             def main():
                 for i in range(12):
-                    runloom.fiber(lambda i=i: w(i))
+                    stackweave.fiber(lambda i=i: w(i))
                 while len(done) < 12:
-                    runloom.sleep(0.005)
-            runloom.run(4, main)
+                    stackweave.sleep(0.005)
+            stackweave.run(4, main)
             print("DONE", sorted(done) == list(range(12)))
-        """, extra_env={"RUNLOOM_BLOCKPOOL_WORKERS": "1"}, timeout=40)
+        """, extra_env={"STACKWEAVE_BLOCKPOOL_WORKERS": "1"}, timeout=40)
         assert rc2 == 0, out
         assert "DONE True" in out, out
 
@@ -458,16 +458,16 @@ class TestBlockingEnvModes:
         rc2, out = run_child("""
             done = []
             def w(i):
-                runloom_c.blocking(lambda i=i: i)
+                stackweave_c.blocking(lambda i=i: i)
                 done.append(i)
             def main():
                 for i in range(8):
-                    runloom.fiber(lambda i=i: w(i))
+                    stackweave.fiber(lambda i=i: w(i))
                 while len(done) < 8:
-                    runloom.sleep(0.005)
-            runloom.run(4, main)
+                    stackweave.sleep(0.005)
+            stackweave.run(4, main)
             print("DONE", len(done))
-        """, extra_env={"RUNLOOM_BLOCKPOOL_WORKERS": "0"}, timeout=30)
+        """, extra_env={"STACKWEAVE_BLOCKPOOL_WORKERS": "0"}, timeout=30)
         assert rc2 == 0, out
         assert "DONE 8" in out, out
 
@@ -478,18 +478,18 @@ class TestBlockingEnvModes:
         rc2, out = run_child("""
             done = []
             def w(i):
-                runloom_c.blocking(lambda i=i: i)
+                stackweave_c.blocking(lambda i=i: i)
                 done.append(i)
             def main():
                 for i in range(8):
-                    runloom.fiber(lambda i=i: w(i))
+                    stackweave.fiber(lambda i=i: w(i))
                 while len(done) < 8:
-                    runloom.sleep(0.005)
-            runloom.run(4, main)
+                    stackweave.sleep(0.005)
+            stackweave.run(4, main)
             print("DONE", len(done))
-            assert runloom_c._self_check(0) == 0
+            assert stackweave_c._self_check(0) == 0
             print("SELFCHECK_OK")
-        """, extra_env={"RUNLOOM_BLOCKPOOL_WORKERS": "100000"}, timeout=30)
+        """, extra_env={"STACKWEAVE_BLOCKPOOL_WORKERS": "100000"}, timeout=30)
         assert rc2 == 0, out
         assert "DONE 8" in out and "SELFCHECK_OK" in out, out
 
@@ -501,52 +501,52 @@ class TestCrashInstallState:
     def test_install_uninstall_roundtrip(self):
         assert rc.crash_handler_installed() is False
         try:
-            flags = runloom.inspect.install_crash_handler("on")
+            flags = stackweave.inspect.install_crash_handler("on")
             assert isinstance(flags, int) and flags > 0
             assert rc.crash_handler_installed() is True
         finally:
-            runloom.inspect.uninstall_crash_handler()
+            stackweave.inspect.uninstall_crash_handler()
         assert rc.crash_handler_installed() is False
 
     def test_double_install_idempotent(self):
         try:
-            runloom.inspect.install_crash_handler("on")
-            runloom.inspect.install_crash_handler("on")
-            runloom.inspect.install_crash_handler("all")
+            stackweave.inspect.install_crash_handler("on")
+            stackweave.inspect.install_crash_handler("on")
+            stackweave.inspect.install_crash_handler("all")
             assert rc.crash_handler_installed() is True
         finally:
-            runloom.inspect.uninstall_crash_handler()
+            stackweave.inspect.uninstall_crash_handler()
         assert rc.crash_handler_installed() is False
 
     def test_double_uninstall_safe(self):
-        runloom.inspect.install_crash_handler("on")
-        runloom.inspect.uninstall_crash_handler()
-        runloom.inspect.uninstall_crash_handler()  # second no-op must not crash
+        stackweave.inspect.install_crash_handler("on")
+        stackweave.inspect.uninstall_crash_handler()
+        stackweave.inspect.uninstall_crash_handler()  # second no-op must not crash
         assert rc.crash_handler_installed() is False
 
     def test_uninstall_when_never_installed(self):
         assert rc.crash_handler_installed() is False
-        runloom.inspect.uninstall_crash_handler()  # no-op, no error
+        stackweave.inspect.uninstall_crash_handler()  # no-op, no error
         assert rc.crash_handler_installed() is False
 
     def test_off_level_uninstalls(self):
         try:
-            runloom.inspect.install_crash_handler("on")
+            stackweave.inspect.install_crash_handler("on")
             assert rc.crash_handler_installed() is True
-            runloom.inspect.install_crash_handler("off")
+            stackweave.inspect.install_crash_handler("off")
             assert rc.crash_handler_installed() is False
         finally:
-            runloom.inspect.uninstall_crash_handler()
+            stackweave.inspect.uninstall_crash_handler()
 
     @pytest.mark.parametrize("level", ["on", "all", "backtrace", "pystack",
                                        "backtrace,pystack", "fiber"])
     def test_level_strings_parse_to_positive_flags(self, level):
         try:
-            flags = runloom.inspect.install_crash_handler(level)
+            flags = stackweave.inspect.install_crash_handler(level)
             assert isinstance(flags, int) and flags > 0
             assert rc.crash_handler_installed() is True
         finally:
-            runloom.inspect.uninstall_crash_handler()
+            stackweave.inspect.uninstall_crash_handler()
 
     def test_crash_thread_arm_is_noop_when_handler_off(self):
         # crash_thread_arm() must be safe (a no-op) when the handler isn't
@@ -567,12 +567,12 @@ class TestCrashInstallState:
             except BaseException as e:  # noqa: BLE001
                 errs.append(e)
         try:
-            runloom.inspect.install_crash_handler("on")
+            stackweave.inspect.install_crash_handler("on")
             th = raw_thread(t)
             th.join(5)
             assert not th.is_alive()
         finally:
-            runloom.inspect.uninstall_crash_handler()
+            stackweave.inspect.uninstall_crash_handler()
         assert errs == []
 
 
@@ -583,31 +583,31 @@ class TestCrashInstallState:
 class TestCrashClassification:
     def test_fiber_overflow_classified_single_thread(self):
         rc2, out = run_child("""
-            runloom.inspect.install_crash_handler("on")
+            stackweave.inspect.install_crash_handler("on")
             def boom():
-                runloom_c._crash_selftest_overflow()   # unbounded real-C recursion
+                stackweave_c._crash_selftest_overflow()   # unbounded real-C recursion
             # 256 KiB: honored exactly on both 3.13 (16 KiB floor) and FT-3.14
             # (256 KiB floor, the p226 fix in 289ecb99).
-            runloom_c.fiber(boom, 256 * 1024)
-            runloom_c.run()
+            stackweave_c.fiber(boom, 256 * 1024)
+            stackweave_c.run()
         """, timeout=40)
         assert rc2 in FAULT_RCS, (rc2, out)            # chained out -> cored
         assert "GOROUTINE STACK OVERFLOW" in out, out
         assert "guard page" in out, out                # named the CLEAN trap
         assert "256 KiB" in out, out
-        assert "=== runloom fiber dump" in out, out
+        assert "=== stackweave fiber dump" in out, out
 
     @mn_only
     def test_fiber_overflow_classified_under_mn(self):
         # The fault fires on a HUB thread -> proves the per-thread sigaltstack was
         # armed at hub start (runloom_coro_thread_init), so the handler can run.
         rc2, out = run_child("""
-            runloom.inspect.install_crash_handler("on")
-            runloom_c.mn_init(2)
+            stackweave.inspect.install_crash_handler("on")
+            stackweave_c.mn_init(2)
             def boom():
-                runloom_c._crash_selftest_overflow()
-            runloom_c.mn_fiber(boom)
-            runloom_c.mn_run()
+                stackweave_c._crash_selftest_overflow()
+            stackweave_c.mn_fiber(boom)
+            stackweave_c.mn_run()
         """, timeout=40)
         assert rc2 in FAULT_RCS, (rc2, out)
         assert "GOROUTINE STACK OVERFLOW" in out, out
@@ -615,16 +615,16 @@ class TestCrashClassification:
 
     def test_wild_pointer_not_classified_as_overflow(self):
         rc2, out = run_child("""
-            runloom.inspect.install_crash_handler("on")
+            stackweave.inspect.install_crash_handler("on")
             def boom():
                 ctypes.string_at(0)        # NULL deref -- not a guard page
-            runloom_c.fiber(boom)
-            runloom_c.run()
+            stackweave_c.fiber(boom)
+            stackweave_c.run()
         """, timeout=40)
         assert rc2 in FAULT_RCS, (rc2, out)
         assert "not in any fiber stack" in out, out
         assert "GOROUTINE STACK OVERFLOW" not in out, out
-        assert "=== runloom fiber dump" in out, out
+        assert "=== stackweave fiber dump" in out, out
 
     def test_overflow_in_offloaded_worker_thread(self):
         # A deliberate guard-page overflow that runs INSIDE an offloaded
@@ -633,13 +633,13 @@ class TestCrashClassification:
         # the handler must still run and the process must die from the fault
         # (no silent corruption, no hang).
         rc2, out = run_child("""
-            runloom.inspect.install_crash_handler("on")
+            stackweave.inspect.install_crash_handler("on")
             def main():
                 def w():
-                    runloom_c.blocking(runloom_c._crash_selftest_overflow)
-                runloom.fiber(w)
-                runloom.sleep(2.0)
-            runloom.run(4, main)
+                    stackweave_c.blocking(stackweave_c._crash_selftest_overflow)
+                stackweave.fiber(w)
+                stackweave.sleep(2.0)
+            stackweave.run(4, main)
         """, timeout=40)
         # The worker has an 8 MB OS-thread stack, so the recursion runs off it
         # into the thread's guard page: a fatal fault, contained + observed.
@@ -647,37 +647,37 @@ class TestCrashClassification:
         # If it faulted, the handler must have run (banner present) and NOT
         # mislabel a non-fiber-stack worker overflow as a fiber overflow.
         if rc2 in FAULT_RCS:
-            assert "runloom crash" in out, out
+            assert "stackweave crash" in out, out
 
     def test_no_interference_on_clean_run(self):
         rc2, out = run_child("""
-            runloom.inspect.install_crash_handler("all")
+            stackweave.inspect.install_crash_handler("all")
             results = []
             def work():
                 results.append(42)
-            runloom_c.fiber(work)
-            runloom_c.run()
+            stackweave_c.fiber(work)
+            stackweave_c.run()
             print("CLEAN-EXIT", results)
         """, timeout=30)
         assert rc2 == 0, out
         assert "CLEAN-EXIT [42]" in out, out
-        assert "runloom crash" not in out, out
+        assert "stackweave crash" not in out, out
 
     def test_report_file_receives_dump(self):
         with tempfile.TemporaryDirectory() as d:
             report = os.path.join(d, "crash.txt")
             rc2, out = run_child("""
-                runloom.inspect.install_crash_handler("on", %r)
+                stackweave.inspect.install_crash_handler("on", %r)
                 def boom():
-                    runloom_c._crash_selftest_overflow()
-                runloom_c.fiber(boom, 16384)
-                runloom_c.run()
+                    stackweave_c._crash_selftest_overflow()
+                stackweave_c.fiber(boom, 16384)
+                stackweave_c.run()
             """ % report, timeout=40)
             assert rc2 in FAULT_RCS, (rc2, out)
             assert os.path.exists(report), "report file not created"
             with open(report) as f:
                 text = f.read()
-            assert "runloom crash" in text, text
+            assert "stackweave crash" in text, text
             assert "GOROUTINE STACK OVERFLOW" in text, text
 
 
@@ -712,16 +712,16 @@ class TestTracebackSignal:
         # this process's SIGQUIT disposition or stderr.
         rc2, out = run_child("""
             import signal
-            runloom_c.install_traceback_signal()
+            stackweave_c.install_traceback_signal()
             def main():
                 def sleeper():
-                    runloom.sleep(0.5)
+                    stackweave.sleep(0.5)
                 for _ in range(3):
-                    runloom.fiber(sleeper)
-                runloom.sleep(0.05)
+                    stackweave.fiber(sleeper)
+                stackweave.sleep(0.05)
                 os.kill(os.getpid(), signal.SIGQUIT)   # -> raw dump to fd 2
-                runloom.sleep(0.05)
-            runloom.run(1, main)
+                stackweave.sleep(0.05)
+            stackweave.run(1, main)
             print("SURVIVED")
         """, timeout=30)
         assert rc2 == 0, out
@@ -830,14 +830,14 @@ class TestFiberStackStates:
         cap = {}
 
         def leaf():
-            runloom.sleep(0.05)
+            stackweave.sleep(0.05)
 
         def middle():
             leaf()
 
         def main():
-            runloom.fiber(middle)
-            runloom.sleep(0.01)
+            stackweave.fiber(middle)
+            stackweave.sleep(0.01)
             sleepers = [g for g in rc.fibers() if g["state"] == "sleep"]
             assert sleepers, [g["state"] for g in rc.fibers()]
             gid = sleepers[0]["id"]
@@ -845,7 +845,7 @@ class TestFiberStackStates:
             cap["frames"] = frames
 
         with hang_guard(20, "fiber_stack parked"):
-            runloom.run(1, main)
+            stackweave.run(1, main)
         funcs = [name for (_fn, _ln, name) in cap["frames"]]
         assert any(n.endswith("leaf") for n in funcs), funcs
 
@@ -860,7 +860,7 @@ class TestFiberStackStates:
             cap["res"] = [rc.fiber_stack(i) for i in ids]
 
         with hang_guard(20, "fiber_stack self"):
-            runloom.run(1, main)
+            stackweave.run(1, main)
         for rep, frames in cap["res"]:
             assert isinstance(frames, list)
 
@@ -873,14 +873,14 @@ class TestFiberStackStates:
             return 1
 
         def main():
-            g = runloom.fiber(quick)
+            g = stackweave.fiber(quick)
             # capture an id from the registry before it drains
             ids = [x["id"] for x in rc.fibers()]
-            runloom.sleep(0.02)   # let quick() finish + free
+            stackweave.sleep(0.02)   # let quick() finish + free
             cap["after"] = [rc.fiber_stack(i) for i in ids]
 
         with hang_guard(20, "fiber_stack after done"):
-            runloom.run(1, main)
+            stackweave.run(1, main)
         for rep, frames in cap["after"]:
             assert isinstance(frames, list)   # never a crash
 
@@ -888,12 +888,12 @@ class TestFiberStackStates:
         cap = {}
 
         def main():
-            runloom.fiber(lambda: runloom.sleep(0.05))
-            runloom.sleep(0.005)
+            stackweave.fiber(lambda: stackweave.sleep(0.05))
+            stackweave.sleep(0.005)
             cap["neg"] = rc.fiber_stack(-7)
             cap["huge"] = rc.fiber_stack(2 ** 60)
         with hang_guard(20, "fiber_stack bogus running"):
-            runloom.run(1, main)
+            stackweave.run(1, main)
         assert cap["neg"] == (None, [])
         assert cap["huge"] == (None, [])
 
@@ -907,14 +907,14 @@ class TestAgeTracking:
 
         def main():
             rc.set_introspect_timestamps(True)
-            runloom.fiber(lambda: runloom.sleep(0.06))
-            runloom.sleep(0.025)
+            stackweave.fiber(lambda: stackweave.sleep(0.06))
+            stackweave.sleep(0.025)
             g = [x for x in rc.fibers() if x["state"] == "sleep"][0]
             cap["age"] = g["age"]
 
         try:
             with hang_guard(20, "age on"):
-                runloom.run(1, main)
+                stackweave.run(1, main)
         finally:
             rc.set_introspect_timestamps(False)
         assert cap["age"] is not None
@@ -925,14 +925,14 @@ class TestAgeTracking:
         # is off -- the simple, clean case.  Run in a subprocess so an earlier
         # test that enabled timestamps + recycled a g can't poison this.
         rc2, out = run_child("""
-            runloom_c.set_introspect_timestamps(False)
+            stackweave_c.set_introspect_timestamps(False)
             cap = {}
             def main():
-                runloom.fiber(lambda: runloom.sleep(0.05))
-                runloom.sleep(0.02)
-                g = [x for x in runloom_c.fibers() if x["state"] == "sleep"][0]
+                stackweave.fiber(lambda: stackweave.sleep(0.05))
+                stackweave.sleep(0.02)
+                g = [x for x in stackweave_c.fibers() if x["state"] == "sleep"][0]
                 cap["age"] = g["age"]
-            runloom.run(1, main)
+            stackweave.run(1, main)
             print("AGE", cap["age"])
         """, timeout=30)
         assert rc2 == 0, out
@@ -949,19 +949,19 @@ class TestAgeTracking:
         # recycles the prior g -- its age must be None, but currently isn't.
         rc2, out = run_child("""
             def main1():
-                runloom_c.set_introspect_timestamps(True)
-                runloom.fiber(lambda: runloom.sleep(0.05))
-                runloom.sleep(0.02)
-                [x for x in runloom_c.fibers() if x["state"] == "sleep"][0]
-            runloom.run(1, main1)
-            runloom_c.set_introspect_timestamps(False)
+                stackweave_c.set_introspect_timestamps(True)
+                stackweave.fiber(lambda: stackweave.sleep(0.05))
+                stackweave.sleep(0.02)
+                [x for x in stackweave_c.fibers() if x["state"] == "sleep"][0]
+            stackweave.run(1, main1)
+            stackweave_c.set_introspect_timestamps(False)
             cap = {}
             def main2():
-                runloom.fiber(lambda: runloom.sleep(0.05))
-                runloom.sleep(0.02)
-                sl = [x for x in runloom_c.fibers() if x["state"] == "sleep"]
+                stackweave.fiber(lambda: stackweave.sleep(0.05))
+                stackweave.sleep(0.02)
+                sl = [x for x in stackweave_c.fibers() if x["state"] == "sleep"]
                 cap["ages"] = [g["age"] for g in sl]
-            runloom.run(1, main2)
+            stackweave.run(1, main2)
             print("AGES", cap["ages"])
         """, timeout=30)
         assert rc2 == 0, out
@@ -986,8 +986,8 @@ class TestIntrospectRaceSafety:
 
         def churn():
             for _ in range(150):
-                runloom.fiber(lambda: runloom.yield_())
-                runloom.yield_()
+                stackweave.fiber(lambda: stackweave.yield_())
+                stackweave.yield_()
 
         def hammer():
             for _ in range(250):
@@ -1001,18 +1001,18 @@ class TestIntrospectRaceSafety:
                 rc._diag_dump(fd)
                 for g in snap[:4]:
                     rc.fiber_stack(g["id"])   # racing churn frees some ids
-                runloom.yield_()
+                stackweave.yield_()
 
         def main():
             for _ in range(6):
-                runloom.fiber(churn)
+                stackweave.fiber(churn)
             for _ in range(3):
-                runloom.fiber(hammer)
-            runloom.sleep(0.6)
+                stackweave.fiber(hammer)
+            stackweave.sleep(0.6)
 
         try:
             with hang_guard(60, "introspect hammer"):
-                runloom.run(4, main)
+                stackweave.run(4, main)
         finally:
             os.close(fd)
             if os.path.exists(path):
@@ -1029,31 +1029,31 @@ class TestIntrospectRaceSafety:
         cap = {"viol": []}
 
         def sleeper():
-            runloom.sleep(0.4)
+            stackweave.sleep(0.4)
 
         def churn():
             for _ in range(100):
-                runloom.fiber(lambda: runloom.yield_())
-                runloom.yield_()
+                stackweave.fiber(lambda: stackweave.yield_())
+                stackweave.yield_()
 
         def hammer():
             for _ in range(200):
                 states = [g["state"] for g in rc.fibers()]
                 cap.setdefault("states", set()).update(states)
                 cap["viol"].append(rc._self_check(0))
-                runloom.yield_()
+                stackweave.yield_()
 
         def main():
             for _ in range(30):
-                runloom.fiber(sleeper)
+                stackweave.fiber(sleeper)
             for _ in range(4):
-                runloom.fiber(churn)
+                stackweave.fiber(churn)
             for _ in range(2):
-                runloom.fiber(hammer)
-            runloom.sleep(0.5)
+                stackweave.fiber(hammer)
+            stackweave.sleep(0.5)
 
         with hang_guard(60, "hammer diverse states"):
-            runloom.run(4, main)
+            stackweave.run(4, main)
         assert all(v == 0 for v in cap["viol"])
         assert "sleep" in cap.get("states", set())
 
@@ -1073,18 +1073,18 @@ class TestIntrospectRaceSafety:
                 rc.fibers()
                 cap["viol"].append(rc._self_check(0))
                 rc.dump_fibers(2) if False else None  # avoid noisy stderr
-                runloom.yield_()
+                stackweave.yield_()
 
         def main():
             for i in range(60):
-                runloom.fiber(lambda i=i: offloader(i))
+                stackweave.fiber(lambda i=i: offloader(i))
             for _ in range(3):
-                runloom.fiber(hammer)
+                stackweave.fiber(hammer)
             while len(done) < 60:
-                runloom.sleep(0.005)
+                stackweave.sleep(0.005)
 
         with hang_guard(60, "hammer+offload"):
-            runloom.run(4, main)
+            stackweave.run(4, main)
         assert sorted(done) == list(range(60))
         assert all(v == 0 for v in cap["viol"])
 
@@ -1114,28 +1114,28 @@ class TestDeadlockDiagnostics:
                 done.append(1)
 
             for _ in range(4):
-                runloom.fiber(parker)
+                stackweave.fiber(parker)
             # Barrier: all 4 captured their handle AND committed to the park.
             while len(handles) < 4 or rc.count_deadlocked() < 4:
-                runloom.sleep(0.002)
+                stackweave.sleep(0.002)
             cap["n"] = rc.count_deadlocked()
             for h in handles:
                 h.wake()                       # park_self returns -> fiber completes
             while len(done) < 4:               # all 4 fully drained (reaped)
-                runloom.sleep(0.002)
+                stackweave.sleep(0.002)
 
         with hang_guard(20, "count_deadlocked"):
-            runloom.run(1, main)
+            stackweave.run(1, main)
         assert cap["n"] >= 4
 
     def test_deadlock_raise_mode_subprocess(self):
         # A real deadlock (recv on an empty unbuffered chan with no sender) under
         # raise-mode must raise RuntimeError, not hang.
         rc2, out = run_child("""
-            import runloom.inspect as gi
+            import stackweave.inspect as gi
             gi.set_deadlock_mode('raise')
             try:
-                runloom.run(1, lambda: runloom_c.Chan(0).recv())
+                stackweave.run(1, lambda: stackweave_c.Chan(0).recv())
                 print('NO_RAISE')
             except RuntimeError as e:
                 print('RAISED_OK' if 'deadlock' in str(e).lower() else 'WRONG')
@@ -1145,9 +1145,9 @@ class TestDeadlockDiagnostics:
 
     def test_deadlock_off_mode_no_dump(self):
         rc2, out = run_child("""
-            import runloom.inspect as gi
+            import stackweave.inspect as gi
             gi.set_deadlock_mode('off')
-            runloom.run(1, lambda: runloom_c.Chan(0).recv())
+            stackweave.run(1, lambda: stackweave_c.Chan(0).recv())
             print('SURVIVED')
         """, timeout=30)
         assert rc2 == 0, out
@@ -1176,11 +1176,11 @@ class TestForkReset:
 
                 def main():
                     for _ in range(20):
-                        runloom.fiber(w)
-                    runloom.sleep(0.005)
-                runloom.run(1, main)
+                        stackweave.fiber(w)
+                    stackweave.sleep(0.005)
+                stackweave.run(1, main)
                 # Run a second cycle to be sure the reset left a usable runtime.
-                runloom.run(1, lambda: [runloom.fiber(w) for _ in range(5)])
+                stackweave.run(1, lambda: [stackweave.fiber(w) for _ in range(5)])
                 if len(out) == 25 and rc._self_check(0) == 0:
                     code = 0
             except BaseException:  # noqa: BLE001
@@ -1206,11 +1206,11 @@ class TestForkReset:
 
                 def main():
                     for i in range(6):
-                        runloom.fiber(lambda i=i: w(i))
+                        stackweave.fiber(lambda i=i: w(i))
                     t0 = time.monotonic()
                     while len(done) < 6 and time.monotonic() - t0 < 5:
-                        runloom.sleep(0.005)
-                runloom.run(1, main)
+                        stackweave.sleep(0.005)
+                stackweave.run(1, main)
                 if sorted(done) == [i * 2 for i in range(6)]:
                     code = 0
             except BaseException:  # noqa: BLE001
@@ -1247,48 +1247,48 @@ class TestForkReset:
 class TestFaultInjectionResilience:
     @mn_only
     def test_spawn_g_fault_once_clean_error(self):
-        # RUNLOOM_FAULT_SPAWN_G=once:12 fails the FIRST g allocation with
-        # ENOMEM(12).  Under runloom.run that first allocation IS the main fiber
+        # STACKWEAVE_FAULT_SPAWN_G=once:12 fails the FIRST g allocation with
+        # ENOMEM(12).  Under stackweave.run that first allocation IS the main fiber
         # (mn_fiber(main_fn)), so it must surface a clean MemoryError -- NOT a crash
         # -- and a SUBSEQUENT run() (fault already consumed) must succeed and
         # leave the runtime self-consistent.
         rc2, out = run_child("""
             raised = False
             try:
-                runloom.run(4, lambda: None)
+                stackweave.run(4, lambda: None)
             except MemoryError:
                 raised = True
             # fault is "once" -> consumed; the next run must work cleanly.
             done = []
             def main():
                 for _ in range(20):
-                    runloom.fiber(lambda: done.append(1))
-                runloom.sleep(0.02)
-            runloom.run(4, main)
-            print("RESULT", raised, len(done) == 20, runloom_c._self_check(0) == 0)
-        """, extra_env={"RUNLOOM_FAULT_SPAWN_G": "once:12"}, timeout=40)
+                    stackweave.fiber(lambda: done.append(1))
+                stackweave.sleep(0.02)
+            stackweave.run(4, main)
+            print("RESULT", raised, len(done) == 20, stackweave_c._self_check(0) == 0)
+        """, extra_env={"STACKWEAVE_FAULT_SPAWN_G": "once:12"}, timeout=40)
         assert rc2 == 0, out
         assert "RESULT True True True" in out, out
 
     def test_spawn_stack_fault_once_clean_error(self):
-        # RUNLOOM_FAULT_SPAWN_STACK=once:12 fails the coro/stack allocation for
+        # STACKWEAVE_FAULT_SPAWN_STACK=once:12 fails the coro/stack allocation for
         # the first spawn -> the spawn path must hit its coro==NULL cleanup and
         # raise MemoryError (here on the single-thread run's main-fiber spawn),
         # NOT crash; a subsequent run (fault consumed) must succeed cleanly.
         rc2, out = run_child("""
             raised = False
             try:
-                runloom.run(1, lambda: None)
+                stackweave.run(1, lambda: None)
             except MemoryError:
                 raised = True
             done = []
             def main():
                 for _ in range(20):
-                    runloom.fiber(lambda: done.append(1))
-                runloom.sleep(0.02)
-            runloom.run(1, main)
-            print("RESULT", raised, len(done) == 20, runloom_c._self_check(0) == 0)
-        """, extra_env={"RUNLOOM_FAULT_SPAWN_STACK": "once:12"}, timeout=40)
+                    stackweave.fiber(lambda: done.append(1))
+                stackweave.sleep(0.02)
+            stackweave.run(1, main)
+            print("RESULT", raised, len(done) == 20, stackweave_c._self_check(0) == 0)
+        """, extra_env={"STACKWEAVE_FAULT_SPAWN_STACK": "once:12"}, timeout=40)
         assert rc2 == 0, out
         assert "RESULT True True True" in out, out
 
@@ -1319,17 +1319,17 @@ class TestEnvGatedModes:
             done = []
             def main():
                 def w(i):
-                    runloom_c.blocking(time.sleep, 0.03)
+                    stackweave_c.blocking(time.sleep, 0.03)
                     done.append(i)
                 for i in range(10):
-                    runloom.fiber(lambda i=i: w(i))
+                    stackweave.fiber(lambda i=i: w(i))
                 while len(done) < 10:
-                    runloom_c.fibers(); runloom_c._self_check(0)
-                    runloom.sleep(0.005)
-            runloom.run(4, main)
-            print("DONE", len(done), runloom_c._self_check(0))
-        """, extra_env={"RUNLOOM_SYSMON": "1", "RUNLOOM_SYSMON_QUIET": "1",
-                        "RUNLOOM_SYSMON_MS": "8"}, timeout=40)
+                    stackweave_c.fibers(); stackweave_c._self_check(0)
+                    stackweave.sleep(0.005)
+            stackweave.run(4, main)
+            print("DONE", len(done), stackweave_c._self_check(0))
+        """, extra_env={"STACKWEAVE_SYSMON": "1", "STACKWEAVE_SYSMON_QUIET": "1",
+                        "STACKWEAVE_SYSMON_MS": "8"}, timeout=40)
         assert rc2 == 0, out
         assert "DONE 10 0" in out, out
 
@@ -1341,23 +1341,23 @@ class TestEnvGatedModes:
             done = []
             def main():
                 def w(i):
-                    runloom_c.blocking(time.sleep, 0.05)
+                    stackweave_c.blocking(time.sleep, 0.05)
                     done.append(i)
                 for i in range(12):
-                    runloom.fiber(lambda i=i: w(i))
+                    stackweave.fiber(lambda i=i: w(i))
                 while len(done) < 12:
-                    runloom.sleep(0.005)
-            runloom.run(4, main)
+                    stackweave.sleep(0.005)
+            stackweave.run(4, main)
             print("DONE", len(done))
-            assert runloom_c._self_check(0) == 0
+            assert stackweave_c._self_check(0) == 0
             print("OK")
-        """, extra_env={"RUNLOOM_HANDOFF": "1", "RUNLOOM_HANDOFF_POOL": "2"},
+        """, extra_env={"STACKWEAVE_HANDOFF": "1", "STACKWEAVE_HANDOFF_POOL": "2"},
             timeout=40)
         assert rc2 == 0, out
         assert "DONE 12" in out and "OK" in out, out
 
     def test_unsafe_migration_gated_off_warns_not_crash(self):
-        # RUNLOOM_PER_G_TSTATE without RUNLOOM_ALLOW_UNSAFE_MIGRATION must warn to
+        # STACKWEAVE_PER_G_TSTATE without STACKWEAVE_ALLOW_UNSAFE_MIGRATION must warn to
         # stderr and run the DEFAULT scheduler (KNOWN-CRASH if actually enabled --
         # we never set ALLOW_UNSAFE_MIGRATION).  The workload must complete.
         rc2, out = run_child("""
@@ -1366,11 +1366,11 @@ class TestEnvGatedModes:
                 def w():
                     done.append(1)
                 for _ in range(20):
-                    runloom.fiber(w)
-                runloom.sleep(0.02)
-            runloom.run(4, main)
+                    stackweave.fiber(w)
+                stackweave.sleep(0.02)
+            stackweave.run(4, main)
             print("DONE", len(done))
-        """, extra_env={"RUNLOOM_PER_G_TSTATE": "1"}, timeout=40)
+        """, extra_env={"STACKWEAVE_PER_G_TSTATE": "1"}, timeout=40)
         assert rc2 == 0, out
         assert "DONE 20" in out, out
 
@@ -1403,17 +1403,17 @@ class TestForeignThreadIntrospection:
 
         def churn():
             for _ in range(150):
-                runloom.fiber(lambda: runloom.yield_())
-                runloom.yield_()
+                stackweave.fiber(lambda: stackweave.yield_())
+                stackweave.yield_()
 
         def main():
             for _ in range(6):
-                runloom.fiber(churn)
-            runloom.sleep(0.4)
+                stackweave.fiber(churn)
+            stackweave.sleep(0.4)
 
         try:
             with hang_guard(60, "foreign introspect"):
-                runloom.run(4, main)
+                stackweave.run(4, main)
         finally:
             stop[0] = True
             th.join(5)
@@ -1495,7 +1495,7 @@ class TestBlockingSpuriousWake:
     @mn_only
     def test_spurious_wake_under_mn_does_not_uaf(self):
         # Same, under M:N (the wake routes through runloom_mn_wake_g on the g's
-        # recorded hub).  runloom.fiber returns None under M:N, so each offloader
+        # recorded hub).  stackweave.fiber returns None under M:N, so each offloader
         # PUBLISHES ITS OWN handle (rc.current_g()) BEFORE it parks in blocking;
         # a single waker fiber then hammers wake() on every published handle the
         # whole time the offloads are in flight -- so spurious wakes land on
@@ -1515,17 +1515,17 @@ class TestBlockingSpuriousWake:
                 for h in handles:
                     if h is not None:
                         h.wake()
-                runloom.sleep(0.001)
+                stackweave.sleep(0.001)
 
         def main():
             for i in range(N):
-                runloom.fiber(lambda i=i: offloader(i))
-            runloom.fiber(waker)
+                stackweave.fiber(lambda i=i: offloader(i))
+            stackweave.fiber(waker)
             while any(r is None for r in results):
-                runloom.sleep(0.003)
+                stackweave.sleep(0.003)
 
         with hang_guard(60, "spurious wake mn"):
-            runloom.run(4, main)
+            stackweave.run(4, main)
         # set-equality integrity: every worker's OWN value, no cross-talk, none lost
         assert results == [("v", i) for i in range(N)]
         assert rc._self_check(0) == 0
@@ -1580,11 +1580,11 @@ class TestBlockingResultEdges:
             got["r"] = rc.blocking(f, 1, 2, c=3)
 
         def main():
-            runloom.fiber(w)
+            stackweave.fiber(w)
             while "r" not in got:
-                runloom.sleep(0.003)
+                stackweave.sleep(0.003)
         with hang_guard(20, "mn kwargs"):
-            runloom.run(2, main)
+            stackweave.run(2, main)
         assert got["r"] == (1, 2, 3, 9)
 
     @mn_only
@@ -1606,11 +1606,11 @@ class TestBlockingResultEdges:
             cap["r"] = rc.blocking(outer)
 
         def main():
-            runloom.fiber(w)
+            stackweave.fiber(w)
             while "r" not in cap:
-                runloom.sleep(0.003)
+                stackweave.sleep(0.003)
         with hang_guard(20, "nested blocking"):
-            runloom.run(2, main)
+            stackweave.run(2, main)
         assert cap["r"] == 42
 
 
@@ -1636,12 +1636,12 @@ class TestBlockingObjectStress:
 
         def main():
             for i in range(N):
-                runloom.fiber(lambda i=i: w(i))
+                stackweave.fiber(lambda i=i: w(i))
             while any(o is None for o in out):
-                runloom.sleep(0.002)
+                stackweave.sleep(0.002)
 
         with hang_guard(60, "object stress"):
-            runloom.run(4, main)
+            stackweave.run(4, main)
         expected = [tuple(("g", i, k, i * 1000 + k) for k in range(5))
                     for i in range(N)]
         assert out == expected
@@ -1664,11 +1664,11 @@ class TestBlockingObjectStress:
 
         def main():
             for i in range(20):
-                runloom.fiber(lambda i=i: w(i))
+                stackweave.fiber(lambda i=i: w(i))
             while any(o is None for o in out):
-                runloom.sleep(0.003)
+                stackweave.sleep(0.003)
         with hang_guard(30, "identity stress"):
-            runloom.run(4, main)
+            stackweave.run(4, main)
         assert all(out[i] is sentinels[i] for i in range(20))
 
 
@@ -1716,19 +1716,19 @@ class TestDiagArgValidation:
         # An unrecognised level string parses to RUNLOOM_CRASH_DEFAULT (not an
         # error) -- documented "on/1/unknown -> default" behaviour.
         try:
-            flags = runloom.inspect.install_crash_handler("totally-bogus-level")
+            flags = stackweave.inspect.install_crash_handler("totally-bogus-level")
             assert isinstance(flags, int) and flags > 0
             assert rc.crash_handler_installed() is True
         finally:
-            runloom.inspect.uninstall_crash_handler()
+            stackweave.inspect.uninstall_crash_handler()
         assert rc.crash_handler_installed() is False
 
     def test_install_crash_handler_empty_level_uses_default(self):
         try:
-            flags = runloom.inspect.install_crash_handler("")
+            flags = stackweave.inspect.install_crash_handler("")
             assert isinstance(flags, int) and flags > 0
         finally:
-            runloom.inspect.uninstall_crash_handler()
+            stackweave.inspect.uninstall_crash_handler()
 
 
 # ---------------------------------------------------------------------------
@@ -1742,15 +1742,15 @@ def test_crash_report_file_unopenable_is_silently_ignored():
     # contract for a bad argument.  The handler must NOT have been installed
     # (the early return is before any signal state is touched).
     rc2, out = run_child("""
-        import runloom
+        import stackweave
         bad = "/this/parent/does/not/exist/crash_report.txt"
         raised = None
         try:
-            runloom.inspect.install_crash_handler("on", bad)
+            stackweave.inspect.install_crash_handler("on", bad)
         except OSError as e:
             raised = e
         print("RAISED_OSERROR", raised is not None)
-        print("INSTALLED", runloom_c.crash_handler_installed())
+        print("INSTALLED", stackweave_c.crash_handler_installed())
         print("FILE_EXISTS", os.path.exists(bad))
     """, timeout=30)
     assert rc2 == 0, out
@@ -1802,9 +1802,9 @@ class TestDeadlockWarnMode:
         # mode=1 (warn): a real deadlock must DUMP a diagnostic to stderr and
         # let run() RETURN (the drain gives up), NOT raise and NOT hang.
         rc2, out = run_child("""
-            import runloom.inspect as gi
+            import stackweave.inspect as gi
             gi.set_deadlock_mode('warn')
-            runloom.run(1, lambda: runloom_c.Chan(0).recv())
+            stackweave.run(1, lambda: stackweave_c.Chan(0).recv())
             print("SURVIVED_WARN")
         """, timeout=30)
         assert rc2 == 0, out
@@ -1819,23 +1819,23 @@ class TestDeadlockWarnMode:
 # ---------------------------------------------------------------------------
 class TestSpawnTstateFault:
     def test_spawn_tstate_fault_once_clean_error_single_thread(self):
-        # RUNLOOM_FAULT_SPAWN_TSTATE=once:12 fails the per-g tstate allocation on
+        # STACKWEAVE_FAULT_SPAWN_TSTATE=once:12 fails the per-g tstate allocation on
         # the first spawn -> the spawn path must hit its cleanup and raise a
         # clean Python error (not crash); a subsequent fault-consumed run works.
         rc2, out = run_child("""
             raised = False
             try:
-                runloom.run(1, lambda: None)
+                stackweave.run(1, lambda: None)
             except (MemoryError, RuntimeError, OSError):
                 raised = True
             done = []
             def main():
                 for _ in range(15):
-                    runloom.fiber(lambda: done.append(1))
-                runloom.sleep(0.02)
-            runloom.run(1, main)
-            print("RESULT", raised, len(done) == 15, runloom_c._self_check(0) == 0)
-        """, extra_env={"RUNLOOM_FAULT_SPAWN_TSTATE": "once:12"}, timeout=40)
+                    stackweave.fiber(lambda: done.append(1))
+                stackweave.sleep(0.02)
+            stackweave.run(1, main)
+            print("RESULT", raised, len(done) == 15, stackweave_c._self_check(0) == 0)
+        """, extra_env={"STACKWEAVE_FAULT_SPAWN_TSTATE": "once:12"}, timeout=40)
         assert rc2 == 0, out
         # Either the fault surfaced as a clean error, or this build injects the
         # tstate fault elsewhere -- in BOTH cases there must be NO crash and the
@@ -1849,17 +1849,17 @@ class TestSpawnTstateFault:
         rc2, out = run_child("""
             raised = False
             try:
-                runloom.run(4, lambda: None)
+                stackweave.run(4, lambda: None)
             except (MemoryError, RuntimeError, OSError):
                 raised = True
             done = []
             def main():
                 for _ in range(20):
-                    runloom.fiber(lambda: done.append(1))
-                runloom.sleep(0.02)
-            runloom.run(4, main)
-            print("RESULT", len(done) == 20, runloom_c._self_check(0) == 0)
-        """, extra_env={"RUNLOOM_FAULT_SPAWN_TSTATE": "once:12"}, timeout=40)
+                    stackweave.fiber(lambda: done.append(1))
+                stackweave.sleep(0.02)
+            stackweave.run(4, main)
+            print("RESULT", len(done) == 20, stackweave_c._self_check(0) == 0)
+        """, extra_env={"STACKWEAVE_FAULT_SPAWN_TSTATE": "once:12"}, timeout=40)
         assert rc2 == 0, out
         assert "RESULT True True" in out, out
 
@@ -1876,14 +1876,14 @@ class TestResetAfterForkIdempotent:
         # in-process conftest invariants.
         rc2, out = run_child("""
             # reset twice back-to-back, then run -- must be a clean no-op-ish reset
-            runloom_c.reset_after_fork()
-            runloom_c.reset_after_fork()
-            assert runloom_c.fiber_count() == 0
-            assert runloom_c.fibers() == []
+            stackweave_c.reset_after_fork()
+            stackweave_c.reset_after_fork()
+            assert stackweave_c.fiber_count() == 0
+            assert stackweave_c.fibers() == []
             done = []
-            runloom.run(1, lambda: [runloom.fiber(lambda: done.append(1)) for _ in range(10)])
-            print("RESULT", len(done) == 10, runloom_c._self_check(0) == 0,
-                  runloom_c.fiber_count() == 0)
+            stackweave.run(1, lambda: [stackweave.fiber(lambda: done.append(1)) for _ in range(10)])
+            print("RESULT", len(done) == 10, stackweave_c._self_check(0) == 0,
+                  stackweave_c.fiber_count() == 0)
         """, timeout=30)
         assert rc2 == 0, out
         assert "RESULT True True True" in out, out
@@ -1903,20 +1903,20 @@ class TestConcurrentCrash:
         # hang, not a double-dump interleave, not a wedged limp-on).  Contained
         # in a subprocess as a negative returncode.
         rc2, out = run_child("""
-            runloom.inspect.install_crash_handler("on")
-            runloom_c.mn_init(2)
+            stackweave.inspect.install_crash_handler("on")
+            stackweave_c.mn_init(2)
             def boom():
-                runloom_c._crash_selftest_overflow()
-            runloom_c.mn_fiber(boom, 16384)
-            runloom_c.mn_fiber(boom, 16384)
-            runloom_c.mn_run()
+                stackweave_c._crash_selftest_overflow()
+            stackweave_c.mn_fiber(boom, 16384)
+            stackweave_c.mn_fiber(boom, 16384)
+            stackweave_c.mn_run()
             print("UNREACHABLE")
         """, timeout=40)
         assert rc2 in FAULT_RCS, (rc2, out)             # it died from the fault
         assert "UNREACHABLE" not in out, out
         # Exactly ONE crash banner -- the latch prevented an interleaved second
         # full dump (a second thread that won the latch would print a 2nd banner).
-        assert out.count("======================== runloom crash") == 1, out
+        assert out.count("======================== stackweave crash") == 1, out
         assert "GOROUTINE STACK OVERFLOW" in out, out
 
 
@@ -1973,15 +1973,15 @@ class TestBlockingTeardownHarder:
         rc2, out = run_child("""
             done = []
             def w(i):
-                runloom_c.blocking(time.sleep, 0.05)
+                stackweave_c.blocking(time.sleep, 0.05)
                 done.append(i)
             def main():
                 for i in range(30):
-                    runloom.fiber(lambda i=i: w(i))
-                runloom.sleep(0.005)   # return almost immediately; all still pending
-            runloom.run(4, main)
+                    stackweave.fiber(lambda i=i: w(i))
+                stackweave.sleep(0.005)   # return almost immediately; all still pending
+            stackweave.run(4, main)
             print("DONE", len(done))
-            assert runloom_c._self_check(0) == 0
+            assert stackweave_c._self_check(0) == 0
             print("SELFCHECK_OK")
         """, timeout=40)
         assert rc2 == 0, out
@@ -1995,15 +1995,15 @@ class TestBlockingTeardownHarder:
         rc2, out = run_child("""
             done = []
             def w(i):
-                runloom_c.blocking(time.sleep, 0.01)
+                stackweave_c.blocking(time.sleep, 0.01)
                 done.append(i)
             def main():
                 for i in range(20):
-                    runloom.fiber(lambda i=i: w(i))
-                runloom.sleep(0.005)
-            runloom.run(4, main)
+                    stackweave.fiber(lambda i=i: w(i))
+                stackweave.sleep(0.005)
+            stackweave.run(4, main)
             print("DONE", sorted(done) == list(range(20)))
-        """, extra_env={"RUNLOOM_BLOCKPOOL_WORKERS": "1"}, timeout=40)
+        """, extra_env={"STACKWEAVE_BLOCKPOOL_WORKERS": "1"}, timeout=40)
         assert rc2 == 0, out
         assert "DONE True" in out, out
 

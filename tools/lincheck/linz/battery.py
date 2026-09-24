@@ -35,17 +35,17 @@ import specs    # noqa: E402
 REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
 # Record against the interpreter running the battery (sys.executable) by default,
 # so this works on ANY build: a hosted CI runner, a release prefix, or a dev
-# pyenv.  Set RUNLOOM_PYTHON to record against a DIFFERENT interpreter than the
+# pyenv.  Set STACKWEAVE_PYTHON to record against a DIFFERENT interpreter than the
 # caller.  (Previously hard-coded to ~/.pyenv/versions/3.14.4t/bin/python3, which
 # only existed on the dev box -- CI hit FileNotFoundError.)
-PY = os.environ.get("RUNLOOM_PYTHON", sys.executable)
+PY = os.environ.get("STACKWEAVE_PYTHON", sys.executable)
 ALL = ["chan", "mutex", "rwmutex", "semaphore", "waitgroup", "event"]
 
 # Primitives whose seeded history is bit/observably reproducible: the native
 # families parked on the C ready-ring, which the seeded baton fully orders.  For
 # these a same-seed observable divergence is a REAL new determinism regression.
 #
-# The Co* foreign-safe family (runloom.sync.Lock == CoLock, runloom.sync.Event ==
+# The Co* foreign-safe family (stackweave.sync.Lock == CoLock, stackweave.sync.Event ==
 # CoEvent) wakes multiple parked waiters in an order NOT governed by the seed
 # (derived from non-seed-stable object identity, contract #9), so their schedule
 # jitters run-to-run.  That is a determinism-COVERAGE gap, not a correctness bug:
@@ -57,7 +57,7 @@ SEED_DETERMINISTIC = {"chan", "rwmutex", "semaphore", "waitgroup"}
 
 
 def hermetic_env():
-    env = {k: v for k, v in os.environ.items() if not k.startswith("RUNLOOM_")}
+    env = {k: v for k, v in os.environ.items() if not k.startswith("STACKWEAVE_")}
     env["PYTHON_GIL"] = "0"
     env["PYTHONHASHSEED"] = "0"            # int observables only, but pin anyway
     env["PYTHON_TLBC"] = "0"              # no first-run re-exec banner

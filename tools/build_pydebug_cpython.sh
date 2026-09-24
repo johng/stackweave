@@ -3,12 +3,12 @@
 # CPython (in-tree, no install).  This is the OBJECT-SEAM assertion lens: CPython's
 # own internal asserts -- tstate ownership (pystate.c), gilstate, biased-refcount
 # merge, mimalloc heap->thread binding -- fire at the EXACT source line that a
-# release build would silently corrupt (the class every recent runloom seam bug
+# release build would silently corrupt (the class every recent stackweave seam bug
 # lived on).  A --with-pydebug build also exposes sys.gettotalrefcount(), the
 # net-zero refleak oracle (tools/refleak_hunt.py).
 #
 # Unlike build_tsan_cpython.sh there is NO sanitizer instrumentation, so NO
-# setarch/ASLR dance is needed.  Point RUNLOOM_PYDEBUG_PYTHON (tools/run_pydebug.sh)
+# setarch/ASLR dance is needed.  Point STACKWEAVE_PYDEBUG_PYTHON (tools/run_pydebug.sh)
 # or SEAM_PYTHON (tools/seamfuzz) at the resulting <SRC>/python.
 #
 # Usage:  tools/build_pydebug_cpython.sh [VERSION]

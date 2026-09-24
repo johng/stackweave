@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# build_patched_cpython.sh -- fetch a PINNED CPython release, apply runloom's
+# build_patched_cpython.sh -- fetch a PINNED CPython release, apply stackweave's
 # migration patches at ZERO FUZZ, build it free-threaded with both feature flags,
 # and install it into a self-contained prefix.
 #
@@ -89,7 +89,7 @@ rl_step "configure (free-threaded, both features, no LTO)"
 ) > "$WORK/configure-$VERSION.log" 2>&1 \
     || { tail -40 "$WORK/configure-$VERSION.log" >&2; rl_die "configure failed (full log: $WORK/configure-$VERSION.log)"; }
 
-# CPPFLAGS reaches CPython's own TUs only.  Extension modules -- runloom's
+# CPPFLAGS reaches CPython's own TUs only.  Extension modules -- stackweave's
 # included -- include the INSTALLED pyconfig.h, and alloc-home changes the
 # _PyThreadStateImpl layout.  Both must agree or offsets shift silently.
 rl_step "arm feature defines in pyconfig.h (for extension modules)"

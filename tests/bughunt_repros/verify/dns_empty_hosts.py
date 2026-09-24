@@ -13,7 +13,7 @@ try:
 except Exception as e:
     print("stock gethostbyname raised:", type(e).__name__, e)
 
-import runloom.monkey as monkey
+import stackweave.monkey as monkey
 monkey.patch()
 
 print("--- patched ---")

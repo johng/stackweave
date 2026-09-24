@@ -292,7 +292,7 @@ static int runloom_global_stack_cap(void)
 {
     int mode = __atomic_load_n(&runloom_stack_cap_mode, __ATOMIC_RELAXED);
     if (mode < 0) {
-        const char *e = getenv("RUNLOOM_STACK_DEPOT_CAP");
+        const char *e = getenv("STACKWEAVE_STACK_DEPOT_CAP");
         mode = 1;                                   /* default AUTO */
         if (e != NULL) {
             long v = atol(e);
@@ -494,7 +494,7 @@ static int runloom_arena_numa_on(void)
     static int v = -1;
     int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
     if (cur < 0) {
-        const char *e = getenv("RUNLOOM_STACK_ARENA_NUMA");
+        const char *e = getenv("STACKWEAVE_STACK_ARENA_NUMA");
         cur = (e != NULL && *e != '0' && *e != '\0') ? 1 : 0;
         __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
     }
@@ -522,7 +522,7 @@ static int runloom_stack_arena_on(void)
     static int v = -1;
     int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
     if (cur < 0) {
-        const char *e = getenv("RUNLOOM_STACK_ARENA");
+        const char *e = getenv("STACKWEAVE_STACK_ARENA");
         cur = (e != NULL && *e != '0' && *e != '\0') ? 1 : 0;
         __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
     }
@@ -550,7 +550,7 @@ static int runloom_arena_huge_mode(void)
     static int v = -1;
     int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
     if (cur < 0) {
-        const char *e = getenv("RUNLOOM_STACK_ARENA_HUGE");
+        const char *e = getenv("STACKWEAVE_STACK_ARENA_HUGE");
         if (e == NULL || *e == '\0' || *e == '0') cur = 0;
         else if (strcmp(e, "hugetlb") == 0 || *e == '2') cur = 2;
         else cur = 1;                       /* "1" / "thp" / anything else -> THP */
@@ -608,7 +608,7 @@ static int runloom_arena_class_for_locked(size_t slot, int node)
     }
     if (freecls < 0) return -1;                 /* no free class for a new (size,node) */
     {
-        const char *n = getenv("RUNLOOM_STACK_ARENA_N");
+        const char *n = getenv("STACKWEAVE_STACK_ARENA_N");
         size_t cap = (n != NULL && *n) ? (size_t)strtoull(n, NULL, 0) : 1200000;
         char *base = NULL;
         if (runloom_arena_map(cap * slot, &base) != 0) return -1;
@@ -786,7 +786,7 @@ static void runloom_stack_madv_reclaim(void *addr, size_t len)
     }
 #endif
     if (flag == -1) {
-        const char *e = getenv("RUNLOOM_STACK_MADV");
+        const char *e = getenv("STACKWEAVE_STACK_MADV");
         if (e != NULL && strcmp(e, "dontneed") == 0) {
 #if defined(MADV_DONTNEED)
             flag = MADV_DONTNEED;
@@ -842,7 +842,7 @@ static int runloom_gwp_stack_k(void)
     int v = __atomic_load_n(&k, __ATOMIC_RELAXED);
     if (v >= 0) return v;
     {
-        const char *e = getenv("RUNLOOM_GWP_STACK");
+        const char *e = getenv("STACKWEAVE_GWP_STACK");
         v = (e != NULL && *e != '\0') ? atoi(e) : 0;
         if (v < 0) v = 0;
         __atomic_store_n(&k, v, __ATOMIC_RELAXED);
@@ -885,7 +885,7 @@ static void runloom_stack_release(void *stack, size_t size)
              * fully resets when the class drains to empty. */
             static int atrim = -1;
             if (__atomic_load_n(&atrim, __ATOMIC_RELAXED) < 0) {
-                const char *e = getenv("RUNLOOM_STACK_ARENA_TRIM");
+                const char *e = getenv("STACKWEAVE_STACK_ARENA_TRIM");
                 __atomic_store_n(&atrim, (e && *e == '1') ? 1 : 0, __ATOMIC_RELAXED);
             }
             if (__atomic_load_n(&atrim, __ATOMIC_RELAXED) == 1) {
@@ -1053,7 +1053,7 @@ static int runloom_scrub_resident_mode(void)
          * page-drop/re-fault).  Opt out with RUNLOOM_STACK_SCRUB_RESIDENT=0 to get
          * the old DONTNEED wipe -- which ALSO reclaims RSS, so the "memory" trade
          * (optimize("memory")) sets =0 for tight-RSS hosts. */
-        const char *e = getenv("RUNLOOM_STACK_SCRUB_RESIDENT");
+        const char *e = getenv("STACKWEAVE_STACK_SCRUB_RESIDENT");
         cur = (e != NULL && e[0] == '0') ? 0 : 1;
         __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
     }
@@ -1815,7 +1815,7 @@ static int runloom_pcreate_b_threads(void)
     static int mode = -2;              /* -2 unread; -1 auto; >=0 fixed */
     int m = __atomic_load_n(&mode, __ATOMIC_RELAXED);
     if (m == -2) {
-        const char *e = getenv("RUNLOOM_GON_PCREATE_B");
+        const char *e = getenv("STACKWEAVE_GON_PCREATE_B");
         if (e == NULL || !*e || e[0] == '0') m = 0;
         else if (strcmp(e, "auto") == 0)     m = -1;
         else { m = atoi(e); if (m < 0) m = 0; if (m > 64) m = 64; }
@@ -1854,7 +1854,7 @@ int runloom_coro_bulk_init(void *coro_arena, size_t coro_stride,
     static int fresh_defer = -1;
     int defer = __atomic_load_n(&fresh_defer, __ATOMIC_RELAXED);
     if (defer < 0) {
-        const char *e = getenv("RUNLOOM_GON_FRESH");
+        const char *e = getenv("STACKWEAVE_GON_FRESH");
         defer = (e != NULL && *e == '1') ? 1 : 0;
         __atomic_store_n(&fresh_defer, defer, __ATOMIC_RELAXED);
     }
@@ -1915,7 +1915,7 @@ int runloom_coro_bulk_init(void *coro_arena, size_t coro_stride,
     {
         static int populate = -1;
         if (__atomic_load_n(&populate, __ATOMIC_RELAXED) < 0) {
-            const char *e = getenv("RUNLOOM_GON_POPULATE");
+            const char *e = getenv("STACKWEAVE_GON_POPULATE");
             __atomic_store_n(&populate, (e && *e == '1') ? 1 : 0, __ATOMIC_RELAXED);
         }
         if (__atomic_load_n(&populate, __ATOMIC_RELAXED) == 1) {
@@ -1956,7 +1956,7 @@ void runloom_coro_arena_release(size_t start_slot, long n, size_t stack_size, in
      * the spawn-a-burst-then-go-idle case where returning RSS matters more. */
     static int trim = -1;
     if (trim < 0) {
-        const char *e = getenv("RUNLOOM_GON_TRIM");
+        const char *e = getenv("STACKWEAVE_GON_TRIM");
         __atomic_store_n(&trim, (e && *e == '1') ? 1 : 0, __ATOMIC_RELAXED);
     }
     if (trim) {
@@ -2121,7 +2121,7 @@ static int runloom_coro_maybe_grow(runloom_coro_t *c)
     int on = __atomic_load_n(&grow_on, __ATOMIC_RELAXED);
     uintptr_t sp, lo, headroom, quarter;
     if (on < 0) {
-        const char *e = getenv("RUNLOOM_STACK_GROW");
+        const char *e = getenv("STACKWEAVE_STACK_GROW");
         on = (e != NULL && *e == '0') ? 0 : 1;     /* default ON */
         __atomic_store_n(&grow_on, on, __ATOMIC_RELAXED);
     }
@@ -2463,7 +2463,7 @@ void runloom_coro_park(runloom_coro_t *c)
     static int park_dontneed = -1;
     int on = __atomic_load_n(&park_dontneed, __ATOMIC_RELAXED);
     if (on < 0) {
-        const char *e = getenv("RUNLOOM_STACK_PARK_DONTNEED");
+        const char *e = getenv("STACKWEAVE_STACK_PARK_DONTNEED");
         on = (e != NULL && *e == '1') ? 1 : 0;
         __atomic_store_n(&park_dontneed, on, __ATOMIC_RELAXED);
     }

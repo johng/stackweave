@@ -16,9 +16,9 @@ import time
 
 import pytest
 
-import runloom
-import runloom_c
-from runloom import monkey
+import stackweave
+import stackweave_c
+from stackweave import monkey
 
 monkey.patch()
 import threading  # noqa: E402  (after patch -> cooperative primitives)
@@ -33,8 +33,8 @@ def _drive(fn):
         except BaseException as e:  # noqa: BLE001
             box[1] = e
 
-    runloom_c.fiber(runner)
-    runloom_c.run()
+    stackweave_c.fiber(runner)
+    stackweave_c.run()
     if box[1] is not None:
         raise box[1]
     return box[0]
@@ -48,10 +48,10 @@ def test_event_timeout_then_wake():
         dt = time.monotonic() - t0
         assert r is False and 0.12 < dt < 0.6, (r, dt)
         out = []
-        runloom.fiber(lambda: out.append(ev.wait(2.0)))
-        runloom.sleep(0.03)
+        stackweave.fiber(lambda: out.append(ev.wait(2.0)))
+        stackweave.sleep(0.03)
         ev.set()
-        runloom.sleep(0.05)
+        stackweave.sleep(0.05)
         assert out == [True], out
         return True
     assert _drive(body)
@@ -70,11 +70,11 @@ def test_condition_timeout_then_wake():
         def w():
             with cond:
                 out.append(cond.wait(2.0))
-        runloom.fiber(w)
-        runloom.sleep(0.03)
+        stackweave.fiber(w)
+        stackweave.sleep(0.03)
         with cond:
             cond.notify()
-        runloom.sleep(0.05)
+        stackweave.sleep(0.05)
         assert out == [True], out
         return True
     assert _drive(body)
@@ -88,10 +88,10 @@ def test_semaphore_timeout_then_wake():
         dt = time.monotonic() - t0
         assert r is False and 0.12 < dt < 0.6, (r, dt)
         out = []
-        runloom.fiber(lambda: out.append(sem.acquire(timeout=2.0)))
-        runloom.sleep(0.03)
+        stackweave.fiber(lambda: out.append(sem.acquire(timeout=2.0)))
+        stackweave.sleep(0.03)
         sem.release()
-        runloom.sleep(0.05)
+        stackweave.sleep(0.05)
         assert out == [True], out
         return True
     assert _drive(body)
@@ -102,14 +102,14 @@ def test_timed_waits_spawn_no_waker_fibers():
     one waker fiber each (the old design spawned ~N extra)."""
     def body():
         ev = threading.Event()
-        base = runloom_c.live_fibers()
+        base = stackweave_c.live_fibers()
         n = 200
         for _ in range(n):
-            runloom.fiber(lambda: ev.wait(5.0))
-        runloom.sleep(0.2)            # all parked on their timed wait
-        peak = runloom_c.live_fibers()
+            stackweave.fiber(lambda: ev.wait(5.0))
+        stackweave.sleep(0.2)            # all parked on their timed wait
+        peak = stackweave_c.live_fibers()
         ev.set()
-        runloom.sleep(0.2)
+        stackweave.sleep(0.2)
         # Old: ~n waiters + ~n wakers.  New: ~n.  Allow slack but well under 2n.
         assert peak - base < n * 1.5, (base, peak, n)
         return True

@@ -3,7 +3,7 @@
 ipaddress.ip_network() and IPv4Address/IPv6Address parse and validate IP
 address strings, returning network/address objects.  The parsing involves
 string manipulation and integer arithmetic that happens in userspace Python
-and in C extensions.  Under runloom's M:N scheduler many fibers ("goroutines")
+and in C extensions.  Under stackweave's M:N scheduler many fibers ("goroutines")
 share one hub OS-thread, and each fiber runs Python code that parses addresses
 concurrently.
 
@@ -21,9 +21,9 @@ code concurrently.
 
 This probes whether ipaddress parsing is robust under M:N concurrency.
 Verified with a standalone plain-threads control (same concurrent parsing
-logic, NO runloom): if a fiber's parsed address value equals its input encoding
+logic, NO stackweave): if a fiber's parsed address value equals its input encoding
 (correctness oracle), it MUST pass under PYTHON_GIL=1 AND PYTHON_GIL=0.  Under
-a CORRECT runloom M:N it MUST also hold (no shared-state corruption).  If a
+a CORRECT stackweave M:N it MUST also hold (no shared-state corruption).  If a
 fiber parses "10.wid.0.0/24" and recovers a different network address (the
 value is wrong, not matching what was encoded), that is a parsing corruption
 under M:N concurrency -- the load-bearing oracle PASSES on a correct runtime
@@ -40,10 +40,10 @@ ORACLES:
     hubs / sleep) so a sibling on the same hub can run concurrent parsing, then
     re-parses the same address and checks the value again.  If the value changes
     or is ever wrong, the parser has a race condition under M:N concurrency.
-    We verified this under PLAIN OS THREADS (64 threads, same hazard, NO runloom)
+    We verified this under PLAIN OS THREADS (64 threads, same hazard, NO stackweave)
     that parsed values match the encoded wid at PYTHON_GIL=1 AND PYTHON_GIL=0:
-    0 mismatches in 6400+ checks each.  Under runloom, a parsing corruption is a
-    runloom M:N concurrency bug or an ipaddress implementation bug.
+    0 mismatches in 6400+ checks each.  Under stackweave, a parsing corruption is a
+    stackweave M:N concurrency bug or an ipaddress implementation bug.
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber that vanished mid-
     parse (stranded inside ipaddress code on corrupted state, or a segfault)
     never returns; the watchdog + require_no_lost catch it.
@@ -59,7 +59,7 @@ concurrency.  At modest funcs (1000-2000) with many variants, the hazard is
 low-probability (few concurrent sibling parses mid-yield).  At higher funcs
 (8000+) with sustained churn, concurrent parsing is likely and any shared-state
 race would manifest.  If no corruption is observed, ipaddress is robust under
-M:N; if corruption fires, it indicates a parsing bug in ipaddress or runloom
+M:N; if corruption fires, it indicates a parsing bug in ipaddress or stackweave
 under concurrent execution.
 
 Stresses: ipaddress module-global _ip_networks/_ip_allocators dict caching +
@@ -76,7 +76,7 @@ cache-isolation gap before the id() oracle fires.
 import ipaddress
 
 import harness
-import runloom
+import stackweave
 
 # IPv4 network addresses will be crafted as "10.wid.X.0/24" where wid is
 # encoded into the second octet.  wid ranges from 0 to H.funcs, so the second
@@ -139,9 +139,9 @@ def ipv4_value_check(H, wid, variant, state):
         # shared parsing state.  The sleep-park (not bare yield) is what
         # reliably deschedules this fiber long enough that the scheduler runs a
         # sibling mid-parse before we resume.
-        runloom.yield_now()
+        stackweave.yield_now()
         if variant & 1:
-            runloom.sleep(0.0002)
+            stackweave.sleep(0.0002)
 
         # Second parse: re-parse and check the value again.
         obj2 = ipaddress.ip_network(net_str, strict=False)
@@ -161,7 +161,7 @@ def ipv4_value_check(H, wid, variant, state):
                 "variant {2}) returned network with WRONG octet value: "
                 "expected octet={3}, got octet={4}; the parser or shared "
                 "module state was corrupted by a sibling's concurrent parse "
-                "(runloom M:N parsing bug -- 0 under plain OS threads).".format(
+                "(stackweave M:N parsing bug -- 0 under plain OS threads).".format(
                     net_str, wid, variant, wid_octet, got_octet_1))
             return
         if got_octet_2 != wid_octet:
@@ -197,9 +197,9 @@ def ipv6_value_check(H, wid, variant, state):
 
         # Yield so a sibling fiber on this hub can run and potentially corrupt
         # shared parsing state.
-        runloom.yield_now()
+        stackweave.yield_now()
         if variant & 1:
-            runloom.sleep(0.0002)
+            stackweave.sleep(0.0002)
 
         # Second parse: re-parse and check the value again.
         obj2 = ipaddress.ip_network(net_str, strict=False)
@@ -219,7 +219,7 @@ def ipv6_value_check(H, wid, variant, state):
                 "variant {2}) returned network with WRONG hex-group value: "
                 "expected group={3:x}, got group={4:x}; the parser or shared "
                 "module state was corrupted by a sibling's concurrent parse "
-                "(runloom M:N parsing bug -- 0 under plain OS threads).".format(
+                "(stackweave M:N parsing bug -- 0 under plain OS threads).".format(
                     net_str, wid, variant, wid_hex, got_group_1))
             return
         if got_group_2 != wid_hex:
@@ -313,8 +313,8 @@ def post(H):
               "corrupted shared state or the parser itself.  ipaddress parsing "
               "involves shared module code and potentially shared caches "
               "(module-level _cache, lru_cache if present); these are SHARED "
-              "across all fibers on a hub under runloom M:N (the same root cause "
-              "as p66/p67/p321).  This is a runloom M:N concurrency bug (0 under "
+              "across all fibers on a hub under stackweave M:N (the same root cause "
+              "as p66/p67/p321).  This is a stackweave M:N concurrency bug (0 under "
               "plain OS threads GIL on AND off); the fix is per-fiber context "
               "isolation of module-global caches and parser state.")
 
@@ -335,7 +335,7 @@ if __name__ == "__main__":
     harness.main(
         "p472_ipaddress", body, setup=setup, post=post,
         default_funcs=4,
-        describe="ipaddress concurrent parsing under M:N; runloom fibers on one "
+        describe="ipaddress concurrent parsing under M:N; stackweave fibers on one "
                  "hub share module-level caches and parser state (NOT isolated "
                  "per-fiber).  LOAD-BEARING: each fiber encodes wid into a unique "
                  "IPv4/IPv6 network address string, parses it via "
@@ -348,5 +348,5 @@ if __name__ == "__main__":
                  "contaminated state under concurrent execution (sibling's parse "
                  "mutated shared module state, lru_cache, or parser internals).  "
                  "This should NOT happen under correct isolation (0 under plain "
-                 "threads GIL on AND off); a mismatch is a runloom M:N parsing "
+                 "threads GIL on AND off); a mismatch is a stackweave M:N parsing "
                  "corruption bug or ipaddress implementation bug under concurrency")

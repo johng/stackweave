@@ -2,7 +2,7 @@
 
 SKIPPED ON ALL FREE-THREADED Python -- the SIGSEGV this program catches (concurrent
 OrderedDict iteration vs popitem/__delitem__) is a STILL-LIVE UPSTREAM CPython
-free-threading bug, NOT a runloom defect:
+free-threading bug, NOT a stackweave defect:
     https://github.com/python/cpython/issues/125996
     "nogil segmentation fault on ordered dict operations"
 gh-125996 was closed as fixed by GH-133734 ("fix thread safety of ordered dict"),
@@ -14,7 +14,7 @@ __delitem__, capturing a dangling node key into di_current that the first __next
 then hashes -> SIGSEGV in PyObject_Hash (di_current->ob_type == NULL).  The iterator
 "mutated during iteration" / "changed size" guards both pass, so they do not protect
 against it.  Still present on CPython main as of 2026-06.
-Verified with PLAIN threading.Thread (NO runloom) on this box: 3.14.6t crashes 12/12
+Verified with PLAIN threading.Thread (NO stackweave) on this box: 3.14.6t crashes 12/12
 GIL-off, 0/12 GIL-on, and gc-disabled still crashes -- an FT-specific use-after-free.
 (The earlier "3.14.6t is 0/55 clean" claim was a FALSE NEGATIVE -- it didn't push
 hard/long enough.)  setup() AUTO-SKIPS on ALL free-threaded builds until the upstream
@@ -91,7 +91,7 @@ import collections
 import sys
 
 import harness
-import runloom
+import stackweave
 
 # Keyspace bounded so the OD stays modestly sized (a few thousand live nodes)
 # while EVERY op touches the order list: setitem appends, move_to_end re-splices,
@@ -168,7 +168,7 @@ def worker(H, wid, rng, state):
 
             H.op(wid)
             if (i & 15) == 0:
-                runloom.yield_now()       # invite a cross-hub resume mid-splice
+                stackweave.yield_now()       # invite a cross-hub resume mid-splice
         H.task_done(wid)
 
 
@@ -177,8 +177,8 @@ SKIP_REASON = (
     "(https://github.com/python/cpython/issues/125996 -- 'nogil segmentation fault on "
     "ordered dict operations'); GH-133734 fix is INCOMPLETE (odictiter_new constructor "
     "still unlocked), so it is STILL LIVE on 3.14t and CPython main.  Reproduced with "
-    "PLAIN threads (no runloom): 3.14.6t crashes 12/12 GIL-off, 0/12 GIL-on. NOT a "
-    "runloom bug; auto-skipped on ALL free-threaded builds until the upstream fix lands.")
+    "PLAIN threads (no stackweave): 3.14.6t crashes 12/12 GIL-off, 0/12 GIL-on. NOT a "
+    "stackweave bug; auto-skipped on ALL free-threaded builds until the upstream fix lands.")
 
 
 def bug_unfixed():

@@ -47,11 +47,11 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain threads):
   threads each running the seed-negative -> yield -> register -> assert-True
   sequence on their own fiber-local ABC, while 4 bumper threads continuously
   register unrelated types to hammer the shared token, GIL OFF, 3.14t) observed 0
-  stale-cache leaks across ~160k iterations.  Under a CORRECT runloom it must also
+  stale-cache leaks across ~160k iterations.  Under a CORRECT stackweave it must also
   hold: register() then isinstance() is True, and an UNregistered control type
   stays False.  If a fiber's own just-registered type reads back as "not an
   instance" (a stale negative-cache hit against the shared token), that is an
-  abc-invalidation desync in runloom, and the single-owner oracle catches it.
+  abc-invalidation desync in stackweave, and the single-owner oracle catches it.
 
 ORACLES:
   * LOAD-BEARING -- NEGATIVE-CACHE INVALIDATION (worker, HARD, fail-fast).  Each
@@ -70,7 +70,7 @@ ORACLES:
         target must NOT flip the unrelated control positive; a True here means a
         cross-entry / cross-fiber cache corruption).
     Single-owner: MyABC and its types live in fiber-local variables, never shared.
-    A failure is a runloom abc-negative-cache-invalidation desync.
+    A failure is a stackweave abc-negative-cache-invalidation desync.
 
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber stranded mid-
     __subclasscheck__ (inside the negative-cache clear/recompute on a desynced
@@ -110,7 +110,7 @@ even fires.
 import abc
 
 import harness
-import runloom
+import stackweave
 
 
 # Number of fiber-local negative-cache-invalidation checks squeezed into one
@@ -173,9 +173,9 @@ def abc_check(H, wid, idx, state):
     # their own register() calls, and the scheduler may migrate this fiber to a
     # different hub -- so the token read in step 4's isinstance() happens on a
     # (possibly) different hub than the seed in step 1.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0003)
+        stackweave.sleep(0.0003)
 
     # Step 3: register the target on THIS fiber's ABC.  This bumps the shared token
     # AND clears FiberABC's caches, so the stale negative entry for `tgt` is gone.
@@ -293,7 +293,7 @@ def post(H):
               "cleared/refilled its caches in this fiber's register->read-back "
               "window.  The shared ABC is a shared Python object (like p490's "
               "shared enum pool / p67's threading.local); this is documented M:N "
-              "shared-object behaviour, NOT a runloom bug, and never reaches the "
+              "shared-object behaviour, NOT a stackweave bug, and never reaches the "
               "load-bearing single-owner oracle".format(smisses, schecks))
 
     # NON-VACUITY: the load-bearing single-owner hazard was actually exercised.
@@ -322,4 +322,4 @@ if __name__ == "__main__":
                  "while an unregistered control stays False.  MEASURED shared-pool "
                  "(expected to show register/read-back misses on shared ABCs, like "
                  "p490) proves the hazard window is live.  A just-registered fiber-"
-                 "local type reading back False is the runloom abc-invalidation bug")
+                 "local type reading back False is the stackweave abc-invalidation bug")

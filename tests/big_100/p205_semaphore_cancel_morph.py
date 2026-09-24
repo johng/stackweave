@@ -1,6 +1,6 @@
 """big_100 / 205 -- semaphore cancel/morph (queued-waiter cancellation).
 
-A `runloom.sync.Semaphore(K)` guards K permits.  Many goroutines acquire it;
+A `stackweave.sync.Semaphore(K)` guards K permits.  Many goroutines acquire it;
 SOME are cancelled while QUEUED waiting for a permit -- they call
 `acquire(timeout=...)`, and a timeout returns False (the goroutine never got a
 permit and must not release one).  Successful acquirers mark themselves "active"
@@ -17,8 +17,8 @@ waiter (timeout path), no permit leak, no over-grant, active<=K invariant.
 Invariant: active <= K at every sample; final free permits == K (no leak).
 """
 import harness
-import runloom
-import runloom.sync as sync
+import stackweave
+import stackweave.sync as sync
 
 K = 8                      # permits
 
@@ -47,7 +47,7 @@ def setup(H):
                 st["breach"][0] = 1
                 H.fail("semaphore OVER-GRANT: {0} active > K={1}".format(cur, K))
                 return
-            runloom.sleep(0.0005)
+            stackweave.sleep(0.0005)
 
     H.fiber(monitor)
 
@@ -76,7 +76,7 @@ def worker(H, wid, rng, state):
         try:
             active[wid] = 1
             state["acquired"][wid] += 1
-            runloom.sleep(rng.uniform(0.0, 0.002))
+            stackweave.sleep(rng.uniform(0.0, 0.002))
         finally:
             active[wid] = 0
             sem.release()

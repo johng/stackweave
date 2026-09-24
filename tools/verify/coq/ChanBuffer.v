@@ -1,4 +1,4 @@
-(* ChanBuffer.v -- machine-checked, UNBOUNDED conservation for runloom's
+(* ChanBuffer.v -- machine-checked, UNBOUNDED conservation for stackweave's
    buffered channel + waiter FIFO.
 
    verify/spin/chan_buffer.pml proves CONSERVATION / FIFO / bounds / non-block

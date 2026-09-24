@@ -7,7 +7,7 @@ reaches executions the seed's own run pinned one way.  This pins that the
 mechanism has TEETH: on the strict-FIFO negative control, seeds whose OWN run is
 clean still reveal the bug under branch-replay; a bug-free scenario reveals none.
 The seed IS the snapshot and replay IS the fork -- no os.fork (forking mid
-runloom_c.run() on an fcontext stack would hang/SEGV).
+stackweave_c.run() on an fcontext stack would hang/SEGV).
 """
 import os
 import sys

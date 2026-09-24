@@ -1,4 +1,4 @@
-"""Sequential reference specifications for runloom's concurrent objects.
+"""Sequential reference specifications for stackweave's concurrent objects.
 
 Each spec is a Model for checker.py: init/step/key/partition plus a decode_event
 that maps one recorded history event to (inp, out).  These are the ENTIRE

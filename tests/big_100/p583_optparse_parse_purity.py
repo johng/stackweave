@@ -13,10 +13,10 @@ fresh Values), but that state is scoped to the single call on a single parser
 instance.
 
 WHERE M:N COULD BREAK IT (the gap this program probes).  Under free-threaded
-CPython with the GIL off and runloom's M:N scheduler, a fiber that builds its OWN
+CPython with the GIL off and stackweave's M:N scheduler, a fiber that builds its OWN
 parser, computes the closed-form expected parse of its OWN argv, then yields mid-
 sequence (parking on a different hub while siblings run), must resume and observe
-the SAME parse result -- bit-identical options and leftover args.  If runloom
+the SAME parse result -- bit-identical options and leftover args.  If stackweave
 leaked another fiber's parser-call state (rargs/largs pointer, the in-flight
 Values, an option-string lookup table) into this fiber's parse across the hub
 migration, the result would differ: a wrong dest value, a leftover arg that
@@ -31,11 +31,11 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain threads):
   known in closed form (we chose the count, the name, the flag, the choice, the
   append-list, and the positionals).  A standalone plain-threads control (8 OS
   threads, each building its own parser + argv, GIL on AND off) returns the
-  closed-form parse 100% of the time -- 0 divergences.  Under a CORRECT runloom it
+  closed-form parse 100% of the time -- 0 divergences.  Under a CORRECT stackweave it
   must also hold, INCLUDING across a yield that parks the fiber on another hub
   while siblings parse their own conflicting argvs.  A single-owner parser whose
   parse changes across a yield -- or disagrees with the closed-form expected -- is
-  a runloom isolation bug, so this fail-fast arm PASSES on a correct runtime
+  a stackweave isolation bug, so this fail-fast arm PASSES on a correct runtime
   (exit 0 when there is no bug).
 
 ORACLES:
@@ -52,7 +52,7 @@ ORACLES:
         -> (opts2, args2), asserts opts2/args2 are bit-identical to the first
         parse AND still equal the closed-form expected.
     Single-owner: the parser, the argv, and the expected dict are fiber-local,
-    never shared.  A divergence is a runloom parse-isolation desync.
+    never shared.  A divergence is a stackweave parse-isolation desync.
 
   * MEASURED (report-ONLY, NEVER fails): a small pool of SHARED OptionParsers is
     hammered by all fibers -- many fibers call parse_args on the SAME parser
@@ -83,7 +83,7 @@ migration + yield under M:N; per-fiber parser isolation vs shared-parser races.
 import optparse
 
 import harness
-import runloom
+import stackweave
 
 # Fiber-local value bands.  Kept small + deterministic so the closed-form expected
 # parse is trivially computable and argv is always VALID (no token that could be
@@ -239,9 +239,9 @@ def worker(H, wid, rng, state):
 
             # YIELD mid-sequence: park so a sibling parses its own conflicting
             # argv, possibly on another hub, before we re-parse.
-            runloom.yield_now()
+            stackweave.yield_now()
             if idx & 1:
-                runloom.sleep(0.0002)
+                stackweave.sleep(0.0002)
 
             parser2 = build_grammar()
             res2 = check_parse(H, wid, parser2, argv, expected, expected_args,
@@ -315,7 +315,7 @@ def post(H):
               "across {1} concurrent parse_args calls -- optparse.OptionParser is "
               "not designed for concurrent parse on one instance (shared "
               "rargs/largs), like a shared dict under threads.  Documented M:N "
-              "shared-object behavior, NOT a runloom bug, and never reaches the "
+              "shared-object behavior, NOT a stackweave bug, and never reaches the "
               "load-bearing single-owner oracle".format(sdiv, schecks))
 
     # NON-VACUITY: the single-owner purity hazard was actually exercised.
@@ -340,6 +340,6 @@ if __name__ == "__main__":
                  "form (store/store_true/append/choice dests + leftover args).  A "
                  "divergence across the yield -- wrong dest, torn append-list, a "
                  "sibling's leftover arg, a spurious error on valid input -- is a "
-                 "runloom parse-isolation bug.  MEASURED shared-parser pool "
+                 "stackweave parse-isolation bug.  MEASURED shared-parser pool "
                  "(expected to diverge, documented concurrent-instance behavior) "
                  "proves the hazard is real without ever failing")

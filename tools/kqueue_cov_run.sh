@@ -6,7 +6,7 @@
 set -u
 cd "$HOME/pygo-macwin" || exit 2
 PY="$HOME/.pyenv/versions/3.14.4t/bin/python3"
-export PYTHON_GIL=0 PYTHONPATH=src RUNLOOM_SYSMON_QUIET=1
+export PYTHON_GIL=0 PYTHONPATH=src STACKWEAVE_SYSMON_QUIET=1
 sudo -n prlimit --pid $$ --nofile=8388608:8388608 2>/dev/null
 ulimit -n 400000 2>/dev/null
 

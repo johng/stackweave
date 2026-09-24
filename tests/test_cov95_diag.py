@@ -1,6 +1,6 @@
 """Adversarial coverage suite for src/runloom_c/runloom_diag.c.
 
-This fragment is the diagnostic infrastructure: the RUNLOOM_DEBUG[_DIAG] flag
+This fragment is the diagnostic infrastructure: the STACKWEAVE_DEBUG[_DIAG] flag
 parser, the lock-free per-thread lifecycle event ring (emit + registry + dump),
 the runloom_self_check structural pass, the seeded delay-injection determinism
 tool, and the TLA+-trace emitters (gilstate / mn-baton).  The normal 327-run
@@ -19,12 +19,12 @@ target here is a TEMP FILE fd, never a pipe.
 
 Regions DRIVEN here (uncovered gcov line -> how):
 
-  L39        parse_one_token "ring" arm -> RUNLOOM_DEBUG_DIAG=ring sets flag 0x8.
+  L39        parse_one_token "ring" arm -> STACKWEAVE_DEBUG_DIAG=ring sets flag 0x8.
   L43        parse_one_token unknown-token -> return 0 -> a bogus token alongside
              "ring" exercises the fall-through (flags stay exactly 0x8).
   L121-162   monotonic_ns / ring_acquire / runloom_evt_log_ -- the ring's lazy
              per-thread alloc + event append.  Cold unless RUNLOOM_DBG_RING; a
-             real workload under RUNLOOM_DEBUG_DIAG=ring emits thousands.
+             real workload under STACKWEAVE_DEBUG_DIAG=ring emits thousands.
   L178-198   op_name switch arms -- reached ONLY from the dump, one arm per op
              code present in a ring at dump time.  We drive a workload that emits
              twelve distinct ops (channel park/wake, netpoll fd link/unlink/
@@ -33,15 +33,15 @@ Regions DRIVEN here (uncovered gcov line -> how):
              WORLD_YIELD, PARKER_FORCE each get a dedicated mode test.
   L224-252   runloom_diag_dump per-thread ring walk (header + newest-first event
              loop) -- the body that only runs when a ring has events.
-  L405-409   runloom_gilstate_trace body  -> RUNLOOM_GILSTATE_TRACE=<path>.
-  L425-428   runloom_mn_trace_event body  -> RUNLOOM_MN_EVENTS=<path> + the
+  L405-409   runloom_gilstate_trace body  -> STACKWEAVE_GILSTATE_TRACE=<path>.
+  L425-428   runloom_mn_trace_event body  -> STACKWEAVE_MN_EVENTS=<path> + the
              controlled barrier mode (the baton protocol that emits the events).
-  L440-441   runloom_diag_init gilstate-trace fopen  -> RUNLOOM_GILSTATE_TRACE.
-  L446-447   runloom_diag_init mn-events fopen        -> RUNLOOM_MN_EVENTS.
-  L501-506   runloom_splitmix64                       -> RUNLOOM_DELAY mixes it.
-  L516-524   runloom_delay_init_once env-set branch   -> RUNLOOM_DELAY[+_MAX_NS].
-  L534-541   runloom_delay_inject active body         -> RUNLOOM_DELAY, plus a
-             RUNLOOM_DELAY_MAX_NS=0 run for the <=0 early-out (L534).
+  L440-441   runloom_diag_init gilstate-trace fopen  -> STACKWEAVE_GILSTATE_TRACE.
+  L446-447   runloom_diag_init mn-events fopen        -> STACKWEAVE_MN_EVENTS.
+  L501-506   runloom_splitmix64                       -> STACKWEAVE_DELAY mixes it.
+  L516-524   runloom_delay_init_once env-set branch   -> STACKWEAVE_DELAY[+_MAX_NS].
+  L534-541   runloom_delay_inject active body         -> STACKWEAVE_DELAY, plus a
+             STACKWEAVE_DELAY_MAX_NS=0 run for the <=0 early-out (L534).
 
 Each assertion proves the line's EFFECT, not just that it ran: the dump must
 carry the labels the op_name arms produce, the trace files must contain the
@@ -94,7 +94,7 @@ import tempfile
 
 import pytest
 
-import runloom_c as rc
+import stackweave_c as rc
 from adv_util import hang_guard
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -106,9 +106,9 @@ def _child_env(**extra):
     """Base subprocess env: GIL off, in-tree src on the path, plus `extra`.
     Strips the diag knobs we don't want leaking in from a parent run."""
     env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
-    for k in ("RUNLOOM_DEBUG_DIAG", "RUNLOOM_DEBUG", "RUNLOOM_DELAY",
-              "RUNLOOM_DELAY_MAX_NS", "RUNLOOM_GILSTATE_TRACE",
-              "RUNLOOM_MN_EVENTS", "RUNLOOM_WORLD_YIELD_NS"):
+    for k in ("STACKWEAVE_DEBUG_DIAG", "STACKWEAVE_DEBUG", "STACKWEAVE_DELAY",
+              "STACKWEAVE_DELAY_MAX_NS", "STACKWEAVE_GILSTATE_TRACE",
+              "STACKWEAVE_MN_EVENTS", "STACKWEAVE_WORLD_YIELD_NS"):
         env.pop(k, None)
     env.update(extra)
     return env
@@ -120,13 +120,13 @@ def _run_child(code, env, timeout=_TIMEOUT):
                               capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         pytest.skip("diag subprocess timed out (shared-box CI contention, "
-                    "not a runloom bug)")
+                    "not a stackweave bug)")
 
 
 # --------------------------------------------------------------------------
 # L39 / L43: parse_one_token "ring" arm + unknown-token fall-through.
 #
-# RUNLOOM_DEBUG_DIAG="ring" sets exactly RUNLOOM_DBG_RING (0x8) -> the "ring"
+# STACKWEAVE_DEBUG_DIAG="ring" sets exactly RUNLOOM_DBG_RING (0x8) -> the "ring"
 # arm (L39) ran.  Adding a bogus token exercises the unknown-token `return 0`
 # (L43): it must contribute nothing, so the final flags stay EXACTLY 0x8.
 # We also assert the ring is genuinely live (a workload emits events the dump
@@ -135,11 +135,11 @@ def _run_child(code, env, timeout=_TIMEOUT):
 _FLAG_CHILD = r"""
 import os, sys, tempfile
 sys.path.insert(0, 'src')
-import runloom_c as rc
+import stackweave_c as rc
 
 # "ring" arm (L39) + an unknown token that must fall through to return 0 (L43).
 flags = rc._diag_flags()
-assert flags == 0x8, "RUNLOOM_DEBUG_DIAG=ring,<bogus> gave flags=0x%x (want 0x8)" % flags
+assert flags == 0x8, "STACKWEAVE_DEBUG_DIAG=ring,<bogus> gave flags=0x%x (want 0x8)" % flags
 
 # The flag must actually arm the emitter: run real work, dump, see events.
 def w():
@@ -159,7 +159,7 @@ sys.stdout.write("FLAG_RING_OK\n")
 
 
 def test_debug_diag_ring_flag_and_unknown_token():
-    env = _child_env(RUNLOOM_DEBUG_DIAG="ring,zzz_not_a_real_flag")
+    env = _child_env(STACKWEAVE_DEBUG_DIAG="ring,zzz_not_a_real_flag")
     p = _run_child(_FLAG_CHILD, env)
     assert p.returncode == 0, "flag child rc=%d\n%s" % (p.returncode, p.stderr[-1500:])
     assert "FLAG_RING_OK" in p.stdout, (p.stdout, p.stderr[-800:])
@@ -182,7 +182,7 @@ def test_debug_diag_ring_flag_and_unknown_token():
 _RING_OPS_CHILD = r"""
 import os, re, socket, sys, tempfile
 sys.path.insert(0, 'src')
-import runloom_c as rc
+import stackweave_c as rc
 READ, WRITE = 1, 2
 
 def st_phase():
@@ -254,7 +254,7 @@ sys.stdout.write("RING_OPS_OK\n")
     "CORO_ACQUIRE/CORO_RELEASE labels in this short run -- a backend-internals "
     "coverage gap, not the wait_fd-on-pipe bug"))
 def test_ring_dump_covers_every_reachable_op_name_arm():
-    env = _child_env(RUNLOOM_DEBUG_DIAG="ring")
+    env = _child_env(STACKWEAVE_DEBUG_DIAG="ring")
     p = _run_child(_RING_OPS_CHILD, env)
     assert p.returncode == 0, "ring-ops child rc=%d\n%s" % (p.returncode, p.stderr[-2000:])
     assert "RING_OPS_OK" in p.stdout, (p.stdout, p.stderr[-1000:])
@@ -272,7 +272,7 @@ def test_ring_dump_covers_every_reachable_op_name_arm():
 _CAL_FREEZE_CHILD = r"""
 import os, sys, tempfile
 sys.path.insert(0, 'src')
-import runloom_c as rc
+import stackweave_c as rc
 
 def w():
     pass
@@ -293,7 +293,7 @@ sys.stdout.write("CAL_FREEZE_OK\n")
 
 
 def test_ring_dump_covers_cal_freeze_arm():
-    env = _child_env(RUNLOOM_DEBUG_DIAG="ring")
+    env = _child_env(STACKWEAVE_DEBUG_DIAG="ring")
     p = _run_child(_CAL_FREEZE_CHILD, env)
     assert p.returncode == 0, "cal-freeze child rc=%d\n%s" % (p.returncode, p.stderr[-1500:])
     assert "CAL_FREEZE_OK" in p.stdout, (p.stdout, p.stderr[-800:])
@@ -302,7 +302,7 @@ def test_ring_dump_covers_cal_freeze_arm():
 # --------------------------------------------------------------------------
 # L196 (op_name WORLD_YIELD) + the WORLD_YIELD monopoly emit it labels.
 #
-# When RUNLOOM_WORLD_YIELD_NS is set, an M:N hub that detaches for a foreign
+# When STACKWEAVE_WORLD_YIELD_NS is set, an M:N hub that detaches for a foreign
 # thread's stop-the-world (a native thread's gc.collect()) emits
 # RUNLOOM_EVT_WORLD_YIELD on the monopoly world-yield.  A native OS thread
 # spinning gc.collect() against an M:N workload forces it; the dump must carry
@@ -311,7 +311,7 @@ def test_ring_dump_covers_cal_freeze_arm():
 _WORLD_YIELD_CHILD = r"""
 import os, sys, gc, threading, tempfile, time
 sys.path.insert(0, 'src')
-import runloom_c as rc
+import stackweave_c as rc
 
 stop = [False]
 def native_gc():
@@ -360,7 +360,7 @@ sys.stdout.write("WORLD_YIELD_OK tries=%d\n" % tries)
 
 
 def test_ring_dump_covers_world_yield_arm():
-    env = _child_env(RUNLOOM_DEBUG_DIAG="ring", RUNLOOM_WORLD_YIELD_NS="3000")
+    env = _child_env(STACKWEAVE_DEBUG_DIAG="ring", STACKWEAVE_WORLD_YIELD_NS="3000")
     p = _run_child(_WORLD_YIELD_CHILD, env)
     assert p.returncode == 0, "world-yield child rc=%d\n%s" % (p.returncode, p.stderr[-2000:])
     assert "WORLD_YIELD_OK" in p.stdout, (p.stdout, p.stderr[-1000:])
@@ -376,7 +376,7 @@ def test_ring_dump_covers_world_yield_arm():
 _PARKER_FORCE_CHILD = r"""
 import os, sys, socket, tempfile
 sys.path.insert(0, 'src')
-import runloom_c as rc
+import stackweave_c as rc
 READ = 1
 
 def main():
@@ -406,7 +406,7 @@ sys.stdout.write("PARK_FORCE_OK\n")
 
 
 def test_ring_dump_covers_parker_force_arm():
-    env = _child_env(RUNLOOM_DEBUG_DIAG="ring", RUNLOOM_IOURING_LOOP="1")
+    env = _child_env(STACKWEAVE_DEBUG_DIAG="ring", STACKWEAVE_IOURING_LOOP="1")
     p = _run_child(_PARKER_FORCE_CHILD, env)
     if p.returncode != 0:
         # iouring loop backend can be unavailable on some kernels/configs.
@@ -419,7 +419,7 @@ def test_ring_dump_covers_parker_force_arm():
 # --------------------------------------------------------------------------
 # L405-409 + L440-441: runloom_gilstate_trace body + its init fopen.
 #
-# RUNLOOM_GILSTATE_TRACE=<path> opens the trace file in runloom_diag_init
+# STACKWEAVE_GILSTATE_TRACE=<path> opens the trace file in runloom_diag_init
 # (L440-441) and the hub-tstate create/delete sites append one ndjson line each
 # via runloom_gilstate_trace (L405-409).  An M:N run with N hubs must produce a
 # file with N "Create" lines (one per hub tstate).
@@ -427,9 +427,9 @@ def test_ring_dump_covers_parker_force_arm():
 _GILTRACE_CHILD = r"""
 import os, sys
 sys.path.insert(0, 'src')
-import runloom_c as rc
+import stackweave_c as rc
 
-path = os.environ["RUNLOOM_GILSTATE_TRACE"]
+path = os.environ["STACKWEAVE_GILSTATE_TRACE"]
 def w():
     rc.sched_yield()
 def main():
@@ -439,7 +439,7 @@ HUBS = 3
 rc.mn_init(HUBS); rc.mn_fiber(main); rc.mn_run(); rc.mn_fini()
 
 lines = [l for l in open(path).read().splitlines() if l.strip()]
-assert lines, "RUNLOOM_GILSTATE_TRACE produced no events"
+assert lines, "STACKWEAVE_GILSTATE_TRACE produced no events"
 creates = [l for l in lines if '"a":"Create"' in l]
 assert len(creates) >= HUBS, "expected >=%d Create events, got %r" % (HUBS, lines)
 # Each line is the ndjson the L406 fprintf wrote.
@@ -455,7 +455,7 @@ def test_gilstate_trace_env_emits_ndjson():
     tf = tempfile.NamedTemporaryFile(prefix="runloom_giltrace_", delete=False)
     tf.close()
     try:
-        env = _child_env(RUNLOOM_GILSTATE_TRACE=tf.name)
+        env = _child_env(STACKWEAVE_GILSTATE_TRACE=tf.name)
         p = _run_child(_GILTRACE_CHILD, env)
         assert p.returncode == 0, "giltrace child rc=%d\n%s" % (
             p.returncode, p.stderr[-1500:])
@@ -470,18 +470,18 @@ def test_gilstate_trace_env_emits_ndjson():
 # --------------------------------------------------------------------------
 # L425-428 + L446-447: runloom_mn_trace_event body + its init fopen.
 #
-# RUNLOOM_MN_EVENTS=<path> opens the baton-trace file in runloom_diag_init
+# STACKWEAVE_MN_EVENTS=<path> opens the baton-trace file in runloom_diag_init
 # (L446-447).  The baton protocol events (Arrive/Rendezvous/Grant/Release) are
 # emitted from runloom_mn_trace_event (L425-428) ONLY inside the controlled
-# barrier scheduler, so we also enable RUNLOOM_MN_BARRIER.  The file must contain
+# barrier scheduler, so we also enable STACKWEAVE_MN_BARRIER.  The file must contain
 # all four action kinds.
 # --------------------------------------------------------------------------
 _MNEVENTS_CHILD = r"""
 import os, sys, json
 sys.path.insert(0, 'src')
-import runloom_c as rc
+import stackweave_c as rc
 
-path = os.environ["RUNLOOM_MN_EVENTS"]
+path = os.environ["STACKWEAVE_MN_EVENTS"]
 def w():
     rc.sched_yield()
 def main():
@@ -490,7 +490,7 @@ def main():
 rc.mn_init(3); rc.mn_fiber(main); rc.mn_run(); rc.mn_fini()
 
 lines = [l for l in open(path).read().splitlines() if l.strip()]
-assert lines, "RUNLOOM_MN_EVENTS produced no baton events"
+assert lines, "STACKWEAVE_MN_EVENTS produced no baton events"
 actions = set()
 for l in lines:
     obj = json.loads(l)
@@ -506,8 +506,8 @@ def test_mn_events_trace_env_emits_baton_protocol():
     tf = tempfile.NamedTemporaryFile(prefix="runloom_mnevents_", delete=False)
     tf.close()
     try:
-        env = _child_env(RUNLOOM_MN_EVENTS=tf.name, RUNLOOM_MN_BARRIER="1",
-                         RUNLOOM_MN_SEED="7", RUNLOOM_MN_PCT="8")
+        env = _child_env(STACKWEAVE_MN_EVENTS=tf.name, STACKWEAVE_MN_BARRIER="1",
+                         STACKWEAVE_MN_SEED="7", STACKWEAVE_MN_PCT="8")
         p = _run_child(_MNEVENTS_CHILD, env)
         assert p.returncode == 0, "mnevents child rc=%d\n%s" % (
             p.returncode, p.stderr[-1500:])
@@ -523,8 +523,8 @@ def test_mn_events_trace_env_emits_baton_protocol():
 # L501-506 (runloom_splitmix64) + L516-524 (runloom_delay_init_once env-set
 # branch) + L535-541 (runloom_delay_inject active body).
 #
-# RUNLOOM_DELAY=<seed> turns the seeded delay injector ON: the first inject call
-# runs runloom_delay_init_once (reads the seed + RUNLOOM_DELAY_MAX_NS, L516-524),
+# STACKWEAVE_DELAY=<seed> turns the seeded delay injector ON: the first inject call
+# runs runloom_delay_init_once (reads the seed + STACKWEAVE_DELAY_MAX_NS, L516-524),
 # and every instrumented scheduler transition then mixes (seed, site, count)
 # through runloom_splitmix64 (L501-506) into a bounded sleep (L535-541).  A
 # normal fiber workload hits many of those sites, so the child just runs to
@@ -533,7 +533,7 @@ def test_mn_events_trace_env_emits_baton_protocol():
 _DELAY_CHILD = r"""
 import os, sys, time
 sys.path.insert(0, 'src')
-import runloom_c as rc
+import stackweave_c as rc
 
 def w():
     rc.sched_yield()
@@ -551,25 +551,25 @@ sys.stdout.write("DELAY_OK\n")
 def test_delay_injection_env_runs_injector_body():
     # Tight cap so the injected sleeps stay sub-microsecond -- we want coverage
     # of the active body (L535-541) + splitmix (L501-506), not wall-clock cost.
-    env = _child_env(RUNLOOM_DELAY="0xC0FFEE", RUNLOOM_DELAY_MAX_NS="300")
+    env = _child_env(STACKWEAVE_DELAY="0xC0FFEE", STACKWEAVE_DELAY_MAX_NS="300")
     p = _run_child(_DELAY_CHILD, env)
     assert p.returncode == 0, "delay child rc=%d\n%s" % (p.returncode, p.stderr[-1500:])
     assert "DELAY_OK" in p.stdout, (p.stdout, p.stderr[-800:])
 
 
 # --------------------------------------------------------------------------
-# L520-521 (RUNLOOM_DELAY_MAX_NS parse, v>=0 branch with v==0) + L534
+# L520-521 (STACKWEAVE_DELAY_MAX_NS parse, v>=0 branch with v==0) + L534
 # (runloom_delay_inject `runloom_delay_max_ns <= 0 -> return` early-out).
 #
-# RUNLOOM_DELAY set (injector ON) but RUNLOOM_DELAY_MAX_NS=0 -> the max-ns parse
+# STACKWEAVE_DELAY set (injector ON) but STACKWEAVE_DELAY_MAX_NS=0 -> the max-ns parse
 # stores 0 (the `v >= 0` true side, L521) and every inject call takes the
 # <=0 early return (L534) -- the injector is on yet sleeps zero.  This drives the
-# zero-bound arm the nonzero RUNLOOM_DELAY run above cannot.
+# zero-bound arm the nonzero STACKWEAVE_DELAY run above cannot.
 # --------------------------------------------------------------------------
 _DELAY_ZERO_CHILD = r"""
 import os, sys
 sys.path.insert(0, 'src')
-import runloom_c as rc
+import stackweave_c as rc
 
 def w():
     rc.sched_yield()
@@ -582,7 +582,7 @@ sys.stdout.write("DELAY_ZERO_OK\n")
 
 
 def test_delay_injection_zero_bound_early_returns():
-    env = _child_env(RUNLOOM_DELAY="5", RUNLOOM_DELAY_MAX_NS="0")
+    env = _child_env(STACKWEAVE_DELAY="5", STACKWEAVE_DELAY_MAX_NS="0")
     p = _run_child(_DELAY_ZERO_CHILD, env)
     assert p.returncode == 0, "delay-zero child rc=%d\n%s" % (p.returncode, p.stderr[-1500:])
     assert "DELAY_ZERO_OK" in p.stdout, (p.stdout, p.stderr[-800:])
@@ -609,7 +609,7 @@ def test_diag_dump_to_stderr_does_not_crash_when_ring_off():
     # Just assert it returns cleanly -- no event lines, no crash.
     with hang_guard(10, "diag_dump stderr"):
         rc._diag_dump(-1)
-        assert rc._diag_flags() == 0   # parent never set RUNLOOM_DEBUG_DIAG
+        assert rc._diag_flags() == 0   # parent never set STACKWEAVE_DEBUG_DIAG
 
 
 if __name__ == "__main__":

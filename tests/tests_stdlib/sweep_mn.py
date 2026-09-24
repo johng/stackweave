@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Drive the vendored CPython stdlib test corpus through runloom's M:N scheduler,
+"""Drive the vendored CPython stdlib test corpus through stackweave's M:N scheduler,
 one module per subprocess, and classify the outcome of each.
 
 Each module is run by ``run_one_mn.py`` in its own free-threaded child process
@@ -15,7 +15,7 @@ Each module is run by ``run_one_mn.py`` in its own free-threaded child process
                   include env collisions when -j > 1)
         LOADERR - module raised before/while loading (import error, missing dep)
         CRASH   - child killed by a signal (SIGSEGV/SIGABRT/...) -- the gold:
-                  a real runloom scheduler/coroutine bug
+                  a real stackweave scheduler/coroutine bug
         HANG    - child hit the timeout (lost wake / deadlock) -- also gold
         ERROR   - child exited non-zero without a signal
   * saves the full child stderr for every non-PASS module under results/<STATUS>/
@@ -42,7 +42,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 HERE = os.path.dirname(os.path.abspath(__file__))      # tests_stdlib/
 REPO = os.path.dirname(HERE)
 TESTROOT = os.path.join(HERE, "test")                  # vendored `test` package
-RESULTS = os.environ.get("RUNLOOM_SWEEP_RESULTS", os.path.join(HERE, "results"))
+RESULTS = os.environ.get("STACKWEAVE_SWEEP_RESULTS", os.path.join(HERE, "results"))
 
 # Signal-number -> name, for readable CRASH labels (child rc is -signum).
 SIGNAMES = {6: "SIGABRT", 4: "SIGILL", 7: "SIGBUS", 8: "SIGFPE",
@@ -107,7 +107,7 @@ def run_module(mod, hubs, timeout, stack=0):
     env["PYGO_GIL"] = "0"
     env.setdefault("PYTHONUNBUFFERED", "1")
     if stack > 0:
-        env["RUNLOOM_MN_STACK"] = str(stack)
+        env["STACKWEAVE_MN_STACK"] = str(stack)
     cmd = [sys.executable, os.path.join(HERE, "run_one_mn.py"), mod, str(hubs)]
     # Run each child in a throwaway cwd: stdlib tests scatter temp files /
     # `tempcwd/` into the working dir, which would otherwise pollute the repo.

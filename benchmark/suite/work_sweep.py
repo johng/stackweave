@@ -5,7 +5,7 @@ ONE server (srv_runloom_work.py), ONE knob (--work N = FNV-1a passes over the
 payload), the same runtime: --handler py (an interpreted Python def doing
 recv_into/py_fnv/fold/send_all) vs --handler cython (the zero-PyObject Cython
 handler with the FNV INLINE -- native recv, FNV, fold, send, no Python wrapper).
-The cython line is runloom's state of the art (it tracks Go in work_xrt_sweep).
+The cython line is stackweave's state of the art (it tracks Go in work_xrt_sweep).
 
 `--work 0` IS the echo (the handler skips the work call), so the leftmost point
 of the curve consolidates the echo load and should reproduce the echo numbers
@@ -13,7 +13,7 @@ of the curve consolidates the echo load and should reproduce the echo numbers
 bends down while the compiled curve holds; that gap is the thing echo could
 never show (every handler optimization ties on echo -- no handler CPU).
 
-The work is PURE inline arithmetic (FNV xor/mul loop) -- nothing runloom routes
+The work is PURE inline arithmetic (FNV xor/mul loop) -- nothing stackweave routes
 to the blockpool, so it runs on the fiber's hub and the per-core CPU accounting
 stays valid. A hashlib/json/struct call would offload or converge to native and
 erase the signal; stated in the report as the honest framing.

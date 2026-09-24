@@ -13,7 +13,7 @@ independent recomputation must match, and ISIZE must equal the fiber's own
 plaintext length.
 
 WHERE M:N COULD BREAK IT (the gap this program probes).  Under free-threaded
-CPython with the GIL off and runloom hubs > 1, a fiber that parks (yields)
+CPython with the GIL off and stackweave hubs > 1, a fiber that parks (yields)
 BETWEEN incremental write() calls is suspended with a half-built compress
 stream: a live zlib compressobj holding DEFLATE scratch, a partial CRC32
 accumulator, and a partial ISIZE counter, all hanging off its GzipFile.  A
@@ -44,7 +44,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain threads):
   off, each streaming its own wid-tagged plaintext through its own GzipFile with
   a sched_yield between writes) that 100% of trailers satisfy (1)-(4) -- zero
   desyncs -- because each GzipFile's compressobj/CRC/size is private.  Under a
-  CORRECT runloom the same must hold: a fiber parking mid-stream and resuming on
+  CORRECT stackweave the same must hold: a fiber parking mid-stream and resuming on
   another hub must find its accumulators exactly as it left them.  If instead a
   fiber's ISIZE counts the wrong length, its CRC mismatches, or its round-trip
   is not byte-identical, that is a real runtime bug (cross-fiber leak of a
@@ -56,7 +56,7 @@ ORACLES:
   * LOAD-BEARING -- TRAILER CONSERVATION (worker, HARD, fail-fast).  The four
     checks above on a single-owner incremental gzip stream.  Single-owner: the
     GzipFile/BytesIO/plaintext are fiber-local, never shared.  A failure is a
-    runloom stream-isolation / accumulator-conservation desync.
+    stackweave stream-isolation / accumulator-conservation desync.
 
   * CONSERVATION SUM (post, HARD via require_no_lost + non-vacuity): each fiber
     records into a race-free per-wid slot how many plaintext bytes it conserved
@@ -91,7 +91,7 @@ import struct
 import zlib
 
 import harness
-import runloom
+import stackweave
 
 # Each fiber's plaintext is assembled from this many wid-tagged chunks, fed
 # through the GzipFile as separate incremental write() calls with a yield after
@@ -158,9 +158,9 @@ def stream_check(H, wid, rng, state):
             # PARK mid-stream: the compressobj + CRC + ISIZE accumulators are
             # half-built here.  A sibling on this or another hub drives its own
             # GzipFile through the same code while we are suspended.
-            runloom.yield_now()
+            stackweave.yield_now()
             if ci & 1:
-                runloom.sleep(0.0002)
+                stackweave.sleep(0.0002)
         gz.close()                          # _write_gzip_footer flushes trailer
     except Exception as e:                  # noqa: BLE001 -- any failure is load-bearing
         H.fail("gzip incremental write/close raised {0}: {1} (wid {2}, "

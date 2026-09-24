@@ -17,7 +17,7 @@ finder's path being spuriously dropped into badmodules (a cache entry another hu
 invalidated mid-lookup), or a stale/foreign spec bleeding a module that is NOT in
 this finder's closed world into self.modules.
 
-WHERE M:N COULD BREAK IT (the gap this program probes).  runloom runs each fiber's
+WHERE M:N COULD BREAK IT (the gap this program probes).  stackweave runs each fiber's
 ModuleFinder.run_script in parallel across hubs.  If the importlib PathFinder /
 path_importer_cache machinery is not free-threading-safe under the
 invalidate-then-rebuild churn, a fiber that analyses its OWN fixed on-disk import
@@ -56,7 +56,7 @@ empty and are never a shared-mutable arm.
 Verified against plain threads: 8 OS threads each analysing their own fixed tree
 (GIL on and off) produce the exact closed world 100% of the time, bit-identical
 across repeats -- 0 wrong sets, 0 nondeterministic results.  Under a CORRECT
-runloom it must also hold, so this program EXITS 0 when there is no bug.  A module
+stackweave it must also hold, so this program EXITS 0 when there is no bug.  A module
 misclassified as bad (or vice-versa), a result that differs across a yield for a
 fixed tree, a spurious ImportError, or a crash is a real runtime (or importlib
 free-threading) fault, not documented Python semantics.
@@ -89,7 +89,7 @@ import modulefinder
 import os
 
 import harness
-import runloom
+import stackweave
 
 # A fixed roster of top-level module names that are guaranteed NOT resolvable from
 # a tree-only search path -- every import of one of these lands deterministically in
@@ -210,9 +210,9 @@ def check_once(H, wid, idx, tree, state):
     # YIELD: let sibling fibers run their own ModuleFinders (invalidate_caches +
     # find_spec over the shared importlib path cache) while this fiber is parked,
     # then re-analyse the SAME fixed tree and assert an identical result.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0003)
+        stackweave.sleep(0.0003)
 
     got_mods2, got_bad2 = analyse(root, entry)
     if got_mods2 != got_mods1 or got_bad2 != got_bad1:

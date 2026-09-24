@@ -1,8 +1,8 @@
-# runloom memcheck suppressions.
+# stackweave memcheck suppressions.
 #
-# runloom's goroutine stacks are mmap'd and the SP is swapped to them by the
-# fcontext asm; runloom does not register them with valgrind (no
-# VALGRIND_STACK_REGISTER). So valgrind treats runloom's *direct* (pointer, not
+# stackweave's goroutine stacks are mmap'd and the SP is swapped to them by the
+# fcontext asm; stackweave does not register them with valgrind (no
+# VALGRIND_STACK_REGISTER). So valgrind treats stackweave's *direct* (pointer, not
 # SP-relative) accesses to a goroutine stack -- the stack paint and the
 # high-water-mark scan -- as "Invalid read/write" of unaddressable memory.
 # These are by-design accesses to validly-mmap'd stacks, not bugs. Suppress

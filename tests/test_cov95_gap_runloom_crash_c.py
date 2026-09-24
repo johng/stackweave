@@ -50,7 +50,7 @@ import sys
 
 import pytest
 
-import runloom_c as rc
+import stackweave_c as rc
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PY = sys.executable
@@ -83,11 +83,11 @@ requires_strace = pytest.mark.skipif(
 
 
 def _clean_env():
-    """A child env with the GIL off and no inherited RUNLOOM_CRASH* skew."""
+    """A child env with the GIL off and no inherited STACKWEAVE_CRASH* skew."""
     env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
-    env.pop("RUNLOOM_CRASH", None)
-    env.pop("RUNLOOM_CRASH_FILE", None)
-    env.pop("RUNLOOM_CRASH_WAIT_SECS", None)
+    env.pop("STACKWEAVE_CRASH", None)
+    env.pop("STACKWEAVE_CRASH_FILE", None)
+    env.pop("STACKWEAVE_CRASH_WAIT_SECS", None)
     return env
 
 
@@ -99,17 +99,17 @@ def _clean_env():
 @requires_strace
 def test_arm_sigaltstack_failure_munmaps_and_returns():
     body = (
-        "import runloom, runloom_c as rc\n"
+        "import stackweave, stackweave_c as rc\n"
         # install_crash_handler('on') -> runloom_crash_install -> arm at L486.
         # The single sigaltstack the arm makes is injected to fail (EINVAL),
         # so L179's `!= 0` is true -> munmap(base,total) [L180] + return [L181].
-        "f = runloom.inspect.install_crash_handler('on')\n"
+        "f = stackweave.inspect.install_crash_handler('on')\n"
         # The arm failure is benign: install still returns the flags bitmask and
         # reports installed (the void arm result is ignored), and the thread is
         # simply NOT armed.  No crash, no hang.
         "assert isinstance(f, int) and f > 0, ('bad flags', f)\n"
         "assert rc.crash_handler_installed() is True\n"
-        "runloom.inspect.uninstall_crash_handler()\n"
+        "stackweave.inspect.uninstall_crash_handler()\n"
         "assert rc.crash_handler_installed() is False\n"
         "print('ARM_FAIL_CLEAN_OK')\n"
     )
@@ -147,10 +147,10 @@ def test_single_hub_disarm_runs_body_deterministically():
         "import sys\n"
         "if not (hasattr(sys, '_is_gil_enabled') and not sys._is_gil_enabled()):\n"
         "    print('SKIP_NO_FT'); raise SystemExit(0)\n"
-        "import runloom, runloom_c as rc\n"
+        "import stackweave, stackweave_c as rc\n"
         # Install BEFORE the hub thread starts so it arms its sigaltstack at
         # runloom_coro_thread_init (arm is a no-op unless the handler is on).
-        "flags = runloom.inspect.install_crash_handler('on')\n"
+        "flags = stackweave.inspect.install_crash_handler('on')\n"
         "assert flags and rc.crash_handler_installed() is True\n"
         "rc.mn_init(1)\n"          # SINGLE hub -> one arm, one disarm
         "N = 8\n"
@@ -168,7 +168,7 @@ def test_single_hub_disarm_runs_body_deterministically():
         "rc.mn_fini()\n"
         "ran = sum(done)\n"
         "assert ran == N, ('not all fibers ran', ran)\n"
-        "runloom.inspect.uninstall_crash_handler()\n"
+        "stackweave.inspect.uninstall_crash_handler()\n"
         "print('SINGLE_HUB_DISARM_OK', ran)\n"
     )
     try:

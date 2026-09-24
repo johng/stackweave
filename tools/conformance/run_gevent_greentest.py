@@ -6,7 +6,7 @@ RUNS on this box/interpreter by exercising a curated handful of gevent's public
 APIs the way greentest does -- cooperative spawn/join, cooperative sleep
 interleaving, a lock round-trip (with a real concurrency bound), a queue
 round-trip, an Event handoff, a Pool map -- plus a runloom-coexistence check
-(import runloom alongside gevent and drive a runloom fiber right after a gevent
+(import stackweave alongside gevent and drive a stackweave fiber right after a gevent
 greenlet, proving the two stackful runtimes do not clash in one process).
 
 Honesty contract:
@@ -177,14 +177,14 @@ def check_pool_map(gevent):
 
 
 def check_runloom_coexistence(gevent):
-    """Prove gevent and runloom (both stackful, both greenlet/fcontext-based)
+    """Prove gevent and stackweave (both stackful, both greenlet/fcontext-based)
     coexist in ONE process: run a gevent greenlet, then immediately drive a
-    runloom single-thread fiber, and confirm both produced their result."""
+    stackweave single-thread fiber, and confirm both produced their result."""
     from gevent import spawn
     try:
-        import runloom_c as rc
+        import stackweave_c as rc
     except Exception as exc:  # noqa: BLE001
-        raise AssertionError("runloom_c not importable for coexistence: %r" % (exc,))
+        raise AssertionError("stackweave_c not importable for coexistence: %r" % (exc,))
 
     g = spawn(lambda: 6 * 7)
     g.join(timeout=10)
@@ -199,8 +199,8 @@ def check_runloom_coexistence(gevent):
     rc.fiber(main)
     rc.run()
     if box.get("r") != 45:
-        raise AssertionError("runloom side wrong: %r" % (box.get("r"),))
-    return "gevent(42) + runloom(45) both ran in one process"
+        raise AssertionError("stackweave side wrong: %r" % (box.get("r"),))
+    return "gevent(42) + stackweave(45) both ran in one process"
 
 
 CHECKS = [

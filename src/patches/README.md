@@ -1,4 +1,4 @@
-# CPython patches for runloom
+# CPython patches for stackweave
 
 Cross-hub fiber migration needs **both** halves below. They fix independent
 halves of the same root cause — free-threaded CPython ties a running frame to
@@ -26,9 +26,9 @@ See each patch's `WHAT CHANGED` header. Applying the other series' patch with
 `-F3` can fuzz those superseded hunks back in and yield a silently wrong
 interpreter — so don't.
 
-`runloom.migration_available()` is True only with both; `runloom.migration_status()`
+`stackweave.migration_available()` is True only with both; `stackweave.migration_status()`
 reports which half is missing. With either absent, migration stays behind the
-`RUNLOOM_ALLOW_UNSAFE_MIGRATION` dev override and the scheduler falls back to the
+`STACKWEAVE_ALLOW_UNSAFE_MIGRATION` dev override and the scheduler falls back to the
 default non-migrating mode with a warning naming the gap.
 
 ## `cpython313t-tstate-alloc-home.patch` — per-tstate allocation home
@@ -46,16 +46,16 @@ ties execution to allocation (see `docs/dev/HUB_MIGRATION_VERDICT.md`).
   Allocation lands on the running hub's heap; old objects remote-free (supported).
   No per-fiber heap (no GC wall), no heap migration (no `_mi_page_retire` crash).
 
-**runloom wiring (when enabled):** call `_PyThreadState_SetAllocHome(g->tstate,
+**stackweave wiring (when enabled):** call `_PyThreadState_SetAllocHome(g->tstate,
 hub->tstate)` at the per-g-tstate attach point (`mn_sched_hub_main.c.inc`); give
-the per-g tstate no live heap. That turns the gated `RUNLOOM_PER_G_TSTATE` mode
+the per-g tstate no live heap. That turns the gated `STACKWEAVE_PER_G_TSTATE` mode
 from "heavy + crashing" into "lightweight + sound".
 
 **Validation status: VALIDATED end-to-end.** Built CPython 3.14.4t with the flag
 (593 stdlib tests pass, zero regression). Wired `runloom_iframe_borrow_alloc_home`
 into the per-g-tstate attach (`mn_sched_hub_main.c.inc`). The previously-crashing
-`RUNLOOM_PER_G_TSTATE` channel-churn repro now passes **24/24** with the borrow vs
-**8/8 abort** without it (`RUNLOOM_NO_ALLOC_HOME=1`); default mode unaffected.
+`STACKWEAVE_PER_G_TSTATE` channel-churn repro now passes **24/24** with the borrow vs
+**8/8 abort** without it (`STACKWEAVE_NO_ALLOC_HOME=1`); default mode unaffected.
 Refined scope: only the alloc-heap + mimalloc page_list redirect to home; the QSBR
 reader stays the running tstate's (`_Py_qsbr_poll` asserts that). A direct migration
 proof (`tests/experiments/resume_rebuild/migration_crosshub_proof.py`) shows **50/60 fibers
@@ -142,12 +142,12 @@ alloc-home applied). `benchmark/bench_migration.py` **before**: `--hubs 1` clean
 `--hubs 2/4/8` SIGSEGV every run. **After**: `--hubs 1/2/4/8` all clean, 10/10 soak
 runs at 8 hubs × 64 fibers × 60 rounds × 32 allocs, with **77–80% of wakes landing
 on a different hub than the fiber parked on**. `mpmc_pergt_repro.py` and
-`migration_crosshub_proof.py` both pass; runloom's own suite is unchanged (223
+`migration_crosshub_proof.py` both pass; stackweave's own suite is unchanged (223
 passed / 1 skipped, and the two residual failures — `test_mn_sim_bytes` late-parker,
 `test_monkey_leak` subprocess — reproduce identically on the *unpatched*
 interpreter, so they are pre-existing). **Not** run against the CPython test suite.
 
-alloc-home is genuinely required alongside exec-home: with `RUNLOOM_NO_ALLOC_HOME=1`
+alloc-home is genuinely required alongside exec-home: with `STACKWEAVE_NO_ALLOC_HOME=1`
 (exec-home on, alloc-home off) `mpmc_pergt_repro.py` still crashed **3/8** runs vs
 **0/8** with both.
 
@@ -207,8 +207,8 @@ LTO can inline it back into its callers and silently reintroduce the bug.
 **⚠ Rebuild everything.** `_Py_ThreadId()` is inlined into `Py_INCREF`/`Py_DECREF`
 through the *public* `refcount.h`, so the fix only reaches code compiled against
 the patched headers. Every extension module in a migrating process must be rebuilt
-— a prebuilt wheel keeps its cacheable reads. `runloom_c.exec_home_available` can
-only speak for runloom's own extension.
+— a prebuilt wheel keeps its cacheable reads. `stackweave_c.exec_home_available` can
+only speak for stackweave's own extension.
 
 **Known gaps:** on MSVC the thread-id reads are intrinsics (`__readgsqword`,
 `__getReg`), not asm, and are left untouched — free-threaded MSVC isn't a migration
@@ -250,41 +250,41 @@ Migration is **off by default**. To enable it you need two things: build CPython
    grep -q _PyThreadStateImpl_AllocHome Include/internal/pycore_tstate.h  # alloc-home
    ```
 
-   Then build runloom against that interpreter (`python setup.py build_ext --inplace`),
+   Then build stackweave against that interpreter (`python setup.py build_ext --inplace`),
    **and rebuild every other extension module you load** — `_Py_ThreadId()` inlines
    into `Py_INCREF`/`Py_DECREF` via the public `refcount.h`, so a wheel built against
    unpatched headers keeps the cacheable reads.
 
-   The same runloom source builds against **stock** CPython too — both features
+   The same stackweave source builds against **stock** CPython too — both features
    compile out to no-ops, so nothing about the default build changes.
 
 2. **Opt in at runtime** (before the runtime starts — the flag is read once at init):
    ```python
-   import runloom
-   if runloom.migration_available():        # True only with BOTH patches
-       runloom.enable_migration()           # or set RUNLOOM_MIGRATION=1 in the env
+   import stackweave
+   if stackweave.migration_available():        # True only with BOTH patches
+       stackweave.enable_migration()           # or set STACKWEAVE_MIGRATION=1 in the env
    else:
-       print(runloom.migration_status())    # which half is missing
-   runloom.run(n_hubs, main)
+       print(stackweave.migration_status())    # which half is missing
+   stackweave.run(n_hubs, main)
    ```
 
 **Flags / API:**
 
 | flag / call | effect |
 |---|---|
-| `RUNLOOM_MIGRATION=1` | production master switch — enables cross-hub migration |
-| `runloom.migration_available()` | `True` iff built against **both** patches (safe to enable) |
-| `runloom.migration_status()` | `{"alloc_home":…, "exec_home":…, "available":…}` — which half is missing |
-| `runloom.enable_migration()` | set the flag; **raises** (naming the missing patch) on an under-patched build |
-| `runloom.migration_enabled()` | whether migration was requested for the next run |
-| `runloom_c.alloc_home_available` | raw C-level capability bit for the allocation half (`0`/`1`) |
-| `runloom_c.exec_home_available` | raw C-level capability bit for the execution half (`0`/`1`) |
-| `RUNLOOM_NO_ALLOC_HOME=1` | disable the heap-borrow (A/B baseline; reproduces the crash) |
-| `RUNLOOM_ALLOW_UNSAFE_MIGRATION=1` | **dev/fuzz only** — force migration on an under-patched CPython (can crash / UAF under churn) |
+| `STACKWEAVE_MIGRATION=1` | production master switch — enables cross-hub migration |
+| `stackweave.migration_available()` | `True` iff built against **both** patches (safe to enable) |
+| `stackweave.migration_status()` | `{"alloc_home":…, "exec_home":…, "available":…}` — which half is missing |
+| `stackweave.enable_migration()` | set the flag; **raises** (naming the missing patch) on an under-patched build |
+| `stackweave.migration_enabled()` | whether migration was requested for the next run |
+| `stackweave_c.alloc_home_available` | raw C-level capability bit for the allocation half (`0`/`1`) |
+| `stackweave_c.exec_home_available` | raw C-level capability bit for the execution half (`0`/`1`) |
+| `STACKWEAVE_NO_ALLOC_HOME=1` | disable the heap-borrow (A/B baseline; reproduces the crash) |
+| `STACKWEAVE_ALLOW_UNSAFE_MIGRATION=1` | **dev/fuzz only** — force migration on an under-patched CPython (can crash / UAF under churn) |
 
 **Safety contract (validated):** on a build missing **either** patch,
-`RUNLOOM_MIGRATION=1` prints a warning naming the missing half and **falls back to
+`STACKWEAVE_MIGRATION=1` prints a warning naming the missing half and **falls back to
 the default non-migrating scheduler — no crash**, and `enable_migration()` raises
 rather than risk a segfault. The unsafe override exists only for fuzzing the
-under-patched path. `RUNLOOM_PER_G_TSTATE` and `RUNLOOM_STEAL_WOKEN` remain as
-internal aliases of `RUNLOOM_MIGRATION`.
+under-patched path. `STACKWEAVE_PER_G_TSTATE` and `STACKWEAVE_STEAL_WOKEN` remain as
+internal aliases of `STACKWEAVE_MIGRATION`.

@@ -2,7 +2,7 @@
 StreamReader (returned by aio.open_connection / aio.start_server) claims
 API-compat; does async-iteration work?"""
 import sys, asyncio
-import runloom.aio as aio
+import stackweave.aio as aio
 
 async def main():
     async def handler(reader, writer):

@@ -17,7 +17,7 @@ implementation.  Two distinct mechanisms are in play per class:
 WHERE M:N COULD BREAK IT (the gap this program probes).  Under free-threaded 3.14t
 with the GIL off, tens of thousands of fibers on hubs>1 build fresh diamond class
 hierarchies CONCURRENTLY.  Class creation mutates type slots (tp_mro, tp_bases,
-tp_subclasses) and the super() walk reads tp_mro while dispatching.  If runloom's
+tp_subclasses) and the super() walk reads tp_mro while dispatching.  If stackweave's
 M:N scheduler exposed a torn __mro__ (a class whose tp_mro was read mid-C3-merge),
 or a super() proxy whose (__self_class__, __thisclass__) binding drifted to the
 WRONG start class across a hub migration (the fiber parked mid-walk on hub X and
@@ -36,7 +36,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain threads):
   plain-threads control (8 OS threads, each building its own fresh diamond with the
   same shape but per-thread additive contributions, GIL on AND off) that 100% of
   walks yield the C3 order and the closed-form accumulator -- 0 corrupted walks.
-  Under a CORRECT runloom it MUST also hold: the single-owner oracle PASSES on a
+  Under a CORRECT stackweave it MUST also hold: the single-owner oracle PASSES on a
   correct runtime (exit 0 when there is no bug).
 
 ORACLES:
@@ -46,7 +46,7 @@ ORACLES:
     fiber-LOCAL (created in local variables, never shared -- distinct from p300's
     shared-type method cache).  The fiber then:
       - Snapshots tuple(D.__mro__) BEFORE a yield.
-      - Yields (runloom.yield_now / sleep) so siblings build/walk their own
+      - Yields (stackweave.yield_now / sleep) so siblings build/walk their own
         diamonds and the scheduler can migrate this fiber across hubs.
       - Re-reads tuple(D.__mro__) and asserts it is UNCHANGED and equals the
         closed-form C3 sequence (D, B, C, A, Root, object) -- no torn __mro__.
@@ -57,7 +57,7 @@ ORACLES:
         super() proxies walked the right tuple from the right start class), and the
         accumulator equals the closed-form sum wid*16 + 10.
     Single-owner: the whole hierarchy + instance belong to one fiber.  A failure is
-    a runloom C3/super desync (torn __mro__, wrong-start super proxy, cross-fiber
+    a stackweave C3/super desync (torn __mro__, wrong-start super proxy, cross-fiber
     dispatch), never documented Python semantics.
 
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber that vanished mid-walk
@@ -83,7 +83,7 @@ or a deterministic replay that reads __mro__ mid-C3-merge of another fiber's cla
 -- is the cleanest signal before the visit-order/accumulator oracle fires.
 """
 import harness
-import runloom
+import stackweave
 
 # Each fiber's four diamond classes get per-fiber additive contributions.  Base
 # wid*4 keeps them distinct across fibers so a cross-fiber dispatch (visiting a
@@ -185,9 +185,9 @@ def diamond_check(H, wid, idx, state):
 
     # YIELD: siblings build/walk their own diamonds; the scheduler may migrate this
     # fiber to another hub, which is where a stale super() proxy would surface.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0003)
+        stackweave.sleep(0.0003)
 
     # Check 1: __mro__ is UNCHANGED across the yield (no torn/replaced tuple).
     mro_after = tuple(D.__mro__)
@@ -294,4 +294,4 @@ if __name__ == "__main__":
                  "form C3 sequence (D,B,C,A,Root,object) and the walk MUST visit "
                  "the C3 order [D,B,C,A] with the closed-form accumulator "
                  "wid*16+10.  Every class is fiber-local -- any corruption is a "
-                 "runloom C3/super desync, not documented Python semantics")
+                 "stackweave C3/super desync, not documented Python semantics")

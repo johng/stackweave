@@ -20,10 +20,10 @@ try:
 except ValueError as e:
     print("stock-empty: ValueError:", e)
 
-import runloom.monkey as monkey
+import stackweave.monkey as monkey
 monkey.patch()
 import select
-import runloom_c as rc
+import stackweave_c as rc
 
 out = {}
 def main():

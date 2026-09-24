@@ -20,10 +20,10 @@ CORRECTNESS NOTE -- why the shared tee is accessed UNDER A COOPERATIVE LOCK:
   CPython's ``itertools.tee`` is documented as NOT thread-safe; advancing two
   sibling branches CONCURRENTLY (two ``next()`` calls genuinely in flight at the
   same instant) corrupts the shared deque even with plain OS threads and the GIL
-  off -- it is a CPython substrate limitation, not a runloom invariant, and it
-  reproduces on stock free-threaded ``threading.Thread`` with no runloom at all.
+  off -- it is a CPython substrate limitation, not a stackweave invariant, and it
+  reproduces on stock free-threaded ``threading.Thread`` with no stackweave at all.
   We therefore guard every ``next()`` on the shared tee with a per-tee
-  ``runloom.sync.Lock`` so exactly one branch advances at a time (the supported
+  ``stackweave.sync.Lock`` so exactly one branch advances at a time (the supported
   way to share a tee).  That EXCLUDES the CPython non-thread-safety and ISOLATES
   the runloom-specific hazard: the shared C deque is advanced by DIFFERENT
   goroutines that MIGRATE across hubs between locked pulls (and ``yield_now()``
@@ -81,7 +81,7 @@ import itertools
 import random
 
 import harness
-import runloom
+import stackweave
 
 # Source length per tee fan-out.  Long enough that the B branches genuinely
 # interleave many advances of the shared deque (and the deque grows to hold the
@@ -117,7 +117,7 @@ def drain_branch(branch, lock, out_box, slot):
             except StopIteration:
                 break
         got.append(v)
-        runloom.yield_now()      # migrate between pulls; deque handed cross-hub
+        stackweave.yield_now()      # migrate between pulls; deque handed cross-hub
     out_box[slot] = got
 
 
@@ -129,7 +129,7 @@ class YieldKey(object):
     the source order for the closed-form check."""
 
     def __call__(self, x):
-        runloom.yield_now()
+        stackweave.yield_now()
         return x
 
 
@@ -164,7 +164,7 @@ def drain_stepwise(c_iter):
         except StopIteration:
             break
         out.append(v)
-        runloom.yield_now()
+        stackweave.yield_now()
     return out
 
 
@@ -186,9 +186,9 @@ def worker(H, wid, rng, state):
 
         # ---- PRIMARY: tee shared across hubs (lock-serialized advance) ------
         branches = itertools.tee(iter(range(SRC_LEN)), BRANCHES)
-        tee_lock = runloom.sync.Lock()   # one advance-at-a-time on the deque
+        tee_lock = stackweave.sync.Lock()   # one advance-at-a-time on the deque
         out_box = [None] * BRANCHES
-        wg = runloom.WaitGroup()
+        wg = stackweave.WaitGroup()
         wg.add(BRANCHES)
 
         def run_branch(branch, bslot):

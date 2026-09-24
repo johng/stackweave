@@ -8,7 +8,7 @@ io_uring_l_loop.c.inc as loop_ms_*, and serve(handler=None) uses it).  The
 GLOBAL-RING multishot path is reached only through a *Python-level* TCPConn's
 .recv()/.recv_into() when:
 
-    RUNLOOM_TCPCONN_IOURING=1   (TCPConn picks the io_uring recv backend)
+    STACKWEAVE_TCPCONN_IOURING=1   (TCPConn picks the io_uring recv backend)
     io_uring is available       (kernel has io_uring)
     pbuf_available()            (kernel >= 5.19: provided-buffer ring set up in
                                  the global ring's lazy_init)
@@ -17,7 +17,7 @@ It runs under the DEFAULT epoll backend -- the global ring's completion eventfd
 is registered into the shared epoll pump, which drains the CQ via
 runloom_iouring_drain(), dispatching each multishot CQE to ms_on_cqe.
 
-The backend choice (RUNLOOM_TCPCONN_IOURING) is resolved ONCE in the C extension
+The backend choice (STACKWEAVE_TCPCONN_IOURING) is resolved ONCE in the C extension
 (getenv, latched), so every test runs its workload in a SUBPROCESS with that env
 set, and each child EXITS CLEANLY so gcov counters flush.  Generous timeouts +
 pytest.skip on TimeoutExpired: this box shares io_uring + CPU with a CI runner,
@@ -51,8 +51,8 @@ pytestmark = pytest.mark.skipif(
 
 def _iou_available():
     try:
-        import runloom_c
-        return bool(runloom_c.iouring_available())
+        import stackweave_c
+        return bool(stackweave_c.iouring_available())
     except Exception:
         return False
 
@@ -62,11 +62,11 @@ needs_iouring = pytest.mark.skipif(
 
 
 def _run(script, timeout=240, env_extra=None):
-    # RUNLOOM_TCPCONN_IOURING=1 routes TCPConn.recv through the global-ring
-    # multishot path (ms_open/ms_recv).  No RUNLOOM_IOURING_LOOP: we want the
+    # STACKWEAVE_TCPCONN_IOURING=1 routes TCPConn.recv through the global-ring
+    # multishot path (ms_open/ms_recv).  No STACKWEAVE_IOURING_LOOP: we want the
     # GLOBAL ring's ms_* family, not the per-hub loop's loop_ms_* family.
     env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src",
-               RUNLOOM_TCPCONN_IOURING="1")
+               STACKWEAVE_TCPCONN_IOURING="1")
     if env_extra:
         env.update(env_extra)
     try:
@@ -90,8 +90,8 @@ def _run(script, timeout=240, env_extra=None):
 # --------------------------------------------------------------------------
 _ECHO = r'''
 import sys, struct; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave, stackweave_c as rc
+from stackweave.sync import WaitGroup
 N = 48
 got = [None] * N
 def main():
@@ -116,7 +116,7 @@ def main():
     wg.wait()
     for ln in lst:
         ln.close()
-runloom.run(4, main)
+stackweave.run(4, main)
 ok = sum(1 for i in range(N) if got[i] == struct.pack(">Q", i))
 sys.stdout.write("ECHO_OK %d\n" % ok)
 '''
@@ -144,8 +144,8 @@ def test_ms_echo_exact_once():
 # --------------------------------------------------------------------------
 _PARTIAL = r'''
 import sys; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave, stackweave_c as rc
+from stackweave.sync import WaitGroup
 res = {}
 def main():
     def handler(conn):
@@ -170,7 +170,7 @@ def main():
     rc.mn_fiber(client)
     wg.wait()
     for ln in lst: ln.close()
-runloom.run(4, main)
+stackweave.run(4, main)
 sys.stdout.write("PARTIAL a=%r b=%r eof=%r\n" % (res.get("a"), res.get("b"), res.get("eof")))
 '''
 
@@ -196,8 +196,8 @@ def test_ms_partial_buffer_carry_and_eof():
 # --------------------------------------------------------------------------
 _TWOBUF = r'''
 import sys; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave, stackweave_c as rc
+from stackweave.sync import WaitGroup
 res = {}
 def main():
     def handler(conn):
@@ -224,7 +224,7 @@ def main():
     rc.mn_fiber(client)
     wg.wait()
     for ln in lst: ln.close()
-runloom.run(4, main)
+stackweave.run(4, main)
 sys.stdout.write("TWOBUF a=%r\n" % (res.get("a"),))
 '''
 
@@ -251,7 +251,7 @@ def test_ms_two_buffers_queued_then_drained_in_one_recv():
 # --------------------------------------------------------------------------
 _SINGLE = r'''
 import sys, socket, struct; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
+import stackweave, stackweave_c as rc
 N = 12
 got = [None] * N
 done = [0]
@@ -286,7 +286,7 @@ def main():
                 lst.close()
     for i in range(N):
         rc.fiber(lambda i=i: client(i))
-runloom.run(1, main)
+stackweave.run(1, main)
 sys.stdout.write("SINGLE_OK %d\n" % sum(1 for i in range(N) if got[i] == struct.pack(">Q", i)))
 '''
 
@@ -309,8 +309,8 @@ def test_ms_single_thread_wake_paths():
 # --------------------------------------------------------------------------
 _RECV_INTO = r'''
 import sys; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave, stackweave_c as rc
+from stackweave.sync import WaitGroup
 res = {}
 def main():
     def handler(conn):
@@ -336,7 +336,7 @@ def main():
     rc.mn_fiber(client)
     wg.wait()
     for ln in lst: ln.close()
-runloom.run(4, main)
+stackweave.run(4, main)
 sys.stdout.write("RECVINTO b1=%r b2=%r\n" % (res.get("b1"), res.get("b2")))
 '''
 
@@ -362,8 +362,8 @@ def test_ms_recv_into_partial():
 # --------------------------------------------------------------------------
 _TEARDOWN = r'''
 import sys, struct; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave, stackweave_c as rc
+from stackweave.sync import WaitGroup
 def one_round(base):
     got = {}
     def main():
@@ -386,7 +386,7 @@ def one_round(base):
             rc.mn_fiber(lambda i=i: cl(i))
         wg.wait()
         for ln in lst: ln.close()
-    runloom.run(4, main)
+    stackweave.run(4, main)
     return sum(1 for i, v in got.items() if v == struct.pack(">Q", base + i))
 total = 0
 for r in range(5):
@@ -415,8 +415,8 @@ def test_ms_close_teardown_storm():
 # --------------------------------------------------------------------------
 _POOL = r'''
 import sys; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave, stackweave_c as rc
+from stackweave.sync import WaitGroup
 N = 64
 PAYLOAD = b"z" * 4096
 ok = bytearray(N)
@@ -452,7 +452,7 @@ def main():
         rc.mn_fiber(lambda i=i: client(i))
     wg.wait()
     for ln in lst: ln.close()
-runloom.run(4, main)
+stackweave.run(4, main)
 sys.stdout.write("POOL_OK %d\n" % sum(ok))
 '''
 

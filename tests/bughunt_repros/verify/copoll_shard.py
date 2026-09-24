@@ -1,5 +1,5 @@
 import select, sys, os, time
-import runloom
+import stackweave
 
 def patched():
     def main():
@@ -8,12 +8,12 @@ def patched():
             p = select.poll(); p.register(r, select.POLLIN)
             print("poll done:", p.poll(None), flush=True)
         def writer():
-            runloom.sleep(0.2)
-            runloom.monkey.offload(time.sleep, 0.05)
+            stackweave.sleep(0.2)
+            stackweave.monkey.offload(time.sleep, 0.05)
             os.write(w, b"x"); print("writer done", flush=True)
-        runloom.fiber(poller); runloom.fiber(writer)
-    runloom.monkey.patch()
-    runloom.run(1, main)   # one hub -> one shard for all offloads
+        stackweave.fiber(poller); stackweave.fiber(writer)
+    stackweave.monkey.patch()
+    stackweave.run(1, main)   # one hub -> one shard for all offloads
     print("ALL DONE", flush=True)
 
 if sys.argv[1] == "patched": patched()

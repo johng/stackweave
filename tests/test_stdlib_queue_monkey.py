@@ -1,4 +1,4 @@
-"""CPython's OWN Lib/test/test_queue.py, run verbatim under runloom.monkey.patch().
+"""CPython's OWN Lib/test/test_queue.py, run verbatim under stackweave.monkey.patch().
 
 monkey makes ``queue.SimpleQueue`` cooperative (CoSimpleQueue) and ``queue.Queue``
 cooperative transitively (it's built on the now-cooperative threading.Condition).

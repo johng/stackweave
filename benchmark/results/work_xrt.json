@@ -16,7 +16,7 @@
     "runtimes": {
       "runloom_cython": {
         "cores": 44,
-        "label": "Runloom (M:N) \u2014 Cython handler (compiled)",
+        "label": "Stackweave (M:N) \u2014 Cython handler (compiled)",
         "kind": "compiled"
       },
       "go": {
@@ -26,7 +26,7 @@
       },
       "runloom_py": {
         "cores": 44,
-        "label": "Runloom (M:N) \u2014 Python handler",
+        "label": "Stackweave (M:N) \u2014 Python handler",
         "kind": "interpreted"
       },
       "asyncio": {

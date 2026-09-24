@@ -4,7 +4,7 @@
 # pending_complete'd (h->pending -= 1) by another hub before the spawner's
 # pending_inc lands, so sum(pending) transiently reads 0 with the SPAWNER
 # fiber still running -> mn_run's `total == 0` exit fires early.
-import runloom, time, sys, threading
+import stackweave, time, sys, threading
 
 TRIALS = int(sys.argv[1]) if len(sys.argv) > 1 else 200
 
@@ -13,15 +13,15 @@ def noop():
 
 bugs = 0
 for t in range(TRIALS):
-    runloom.mn_init(8)
+    stackweave.mn_init(8)
     state = {"done": False, "spawned": 0}
     def root():
         # spawn many trivial fibers; each spawn opens the submit->inc window
         for i in range(20000):
-            runloom.mn_fiber(noop)
+            stackweave.mn_fiber(noop)
         state["done"] = True
-    runloom.mn_fiber(root)
-    runloom.mn_run()
+    stackweave.mn_fiber(root)
+    stackweave.mn_run()
     done_at_return = state["done"]
     if not done_at_return:
         # give the still-running root fiber time to finish -> proves mn_run
@@ -31,7 +31,7 @@ for t in range(TRIALS):
             time.sleep(0.005)
         print(f"trial {t}: BUG mn_run returned early; root done after wait={state['done']}")
         bugs += 1
-        runloom.mn_fini()
+        stackweave.mn_fini()
         break
-    runloom.mn_fini()
+    stackweave.mn_fini()
 print("bugs:", bugs)

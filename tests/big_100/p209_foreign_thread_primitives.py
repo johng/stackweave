@@ -20,7 +20,7 @@ import _thread as _rt          # captured BEFORE monkey.patch()
 import time as _time
 
 import harness
-import runloom
+import stackweave
 
 REAL_SLEEP = _time.sleep
 
@@ -89,7 +89,7 @@ def worker(H, wid, rng, state):
             go_incs[wid] += 1
         H.op(wid)
         H.task_done(wid)
-        runloom.yield_now()
+        stackweave.yield_now()
 
 
 def body(H):

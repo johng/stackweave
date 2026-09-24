@@ -5,7 +5,7 @@ claimed per-thread sched 'leak'."""
 import threading
 import time
 import os
-import runloom_c as rc
+import stackweave_c as rc
 
 
 def rss_kb():

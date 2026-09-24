@@ -5,20 +5,20 @@
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
 import multiprocessing as mp
-import runloom
+import stackweave
 
 def child(q):
     q.get(); raise RuntimeError("intended")
 
 def main():
-    runloom.monkey.patch()
+    stackweave.monkey.patch()
     ctx = mp.get_context("spawn")
     q = ctx.Queue()
     p = ctx.Process(target=child, args=(q,))
     state = {}
     def root():
         p.start(); q.put(b"x" * 300000); p.join(); state["x"] = p.exitcode
-    runloom.run(8, root)
+    stackweave.run(8, root)
     q.close()
     print("OK", state)
 

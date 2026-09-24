@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 """Real-time communication and websockets -- a real-time communication and websockets toy using the multiprocessing primitive with a freeform payload, expecting failure.
 
-Synthetic runloom toy program (auto-generated).
+Synthetic stackweave toy program (auto-generated).
   test type : failure
   category  : real-time communication and websockets
   primitive : multiprocessing
   format    : freeform (base64)
-  scheduler : M:N via runloom.run(8, root), free-threaded 3.13t, GIL off
+  scheduler : M:N via stackweave.run(8, root), free-threaded 3.13t, GIL off
 
-Exercises runloom's main API -- the root goroutine spawns workers with
-runloom.fiber(...) onto 8 hub threads, using the monkey-patched cooperative
+Exercises stackweave's main API -- the root goroutine spawns workers with
+stackweave.fiber(...) onto 8 hub threads, using the monkey-patched cooperative
 multiprocessing primitive to carry a freeform payload.  Prints PASS and exits 0 when
 healthy; FAIL / hang / crash signals a bug.
 """
@@ -37,8 +37,8 @@ import multiprocessing as mp
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "..", "src"))
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
 THEME = "real-time communication and websockets"
 CATSLUG = "real-time-communication-and-websockets"
@@ -97,8 +97,8 @@ def mp_fail(in_q):
     raise RuntimeError("intended child failure for synthetic test")
 
 def main():
-    runloom.monkey.patch()
-    GO = runloom.fiber
+    stackweave.monkey.patch()
+    GO = stackweave.fiber
     payload = mk_payload()
     enc = encode(payload)
     assert decode(enc) == payload
@@ -115,7 +115,7 @@ def main():
 
     def __root():
         GO(driver)
-    runloom.run(NHUB, __root)
+    stackweave.run(NHUB, __root)
     in_q.close()
     finish(state.get("exit") not in (0, None), state)
 

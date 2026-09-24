@@ -9,7 +9,7 @@ This is the objective yardstick for the barrier-rendezvous work: a seed is
 "stable" iff all K runs produce one signature.  House style: .format().
 
 Usage: repro_probe.py [seeds] [reps]   (defaults: 8 seeds, 6 reps each)
-Env passthrough: RUNLOOM_MN_BARRIER, RUNLOOM_MN_TRACE, etc. flow to the children.
+Env passthrough: STACKWEAVE_MN_BARRIER, STACKWEAVE_MN_TRACE, etc. flow to the children.
 """
 import os
 import subprocess
@@ -20,22 +20,22 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), 
 
 def run_once(seed, m=6, hubs=3):
     code = (
-        "import sys; sys.path.insert(0, 'src'); import runloom_c\n"
+        "import sys; sys.path.insert(0, 'src'); import stackweave_c\n"
         "m = {}; hubs = {}\n".format(m, hubs) +
-        "runloom_c.mn_init(hubs)\n"
-        "ch = runloom_c.Chan(); got = []\n"
+        "stackweave_c.mn_init(hubs)\n"
+        "ch = stackweave_c.Chan(); got = []\n"
         "def receiver(rid):\n"
         "    while True:\n"
         "        v, ok = ch.recv()\n"
         "        if not ok: break\n"
         "        got.append((rid, v))\n"
         "for r in range(m):\n"
-        "    runloom_c.mn_fiber(lambda r=r: receiver(r))\n"
+        "    stackweave_c.mn_fiber(lambda r=r: receiver(r))\n"
         "def producer():\n"
         "    for v in range(m*2): ch.send(v)\n"
         "    ch.close()\n"
-        "runloom_c.mn_fiber(producer)\n"
-        "runloom_c.mn_run(); runloom_c.mn_fini()\n"
+        "stackweave_c.mn_fiber(producer)\n"
+        "stackweave_c.mn_run(); stackweave_c.mn_fini()\n"
         "sig = ''.join(str(r) for r, _ in got)\n"
         "vals = sorted(v for _, v in got)\n"
         "print(sig + '|' + ('OK' if vals == list(range(m*2)) else 'LOST'))\n"
@@ -43,7 +43,7 @@ def run_once(seed, m=6, hubs=3):
     env = dict(os.environ)
     env["PYTHON_GIL"] = "0"
     env["PYTHONPATH"] = os.path.join(ROOT, "src")
-    env["RUNLOOM_MN_SEED"] = str(seed)
+    env["STACKWEAVE_MN_SEED"] = str(seed)
     try:
         out = subprocess.run([sys.executable, "-c", code], env=env, cwd=ROOT,
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
@@ -61,8 +61,8 @@ def run_once(seed, m=6, hubs=3):
 def main():
     seeds = int(sys.argv[1]) if len(sys.argv) > 1 else 8
     reps = int(sys.argv[2]) if len(sys.argv) > 2 else 6
-    barrier = os.environ.get("RUNLOOM_MN_BARRIER", "(unset)")
-    print("repro probe: {} seeds x {} reps  [RUNLOOM_MN_BARRIER={}]".format(seeds, reps, barrier))
+    barrier = os.environ.get("STACKWEAVE_MN_BARRIER", "(unset)")
+    print("repro probe: {} seeds x {} reps  [STACKWEAVE_MN_BARRIER={}]".format(seeds, reps, barrier))
     stable = 0
     for s in range(1, seeds + 1):
         sigs = [run_once(s) for _ in range(reps)]

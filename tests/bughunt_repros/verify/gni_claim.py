@@ -1,5 +1,5 @@
 import time, socket, asyncio
-import runloom.aio as aio
+import stackweave.aio as aio
 socket.getnameinfo = lambda sa, fl: (time.sleep(2.0), ('h','p'))[1]
 async def main():
     loop=asyncio.get_event_loop(); ticks=[]

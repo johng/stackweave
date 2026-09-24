@@ -1,16 +1,16 @@
-"""asyncio bridge — run existing async/await code on runloom's scheduler.
+"""asyncio bridge — run existing async/await code on stackweave's scheduler.
 
-Already have async def code?  runloom.aio.run(coro) is a drop-in for
-asyncio.run that drives each Task on a runloom fiber.  Standard
+Already have async def code?  stackweave.aio.run(coro) is a drop-in for
+asyncio.run that drives each Task on a stackweave fiber.  Standard
 asyncio building blocks — gather, sleep, wait_for, Queue, Lock — work
-unchanged; runloom just provides the event loop underneath.
+unchanged; stackweave just provides the event loop underneath.
 
 Run:
     python3 examples/asyncio_bridge.py
 """
 import asyncio
 
-import runloom
+import stackweave
 
 async def fetch(name, delay):
     await asyncio.sleep(delay)            # cooperative; other tasks run
@@ -55,4 +55,4 @@ async def main():
     print("queue results:", sorted(collected))
 
 if __name__ == "__main__":
-    runloom.aio.run(main())
+    stackweave.aio.run(main())

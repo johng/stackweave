@@ -28,7 +28,7 @@ run_one() {
   local srv_args=("$@")
   echo "===== tier=$tier port=$port ====="
   # launch server on loopback, pinned to server cores
-  PYTHONPATH=$SRC PYTHON_GIL=0 RUNLOOM_DEBUG= taskset -c $SRVCPU \
+  PYTHONPATH=$SRC PYTHON_GIL=0 STACKWEAVE_DEBUG= taskset -c $SRVCPU \
       $PY "${srv_args[@]}" --host 127.0.0.1 --port "$port" --hubs 44 --token "ANOM_$tier" \
       > "$RES/anomaly_srv_$tier.out" 2>&1 &
   local srvwrap=$!

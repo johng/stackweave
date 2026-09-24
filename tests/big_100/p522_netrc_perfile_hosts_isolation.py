@@ -36,13 +36,13 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY.
       - Asserts EVERY recovered host name carries THIS fiber's wid marker
         ("W{wid}_") -- a host tagged with a different wid is a sibling's entry
         that leaked across files (the isolation bug), a hard fault.
-      - Yields (runloom.yield_now) so siblings parse their own files on this hub.
+      - Yields (stackweave.yield_now) so siblings parse their own files on this hub.
       - Re-parses the SAME file -> nrc1 and asserts nrc1.hosts == nrc0.hosts
         byte-for-byte: the mapping is STABLE across the park (no field mutated,
         no host gained or lost).
     Single-owner: the file, the netrc objects, and both hosts dicts are all
     fiber-local, created and read by exactly one fiber.  A cross-file host, a
-    wrong field value, or an unstable re-parse is a runloom isolation bug -- and
+    wrong field value, or an unstable re-parse is a stackweave isolation bug -- and
     on a correct runtime this oracle PASSES (the program exits 0 when there is
     no bug).
 
@@ -73,7 +73,7 @@ import os
 import netrc
 
 import harness
-import runloom
+import stackweave
 
 # Machine entries written per fiber.  A handful is enough to force multiple
 # top-level "machine" keywords + follower tokens through the lexer while keeping
@@ -158,7 +158,7 @@ def netrc_check(H, wid, path, state):
     # YIELD: park here so a sibling drives its OWN netrc parse on this hub before
     # we re-read.  If parser/hosts state were not fiber-local, a sibling's tokens
     # could bleed into this fiber's mapping across the migration.
-    runloom.yield_now()
+    stackweave.yield_now()
 
     # ---- parse #2: the mapping must be identical across the park -------------
     nrc1 = netrc.netrc(path)
@@ -227,4 +227,4 @@ if __name__ == "__main__":
                  "with every host carrying this fiber's wid marker (no cross-file "
                  "leak) and stable across a re-parse taken after a yield.  A host "
                  "tagged with a sibling's wid, a torn field, or an unstable "
-                 "re-parse is the runloom parser-isolation bug")
+                 "re-parse is the stackweave parser-isolation bug")

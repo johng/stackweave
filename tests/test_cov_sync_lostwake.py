@@ -1,7 +1,7 @@
-"""Coverage for two sync-lostwake gaps on runloom's fan-in primitives.
+"""Coverage for two sync-lostwake gaps on stackweave's fan-in primitives.
 
 Gap 1 -- gather() with NO scheduler running.
-    runloom.gather() spawns each callable as a fiber and then blocks in
+    stackweave.gather() spawns each callable as a fiber and then blocks in
     WaitGroup.wait().  Called from a bare OS thread with no run()/mn_run() live,
     those fibers queue on a single-thread ring that nothing drains, so wg.wait()
     would poll forever -> a silent forever-hang.  gather() is supposed to detect
@@ -18,16 +18,16 @@ Gap 2 -- Future timeout-survivor (the stale-parker lost-wake class).
     de-queued handle, no crash.
 
 Conventions copied from tests/test_sync_primitives.py (the `_drive` root-fiber
-harness + runloom.run(hubs, ...)) and tests/test_adv_sched.py (hang_guard /
+harness + stackweave.run(hubs, ...)) and tests/test_adv_sched.py (hang_guard /
 raw_thread from adv_util so a lost wake fails as a timeout, not a wedge).
 """
 import re
 
 import pytest
 
-import runloom
-import runloom_c
-from runloom import sync
+import stackweave
+import stackweave_c
+from stackweave import sync
 
 from adv_util import hang_guard, raw_thread
 
@@ -43,7 +43,7 @@ def _drive(fn, hubs=8):
         except BaseException as e:   # noqa: BLE001  (re-raised below)
             box[1] = e
 
-    runloom.run(hubs, runner)
+    stackweave.run(hubs, runner)
     if box[1] is not None:
         raise box[1]
     return box[0]
@@ -58,7 +58,7 @@ def test_gather_no_scheduler_raises_on_main_thread():
     watchdog _exit (timeout) instead of a forever-hang."""
     with hang_guard(10, "gather no-scheduler main-thread"):
         with pytest.raises(RuntimeError, match="running scheduler"):
-            runloom.gather(lambda: 1, lambda: 2, lambda: 3)
+            stackweave.gather(lambda: 1, lambda: 2, lambda: 3)
 
 
 def test_gather_no_scheduler_raises_on_raw_thread():
@@ -69,7 +69,7 @@ def test_gather_no_scheduler_raises_on_raw_thread():
 
     def worker():
         try:
-            runloom.gather(lambda: 1, lambda: 2)
+            stackweave.gather(lambda: 1, lambda: 2)
             box["r"] = ("no-raise",)
         except RuntimeError as e:
             box["r"] = ("raised", str(e))
@@ -93,7 +93,7 @@ def test_future_timeout_survivor_still_resolves():
     set_result(7) must wake the survivor with 7 and never touch the de-queued
     handle."""
     def body():
-        fut = runloom.Future()
+        fut = stackweave.Future()
         out = {}
         wg = sync.WaitGroup()
         wg.add(3)
@@ -120,13 +120,13 @@ def test_future_timeout_survivor_still_resolves():
         def resolver():
             # Sleep well past the 0.03 timeout so the timed-out waiter has
             # already expired AND de-queued its handle before we resolve.
-            runloom.sleep(0.12)
+            stackweave.sleep(0.12)
             fut.set_result(7)
             wg.done()
 
-        runloom.fiber(timeout_waiter)
-        runloom.fiber(survivor)
-        runloom.fiber(resolver)
+        stackweave.fiber(timeout_waiter)
+        stackweave.fiber(survivor)
+        stackweave.fiber(resolver)
         wg.wait()
         # Future stays intact after the survivor's wake -- a stale double-wake
         # would corrupt _done / _waiters; a re-read must still return 7.
@@ -147,7 +147,7 @@ def test_future_many_timeouts_then_survivor():
     the de-queued handles must not receive a lost/double wake, and none may
     crash the runtime."""
     def body():
-        fut = runloom.Future()
+        fut = stackweave.Future()
         n_timeouts = 4
         out = {"timed_out": 0, "not_timed_out": 0, "errors": []}
         wg = sync.WaitGroup()
@@ -173,14 +173,14 @@ def test_future_many_timeouts_then_survivor():
                 wg.done()
 
         def resolver():
-            runloom.sleep(0.12)               # all timeouts expired + de-queued
+            stackweave.sleep(0.12)               # all timeouts expired + de-queued
             fut.set_result(7)
             wg.done()
 
         for _ in range(n_timeouts):
-            runloom.fiber(timeout_waiter)
-        runloom.fiber(survivor)
-        runloom.fiber(resolver)
+            stackweave.fiber(timeout_waiter)
+        stackweave.fiber(survivor)
+        stackweave.fiber(resolver)
         wg.wait()
         return out
 

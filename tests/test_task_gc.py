@@ -1,6 +1,6 @@
 """Regression tests for fiber/task lifetime under GC.
 
-A runloom.aio task owns a fiber whose callable is the task's own bound
+A stackweave.aio task owns a fiber whose callable is the task's own bound
 `_driver` method, so the C-level runloom_g_t holds  g->callable -> _driver ->
 task.  Combined with task._g (a RunloomG wrapping that same runloom_g_t) this is a
 reference cycle:
@@ -17,7 +17,7 @@ import gc
 import asyncio
 import unittest
 
-import runloom.aio as aio
+import stackweave.aio as aio
 
 
 def _count(typename):
@@ -27,7 +27,7 @@ def _count(typename):
 class TestTaskGC(unittest.TestCase):
     def test_completed_tasks_do_not_accumulate(self):
         """Inside one running loop, spawning + awaiting + dropping many tasks
-        must not grow the live RunloomTask population.
+        must not grow the live StackweaveTask population.
 
         Measured as a delta from a baseline taken inside main(), so the count
         is unaffected by tasks other tests in the suite may have leaked (e.g.
@@ -39,7 +39,7 @@ class TestTaskGC(unittest.TestCase):
         async def main():
             loop = asyncio.get_event_loop()
             gc.collect()
-            base = _count("RunloomTask")
+            base = _count("StackweaveTask")
             deltas = []
             for _ in range(4):
                 for i in range(150):
@@ -47,7 +47,7 @@ class TestTaskGC(unittest.TestCase):
                     await t
                     del t
                 gc.collect()
-                deltas.append(_count("RunloomTask") - base)
+                deltas.append(_count("StackweaveTask") - base)
             return deltas
 
         deltas = aio.run(main())
@@ -81,7 +81,7 @@ class TestTaskGC(unittest.TestCase):
         shape as the task<->driver cycle) is reclaimed once it completes,
         because the fiber releases its callable at completion."""
         import weakref
-        import runloom_c
+        import stackweave_c
         box = {}
 
         def run_once():
@@ -90,12 +90,12 @@ class TestTaskGC(unittest.TestCase):
             def body():
                 # body's closure holds `cell`; cell holds the handle, whose
                 # runloom_g_t holds body -> a cycle through the C struct.
-                cell["g"] = runloom_c.current_g()
+                cell["g"] = stackweave_c.current_g()
                 return 7
 
             box["w"] = weakref.ref(body)
-            runloom_c.fiber(body)
-            runloom_c.run()
+            stackweave_c.fiber(body)
+            stackweave_c.run()
             del body
 
         run_once()

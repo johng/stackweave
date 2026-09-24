@@ -9,7 +9,7 @@ so any deque corruption or lost task shows up as a wrong total.
 Stresses: M:N scheduling, work stealing, deque correctness.
 """
 import harness
-import runloom
+import stackweave
 
 
 def seq_sum(lo, hi):
@@ -25,7 +25,7 @@ def parallel_sum(H, lo, hi, result):
         return
     # Uneven split (1/4 vs 3/4) to stress load balancing.
     mid = lo + max(1, n // 4)
-    sub = runloom.Chan(2)
+    sub = stackweave.Chan(2)
     H.fiber(parallel_sum, H, lo, mid, sub)
     H.fiber(parallel_sum, H, mid, hi, sub)
     total = 0
@@ -56,7 +56,7 @@ def worker(H, wid, rng, state):
         hi = rng.randint(300, 1024)
         expected = seq_sum(0, hi)
         if do_parallel:
-            result = runloom.Chan(1)
+            result = stackweave.Chan(1)
             H.fiber(parallel_sum, H, 0, hi, result)
             got = result.recv()[0]
         else:

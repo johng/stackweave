@@ -6,12 +6,12 @@ runs two phases:
 
   Phase A -- park / wake / cancel on a fresh pipe.  The worker makes an
   os.pipe(), spawns a sibling goroutine that calls
-  runloom_c.wait_fd(read_fd, READ) and parks (the pipe is empty).  The worker
+  stackweave_c.wait_fd(read_fd, READ) and parks (the pipe is empty).  The worker
   then chooses, per round, one of two resolutions:
     (a) WRITE a uniquely tagged byte -> the parker's wait_fd returns readable,
         the parker os.read()s exactly that byte and reports it; the worker
         H.check()s the byte is the one IT wrote (no cross-talk), or
-    (b) CANCEL via runloom_c.netpoll_cancel_fd(read_fd) while the sibling is
+    (b) CANCEL via stackweave_c.netpoll_cancel_fd(read_fd) while the sibling is
         parked -> the parker's wait_fd must return the WAIT_FD_CANCELLED
         sentinel (NOT readable, NOT a hang); the worker H.check()s the parker
         saw exactly that sentinel.
@@ -30,7 +30,7 @@ runs two phases:
 Oracle: every park resolves to either the correct tagged byte or the cancelled
 sentinel; zero hangs; no leaked fds.
 
-Stresses: Stresses: runloom_c.wait_fd parking on raw pollable fds (os.pipe),
+Stresses: Stresses: stackweave_c.wait_fd parking on raw pollable fds (os.pipe),
 cross-goroutine netpoll_cancel_fd while parked (WAIT_FD_CANCELLED sentinel, not
 a hang), and per-fd arm-cache correctness when the SAME fd NUMBER is closed and
 re-created (stale-arm reuse hang class).
@@ -48,15 +48,15 @@ if not _POSIX:
     sys.exit(0)
 
 import harness
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
-if not hasattr(runloom_c, "wait_fd") or not hasattr(runloom_c, "netpoll_cancel_fd"):
-    print("SKIP: runloom_c.wait_fd / netpoll_cancel_fd unavailable")
+if not hasattr(stackweave_c, "wait_fd") or not hasattr(stackweave_c, "netpoll_cancel_fd"):
+    print("SKIP: stackweave_c.wait_fd / netpoll_cancel_fd unavailable")
     sys.exit(0)
 
 READ = 1                              # wait_fd events bitmask: 1=read
-CANCELLED = runloom_c.WAIT_FD_CANCELLED
+CANCELLED = stackweave_c.WAIT_FD_CANCELLED
 # Short re-park ceiling: netpoll_cancel_fd(fd) only wakes a fiber that is
 # ALREADY parked, so a cancel issued in the tiny window before the park lands is
 # a benign no-op (NOT the bug we hunt) -- the parker must wake on the ceiling and
@@ -83,7 +83,7 @@ def parked_reader(read_fd, mode, expect_byte, done):
     the worker's H.check fails loudly rather than silently re-parking forever."""
     while True:
         try:
-            ready = runloom_c.wait_fd(read_fd, READ, REPARK_MS)
+            ready = stackweave_c.wait_fd(read_fd, READ, REPARK_MS)
         except OSError:
             done.send(("err", -1))
             return
@@ -125,7 +125,7 @@ def worker(H, wid, rng):
         seq += 1
         tag = (seq * 31 + wid) & 0xFF
         do_cancel = rng.random() < 0.5
-        done = runloom.Chan(1)
+        done = stackweave.Chan(1)
         H.fiber(parked_reader, rfd, "cancel" if do_cancel else "write",
              tag, done)
         H.sleep(0.002)                # let the sibling actually reach the park
@@ -138,7 +138,7 @@ def worker(H, wid, rng):
             # never resolves the sibling -> watchdog HANG (the real bug).
             res = None
             while res is None:
-                runloom_c.netpoll_cancel_fd(rfd)
+                stackweave_c.netpoll_cancel_fd(rfd)
                 res = done.try_recv()
                 if res is None:
                     H.sleep(0.005)
@@ -166,7 +166,7 @@ def worker(H, wid, rng):
                 return
         # Drop any idle arm before closing so the fd number re-registers clean.
         try:
-            runloom_c.netpoll_release_if_idle(rfd)
+            stackweave_c.netpoll_release_if_idle(rfd)
         except Exception:
             pass
         os.close(rfd)
@@ -187,7 +187,7 @@ def worker(H, wid, rng):
             pass
         for cr, cw in churn:
             try:
-                runloom_c.netpoll_release_if_idle(cr)
+                stackweave_c.netpoll_release_if_idle(cr)
             except Exception:
                 pass
             os.close(cr)
@@ -201,7 +201,7 @@ def worker(H, wid, rng):
             continue
         os.set_blocking(r2, False)
         tag2 = (seq * 17 + wid + 3) & 0xFF
-        done2 = runloom.Chan(1)
+        done2 = stackweave.Chan(1)
         H.fiber(parked_reader, r2, "write", tag2, done2)
         H.sleep(0.002)
         try:
@@ -214,7 +214,7 @@ def worker(H, wid, rng):
                      "the NEW pipe wid={0} seq={1}: wrote {2} got ({3!r}, "
                      "{4!r})".format(wid, seq, tag2, kind2, val2))
         try:
-            runloom_c.netpoll_release_if_idle(r2)
+            stackweave_c.netpoll_release_if_idle(r2)
         except Exception:
             pass
         os.close(r2)

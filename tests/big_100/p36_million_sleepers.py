@@ -13,8 +13,8 @@ stack itself (sleepers never recurse), so a million parked timers stay cheap.
 import time
 
 import harness
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
 LATE_THRESHOLD = 0.5      # a wake-up later than this counts as "late"
 FAIL_THRESHOLD = 30.0     # later than this is treated as starvation
@@ -26,7 +26,7 @@ def sleeper(H, wid, rng, state):
     while H.running():
         target = rng.uniform(0.001, 0.25)
         t0 = time.perf_counter()
-        runloom.sleep(target)
+        stackweave.sleep(target)
         lateness = (time.perf_counter() - t0) - target
         if lateness > maxlat[wid & 1023]:
             maxlat[wid & 1023] = lateness
@@ -47,7 +47,7 @@ def setup(H):
 def body(H):
     # Sleepers don't recurse into deep C, so a small stack is plenty and keeps
     # a million parked goroutines affordable.
-    runloom_c.set_stack_size(96 * 1024)
+    stackweave_c.set_stack_size(96 * 1024)
     H.run_pool(H.funcs, sleeper, H.state)
 
     def reporter():

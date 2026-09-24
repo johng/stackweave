@@ -8,12 +8,12 @@
 (3) submit() from a non-fiber context with no scheduler running never resolves
     (stdlib ThreadPoolExecutor works anywhere).
 """
-import runloom.monkey as monkey
+import stackweave.monkey as monkey
 monkey.patch()
 
 import time
 import concurrent.futures as cf
-import runloom_c as rc
+import stackweave_c as rc
 
 out = {}
 

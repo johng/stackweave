@@ -6,7 +6,7 @@ state's current context (`ts->context`), points `ts->context` at THIS Context, r
 `fn` (so every `ContextVar.set()` inside `fn` mutates THIS Context's hamt), then on
 exit restores the saved context and asserts `ts->context` is still this Context.
 
-WHERE M:N COULD BREAK IT (the gap this program probes).  runloom's M:N fibers share
+WHERE M:N COULD BREAK IT (the gap this program probes).  stackweave's M:N fibers share
 ONE PyThreadState per hub.  When a fiber suspends at a cooperative yield, the runtime
 must SAVE that fiber's `ts->context` and, on resume (possibly on a DIFFERENT hub /
 PyThreadState), RESTORE it (src/runloom_c/runloom_sched_pystate.c.inc lines 111-127
@@ -43,11 +43,11 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (holds on plain threads too):
   plain-threads control (8 OS threads, each with its own Context and the same shared
   ContextVars set to distinct per-thread values, GIL on AND off): iterating each
   thread's own Context object returns 100% that thread's values, 0 cross-thread
-  bleed.  Under a correct runloom it must also hold: the Context is single-owner and
+  bleed.  Under a correct stackweave it must also hold: the Context is single-owner and
   its hamt is only mutated while it is the current context of THIS fiber.  If iterating
   the owned Context returns a value this fiber never set (a sibling's value, a torn
   value, a missing/extra key), OR `ctx.run()` raises the "different context object"
-  RuntimeError, that is a runloom per-fiber-context save/restore bug, and the
+  RuntimeError, that is a stackweave per-fiber-context save/restore bug, and the
   single-owner oracle PASSES on a correct runtime (exit 0 when there is no bug).
 
 ORACLES:
@@ -63,7 +63,7 @@ ORACLES:
           (3) `len(ctx) == NUM_VARS` -- no leaked/extra bindings;
           (4) iterating `ctx` yields exactly our ContextVars (closed key set).
     Single-owner: the Context is a fiber-local variable, never shared.  A mismatch is
-    a runloom context-isolation desync; a raised RuntimeError from run() is caught and
+    a stackweave context-isolation desync; a raised RuntimeError from run() is caught and
     turned into a fail (the exit-time "different context object" assertion tripping).
 
   * MEASURED (report-ONLY, NEVER fails): thread-current context view.  Inside the run,
@@ -71,7 +71,7 @@ ORACLES:
     snapshot -- both read `ts->context`, the SHARED-per-hub thread-current context (the
     p66 hazard).  We MEASURE how often that view disagrees with this fiber's values and
     report the rate; we NEVER fail on it (a shared thread-current context is documented
-    M:N behavior, not a runloom bug).  On the current runtime -- which DOES save/restore
+    M:N behavior, not a stackweave bug).  On the current runtime -- which DOES save/restore
     ts->context per fiber -- this rate is expected to be ~0, which independently
     corroborates the isolation; but we keep it report-only so a future change that
     reintroduces thread-current sharing cannot mislabel documented semantics as a bug.
@@ -101,7 +101,7 @@ single-owner value oracle even fires.
 import contextvars
 
 import harness
-import runloom
+import stackweave
 
 # Number of globally-shared-IDENTITY ContextVars.  Each fiber's OWN Context stores
 # its own binding for each; the shared identity is what makes a cross-fiber leak
@@ -151,13 +151,13 @@ def context_isolation_check(H, wid, idx, state):
         # YIELD INSIDE the run: siblings entered in their OWN ctx.run() interleave
         # here while this Context is entered.  A broken per-fiber context save/restore
         # would resume us (or a sibling) with the wrong ts->context.
-        runloom.yield_now()
+        stackweave.yield_now()
         if idx & 1:
-            runloom.sleep(0.0002)
+            stackweave.sleep(0.0002)
         # MEASURED (report-only): the thread-current view via CV.get()/copy_context.
         # This reads ts->context (shared-per-hub, the p66 hazard).  Count disagreement
         # but NEVER fail on it -- a shared thread-current context is documented M:N
-        # behavior, not a runloom bug.
+        # behavior, not a stackweave bug.
         leaked = False
         for i in range(NUM_VARS):
             if CVARS[i].get(None) != base + i:
@@ -267,7 +267,7 @@ def post(H):
         H.log("note: the thread-current (CV.get/copy_context) view disagreed with "
               "the fiber's values {0} times across {1} checks -- reads of the "
               "shared-per-hub ts->context, documented M:N behavior (like p66), NOT a "
-              "runloom bug; this NEVER reaches the load-bearing single-owner Context "
+              "stackweave bug; this NEVER reaches the load-bearing single-owner Context "
               "oracle".format(leaks, checks))
 
     # NON-VACUITY: the load-bearing single-owner Context hazard was actually run.

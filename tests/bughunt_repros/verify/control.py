@@ -1,4 +1,4 @@
-import gc, weakref, runloom_c as rc
+import gc, weakref, stackweave_c as rc
 class Req: pass
 # control 1: plain cycle through list
 r = Req(); lst = [r]; r.reply = lst

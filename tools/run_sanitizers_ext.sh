@@ -1,34 +1,34 @@
 #!/usr/bin/env bash
-# run_sanitizers_ext.sh -- build the runloom_c EXTENSION under ThreadSanitizer
+# run_sanitizers_ext.sh -- build the stackweave_c EXTENSION under ThreadSanitizer
 # and run real workloads under the free-threaded interpreter to hunt data races
-# in runloom's own C (scheduler / chan / select / netpoll / coro).
+# in stackweave's own C (scheduler / chan / select / netpoll / coro).
 #
 # This complements tools/run_sanitizers.sh, which TSans only the standalone C
 # deque harness (test_cldeque).  Here the *whole runtime* runs under TSan while
 # driven by real goroutines on real OS threads with the GIL off -- the regime
-# where runloom's lock-free park/wake/select bugs actually live.
+# where stackweave's lock-free park/wake/select bugs actually live.
 #
 # Default (ext-only): build the ext with -fsanitize=thread and force-load
 # libtsan into a stock free-threaded CPython.  TSan instruments every load/store
-# in the ext (including inlined Py_INCREF / atomics) -- exactly runloom's code --
+# in the ext (including inlined Py_INCREF / atomics) -- exactly stackweave's code --
 # and is blind to the uninstrumented interpreter's internals, the few of which
 # that surface are filtered by tools/tsan_suppressions.txt.  Needs no patched
 # CPython.
 #
-# Gold standard (RUNLOOM_TSAN_PYTHON=/path/to/tsan/python3.13t): build + run under
+# Gold standard (STACKWEAVE_TSAN_PYTHON=/path/to/tsan/python3.13t): build + run under
 # a FULLY TSan-instrumented free-threaded interpreter (tools/build_tsan_cpython.sh)
 # so races crossing into CPython internals are attributed too.  Set
-# RUNLOOM_TSAN_CPYTHON_SUPP to that tree's suppressions_free_threading.txt to mute
+# STACKWEAVE_TSAN_CPYTHON_SUPP to that tree's suppressions_free_threading.txt to mute
 # the known CPython free-threading races.
 #
 # STATUS (2026-08-21, gold on a --with-thread-sanitizer CPython 3.14.4t): the
-# only non-suppressed report in runloom's own C is
+# only non-suppressed report in stackweave's own C is
 # runloom_sched_pystate.c.inc:602 runloom_chunk_grace_depth -- the lazy getenv
 # cache, self-documented in the source as a benign idempotent first-init race.
 # Everything else is clean.  Re-verify with tools/verify/tsan_gold_drift.py,
 # which warns when src/runloom_c has drifted past this run.
 #
-# The previous status line here claimed "runloom's C is TSan-clean" from a run
+# The previous status line here claimed "stackweave's C is TSan-clean" from a run
 # against **3.13t**, and it had gone quietly stale by a whole minor version:
 # RUNLOOM_GCFRAMES_ANCHOR is gated `Py_GIL_DISABLED && PY_VERSION_HEX >=
 # 0x030E0000`, so the entire GC-frames anchor compiles to nothing on 3.13 and
@@ -75,26 +75,26 @@ command -v setarch >/dev/null 2>&1 && SA="setarch $(uname -m) -R"
 
 # Optional gold-standard mode: a FULLY TSan-instrumented free-threaded
 # interpreter (build it with tools/build_tsan_cpython.sh).  Point
-# RUNLOOM_TSAN_PYTHON at it and the ext is built against + run UNDER it directly --
+# STACKWEAVE_TSAN_PYTHON at it and the ext is built against + run UNDER it directly --
 # no libtsan preload -- so races crossing into CPython internals are attributed
-# too.  Set RUNLOOM_TSAN_CPYTHON_SUPP to that tree's
+# too.  Set STACKWEAVE_TSAN_CPYTHON_SUPP to that tree's
 # Tools/tsan/suppressions_free_threading.txt to fold in the known CPython
 # free-threading races.  Unset = the default preload path (instruments only the
 # ext; needs no patched interpreter).
-FULL_PY="${RUNLOOM_TSAN_PYTHON:-}"
+FULL_PY="${STACKWEAVE_TSAN_PYTHON:-}"
 SUPP_EFF="$SUPP"
 if [ -n "$FULL_PY" ]; then
-    [ -x "$FULL_PY" ] || { echo "RUNLOOM_TSAN_PYTHON=$FULL_PY not executable"; exit 2; }
+    [ -x "$FULL_PY" ] || { echo "STACKWEAVE_TSAN_PYTHON=$FULL_PY not executable"; exit 2; }
     BUILD_PY="$FULL_PY"; RUN_PY="$FULL_PY"; PRELOAD=""; MODE="fully-instrumented interpreter (no preload)"
-    if [ -n "${RUNLOOM_TSAN_CPYTHON_SUPP:-}" ] && [ -f "${RUNLOOM_TSAN_CPYTHON_SUPP}" ]; then
+    if [ -n "${STACKWEAVE_TSAN_CPYTHON_SUPP:-}" ] && [ -f "${STACKWEAVE_TSAN_CPYTHON_SUPP}" ]; then
         SUPP_EFF="$(mktemp /tmp/runloom_tsan_supp.XXXX.txt)"
-        cat "$SUPP" "$RUNLOOM_TSAN_CPYTHON_SUPP" > "$SUPP_EFF"
+        cat "$SUPP" "$STACKWEAVE_TSAN_CPYTHON_SUPP" > "$SUPP_EFF"
     fi
 else
     BUILD_PY="$PYTHON"; RUN_PY="$PYTHON"; PRELOAD="$LIBTSAN"; MODE="ext-only (libtsan preload)"
 fi
 
-echo "================ runloom ext under ThreadSanitizer ================"
+echo "================ stackweave ext under ThreadSanitizer ================"
 echo "  build/run python : $RUN_PY"
 echo "  mode             : $MODE"
 echo "  suppressions     : $SUPP_EFF"
@@ -106,8 +106,8 @@ $RM -f src/runloom_c*.so
 $RM -rf build/temp.tsan build/lib.*
 # setarch -R: in full-interpreter mode BUILD_PY is itself TSan-instrumented and
 # would abort under ASLR while running setup.py; harmless for a normal BUILD_PY.
-$SA env RUNLOOM_EXTRA_CFLAGS="-fsanitize=thread -g -O1 -fno-omit-frame-pointer" \
-RUNLOOM_EXTRA_LDFLAGS="-fsanitize=thread" \
+$SA env STACKWEAVE_EXTRA_CFLAGS="-fsanitize=thread -g -O1 -fno-omit-frame-pointer" \
+STACKWEAVE_EXTRA_LDFLAGS="-fsanitize=thread" \
     "$BUILD_PY" setup.py build_ext --inplace --build-temp build/temp.tsan \
     >/tmp/runloom_tsan_ext_build.log 2>&1 \
     || { echo "  BUILD FAILED -- see /tmp/runloom_tsan_ext_build.log"; tail -20 /tmp/runloom_tsan_ext_build.log; exit 2; }
@@ -156,19 +156,19 @@ echo "  race reports (non-suppressed), by site:"
 shopt -s nullglob
 reports=("$LOGDIR"/tsan.*)
 if [ ${#reports[@]} -eq 0 ]; then
-    echo "    NONE -- runloom ext is TSan-clean across all workloads"
+    echo "    NONE -- stackweave ext is TSan-clean across all workloads"
     rc=0
 else
     cat "$LOGDIR"/tsan.* | grep "SUMMARY: ThreadSanitizer" | sort | uniq -c | sort -rn | sed 's/^/    /'
     # Judge by the SUMMARY line -- the authoritative racing site -- NOT any stack
-    # frame.  In full-interpreter mode runloom frames legitimately appear deep in
+    # frame.  In full-interpreter mode stackweave frames legitimately appear deep in
     # the call stack of a CPython-internal race (e.g. a refcount merge triggered
-    # from a goroutine); only a SUMMARY pointing at src/runloom_c is a runloom bug.
+    # from a goroutine); only a SUMMARY pointing at src/runloom_c is a stackweave bug.
     if cat "$LOGDIR"/tsan.* | grep "SUMMARY: ThreadSanitizer" | grep -q "src/runloom_c/"; then
-        echo "  >>> data races in runloom's own C -- see $LOGDIR/tsan.*"
+        echo "  >>> data races in stackweave's own C -- see $LOGDIR/tsan.*"
         rc=1
     else
-        echo "  (all race summaries are in CPython internals; runloom's C is clean)"
+        echo "  (all race summaries are in CPython internals; stackweave's C is clean)"
         rc=0
     fi
 fi

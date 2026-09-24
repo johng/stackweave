@@ -1,7 +1,7 @@
 import threading
-import runloom
-from runloom.sync import Semaphore
-from runloom.monkey import CoSemaphore
+import stackweave
+from stackweave.sync import Semaphore
+from stackweave.monkey import CoSemaphore
 
 # Baseline: stdlib threading semantics
 t = threading.Semaphore(1)
@@ -19,11 +19,11 @@ def main():
     def worker(i):
         if sem.acquire(False):   # threading-style non-blocking acquire
             inside.append(i)
-            runloom.sleep(0.2)   # hold the "permit"
+            stackweave.sleep(0.2)   # hold the "permit"
             sem.release()
     for i in range(4):
-        runloom.fiber(worker, i)
-    runloom.sleep(0.1)
+        stackweave.fiber(worker, i)
+    stackweave.sleep(0.1)
     print("fibers simultaneously in critical section guarded by Semaphore(1):", len(inside), inside)
-    runloom.sleep(0.3)
-runloom.run(2, main)
+    stackweave.sleep(0.3)
+stackweave.run(2, main)

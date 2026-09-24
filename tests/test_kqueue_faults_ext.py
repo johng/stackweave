@@ -88,7 +88,7 @@ def _base_env(site, spec):
     env["PYTHON_GIL"] = "0"                       # focus: free-threaded only
     env["FAULT_SITE"] = site
     env["FAULT_TIMEOUT_MS"] = str(TIMEOUT_MS)
-    env["RUNLOOM_FAULT_" + site] = spec
+    env["STACKWEAVE_FAULT_" + site] = spec
     return env
 
 
@@ -169,7 +169,7 @@ def test_register_once_error_surfaces_then_rolls_back(errno_):
     code = r"""
 import os, socket, sys, threading, time
 sys.path.insert(0, "src")
-import runloom_c
+import stackweave_c
 SITE = "KQUEUE_CTL"
 TO = int(os.environ["FAULT_TIMEOUT_MS"])
 # socketpair so the SECOND park can be woken by a real edge from the peer.
@@ -189,7 +189,7 @@ def feeder():
 def parker():
     # FIRST park: the once-fault fires on this fd's registration kevent.
     try:
-        r = runloom_c.wait_fd(a.fileno(), 1, TO)
+        r = stackweave_c.wait_fd(a.fileno(), 1, TO)
         first.append(("ok", r))
     except OSError as e:
         first.append(("oserror", e.errno))
@@ -197,19 +197,19 @@ def parker():
     # registration must now succeed and the real edge must wake it.
     t = threading.Thread(target=feeder, daemon=True); t.start()
     try:
-        r = runloom_c.wait_fd(a.fileno(), 1, TO)
+        r = stackweave_c.wait_fd(a.fileno(), 1, TO)
         second.append(("ok", r))
     except OSError as e:
         second.append(("oserror", e.errno))
     t.join(5)
 
-runloom_c.fiber(parker)
-runloom_c.run()
+stackweave_c.fiber(parker)
+stackweave_c.run()
 a.close(); b.close()
-print("BACKEND=%s" % runloom_c.netpoll_backend())
+print("BACKEND=%s" % stackweave_c.netpoll_backend())
 print("FIRST=%r" % (first,))
 print("SECOND=%r" % (second,))
-print("FAULTS=%d" % runloom_c._fault_count(SITE))
+print("FAULTS=%d" % stackweave_c._fault_count(SITE))
 print("DONE")
 """
     p = _run_snippet("KQUEUE_CTL", "once:%d" % errno_, code)
@@ -245,7 +245,7 @@ def test_kqueue_create_once_under_mn(hubs, errno_):
     code = r"""
 import os, socket, sys
 sys.path.insert(0, "src")
-import runloom, runloom_c
+import stackweave, stackweave_c
 SITE = "KQUEUE_CREATE"
 HUBS = int(os.environ["RL_HUBS"])
 TO = int(os.environ["FAULT_TIMEOUT_MS"])
@@ -256,23 +256,23 @@ def main():
     s.bind(("127.0.0.1", 0)); s.setblocking(False)
     def parker():
         try:
-            r = runloom_c.wait_fd(s.fileno(), 1, TO)
+            r = stackweave_c.wait_fd(s.fileno(), 1, TO)
             result.append(("ok", r))
         except OSError as e:
             result.append(("oserror", e.errno))
         except BaseException as e:
             result.append(("err", type(e).__name__))
-    runloom.fiber(parker)
-    runloom.sleep(float(TO) / 1000.0 + 0.3)
+    stackweave.fiber(parker)
+    stackweave.sleep(float(TO) / 1000.0 + 0.3)
     s.close()
 
 try:
-    runloom.run(HUBS, main)
+    stackweave.run(HUBS, main)
 finally:
     pass
-print("BACKEND=%s" % runloom_c.netpoll_backend())
+print("BACKEND=%s" % stackweave_c.netpoll_backend())
 print("RESULT=%r" % (result,))
-print("FAULTS=%d" % runloom_c._fault_count(SITE))
+print("FAULTS=%d" % stackweave_c._fault_count(SITE))
 print("DONE")
 """
     env = _base_env("KQUEUE_CREATE", "once:%d" % errno_)
@@ -308,7 +308,7 @@ print("DONE")
 _HEAVY_CODE = r"""
 import os, socket, sys
 sys.path.insert(0, "src")
-import runloom_c
+import stackweave_c
 SITE = os.environ["FAULT_SITE"]
 TO = int(os.environ["FAULT_TIMEOUT_MS"])
 N = int(os.environ["RL_NPARK"])
@@ -318,7 +318,7 @@ results = []  # one slot per fiber (single writer each) -- race-free under no-gi
 def make_parker(i, fd):
     def parker():
         try:
-            r = runloom_c.wait_fd(fd, 1, TO)
+            r = stackweave_c.wait_fd(fd, 1, TO)
             results[i] = ("ok", r)
         except OSError as e:
             results[i] = ("oserror", e.errno)
@@ -332,18 +332,18 @@ for i in range(N):
     socks.append(s)
     results.append(None)
 for i, s in enumerate(socks):
-    runloom_c.fiber(make_parker(i, s.fileno()))
-runloom_c.run()
+    stackweave_c.fiber(make_parker(i, s.fileno()))
+stackweave_c.run()
 for s in socks:
     s.close()
 done = sum(1 for r in results if r is not None)
 oserr = sum(1 for r in results if r and r[0] == "oserror")
 ok = sum(1 for r in results if r and r[0] == "ok")
 bad = sum(1 for r in results if r and r[0] == "err")
-print("BACKEND=%s" % runloom_c.netpoll_backend())
+print("BACKEND=%s" % stackweave_c.netpoll_backend())
 print("RESULT=%r" % [("done", done), ("ok", ok), ("oserror", oserr), ("err", bad)])
 print("NPARK=%d" % N)
-print("FAULTS=%d" % runloom_c._fault_count(SITE))
+print("FAULTS=%d" % stackweave_c._fault_count(SITE))
 print("DONE")
 """
 
@@ -415,14 +415,14 @@ def test_heavy_concurrency_ctl_always_oserror(npark):
 _PERHUB_CODE = r"""
 import socket, sys
 sys.path.insert(0, "src")
-import runloom, runloom_c
+import stackweave, stackweave_c
 socks = []
 outcomes = []
 def worker(i):
     a, b = socket.socketpair(); a.setblocking(False); b.setblocking(False)
     socks.append((a, b))
     try:
-        r = runloom_c.wait_fd(a.fileno(), 1, 300)   # READ + 300ms deadline
+        r = stackweave_c.wait_fd(a.fileno(), 1, 300)   # READ + 300ms deadline
         outcomes.append(("ok", r))
     except OSError as e:
         outcomes.append(("oserror", e.errno))
@@ -430,11 +430,11 @@ def worker(i):
         outcomes.append(("err", type(e).__name__))
 def main():
     for i in range(64):
-        runloom.fiber(worker, i)
-    runloom.sleep(0.6)
-runloom.run(8, main)
-print("BACKEND=%s" % runloom_c.netpoll_backend())
-print("FAULTS=%d" % runloom_c._fault_count("KQUEUE_PERHUB"))
+        stackweave.fiber(worker, i)
+    stackweave.sleep(0.6)
+stackweave.run(8, main)
+print("BACKEND=%s" % stackweave_c.netpoll_backend())
+print("FAULTS=%d" % stackweave_c._fault_count("KQUEUE_PERHUB"))
 print("N=%d" % len(outcomes))
 print("EINVAL=%d" % sum(1 for k, v in outcomes if k == "oserror" and v == 22))
 print("DONE")

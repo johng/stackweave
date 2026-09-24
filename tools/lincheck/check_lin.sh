@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# check_lin.sh -- linearizability pipeline for runloom channels.
+# check_lin.sh -- linearizability pipeline for stackweave channels.
 #
 #   1. record a concurrent send/recv/close history from a real M:N run
 #      -- twice: once with plain recv consumers, once with select() consumers;

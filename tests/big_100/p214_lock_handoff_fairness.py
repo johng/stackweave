@@ -1,6 +1,6 @@
 """big_100 / 214 -- lock hand-off fairness.
 
-One shared `runloom.sync.Lock`.  N goroutines each loop: acquire the lock,
+One shared `stackweave.sync.Lock`.  N goroutines each loop: acquire the lock,
 increment a SHARED counter under it, bump their own per-goroutine acquire-count
 slot, `yield_now()` (force a scheduler hand-off while NOT holding the lock would
 be wrong -- we yield while holding, stressing hand-off to a waiter on resume),
@@ -25,8 +25,8 @@ Invariant 1: shared_counter == sum(per-g) == ops (no lost increment).
 Invariant 2: every running goroutine acquired > 0; max/min spread bounded.
 """
 import harness
-import runloom
-import runloom.sync as sync
+import stackweave
+import stackweave.sync as sync
 
 MAX_CONTENDERS = 2000      # a single lock can't usefully serve more
 FAIRNESS_BOUND = 200       # generous max/min ratio bound for runners that ran
@@ -54,7 +54,7 @@ def worker(H, wid, rng, state):
             # is safe even with the GIL off.
             counter[0] += 1
             acq[wid] += 1
-            runloom.yield_now()      # hand off the scheduler WHILE holding the lock
+            stackweave.yield_now()      # hand off the scheduler WHILE holding the lock
         H.op(wid)
 
 

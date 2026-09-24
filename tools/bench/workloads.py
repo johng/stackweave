@@ -1,4 +1,4 @@
-"""workloads.py -- canonical runloom microbenchmarks for the rigor harness.
+"""workloads.py -- canonical stackweave microbenchmarks for the rigor harness.
 
 Each workload is a plain function returning ``(ops, seconds)`` for ONE
 in-process iteration:
@@ -20,9 +20,9 @@ import time
 # names (``rigor.py list``) without a built extension on its path.  Children
 # run with PYTHONPATH=src, where the import succeeds.
 try:
-    import runloom_c
+    import stackweave_c
 except ImportError:
-    runloom_c = None
+    stackweave_c = None
 
 
 def spawn(scale=100000):
@@ -36,8 +36,8 @@ def spawn(scale=100000):
 
     t0 = time.perf_counter()
     for _ in range(scale):
-        runloom_c.fiber(noop)
-    runloom_c.run()
+        stackweave_c.fiber(noop)
+    stackweave_c.run()
     return scale, time.perf_counter() - t0
 
 
@@ -47,8 +47,8 @@ def chan_pingpong(scale=200000):
     The classic ``BenchmarkPingPong`` shape: every roundtrip is 4 channel
     ops + 2 goroutine switches, all parking.  ops = roundtrips.
     """
-    a = runloom_c.Chan()
-    b = runloom_c.Chan()
+    a = stackweave_c.Chan()
+    b = stackweave_c.Chan()
 
     def pinger():
         for i in range(scale):
@@ -60,10 +60,10 @@ def chan_pingpong(scale=200000):
             v, _ = a.recv()
             b.send(v)
 
-    runloom_c.fiber(pinger)
-    runloom_c.fiber(ponger)
+    stackweave_c.fiber(pinger)
+    stackweave_c.fiber(ponger)
     t0 = time.perf_counter()
-    runloom_c.run()
+    stackweave_c.run()
     return scale, time.perf_counter() - t0
 
 
@@ -73,7 +73,7 @@ def chan_buffered(scale=500000, cap=64):
     Most sends don't park (buffer absorbs them): measures the buffered
     fast path rather than the park/wake path.  ops = items moved.
     """
-    ch = runloom_c.Chan(cap)
+    ch = stackweave_c.Chan(cap)
 
     def producer():
         for i in range(scale):
@@ -86,10 +86,10 @@ def chan_buffered(scale=500000, cap=64):
             if not ok:
                 break
 
-    runloom_c.fiber(producer)
-    runloom_c.fiber(consumer)
+    stackweave_c.fiber(producer)
+    stackweave_c.fiber(consumer)
     t0 = time.perf_counter()
-    runloom_c.run()
+    stackweave_c.run()
     return scale, time.perf_counter() - t0
 
 
@@ -101,12 +101,12 @@ def yield_storm(gs=200, k=2000):
     """
     def spinner():
         for _ in range(k):
-            runloom_c.yield_()
+            stackweave_c.yield_()
 
     for _ in range(gs):
-        runloom_c.fiber(spinner)
+        stackweave_c.fiber(spinner)
     t0 = time.perf_counter()
-    runloom_c.run()
+    stackweave_c.run()
     return gs * k, time.perf_counter() - t0
 
 

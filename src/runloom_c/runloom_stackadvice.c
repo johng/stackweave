@@ -92,7 +92,7 @@ void runloom_advice_set_autosize(int on, int prescan)
      * overridden by the env if set -- never a leftover from a previous call. */
     runloom_autosize_start = RUNLOOM_AUTOSIZE_START_DEFAULT;
     {
-        const char *e = getenv("RUNLOOM_STACK_AUTOSIZE_START");
+        const char *e = getenv("STACKWEAVE_STACK_AUTOSIZE_START");
         if (e != NULL && e[0]) {
             long v = atol(e);
             if (v > 0) runloom_autosize_start = (size_t)v;

@@ -114,7 +114,7 @@ identity assert even fires.  Per-fiber RNG (rng) keeps it replayable.
 import threading
 
 import harness
-import runloom
+import stackweave
 
 # Finite sentinel UNIVERSE of slot NAMES.  Every class of the family defines one
 # descriptor per name here.  NSLOTS is large enough to push the type's tp_dict
@@ -282,10 +282,10 @@ def do_contended(H, wid, rng, state, slot):
     DURING the install loop.  Readers first wait on a 'ready' Chan published by
     the builder (so they read the SAME class object), then race subsequent reads
     against a churn rebuild that re-bumps the type's version tag."""
-    gate = runloom.WaitGroup()          # builder trips just before type() runs
+    gate = stackweave.WaitGroup()          # builder trips just before type() runs
     gate.add(1)
-    ready = runloom.Chan(1)             # builder publishes the built class here
-    wg = runloom.WaitGroup()
+    ready = stackweave.Chan(1)             # builder publishes the built class here
+    wg = stackweave.WaitGroup()
     wg.add(1 + READERS)
 
     install_tally = state["installs"]
@@ -298,7 +298,7 @@ def do_contended(H, wid, rng, state, slot):
             # loop so the version-tag bump + __set_name__ writes overlap the
             # readers' attribute resolution on other hubs.
             gate.done()
-            runloom.yield_now()
+            stackweave.yield_now()
             cls, log, loglock = make_descriptor_class()
             published = cls
             # Install conservation on the fully-built class.
@@ -319,7 +319,7 @@ def do_contended(H, wid, rng, state, slot):
     def run_reader(ridx):
         try:
             gate.wait()                 # ensure we run DURING/after the bump window
-            runloom.yield_now()
+            stackweave.yield_now()
             cls, ok = ready.recv()      # the class the builder published (val, ok)
             if not ok or cls is None or H.failed:
                 return
@@ -329,7 +329,7 @@ def do_contended(H, wid, rng, state, slot):
                 if not check_instance_reads(H, wid, cls, "(contended reader)"):
                     return
                 read_tally[slot] += 1
-                runloom.yield_now()     # re-park between passes -> race a rebuild
+                stackweave.yield_now()     # re-park between passes -> race a rebuild
         except Exception as exc:        # noqa: BLE001
             H.error(wid, exc)
         finally:
@@ -380,7 +380,7 @@ def do_rebuild(H, wid, rng, state, slot):
             return False
         state["installs"][slot] += n
         built += 1
-        runloom.yield_now()
+        stackweave.yield_now()
     state["rebuild"][slot] += built
     return not H.failed
 

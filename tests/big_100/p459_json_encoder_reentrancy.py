@@ -3,8 +3,8 @@
 json.dumps() uses the C encoder (json.encoder.c_make_encoder).  When you pass a
 `default=` callback, that callback runs ARBITRARY PYTHON for every object the
 encoder doesn't know how to serialize -- and it runs WHILE the C encoder is
-partway through building the output for the enclosing object.  In a runloom M:N
-runtime a callback that yields / sleeps (runloom.sleep) is a SCHEDULING POINT: the
+partway through building the output for the enclosing object.  In a stackweave M:N
+runtime a callback that yields / sleeps (stackweave.sleep) is a SCHEDULING POINT: the
 fiber can be preempted and the hub can switch to a SIBLING fiber that is ALSO
 inside its own json.dumps on the same hub / same OS thread.  json is almost
 universally ASSUMED reentrant-safe, so this is a LOAD-BEARING probe: a clean run
@@ -17,7 +17,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (discriminator discipline, per p321):
 
   * LOAD-BEARING -- SINGLE-OWNER ROUND-TRIP IDENTITY (per-op, HARD).
     Each fiber builds its OWN distinct nested object, tagged with its wid, that
-    embeds custom objects whose `default=` callback calls runloom.sleep/yield_now
+    embeds custom objects whose `default=` callback calls stackweave.sleep/yield_now
     MID-ENCODE to force a hub switch INSIDE dumps().  Every object touched is
     owned by exactly THIS fiber -- nothing is shared between fibers except the
     interpreter's json machinery (the C encoder, the module-global encoder
@@ -33,9 +33,9 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (discriminator discipline, per p321):
     standalone control below): the GIL serializes the C encoder, and even though
     a default= callback can run other Python, json.dumps builds into a FRESH
     accumulator per call, so no sibling's bytes ever appear in our result.  A
-    correct runloom MUST match that.  If runloom's preempt-mid-C-encode splices a
+    correct stackweave MUST match that.  If stackweave's preempt-mid-C-encode splices a
     sibling fiber's bytes into our buffer, or corrupts the shared encoder state
-    across a hub migration, the identity breaks -- and THAT is the real runloom
+    across a hub migration, the identity breaks -- and THAT is the real stackweave
     bug this program uniquely catches.  Exits 0 when there is no bug.
 
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber preempted inside the C
@@ -52,7 +52,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (discriminator discipline, per p321):
     sibling's wid.  This reproduces HEAVILY under PLAIN OS THREADS WITH THE GIL ON
     (verified by the standalone control: ~100k bleeds GIL-on), so hard-failing on it
     would be a FALSE-POSITIVE detector -- it is the documented-unsafe usage, not a
-    runloom bug.  We MEASURE the bleed rate on this arm and REPORT it, exactly like
+    stackweave bug.  We MEASURE the bleed rate on this arm and REPORT it, exactly like
     p67's TLS leak rate -- NEVER assert on it.  (NOTE: CPython's json.JSONEncoder
     itself IS reentrant -- each .encode()/iterencode() builds a FRESH markers dict
     and a fresh c_make_encoder accumulator as locals, sharing no per-call state on
@@ -62,7 +62,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (discriminator discipline, per p321):
     corruption, not the documented interleave.)
 
 Stresses: json C encoder (c_make_encoder) reentrancy, default= callback running
-arbitrary Python (runloom.sleep/yield_now) MID-ENCODE forcing a hub switch inside
+arbitrary Python (stackweave.sleep/yield_now) MID-ENCODE forcing a hub switch inside
 dumps(), recycled internal encode buffer cross-fiber bleed, json.loads/dumps
 concurrent across fibers/hubs, preempt-in-C-extension, no-lost-wake parked inside
 a C callback.
@@ -76,7 +76,7 @@ bleed before the identity oracle even fires.
 import json
 
 import harness
-import runloom
+import stackweave
 
 # Modest population: this is a correctness probe of the C-encoder reentrancy, not
 # a scale soak.  Each op does a real nested encode with several callback-driven
@@ -127,7 +127,7 @@ def build_scratch_payload(wid):
 def make_default(H, wid, fired_box):
     """Build the `default=` callback for this encode.  It runs arbitrary Python
     MID-ENCODE (the C encoder calls it for each Tagged): it FORCES A HUB SWITCH
-    (runloom.sleep / yield_now) so a sibling fiber's concurrent dumps() can
+    (stackweave.sleep / yield_now) so a sibling fiber's concurrent dumps() can
     interleave on this hub, then returns a JSON-serializable dict still tagged
     with THIS fiber's wid.  fired_box[0] counts callbacks so the caller can prove
     the encode actually ran through the yield points (non-vacuous)."""
@@ -137,9 +137,9 @@ def make_default(H, wid, fired_box):
             # MID-ENCODE scheduling point: half the time a real timed park, half a
             # bare yield, so the preempt lands at different encoder depths.
             if (o.idx & 1) == 0:
-                runloom.sleep(0.0003)
+                stackweave.sleep(0.0003)
             else:
-                runloom.yield_now()
+                stackweave.yield_now()
             return {"__tag__": o.wid, "__i__": o.idx}
         raise TypeError("not serializable: {0!r}".format(o))
     return default
@@ -193,7 +193,7 @@ def roundtrip_check(H, wid, state):
 
     # IDENTITY: every wid-tag in the decoded object must be THIS fiber's wid.  A
     # foreign wid here means a sibling fiber's bytes were spliced into our output
-    # buffer across the preempt-mid-C-encode -- the real runloom bug.
+    # buffer across the preempt-mid-C-encode -- the real stackweave bug.
     for tag in _all_tags(decoded):
         if tag != wid:
             # First rule out garbage (a wid that was never any fiber's) -- that is
@@ -248,9 +248,9 @@ def shared_scratch_check(H, wid, state):
             # MID-ENCODE scheduling point: a sibling's default= can overwrite
             # scratch[0] before we read it back.
             if (o.idx & 1) == 0:
-                runloom.sleep(0.0003)
+                stackweave.sleep(0.0003)
             else:
-                runloom.yield_now()
+                stackweave.yield_now()
             seen = scratch[0]                # READ shared scratch back
             return {"__tag__": o.wid, "__seen__": seen}
         raise TypeError("not serializable: {0!r}".format(o))
@@ -324,7 +324,7 @@ def run_shared_phase(H, state):
     nshared = state["nshared"]
     if nshared <= 0:
         return
-    wg = runloom.WaitGroup()
+    wg = stackweave.WaitGroup()
     wg.add(nshared)
     rounds = max(8, H.rounds)        # several rounds so overlaps actually occur
 
@@ -383,7 +383,7 @@ def post(H):
     H.log("LOAD-BEARING single-owner json round-trips that kept identity: {0} | "
           "shared-scratch arm (documented-unsafe, REPORT ONLY): {1} clean, {2} "
           "bled, {3} torn-structure raises ({4:.1f}% interleaved -- reproduces "
-          "under plain GIL threads, NOT a runloom bug); ops={5}".format(
+          "under plain GIL threads, NOT a stackweave bug); ops={5}".format(
               rt, s_ok, s_bleed, s_err, bleed_pct, H.total_ops()))
 
     # Reaching post with no failure means every per-op identity check held fail-
@@ -401,8 +401,8 @@ def post(H):
               "+ {1} torn-structure raises across {2} concurrent encodes that "
               "write-then-read ONE shared mutable scratch across the mid-encode "
               "yield -- documented-unsafe usage (reproduces under plain GIL threads "
-              "with PYTHON_GIL=1), NOT a runloom bug; the load-bearing single-owner "
-              "arm above is the runloom oracle".format(s_bleed, s_err, s_total))
+              "with PYTHON_GIL=1), NOT a stackweave bug; the load-bearing single-owner "
+              "arm above is the stackweave oracle".format(s_bleed, s_err, s_total))
 
     # COMPLETENESS: no worker parked-then-vanished (e.g. preempted inside the C
     # encoder / its default= callback and never re-woken).
@@ -414,11 +414,11 @@ if __name__ == "__main__":
         "p459_json_encoder_reentrancy", body, setup=setup, post=post,
         default_funcs=6000,
         describe="json.dumps uses the C encoder; a default= callback runs Python "
-                 "(runloom.sleep/yield_now) MID-ENCODE, forcing a hub switch INSIDE "
+                 "(stackweave.sleep/yield_now) MID-ENCODE, forcing a hub switch INSIDE "
                  "dumps() while sibling fibers also encode.  LOAD-BEARING: each "
                  "fiber round-trips its OWN distinct wid-tagged object and must "
                  "recover it EXACTLY (no spliced sibling bytes from the recycled "
-                 "encode buffer) -- a real runloom bug if it bleeds.  A SHARED "
+                 "encode buffer) -- a real stackweave bug if it bleeds.  A SHARED "
                  "mutable scratch written-then-read by the callback across the "
                  "mid-encode yield is documented-unsafe (reproduces under plain GIL "
                  "threads) -- measured + reported, never failed")

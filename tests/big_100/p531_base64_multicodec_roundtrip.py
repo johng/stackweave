@@ -47,7 +47,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (single-owner, closed-world round-trip):
   Verified against a plain-threads control (8 OS threads, GIL on AND off, each
   thread round-tripping its own distinct wid-tagged bytes through all five
   codecs): 100% of round-trips reproduce the input and every encoded form stays
-  within its alphabet.  So a correct runloom must also stay clean, and the
+  within its alphabet.  So a correct stackweave must also stay clean, and the
   load-bearing oracle PASSES (exit 0) when there is no bug.
 
 ORACLES:
@@ -74,7 +74,7 @@ stability across a hub-migrating yield, per-fiber round-trip conservation.
 import base64
 
 import harness
-import runloom
+import stackweave
 
 # ---- Per-codec LEGAL alphabets (the set of byte values a correct encoder may
 # emit).  A byte outside the set in an encoded form means the encoder's output
@@ -148,9 +148,9 @@ def roundtrip_all(H, wid, idx, rng, state):
         # YIELD: a sibling on this hub runs its OWN encode of DIFFERENT bytes.
         # If any encoder scratch were thread-affine/module-global, e2/e1 or the
         # decode below would be contaminated by the sibling's group state.
-        runloom.yield_now()
+        stackweave.yield_now()
         if idx & 1:
-            runloom.sleep(0.0002)
+            stackweave.sleep(0.0002)
 
         e2 = encode(payload)
 

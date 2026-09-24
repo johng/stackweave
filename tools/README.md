@@ -1,6 +1,6 @@
-# runloom dev tooling
+# stackweave dev tooling
 
-Tools for exposing deadlocks, hangs, races, and crashes in the runloom runtime --
+Tools for exposing deadlocks, hangs, races, and crashes in the stackweave runtime --
 and the harnesses that drive them hard. This file is the **complete index of every
 tool under `tools/`**. Most are wired into the CI lanes (`../scripts/check_all.sh`
 and its `_fast` / `_extensive` variants); the machine-checked proofs live in
@@ -15,7 +15,7 @@ map, and the few deepest-used ones are written up at the bottom.
 | [`watchdog.py`](watchdog.py) | turn a silent hang into a full state dump (thread stacks + scheduler self-check + stats + lifecycle event ring) | `python tools/watchdog.py` / import in tests |
 | [`mn_stress.py`](mn_stress.py) | seeded fuzzer for the M:N scheduler: token-conservation over cross-hub channels + `select` under real parallelism | `python tools/mn_stress.py --iters 500 [--seed N]` |
 | [`hang_hunter/`](hang_hunter/) | autonomous stress+fuzz daemon for the M:N scheduler with auto-triage + dedup of hangs/crashes | see [`hang_hunter/README.md`](hang_hunter/README.md) |
-| [`lifefuzz/`](lifefuzz/) | generative, **replayable** life-cycle fuzzer: mass-produces diverse runloom programs under lifecycle oracles | see [`lifefuzz/README.md`](lifefuzz/README.md) |
+| [`lifefuzz/`](lifefuzz/) | generative, **replayable** life-cycle fuzzer: mass-produces diverse stackweave programs under lifecycle oracles | see [`lifefuzz/README.md`](lifefuzz/README.md) |
 | [`monkey_offload_stress.py`](monkey_offload_stress.py) | stress the monkey-offload cross-thread wake path (worker threads `unpark`-ing goroutines) | `python tools/monkey_offload_stress.py [ngor] [ops] [nhubs]` |
 | [`wake_skew_test.sh`](wake_skew_test.sh) | wake-protocol **Layer 3**: run wake-sensitive tests under skew injection (`-DRUNLOOM_WAKE_SKEW`) to expose park/wake races | `tools/wake_skew_test.sh` |
 
@@ -23,9 +23,9 @@ map, and the few deepest-used ones are written up at the bottom.
 | tool | what | run |
 |------|------|-----|
 | [`run_sanitizers.sh`](run_sanitizers.sh) | the standalone deque C harness (`test_cldeque`) under ASan / TSan / UBSan | `tools/run_sanitizers.sh [pushes thieves rounds]` |
-| [`run_sanitizers_ext.sh`](run_sanitizers_ext.sh) | the **whole `runloom_c` ext** under TSan (preloaded libtsan) on free-threaded CPython -- real scheduler/chan/select/netpoll | `tools/run_sanitizers_ext.sh [intensity]` |
-| [`run_pydebug.sh`](run_pydebug.sh) | runloom under a `--with-pydebug` CPython so the host's OWN internal asserts (tstate/STW/gilstate/mimalloc) are the oracle | `tools/run_pydebug.sh [iters]` -- see [`../docs/dev/cpython_boundary.md`](../docs/dev/cpython_boundary.md) |
-| [`run_msan.sh`](run_msan.sh) | `runloom_c` under MemorySanitizer vs an MSan-instrumented CPython -- uninitialised reads | `tools/run_msan.sh` -- see [`../docs/dev/msan.md`](../docs/dev/msan.md) |
+| [`run_sanitizers_ext.sh`](run_sanitizers_ext.sh) | the **whole `stackweave_c` ext** under TSan (preloaded libtsan) on free-threaded CPython -- real scheduler/chan/select/netpoll | `tools/run_sanitizers_ext.sh [intensity]` |
+| [`run_pydebug.sh`](run_pydebug.sh) | stackweave under a `--with-pydebug` CPython so the host's OWN internal asserts (tstate/STW/gilstate/mimalloc) are the oracle | `tools/run_pydebug.sh [iters]` -- see [`../docs/dev/cpython_boundary.md`](../docs/dev/cpython_boundary.md) |
+| [`run_msan.sh`](run_msan.sh) | `stackweave_c` under MemorySanitizer vs an MSan-instrumented CPython -- uninitialised reads | `tools/run_msan.sh` -- see [`../docs/dev/msan.md`](../docs/dev/msan.md) |
 | [`build_msan_cpython.sh`](build_msan_cpython.sh) | build a free-threaded CPython under MSan (clang, `-fsanitize=memory`) -- prereq for `run_msan.sh` | `tools/build_msan_cpython.sh` |
 | [`build_tsan_cpython.sh`](build_tsan_cpython.sh) | build a fully TSan-instrumented CPython (gold standard -- interpreter + ext both instrumented) | `tools/build_tsan_cpython.sh` |
 | [`build_patched_rr.sh`](build_patched_rr.sh) | build + install `rr` with the vPMU min-period clamp so record/replay works on VMware vPMU | `tools/build_patched_rr.sh` -- see [`../docs/dev/rr_vpmu_status.md`](../docs/dev/rr_vpmu_status.md) |
@@ -50,7 +50,7 @@ map, and the few deepest-used ones are written up at the bottom.
 |------|------|-----|
 | [`dst/`](dst/) | Deterministic Simulation Testing on the single hub: real chan/select, seeded yield oracle (`UniformYield` / `PCTBounded`) | see [`dst/README.md`](dst/README.md) |
 | [`pct/`](pct/) | Probabilistic Concurrency Testing (single hub): random priorities + demotions, depth-bounded bug guarantee | see [`pct/README.md`](pct/README.md) |
-| [`mn_controlled/`](mn_controlled/) | the M:N analogue: baton-gated hub resumption (`RUNLOOM_MN_SEED`) for reproducible multi-hub races | see [`mn_controlled/README.md`](mn_controlled/README.md) |
+| [`mn_controlled/`](mn_controlled/) | the M:N analogue: baton-gated hub resumption (`STACKWEAVE_MN_SEED`) for reproducible multi-hub races | see [`mn_controlled/README.md`](mn_controlled/README.md) |
 
 ### Linearizability & model<->binary conformance
 | tool | what | run |
@@ -105,12 +105,12 @@ from tools.watchdog import run_guarded, watchdog, hang_dump
 # test-friendly: runs fn() in a worker thread, raises TimeoutError (after
 # dumping full state) if it overruns -- works even when the scheduler is
 # wedged, because the wedge is on the worker, not the caller.
-run_guarded(lambda: runloom_c.run(), seconds=5.0, label="my workload")
+run_guarded(lambda: stackweave_c.run(), seconds=5.0, label="my workload")
 
 # context-manager form (good when the block DOES return, just slowly;
 # pass abort=True to os.abort() for a core dump on a true wedge):
 with watchdog(5.0, label="ping-pong", abort=False):
-    runloom_c.run()
+    stackweave_c.run()
 
 # or dump state on demand from anywhere:
 hang_dump(label="manual")
@@ -119,12 +119,12 @@ hang_dump(label="manual")
 On a breach it dumps: every OS thread's stack (`faulthandler`), the
 scheduler/netpoll `_self_check`, `stats()`, and the per-thread lifecycle
 event ring (`_diag_dump`). For the ring to contain anything, start with
-`RUNLOOM_DEBUG=ring,gstate` (read once at import).
+`STACKWEAVE_DEBUG=ring,gstate` (read once at import).
 
 Self-demo (catches a deliberate non-terminating scheduler):
 
 ```sh
-RUNLOOM_DEBUG=ring,gstate python tools/watchdog.py
+STACKWEAVE_DEBUG=ring,gstate python tools/watchdog.py
 ```
 
 ## mn_stress.py -- M:N scheduler fuzzer
@@ -159,7 +159,7 @@ TSan abort otherwise).
 ## run_sanitizers_ext.sh -- the whole runtime under TSan
 
 `run_sanitizers.sh` only covers the standalone deque. This builds the
-**entire `runloom_c` extension** with `-fsanitize=thread` and runs it
+**entire `stackweave_c` extension** with `-fsanitize=thread` and runs it
 under a stock free-threaded CPython (force-loading `libtsan`), driven by
 `mn_stress` + the lincheck recorder (plain **and** select consumers) + a
 chan/sched pytest subset -- so TSan watches the real scheduler, channel,
@@ -170,7 +170,7 @@ tools/run_sanitizers_ext.sh            # ~30s
 tools/run_sanitizers_ext.sh 1000       # heavier mn_stress soak
 ```
 
-TSan instruments only the ext (exactly runloom's C, incl. inlined `Py_INCREF`);
+TSan instruments only the ext (exactly stackweave's C, incl. inlined `Py_INCREF`);
 the few races inside the uninstrumented interpreter are filtered by
 [`tsan_suppressions.txt`](tsan_suppressions.txt) (CPython-only -- never
 suppress a `src/runloom_c/*` frame). The fully-instrumented interpreter
@@ -236,17 +236,17 @@ guarded by `tests/test_mn.py::test_select_close_conservation`.
 32 KB default coroutine stack -- caught cleanly by the PROT_NONE guard
 page (a clean fault, not silent corruption).
 
-`runloom.runtime` already had `prewarm_stdlib()` (resolves that import on the
-main thread's big stack before any goroutine runs) and `runloom.runtime.run`
-/ the aio loop called it -- but `runloom.sync.run`/`runloom.sync.go` did not.
-Fixed by calling `prewarm_stdlib()` from the `runloom.sync` entry points
+`stackweave.runtime` already had `prewarm_stdlib()` (resolves that import on the
+main thread's big stack before any goroutine runs) and `stackweave.runtime.run`
+/ the aio loop called it -- but `stackweave.sync.run`/`stackweave.sync.go` did not.
+Fixed by calling `prewarm_stdlib()` from the `stackweave.sync` entry points
 too, guarded so it only warms on the main thread (never on a goroutine's
 small stack). `tests/test_sync.py` now passes 7/7.
 
 ### C. Whole-runtime TSan: five scheduler/chan/netpoll data races -- FIXED
 
 `run_sanitizers_ext.sh` (the ext under ThreadSanitizer, driven by mn_stress +
-lincheck + a pytest subset) flagged five data races in runloom's own C on its
+lincheck + a pytest subset) flagged five data races in stackweave's own C on its
 first runs.  All were real C11 races -- benign on x86 (aligned word
 read/write) but UB, and several stale-prone on weak memory models.  Each was
 the lone plain access among siblings that already used the correct atomic, and

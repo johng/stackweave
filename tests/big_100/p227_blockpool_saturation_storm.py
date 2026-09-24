@@ -2,8 +2,8 @@
 
 Many programs touch the blocking-offload pool incidentally, but none drive
 offload DEMAND far past the pool's worker count.  This one does: with a small
-pool (RUNLOOM_BLOCKPOOL_WORKERS=4 by default) and thousands of goroutines all
-calling runloom_c.blocking() in a tight round loop, the offload queue depth runs
+pool (STACKWEAVE_BLOCKPOOL_WORKERS=4 by default) and thousands of goroutines all
+calling stackweave_c.blocking() in a tight round loop, the offload queue depth runs
 deep, the worker-thread cap is held hard, and every completion has to come back
 through the foreign-waker path (the offload thread wakes the parked caller via a
 same-thread peek, NOT sched_get -- a documented invariant).  Pool saturation is
@@ -27,28 +27,28 @@ completed offload count equals what was submitted (no swallowed completion).  We
 also probe live_fibers() stays bounded (the pool must not leak goroutines).
 
 Stresses: Stresses: blocking-offload pool saturation -- far more concurrent
-runloom_c.blocking() callers than RUNLOOM_BLOCKPOOL_WORKERS, driving queue depth,
+stackweave_c.blocking() callers than STACKWEAVE_BLOCKPOOL_WORKERS, driving queue depth,
 worker-thread cap, FIFO-ish fairness, and the foreign-waker (offload-thread ->
 scheduler) wake path under sustained backpressure.
 """
 import os
 
 # Force a SMALL offload pool so demand >> pool size and the queue saturates.
-# RUNLOOM_BLOCKPOOL_WORKERS is read by runloom_blockpool_init() via getenv() the
-# first time blocking() is called, so it MUST be set before runloom initialises.
+# STACKWEAVE_BLOCKPOOL_WORKERS is read by runloom_blockpool_init() via getenv() the
+# first time blocking() is called, so it MUST be set before stackweave initialises.
 # setdefault so a soak harness can dial pool size (e.g. =hubs) to compare.
-os.environ.setdefault("RUNLOOM_BLOCKPOOL_WORKERS", "4")
+os.environ.setdefault("STACKWEAVE_BLOCKPOOL_WORKERS", "4")
 
 import hashlib  # noqa: E402
 import struct   # noqa: E402
 
 import harness  # noqa: E402
-import runloom_c  # noqa: E402
+import stackweave_c  # noqa: E402
 
 
 # Availability guard: blocking is cross-platform, but never assume.
-_OFFLOAD = getattr(runloom_c, "blocking", None)
-_LIVE = getattr(runloom_c, "live_fibers", None)
+_OFFLOAD = getattr(stackweave_c, "blocking", None)
+_LIVE = getattr(stackweave_c, "live_fibers", None)
 
 
 def transform(payload):
@@ -122,15 +122,15 @@ def worker(H, wid, rng, state):
 
 def setup(H):
     H.state = {"completed": [0] * 1024, "submitted": [0] * 1024}
-    H.log("RUNLOOM_BLOCKPOOL_WORKERS={0} funcs={1} (demand >> pool: "
+    H.log("STACKWEAVE_BLOCKPOOL_WORKERS={0} funcs={1} (demand >> pool: "
           "saturating the offload queue)".format(
-              os.environ.get("RUNLOOM_BLOCKPOOL_WORKERS"), H.funcs))
+              os.environ.get("STACKWEAVE_BLOCKPOOL_WORKERS"), H.funcs))
 
 
 def body(H):
     if _OFFLOAD is None:
         # Availability guard: offload pool unavailable -> trivial no-op PASS.
-        H.log("SKIP: runloom_c.blocking unavailable; offload pool not built")
+        H.log("SKIP: stackweave_c.blocking unavailable; offload pool not built")
         return
     H.run_pool(H.funcs, worker, H.state)
 
@@ -156,7 +156,7 @@ def probe_live_fibers(H):
 
 def run_with_probe(H):
     if _OFFLOAD is None:
-        H.log("SKIP: runloom_c.blocking unavailable; offload pool not built")
+        H.log("SKIP: stackweave_c.blocking unavailable; offload pool not built")
         return
     H.fiber(probe_live_fibers, H)
     H.run_pool(H.funcs, worker, H.state)
@@ -182,6 +182,6 @@ def post(H):
 if __name__ == "__main__":
     harness.main("p227_blockpool_saturation_storm", run_with_probe,
                  setup=setup, post=post, default_funcs=2000,
-                 describe="thousands of runloom_c.blocking() callers against a "
+                 describe="thousands of stackweave_c.blocking() callers against a "
                           "tiny offload pool: queue depth, worker cap, FIFO "
                           "fairness, foreign-waker wake path under backpressure")

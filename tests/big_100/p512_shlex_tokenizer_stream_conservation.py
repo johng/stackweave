@@ -21,7 +21,7 @@ EXACT token sequence shlex.split(s) returns -- the lexer is deterministic.
 WHERE M:N COULD BREAK IT (the gap this program probes).  Each fiber owns its own
 shlex.shlex instance and drives it get_token()-by-get_token(), YIELDING at the
 midpoint of tokenization (half the tokens pulled, scheduler free to run a sibling
-that is mid-scan on ITS OWN lexer).  runloom gives each fiber its own frame stack,
+that is mid-scan on ITS OWN lexer).  stackweave gives each fiber its own frame stack,
 so a sibling's lexer state (its pushback deque, its `state` cursor, its `token`
 accumulator, its char-source iterator) must stay completely disjoint from this
 fiber's.  If instance state were NOT fiber-isolated -- if a sibling's get_token()
@@ -42,13 +42,13 @@ WHICH ORACLES ARE LOAD-BEARING, AND WHY:
 
   * LOAD-BEARING -- STREAM ISOLATION (worker, HARD, fail-fast).  Drain the fiber's
     OWN shlex.shlex incrementally: pull the first half of the tokens with
-    get_token(), YIELD (runloom.yield_now / sleep) so siblings interleave their
+    get_token(), YIELD (stackweave.yield_now / sleep) so siblings interleave their
     own mid-scan lexers, then pull the remaining tokens.  Assert the concatenated
     incremental sequence equals shlex.split(cmdline) EXACTLY (same length, same
     tokens in order) -- which in turn equals the fiber's private ground-truth
     list.  Single-owner: the lexer, the command line, and the token list are all
     fiber-local, never shared.  A mismatch means this fiber's lexer resumed with
-    state corrupted by a sibling -- a runloom stream-isolation bug.
+    state corrupted by a sibling -- a stackweave stream-isolation bug.
 
   * LOAD-BEARING -- QUOTE ROUND-TRIP CONSERVATION (worker, HARD, fail-fast).  A
     closed-world multiset law over the fiber's OWN tokens:
@@ -76,7 +76,7 @@ the SAME single-owner string (a cross-fiber leak of lexer state -- torn/dropped/
 merged token, mis-split quote boundary), or a quote round-trip that changes the
 token multiset of a fiber's OWN tokens, or a SIGSEGV mid-scan.  There is NO shared
 lexer and NO shared string anywhere in the load-bearing path, so a failure cannot
-be documented shared-object shlex behavior -- it can only be a runloom
+be documented shared-object shlex behavior -- it can only be a stackweave
 per-fiber-instance isolation bug.
 
 Stresses: shlex.shlex.get_token() state machine (state cursor, pushback/
@@ -94,7 +94,7 @@ pushback char, localizes the leak before the token-sequence oracle fires.
 import shlex
 
 import harness
-import runloom
+import stackweave
 
 # Raw token "atoms": a mix of plain words, words with embedded spaces, embedded
 # quotes, shell metacharacters, and escape-worthy characters.  Each forces
@@ -167,7 +167,7 @@ def drain_incremental(cmdline, midpoint):
             # YIELD at the exact midpoint of tokenization: this fiber's lexer is
             # now HALF-drained (its pushback/state/token/char-source frozen).  A
             # sibling mid-scan on ITS OWN lexer must not perturb this state.
-            runloom.yield_now()
+            stackweave.yield_now()
     return out
 
 
@@ -187,11 +187,11 @@ def stream_isolation_check(H, wid, idx, state):
     oneshot = shlex.split(cmdline)
 
     # Sanity: quote-join really is the split inverse for this fiber's tokens.
-    # (If this ever fails it is a construction bug in THIS test, not runloom, so
+    # (If this ever fails it is a construction bug in THIS test, not stackweave, so
     # it is caught here and reported distinctly.)
     if oneshot != tokens:
         H.fail("test-construction error: shlex.split(quote-join) != tokens for "
-               "wid {0} idx {1} -- got {2!r} expected {3!r} (NOT a runloom bug; "
+               "wid {0} idx {1} -- got {2!r} expected {3!r} (NOT a stackweave bug; "
                "the atom set produced a non-round-tripping command line)".format(
                    wid, idx, oneshot, tokens))
         return
@@ -236,10 +236,10 @@ def quote_conservation_check(H, wid, idx, state):
     cmdline = make_cmdline(tokens)
 
     toks = shlex.split(cmdline)
-    runloom.yield_now()                # sibling re-quotes during our round-trip
+    stackweave.yield_now()                # sibling re-quotes during our round-trip
     rebar = " ".join(shlex.quote(t) for t in toks)
     if idx & 1:
-        runloom.sleep(0.0003)          # occasionally sleep-park across the trip
+        stackweave.sleep(0.0003)          # occasionally sleep-park across the trip
     again = shlex.split(rebar)
 
     # Length conservation: no token dropped, doubled, merged, or split.
@@ -328,6 +328,6 @@ if __name__ == "__main__":
                  "midpoint yield MUST equal shlex.split() of the SAME single-owner "
                  "string. LOAD-BEARING 2: shlex.quote round-trip (split->quote-"
                  "join->split) conserves the token MULTISET of a fiber's OWN "
-                 "tokens.  Nothing is shared, so a mismatch is a runloom per-"
+                 "tokens.  Nothing is shared, so a mismatch is a stackweave per-"
                  "instance stream-isolation bug, never shared-object shlex "
                  "semantics")

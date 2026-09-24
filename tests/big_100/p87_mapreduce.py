@@ -11,7 +11,7 @@ import os
 import threading
 
 import harness
-import runloom
+import stackweave
 
 VOCAB = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta"]
 

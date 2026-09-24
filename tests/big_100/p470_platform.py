@@ -11,7 +11,7 @@ manifests as a torn/inconsistent cache lookup -- platform.platform() returns
 different values across successive calls (the cache entry was not actually
 stored / was overwritten by a sibling's concurrent init).
 
-WHERE M:N BREAKS IT (the gap this program probes).  Under runloom's M:N
+WHERE M:N BREAKS IT (the gap this program probes).  Under stackweave's M:N
 scheduler many fibers share ONE hub OS-thread, so they all see the SAME
 module-level dicts.  If fiber A calls platform.platform(), observes cache=None,
 allocates a new cache dict and caches its result, then YIELDS before returning,
@@ -19,7 +19,7 @@ and fiber B (on the same hub) calls platform.platform() concurrently, the cache
 may appear uninitialized to B (the TOCTOU window), or B's cache init may overwrite
 A's (a dict identity race).  Even under correct locking, the lazy-init pattern
 is inherently racy: the module dict is not atomic, and two concurrent inits race
-to "own" the cache slot.  This is a runloom M:N gap: under plain OS threads each
+to "own" the cache slot.  This is a stackweave M:N gap: under plain OS threads each
 thread has its own GIL segment or operates serially, but under M:N the race is
 real.
 
@@ -36,11 +36,11 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain threads):
   control (PYTHON_GIL=1 and =0): cache is stable and correct across all calls,
   so a mismatch would be a false positive detector.  On plain threads each thread
   has its own context (or the GIL serializes), so the lazy init succeeds.  Under
-  a CORRECT runloom it must ALSO hold (each hub's cache initialized atomically
-  and correctly).  If runloom leaks a sibling's torn cache or a partially-
+  a CORRECT stackweave it must ALSO hold (each hub's cache initialized atomically
+  and correctly).  If stackweave leaks a sibling's torn cache or a partially-
   initialized cache value -- platform.platform() returns different values on
   successive calls, or a wrong value (not the actual system platform) -- that is
-  the runloom M:N lazy-init race, and the program fails.
+  the stackweave M:N lazy-init race, and the program fails.
 
 ORACLES:
   * LOAD-BEARING -- platform.platform() / system() / node() / release() RESULT
@@ -79,7 +79,7 @@ stability oracle fires.
 import platform
 
 import harness
-import runloom
+import stackweave
 
 # Canonical, single-owner snapshot of the platform values, taken once at setup
 # before any fiber calls platform functions.  Each fiber's load-bearing oracle
@@ -156,9 +156,9 @@ def platform_check(H, wid, idx, state):
         return
 
     # Yield + sleep to let a sibling run and race on the shared cache.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
 
     # Second call -- must return the SAME value as r1.
     try:
@@ -169,7 +169,7 @@ def platform_check(H, wid, idx, state):
         return
 
     # Yield again.
-    runloom.yield_now()
+    stackweave.yield_now()
 
     # Third call -- must ALSO match r1 and r2.
     try:
@@ -186,7 +186,7 @@ def platform_check(H, wid, idx, state):
     if r1 != r2:
         H.fail("platform.{0}() NOT STABLE: call 1={1!r} != call 2={2!r} "
                "(wid {3}) -- a sibling fiber's lazy-cache init or concurrent "
-               "cache mutation corrupted the cache (runloom M:N lazy-init race; "
+               "cache mutation corrupted the cache (stackweave M:N lazy-init race; "
                "the same function should always return the same cached value)".
                format(func.__name__, r1, r2, wid))
         state["mismatches"][wid & 1023] += 1
@@ -194,7 +194,7 @@ def platform_check(H, wid, idx, state):
     if r1 != r3:
         H.fail("platform.{0}() NOT STABLE: call 1={1!r} != call 3={2!r} "
                "(wid {3}) -- the cache value drifted across two yields (lazy-init "
-               "or concurrent mutation, runloom M:N race)".format(
+               "or concurrent mutation, stackweave M:N race)".format(
                    func.__name__, r1, r3, wid))
         state["mismatches"][wid & 1023] += 1
         return
@@ -291,4 +291,4 @@ if __name__ == "__main__":
                  "canonical system identity (correct cache).  A mismatch "
                  "(r1!=r2) or wrong value (r1!=expected) is a torn cache -- the "
                  "lazy-init race (0 under plain threads GIL on AND off; a "
-                 "runloom M:N shared-cache-dict TOCTOU gap)")
+                 "stackweave M:N shared-cache-dict TOCTOU gap)")

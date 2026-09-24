@@ -8,12 +8,12 @@ blocks every other offloaded call (open/os.stat/os.system/...) from every fiber.
 This measures 4 concurrent 0.5s offloads: expected ~0.5s wall (parallel pool),
 observed ~2.0s (fully serialized on one worker).
 """
-import runloom.monkey as monkey
+import stackweave.monkey as monkey
 monkey.patch()
 
 import time
-import runloom_c as rc
-from runloom.monkey import offload, _raw_time_sleep
+import stackweave_c as rc
+from stackweave.monkey import offload, _raw_time_sleep
 
 N = 4
 t = {}

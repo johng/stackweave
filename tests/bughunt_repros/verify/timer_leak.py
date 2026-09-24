@@ -1,5 +1,5 @@
 import gc, asyncio
-import runloom.aio as aio
+import stackweave.aio as aio
 def rss():
     for line in open('/proc/self/status'):
         if line.startswith('VmRSS'): return int(line.split()[1])

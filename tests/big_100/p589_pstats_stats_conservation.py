@@ -16,7 +16,7 @@ module PRODUCES.  Each fiber builds its OWN Stats from a fiber-local synthetic
 stats dict with KNOWN closed-form aggregate totals, then asserts pstats' derived
 quantities equal those totals -- exactly, and stably across a yield.
 
-WHERE M:N COULD BREAK IT.  runloom runs these fibers in parallel across hubs with
+WHERE M:N COULD BREAK IT.  stackweave runs these fibers in parallel across hubs with
 the GIL off, migrating a fiber's frame between hubs at its yield points.  A
 Stats instance is single-owner (built, read and mutated by ONE fiber, never
 shared), so on a CORRECT runtime every law below holds deterministically.  A
@@ -25,7 +25,7 @@ hub migration, a lost/duplicated entry inside the C dict operations backing
 sort_stats()/strip_dirs(), a scalar (total_calls/total_tt) that changed value
 across a yield although nothing in this fiber mutated it, or a SIGSEGV inside the
 sort/merge over a dict another hub's scheduler perturbed.  All of these are
-runloom faults, not documented Python semantics (the object is never shared).
+stackweave faults, not documented Python semantics (the object is never shared).
 
 Verified against plain threads: 8 OS threads each building their own Stats from
 a private synthetic dict and running the identical laws (GIL on AND off) show
@@ -60,7 +60,7 @@ ORACLES:
         are invariant regardless of how many merges happened) AND every surviving
         key's filename is a bare basename.
     Every scalar/law is a closed-form function of the fiber-local input, so a
-    violation is a runloom instance-isolation / torn-object desync, never Python
+    violation is a stackweave instance-isolation / torn-object desync, never Python
     semantics.
 
   * NON-VACUITY (post, HARD): the load-bearing arm actually ran (checks > 0).
@@ -84,7 +84,7 @@ import os
 import pstats
 
 import harness
-import runloom
+import stackweave
 
 # Fiber-local func universe.  Filenames deliberately share BASENAMES across
 # distinct directories so strip_dirs() collapses some entries (exercising the
@@ -196,9 +196,9 @@ def stats_oracle(H, wid, rng, state):
         return
 
     # ---- YIELD: allow sibling interleave + possible hub migration -------------
-    runloom.yield_now()
+    stackweave.yield_now()
     if state["tick"][wid] & 1:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
 
     # ---- STABILITY: single-owner scalars are UNCHANGED across the yield -------
     if st.total_calls != sum_nc or st.prim_calls != sum_cc or st.total_tt != sum_tt:
@@ -251,7 +251,7 @@ def stats_oracle(H, wid, rng, state):
         pre[2] += tt
         pre[3] += ct
 
-    runloom.yield_now()                 # migrate hubs across the merge boundary
+    stackweave.yield_now()                 # migrate hubs across the merge boundary
 
     st.strip_dirs()
 
@@ -345,4 +345,4 @@ if __name__ == "__main__":
                  "permutation of the keys, get_stats_profile's projection "
                  "identity, and strip_dirs' merge conserving all four component "
                  "sums.  A scalar that shifts across a yield, a dropped/duped key, "
-                 "or a broken merge sum is a runloom instance-isolation bug")
+                 "or a broken merge sum is a stackweave instance-isolation bug")

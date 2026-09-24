@@ -1,8 +1,8 @@
 """aio.open_connection StreamWriter: write() buffers residue when the socket
 is full; close() must flush buffered data before FIN (asyncio flushes the
-transport buffer on close). Does runloom's bridge writer drop it?"""
+transport buffer on close). Does stackweave's bridge writer drop it?"""
 import sys, asyncio, socket, threading, time
-import runloom.aio as aio
+import stackweave.aio as aio
 
 received = []
 done = threading.Event()

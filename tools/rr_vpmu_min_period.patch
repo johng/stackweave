@@ -24,7 +24,7 @@ index 400dadf..1828c29 100644
 +  // reproducible across runs).  Clamp small periods up to the vPMU minimum; rr
 +  // fires the PMI a few branches late and single-steps the remainder, which is
 +  // well within the PMI skid it already tolerates, so replay stays exact.
-+  // Lets rr run under a VMware vPMU.  See docs/dev/rr_vpmu_status.md (runloom).
++  // Lets rr run under a VMware vPMU.  See docs/dev/rr_vpmu_status.md (stackweave).
 +  if (ticks_period > 0 && ticks_period < 32) {
 +    ticks_period = 32;
 +  }

@@ -436,7 +436,7 @@ static PyObject *yielder_vectorcall(PyObject *self,
 
 static PyTypeObject RunloomYielderType = {
     PyVarObject_HEAD_INIT(NULL, 0)
-    .tp_name = "runloom_c._Yielder",
+    .tp_name = "stackweave_c._Yielder",
     .tp_basicsize = sizeof(RunloomYielder),
     .tp_vectorcall_offset = offsetof(RunloomYielder, vectorcall),
     .tp_call = PyVectorcall_Call,

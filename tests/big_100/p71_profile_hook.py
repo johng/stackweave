@@ -12,7 +12,7 @@ import sys
 import threading
 
 import harness
-import runloom
+import stackweave
 
 
 def setup(H):
@@ -30,9 +30,9 @@ def make_profiler(state):
 
 def busy(depth):
     if depth <= 0:
-        runloom.yield_now()
+        stackweave.yield_now()
         return 1
-    runloom.sleep(0.0) if depth % 3 == 0 else None
+    stackweave.sleep(0.0) if depth % 3 == 0 else None
     return 1 + busy(depth - 1)
 
 

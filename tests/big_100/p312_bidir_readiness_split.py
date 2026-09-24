@@ -50,8 +50,8 @@ import os
 import socket
 
 import harness
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
 # Capture RAW os.write / set_blocking BEFORE harness's monkey.patch() makes them
 # cooperative.  We need a raw non-blocking write that RAISES BlockingIOError when
@@ -107,7 +107,7 @@ def reader(running, fd, sock, want, expect, done):
             # Park THIS fd for READ readiness.  Under per-hub epoll this arms the
             # READ direction of fd's combined arm mask on THIS goroutine's hub.
             try:
-                ready = runloom_c.wait_fd(fd, READ, WAIT_MS)
+                ready = stackweave_c.wait_fd(fd, READ, WAIT_MS)
             except OSError:
                 break                    # fd closed at teardown
             if not (ready & READ):
@@ -157,7 +157,7 @@ def writer(running, fd, sock, total, payload, done):
             # the WRITE direction of fd's combined arm mask; the peer's drain must
             # drive the EPOLLOUT wake.  A dropped/disarmed OUT wake strands here.
             try:
-                ready = runloom_c.wait_fd(fd, WRITE, WAIT_MS)
+                ready = stackweave_c.wait_fd(fd, WRITE, WAIT_MS)
             except OSError:
                 break                    # fd closed at teardown
             if not (ready & WRITE):
@@ -211,7 +211,7 @@ def peer(running, fd, sock, send_bytes, drain_total, drain_first):
         if sent < nsend:
             want_mask |= WRITE          # peer must WRITE to feed R's bytes
         try:
-            ready = runloom_c.wait_fd(fd, want_mask, WAIT_MS)
+            ready = stackweave_c.wait_fd(fd, want_mask, WAIT_MS)
         except OSError:
             break                       # fd closed at teardown -> stop cleanly
         if ready == 0:
@@ -341,8 +341,8 @@ def setup(H):
     H.state = {
         "pairs": pairs,
         # cap-1 done-Chans, one per worker (single producer / single consumer).
-        "rdone": [runloom.Chan(1) for _ in range(n)],
-        "wdone": [runloom.Chan(1) for _ in range(n)],
+        "rdone": [stackweave.Chan(1) for _ in range(n)],
+        "wdone": [stackweave.Chan(1) for _ in range(n)],
     }
 
 

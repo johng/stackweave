@@ -13,9 +13,9 @@ stored in a module-global cache or is pooled without per-fiber isolation -- a
 fiber's parse() can be corrupted by a sibling's concurrent parse() if they
 yield at a scheduling point mid-parse.
 
-WHERE M:N BREAKS IT (the gap this program catches).  Under runloom's M:N
+WHERE M:N BREAKS IT (the gap this program catches).  Under stackweave's M:N
 scheduler many fibers share one hub OS-thread.  If a fiber yields (via
-runloom.sleep or a netpoll park) INSIDE a parse() call, a sibling fiber on
+stackweave.sleep or a netpoll park) INSIDE a parse() call, a sibling fiber on
 the same hub can run and corrupt the shared parser's internal state (lasttag,
 cdata_elem, event handlers returning midway through the first fiber's parse).
 Each fiber's parse result then contains a mix of events from both fibers'
@@ -34,14 +34,14 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain threads):
   Each fiber parses a DISTINCT HTML document with a UNIQUE, precomputed set of
   expected tags.  The oracle: all extracted tags MUST match the expected set --
   no tags leaked from a sibling's parse.  We verified with a standalone plain-
-  threads control (64 threads, same hazard, NO runloom) that tag extraction is
+  threads control (64 threads, same hazard, NO stackweave) that tag extraction is
   race-free under PYTHON_GIL=1 AND PYTHON_GIL=0 (each thread gets its own parser
   or a parser-per-thread cache), scoring 0 mismatches in many rounds.  Under a
-  CORRECT runloom with per-fiber parser isolation (each fiber gets its own
-  parser instance or a fiber-local cache), the same MUST hold.  If runloom leaks
+  CORRECT stackweave with per-fiber parser isolation (each fiber gets its own
+  parser instance or a fiber-local cache), the same MUST hold.  If stackweave leaks
   a sibling's tags into this fiber's parse result -- the extracted tag set does
   not match the expected set, or it contains tags from another fiber's HTML --
-  that is the runloom M:N isolation bug.
+  that is the stackweave M:N isolation bug.
 
 ORACLES:
   * LOAD-BEARING -- TAG EXTRACTION CORRECTNESS (worker, HARD, fail-fast).
@@ -79,7 +79,7 @@ hub between the first parse()'s entry and its event-handler loop localizes the
 leak before the tag-set oracle fires.
 
 EXPECTED RESULT: if html.parser instances are properly isolated per fiber in
-runloom (each fiber gets its own parser instance via a fiber-local cache or
+stackweave (each fiber gets its own parser instance via a fiber-local cache or
 lazy allocation), this program PASSES (exit 0).  If a fiber can corrupt a
 sibling's parser via shared/pooled instances without per-fiber isolation, the
 tag-set oracle fires (exit 1).  On plain threads (GIL on AND off) it PASSES
@@ -89,7 +89,7 @@ specific.
 import html.parser
 
 import harness
-import runloom
+import stackweave
 
 # Simple test HTML documents: each is a sequence of distinct tags.
 # The "payload" is a unique, precomputed tag sequence per document.
@@ -182,9 +182,9 @@ def parse_and_check(H, wid, idx, state):
         # Yield INSIDE the parse window so a sibling parser's events can fire
         # while this fiber's parser state is live.
         if chunk_idx < len(chunks) - 1:
-            runloom.yield_now()
+            stackweave.yield_now()
             if idx & 1:
-                runloom.sleep(0.0001)
+                stackweave.sleep(0.0001)
 
     # Close the parser to finalize any pending state.
     parser.close()

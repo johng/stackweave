@@ -12,7 +12,7 @@ the reader/verifier split across hubs.
 import os
 
 import harness
-import runloom
+import stackweave
 
 # Limit concurrent file opens: at 1M goroutines each opening a 2MiB file
 # overwhelms the page cache.  max_concurrent=MAX_READERS spawns only
@@ -40,7 +40,7 @@ def setup(H):
         with open(p, "wb") as f:
             f.write(tile)
         paths.append(p)
-    H.state = {"paths": paths, "queue": runloom.Chan(4096)}
+    H.state = {"paths": paths, "queue": stackweave.Chan(4096)}
 
 
 def reader(H, wid, rng, state):
@@ -61,7 +61,7 @@ def reader(H, wid, rng, state):
         while H.running():
             if queue.try_send((offset, chunk)):
                 break
-            runloom.sleep(0.002)
+            stackweave.sleep(0.002)
         else:
             break
         H.op(wid)
@@ -77,7 +77,7 @@ def verifier(H, wid, rng, state):
         if got is None:
             if not H.running():
                 break
-            runloom.sleep(0.002)
+            stackweave.sleep(0.002)
             continue
         item, ok = got
         if not ok:

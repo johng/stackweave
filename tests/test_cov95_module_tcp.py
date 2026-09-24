@@ -42,8 +42,8 @@ Class D -- synchronous syscall hard errors via strace -e inject= (Linux only),
               recvfrom error), L272-273 (tcp_send sendto error),
               L320-322 (tcp_send_once sendto error).
 
-Class E -- _diag_flags (subprocess so RUNLOOM_DEBUG_DIAG is parsed at import):
-  module_select L154/157 (_diag_flags returns the parsed RUNLOOM_DEBUG mask).
+Class E -- _diag_flags (subprocess so STACKWEAVE_DEBUG_DIAG is parsed at import):
+  module_select L154/157 (_diag_flags returns the parsed STACKWEAVE_DEBUG mask).
 
 Excluded (see the structured report): module_tcp L30-31 (thread_init failure --
 ConvertThreadToFiber, Windows-fibers only; the POSIX body is unconditional
@@ -69,8 +69,8 @@ from adv_util import hang_guard  # noqa: E402
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PY = sys.executable
 
-import runloom  # noqa: E402
-import runloom_c as rc  # noqa: E402
+import stackweave  # noqa: E402
+import stackweave_c as rc  # noqa: E402
 
 
 def _run_child(script, timeout=200, env_extra=None):
@@ -182,7 +182,7 @@ def test_select_case_parse_error_arms():
             box["bad_chan"] = True
 
     with hang_guard(60, "select parse error arms"):
-        runloom.run(2, main)
+        stackweave.run(2, main)
 
     assert box.get("no_cases") is True
     assert box.get("not_seq") is True
@@ -208,7 +208,7 @@ def test_select_case_parse_error_arms():
 _SEND_ONCE_PARK = r'''
 import sys, os, socket
 sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 res = {}
 def main():
     a, b = socket.socketpair()
@@ -293,7 +293,7 @@ def test_send_once_real_eagain_park_then_complete():
 _SIG_TEMPLATE = r'''
 import sys, os, socket, signal
 sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 out = {}
 class Boom(Exception): pass
 def handler(signum, frame): raise Boom()
@@ -379,7 +379,7 @@ needs_strace = pytest.mark.skipif(
 _HARD_TEMPLATE = r'''
 import sys, os, socket
 sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 MODE = "__MODE__"
 out = {}
 def main():
@@ -442,15 +442,15 @@ def test_send_synchronous_epipe(mode):
 
 
 # ===========================================================================
-# Class E: _diag_flags reads the RUNLOOM_DEBUG mask parsed once at import. Run
-# in a subprocess so RUNLOOM_DEBUG_DIAG is in the environment before runloom_c
+# Class E: _diag_flags reads the STACKWEAVE_DEBUG mask parsed once at import. Run
+# in a subprocess so STACKWEAVE_DEBUG_DIAG is in the environment before stackweave_c
 # is imported (the parse is one-shot in runloom_diag_init at module load).
 # ===========================================================================
 
 _DIAG_FLAGS_CHILD = r'''
 import sys
 sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 # RUNLOOM_DBG_PARKER (1<<0) | RUNLOOM_DBG_GSTATE (1<<1) == 3
 sys.stdout.write("DIAG_FLAGS=%d\n" % rc._diag_flags())
 '''
@@ -458,7 +458,7 @@ sys.stdout.write("DIAG_FLAGS=%d\n" % rc._diag_flags())
 
 def test_diag_flags_reflects_runloom_debug_mask():
     """module_select.c.inc L154/157: _diag_flags() returns the parsed
-    RUNLOOM_DEBUG flag mask as an int. With RUNLOOM_DEBUG_DIAG=parker,gstate the
+    STACKWEAVE_DEBUG flag mask as an int. With STACKWEAVE_DEBUG_DIAG=parker,gstate the
     mask must be exactly RUNLOOM_DBG_PARKER|RUNLOOM_DBG_GSTATE == 3 -- proving
     the getter reads the live flag word, not a constant. (parker,gstate chosen
     because they are cheap: invariants would run self_check on every park and
@@ -466,10 +466,10 @@ def test_diag_flags_reflects_runloom_debug_mask():
     # In-process call first: covers the lines even where the subprocess is slow.
     assert isinstance(rc._diag_flags(), int)
     p = _run_child(_DIAG_FLAGS_CHILD, timeout=120,
-                   env_extra={"RUNLOOM_DEBUG_DIAG": "parker,gstate"})
+                   env_extra={"STACKWEAVE_DEBUG_DIAG": "parker,gstate"})
     assert p.returncode == 0, (p.stdout[-300:], p.stderr[-800:])
     assert "DIAG_FLAGS=3" in p.stdout, (
-        "_diag_flags did not reflect RUNLOOM_DEBUG_DIAG=parker,gstate (== 3)\n"
+        "_diag_flags did not reflect STACKWEAVE_DEBUG_DIAG=parker,gstate (== 3)\n"
         "stdout=%s\nstderr=%s" % (p.stdout, p.stderr[-500:]))
 
 

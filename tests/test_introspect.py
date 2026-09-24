@@ -1,4 +1,4 @@
-"""Goroutine registry + dump (runloom.inspect / runloom_c introspection)."""
+"""Goroutine registry + dump (stackweave.inspect / stackweave_c introspection)."""
 import io
 import os
 import sys
@@ -9,42 +9,42 @@ import pytest
 
 sys.path.insert(0, "src")
 
-import runloom
-import runloom_c
-import runloom.inspect as gi
+import stackweave
+import stackweave_c
+import stackweave.inspect as gi
 
 # Goroutine introspection is POSIX-only (runloom_introspect.c is wrapped in
 # #if !defined(_WIN32)); the C functions aren't built on Windows, so skip
 # wherever the API is absent rather than hardcoding a platform.
 pytestmark = pytest.mark.skipif(
-    not hasattr(runloom_c, "fiber_count"),
+    not hasattr(stackweave_c, "fiber_count"),
     reason="fiber introspection is POSIX-only (not built on this platform)")
 
 
 class TestCountAndRegistry(unittest.TestCase):
     def test_count_zero_when_idle(self):
-        self.assertEqual(runloom_c.fiber_count(), 0)
-        self.assertEqual(runloom_c.fibers(), [])
+        self.assertEqual(stackweave_c.fiber_count(), 0)
+        self.assertEqual(stackweave_c.fibers(), [])
 
     def test_count_tracks_live_fibers(self):
         seen = {}
 
         def sleeper():
-            runloom.sleep(0.03)
+            stackweave.sleep(0.03)
 
         def main():
             for _ in range(5):
-                runloom.fiber(sleeper)
-            runloom.sleep(0.005)            # let them park
-            seen["count"] = runloom_c.fiber_count()
-            seen["states"] = [g["state"] for g in runloom_c.fibers()]
+                stackweave.fiber(sleeper)
+            stackweave.sleep(0.005)            # let them park
+            seen["count"] = stackweave_c.fiber_count()
+            seen["states"] = [g["state"] for g in stackweave_c.fibers()]
 
-        runloom.run(1, main)
+        stackweave.run(1, main)
         # 5 sleepers + main itself
         self.assertEqual(seen["count"], 6)
         self.assertEqual(seen["states"].count("sleep"), 5)
         # everything drained -> registry reports zero live again
-        self.assertEqual(runloom_c.fiber_count(), 0)
+        self.assertEqual(stackweave_c.fiber_count(), 0)
 
     def test_registry_balances_under_churn(self):
         def noop():
@@ -52,25 +52,25 @@ class TestCountAndRegistry(unittest.TestCase):
 
         def main():
             for _ in range(2000):
-                runloom.fiber(noop)
-                runloom.yield_()
+                stackweave.fiber(noop)
+                stackweave.yield_()
 
-        runloom.run(1, main)
-        self.assertEqual(runloom_c.fiber_count(), 0)
+        stackweave.run(1, main)
+        self.assertEqual(stackweave_c.fiber_count(), 0)
 
     def test_ids_are_unique(self):
         ids = {}
 
         def sleeper():
-            runloom.sleep(0.02)
+            stackweave.sleep(0.02)
 
         def main():
             for _ in range(8):
-                runloom.fiber(sleeper)
-            runloom.sleep(0.005)
-            ids["set"] = [g["id"] for g in runloom_c.fibers()]
+                stackweave.fiber(sleeper)
+            stackweave.sleep(0.005)
+            ids["set"] = [g["id"] for g in stackweave_c.fibers()]
 
-        runloom.run(1, main)
+        stackweave.run(1, main)
         got = ids["set"]
         self.assertEqual(len(got), len(set(got)))   # all unique
         self.assertTrue(all(i > 0 for i in got))
@@ -81,16 +81,16 @@ class TestStates(unittest.TestCase):
         cap = {}
 
         def sleeper():
-            runloom.sleep(0.05)
+            stackweave.sleep(0.05)
 
         def main():
-            runloom.fiber(sleeper)
-            runloom.sleep(0.005)
-            g = [x for x in runloom_c.fibers() if x["state"] == "sleep"][0]
+            stackweave.fiber(sleeper)
+            stackweave.sleep(0.005)
+            g = [x for x in stackweave_c.fibers() if x["state"] == "sleep"][0]
             cap["wake_in"] = g["wake_in"]
             cap["blocked_on"] = g["blocked_on"]
 
-        runloom.run(1, main)
+        stackweave.run(1, main)
         self.assertIsNotNone(cap["wake_in"])
         self.assertGreater(cap["wake_in"], 0.0)
         self.assertEqual(cap["blocked_on"], "timer")
@@ -103,19 +103,19 @@ class TestStates(unittest.TestCase):
         cap = {}
         try:
             def waiter():
-                runloom_c.wait_fd(r, 1, -1)     # park on readable
+                stackweave_c.wait_fd(r, 1, -1)     # park on readable
                 os.read(r, 1)
 
             def main():
-                runloom.fiber(waiter)
-                runloom.sleep(0.01)
-                iow = [g for g in runloom_c.fibers()
+                stackweave.fiber(waiter)
+                stackweave.sleep(0.01)
+                iow = [g for g in stackweave_c.fibers()
                        if g["state"] == "io-wait"]
                 cap["iow"] = iow
                 os.write(w, b"x")               # wake it -> drains
-                runloom.sleep(0.01)
+                stackweave.sleep(0.01)
 
-            runloom.run(1, main)
+            stackweave.run(1, main)
         finally:
             os.close(r)
             os.close(w)
@@ -133,7 +133,7 @@ class TestStackReconstruction(unittest.TestCase):
         cap = {}
 
         def leaf():
-            runloom.sleep(0.05)
+            stackweave.sleep(0.05)
 
         def middle():
             leaf()
@@ -142,21 +142,21 @@ class TestStackReconstruction(unittest.TestCase):
             middle()
 
         def main():
-            runloom.fiber(top)
-            runloom.sleep(0.01)
-            gid = [g for g in runloom_c.fibers()
+            stackweave.fiber(top)
+            stackweave.sleep(0.01)
+            gid = [g for g in stackweave_c.fibers()
                    if g["state"] == "sleep"][0]["id"]
             cap["frames"] = gi.stack(gid)
             cap["entry"] = gi.entry(gid)
 
-        runloom.run(1, main)
+        stackweave.run(1, main)
         # co_qualname is fully-qualified (Class.method.<locals>.leaf); match
         # on suffix.  single-thread scheduler -> full user stack, deepest first.
         funcs = [name for (_fn, _ln, name) in cap["frames"]]
         self.assertTrue(any(n.endswith("leaf") for n in funcs), funcs)
         self.assertTrue(any(n.endswith("middle") for n in funcs), funcs)
         self.assertTrue(any(n.endswith("top") for n in funcs), funcs)
-        # deepest frame is the runloom.sleep internal; user frames follow
+        # deepest frame is the stackweave.sleep internal; user frames follow
         self.assertEqual(funcs[0], "sleep")
         self.assertIn("top", cap["entry"])
 
@@ -167,16 +167,16 @@ class TestAge(unittest.TestCase):
         gi.enable_timestamps(True)
         try:
             def sleeper():
-                runloom.sleep(0.05)
+                stackweave.sleep(0.05)
 
             def main():
-                runloom.fiber(sleeper)
-                runloom.sleep(0.02)
-                g = [x for x in runloom_c.fibers()
+                stackweave.fiber(sleeper)
+                stackweave.sleep(0.02)
+                g = [x for x in stackweave_c.fibers()
                      if x["state"] == "sleep"][0]
                 cap["age"] = g["age"]
 
-            runloom.run(1, main)
+            stackweave.run(1, main)
         finally:
             gi.enable_timestamps(False)
         self.assertIsNotNone(cap["age"])
@@ -189,17 +189,17 @@ class TestDump(unittest.TestCase):
         out = {}
 
         def sleeper():
-            runloom.sleep(0.03)
+            stackweave.sleep(0.03)
 
         def main():
-            runloom.fiber(sleeper)
-            runloom.sleep(0.005)
+            stackweave.fiber(sleeper)
+            stackweave.sleep(0.005)
             fd, path = tempfile.mkstemp()
             out["path"] = path
-            runloom_c.dump_fibers(fd)
+            stackweave_c.dump_fibers(fd)
             os.close(fd)
 
-        runloom.run(1, main)
+        stackweave.run(1, main)
         with open(out["path"]) as f:
             text = f.read()
         os.unlink(out["path"])
@@ -210,31 +210,31 @@ class TestDump(unittest.TestCase):
         cap = {}
 
         def sleeper():
-            runloom.sleep(0.03)
+            stackweave.sleep(0.03)
 
         def main():
-            runloom.fiber(sleeper)
-            runloom.sleep(0.005)
+            stackweave.fiber(sleeper)
+            stackweave.sleep(0.005)
             cap["text"] = gi.format(stacks=True)
 
-        runloom.run(1, main)
-        self.assertIn("runloom fibers:", cap["text"])
+        stackweave.run(1, main)
+        self.assertIn("stackweave fibers:", cap["text"])
         self.assertIn("sleep", cap["text"])
 
     def test_dump_to_file_object(self):
         cap = {}
 
         def sleeper():
-            runloom.sleep(0.03)
+            stackweave.sleep(0.03)
 
         def main():
-            runloom.fiber(sleeper)
-            runloom.sleep(0.005)
+            stackweave.fiber(sleeper)
+            stackweave.sleep(0.005)
             buf = io.StringIO()
             gi.dump(file=buf, stacks=True)
             cap["text"] = buf.getvalue()
 
-        runloom.run(1, main)
+        stackweave.run(1, main)
         self.assertIn("fiber", cap["text"])
 
 
@@ -247,7 +247,7 @@ def _run_script(code, env_extra=None):
     (returncode, stdout+stderr)."""
     env = dict(os.environ)
     env["PYTHON_GIL"] = "0"
-    env["RUNLOOM_SYSMON"] = "0"
+    env["STACKWEAVE_SYSMON"] = "0"
     env["PYTHONPATH"] = "src" + os.pathsep + env.get("PYTHONPATH", "")
     if env_extra:
         env.update(env_extra)
@@ -271,14 +271,14 @@ class TestDeadlockDetection(unittest.TestCase):
             gi.set_deadlock_mode(old)
 
     def test_count_deadlocked_zero_when_idle(self):
-        self.assertEqual(runloom_c.count_deadlocked(), 0)
+        self.assertEqual(stackweave_c.count_deadlocked(), 0)
 
     def test_raise_end_to_end(self):
         rc, out = _run_script(
-            "import runloom, runloom_c, runloom.inspect as gi\n"
+            "import stackweave, stackweave_c, stackweave.inspect as gi\n"
             "gi.set_deadlock_mode('raise')\n"
             "try:\n"
-            "    runloom.run(1, lambda: runloom_c.Chan(0).recv())\n"
+            "    stackweave.run(1, lambda: stackweave_c.Chan(0).recv())\n"
             "    print('NO_RAISE')\n"
             "except RuntimeError as e:\n"
             "    print('RAISED_OK' if 'deadlock' in str(e).lower() else 'WRONG')\n")
@@ -287,13 +287,13 @@ class TestDeadlockDetection(unittest.TestCase):
 
     def test_warn_is_non_fatal(self):
         rc, out = _run_script(
-            "import runloom, runloom_c, runloom.inspect as gi\n"
+            "import stackweave, stackweave_c, stackweave.inspect as gi\n"
             "gi.set_deadlock_mode('warn')\n"
-            "def waiter(): runloom_c.Chan(0).recv()\n"
+            "def waiter(): stackweave_c.Chan(0).recv()\n"
             "def main():\n"
-            "    runloom.fiber(waiter)\n"
-            "    runloom_c.Chan(0).recv()\n"
-            "runloom.run(1, main)\n"            # warn -> prints, no raise
+            "    stackweave.fiber(waiter)\n"
+            "    stackweave_c.Chan(0).recv()\n"
+            "stackweave.run(1, main)\n"            # warn -> prints, no raise
             "print('SURVIVED')\n")
         self.assertEqual(rc, 0)
         self.assertIn("SURVIVED", out)
@@ -302,9 +302,9 @@ class TestDeadlockDetection(unittest.TestCase):
 
     def test_off_mode_silent(self):
         rc, out = _run_script(
-            "import runloom, runloom_c, runloom.inspect as gi\n"
+            "import stackweave, stackweave_c, stackweave.inspect as gi\n"
             "gi.set_deadlock_mode('off')\n"
-            "runloom.run(1, lambda: runloom_c.Chan(0).recv())\n"
+            "stackweave.run(1, lambda: stackweave_c.Chan(0).recv())\n"
             "print('SURVIVED')\n")
         self.assertEqual(rc, 0)
         self.assertIn("SURVIVED", out)
@@ -312,14 +312,14 @@ class TestDeadlockDetection(unittest.TestCase):
 
     def test_no_false_positive_on_clean_run(self):
         rc, out = _run_script(
-            "import runloom, runloom.inspect as gi\n"
+            "import stackweave, stackweave.inspect as gi\n"
             "gi.set_deadlock_mode('raise')\n"
             "def worker():\n"
-            "    [runloom.yield_() for _ in range(3)]\n"
+            "    [stackweave.yield_() for _ in range(3)]\n"
             "def main():\n"
-            "    [runloom.fiber(worker) for _ in range(5)]\n"
-            "    runloom.sleep(0.005)\n"
-            "runloom.run(1, main)\n"            # completes -> no deadlock
+            "    [stackweave.fiber(worker) for _ in range(5)]\n"
+            "    stackweave.sleep(0.005)\n"
+            "stackweave.run(1, main)\n"            # completes -> no deadlock
             "print('CLEAN_OK')\n")
         self.assertEqual(rc, 0)
         self.assertIn("CLEAN_OK", out)
@@ -331,17 +331,17 @@ class TestLeakWatchdog(unittest.TestCase):
         cap = {}
 
         def sleeper():
-            runloom.sleep(0.06)
+            stackweave.sleep(0.06)
 
         def main():
             gi.enable_timestamps(True)
             for _ in range(3):
-                runloom.fiber(sleeper)
-            runloom.sleep(0.03)            # let them age
+                stackweave.fiber(sleeper)
+            stackweave.sleep(0.03)            # let them age
             cap["hits"] = gi.leaked(min_age=0.01, states=("sleep",))
             cap["none"] = gi.leaked(min_age=10.0, states=("sleep",))
 
-        runloom.run(1, main)
+        stackweave.run(1, main)
         self.assertEqual(len(cap["hits"]), 3)
         self.assertTrue(all(g["age"] >= 0.01 for g in cap["hits"]))
         self.assertEqual(cap["none"], [])   # nothing parked >10s
@@ -350,7 +350,7 @@ class TestLeakWatchdog(unittest.TestCase):
         gi.enable_timestamps(False)
         # leaked() should turn tracking on rather than error
         self.assertEqual(gi.leaked(min_age=0.01), [])
-        self.assertTrue(runloom_c.get_introspect_timestamps())
+        self.assertTrue(stackweave_c.get_introspect_timestamps())
 
 
 class TestMaxGoroutines(unittest.TestCase):
@@ -364,19 +364,19 @@ class TestMaxGoroutines(unittest.TestCase):
             gi.set_max_fibers(5)
             spawned = rejected = 0
             def parker():
-                runloom_c.park_self()       # occupies a slot
+                stackweave_c.park_self()       # occupies a slot
             for _ in range(20):
                 try:
-                    runloom.fiber(parker)
+                    stackweave.fiber(parker)
                     spawned += 1
                 except RuntimeError:
                     rejected += 1
             cap["spawned"] = spawned
             cap["rejected"] = rejected
             cap["live"] = gi.live_fibers()
-            runloom_c.sched_reset()         # finish the parkers -> free slots
+            stackweave_c.sched_reset()         # finish the parkers -> free slots
 
-        runloom.run(1, main)
+        stackweave.run(1, main)
         self.assertEqual(cap["spawned"], 5)
         self.assertEqual(cap["rejected"], 15)
         self.assertEqual(cap["live"], 5)
@@ -392,10 +392,10 @@ class TestMaxGoroutines(unittest.TestCase):
             def quick():
                 ran["n"] += 1
             for _ in range(500):
-                runloom.fiber(quick)
-                runloom.yield_()               # let some finish, freeing slots
+                stackweave.fiber(quick)
+                stackweave.yield_()               # let some finish, freeing slots
 
-        runloom.run(1, main)
+        stackweave.run(1, main)
         self.assertEqual(ran["n"], 500)
         self.assertEqual(gi.live_fibers(), 0)
 
@@ -407,9 +407,9 @@ class TestMaxGoroutines(unittest.TestCase):
 class TestOutsideGoroutine(unittest.TestCase):
     def test_apis_safe_when_idle(self):
         # No scheduler running: must not crash.
-        self.assertEqual(runloom_c.fiber_count(), 0)
-        self.assertEqual(runloom_c.fibers(), [])
-        rep, frames = runloom_c.fiber_stack(999999)
+        self.assertEqual(stackweave_c.fiber_count(), 0)
+        self.assertEqual(stackweave_c.fibers(), [])
+        rep, frames = stackweave_c.fiber_stack(999999)
         self.assertIsNone(rep)
         self.assertEqual(frames, [])
 

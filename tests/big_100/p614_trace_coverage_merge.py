@@ -3,7 +3,7 @@
 The `trace` module's PROCESS-GLOBAL machinery (Trace, sys.settrace) is NOT
 single-owner -- the trace hook is a per-thread/per-hub global, so wiring the
 oracle to a live Trace run would race exactly like any shared-across-threads
-sys.settrace and prove nothing about runloom.  Instead we build the oracle on the
+sys.settrace and prove nothing about stackweave.  Instead we build the oracle on the
 SINGLE-OWNER objects the module PRODUCES:
 
   * trace.CoverageResults -- a plain result object whose `counts` dict maps
@@ -15,7 +15,7 @@ SINGLE-OWNER objects the module PRODUCES:
     by construction and the closed-world sum MUST hold exactly.  If it does not,
     the fiber's own single-owner dict was corrupted across a hub migration / yield
     (a torn entry, a cross-fiber leak of another fiber's counts, a dropped RMW on
-    a single-owner object) -- a real runloom bug.
+    a single-owner object) -- a real stackweave bug.
 
   * trace._find_lines_from_code(code, strs) -- a PURE function: given a compiled
     code object and a set of string-literal line numbers to skip, it walks
@@ -58,7 +58,7 @@ WHICH ORACLE IS LOAD-BEARING (verified semantics):
 
 There is deliberately NO shared/report-only arm: a SHARED CoverageResults merged
 by many fibers without a lock would lose counts exactly as any shared dict does
-GIL-off -- documented Python behaviour, not a runloom bug -- so we never build one
+GIL-off -- documented Python behaviour, not a stackweave bug -- so we never build one
 and never risk mislabelling it.  The whole design keeps every mutated object
 single-owner, so any FAIL is a real runtime fault.
 
@@ -74,7 +74,7 @@ across a yield, per-fiber result-object isolation under M:N churn.
 import trace
 
 import harness
-import runloom
+import stackweave
 
 # Per-fiber key universe.  Each fiber's (filename, lineno) keys are derived from
 # its wid so no two fibers share a key -- the single-owner property.  UNIVERSE_LINES
@@ -158,9 +158,9 @@ def merge_check(H, wid, idx):
         # YIELD: allow siblings to run mid-merge-sequence.  If the result's counts
         # dict is not fiber-isolated, a sibling merging into ITS result on this hub
         # could scribble here, migrate us mid-RMW, or leak a key.
-        runloom.yield_now()
+        stackweave.yield_now()
         if idx & 1:
-            runloom.sleep(0.0003)
+            stackweave.sleep(0.0003)
 
     counts = result.counts
 
@@ -218,9 +218,9 @@ def purity_check(H, wid, idx):
 
     # YIELD: allow siblings to run; a pure function on fiber-local input must be
     # unaffected by any concurrent fiber.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
 
     again = trace._find_lines_from_code(code, frozenset())
 
@@ -317,4 +317,4 @@ if __name__ == "__main__":
                  "no out-of-universe key) and recomputes the pure line-finder on "
                  "fiber-local code (bit-identical across a yield).  A dropped/"
                  "doubled/torn merge on a private dict, a cross-fiber key leak, or "
-                 "a non-pure line-finder result is the runloom bug")
+                 "a non-pure line-finder result is the stackweave bug")

@@ -1,22 +1,22 @@
-# The runloom canary
+# The stackweave canary
 
-_docs/dev/RELIABILITY_PROGRAM.md R6._  A small but **real** service on runloom,
+_docs/dev/RELIABILITY_PROGRAM.md R6._  A small but **real** service on stackweave,
 meant to run continuously for weeks.  It is the highest-fidelity reliability
 test there is — a live service under live load — and it is the launch-credibility
-artifact: *"a runloom server ran continuously for N days with flat gauges"* is
+artifact: *"a stackweave server ran continuously for N days with flat gauges"* is
 the only reliability claim users actually trust, and this makes it measurable
 instead of a vibe.
 
 ## What it is
 
-`server.py` — one runloom process exercising the whole stack at once:
+`server.py` — one stackweave process exercising the whole stack at once:
 
 - **echo** (TCP accept/echo — the park/wake + throughput workhorse),
 - **chat room** (channels + `select` + timers + TCP: every line is broadcast to
   all joined clients through a per-client channel and a select fan-out, with a
   stoppable keepalive ticker per connection),
 - **status endpoint** — send `stats\n`, get one JSON line of `{uptime_s, stats}`
-  where `stats` is the R0 gauge surface (`runloom.stats()`).  So the service's
+  where `stats` is the R0 gauge surface (`stackweave.stats()`).  So the service's
   health is observable from outside, live.
 
 It arms the R5 crash + self-hang telemetry, so a canary wedge produces a
@@ -26,7 +26,7 @@ the slope oracle can judge it.
 `client.py` — the fleet driver: steady echo round-trips + chat participation +
 a periodic **churn burst** (a wave of short-lived connections) that ages the
 connection create/destroy cycle a real service sees daily.  It is itself a
-runloom program, so a canary deployment is runloom-on-both-ends.
+stackweave program, so a canary deployment is runloom-on-both-ends.
 
 ## Run it as a soak
 

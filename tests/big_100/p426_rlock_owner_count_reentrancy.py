@@ -1,15 +1,15 @@
 """big_100 / 426 -- RLock owner-token / recursion-count reentrancy under M:N.
 
 The subject is the cooperative ``threading.RLock`` -- monkey.patch() hands every
-fiber the cooperative CoRLock (src/runloom/monkey/locks.py:85,
+fiber the cooperative CoRLock (src/stackweave/monkey/locks.py:85,
 ``__slots__ = ("_lock", "_owner", "_count", "__weakref__")``).  It is a
 REENTRANT lock whose ownership is keyed on the CURRENT SCHEDULABLE IDENTITY
-(``runloom.current()`` -- the bare G handle for this fiber).  Two of its
+(``stackweave.current()`` -- the bare G handle for this fiber).  Two of its
 operations are non-atomic test/update pairs over the SAME ``_owner`` /
 ``_count`` fields, and that pair is the hazard:
 
     def acquire(self, blocking=True, timeout=-1):
-        cur = runloom.current() if _in_fiber() else _real_get_ident()
+        cur = stackweave.current() if _in_fiber() else _real_get_ident()
         if self._owner is not None and self._owner == cur:   # TEST
             self._count += 1                                  # then INCR
             return True
@@ -20,7 +20,7 @@ operations are non-atomic test/update pairs over the SAME ``_owner`` /
         return ok
 
     def release(self):
-        cur = runloom.current() if _in_fiber() else _real_get_ident()
+        cur = stackweave.current() if _in_fiber() else _real_get_ident()
         if self._owner != cur:                                # TEST
             ... raise RuntimeError("cannot release un-acquired lock")
         self._count -= 1                                      # DECR
@@ -105,7 +105,7 @@ _count store/load, or a single net != 0 ladder under replay, localizes the torn
 reentrancy before the conservation sum even closes.
 """
 import harness
-import runloom
+import stackweave
 
 # A small pool of SHARED RLocks so thousands of fibers pile onto each one --
 # that is what drives a genuine cross-hub reentry-vs-release interleave on the
@@ -142,7 +142,7 @@ def held_ladder(H, wid, rlock, token_cell, idx, depth, acq_tally, rel_tally,
     Returns True on a clean balanced ladder; H.fail + False on the first torn
     rung.  Single-writer per-slot tallies are bumped so post() can prove net
     acquires == releases (== 0 conservation per fiber)."""
-    cur = runloom.current()
+    cur = stackweave.current()
 
     # ---- climb: acquire `depth` times, checking the reentry test-and-incr -----
     for d in range(1, depth + 1):
@@ -190,12 +190,12 @@ def held_ladder(H, wid, rlock, token_cell, idx, depth, acq_tally, rel_tally,
         # contends for the SAME object while our _count is positive and _owner is
         # our G -- the window a torn release() would corrupt.
         if contended:
-            runloom.yield_now()
+            stackweave.yield_now()
         _ = cur                              # keep `cur` live for replay clarity
 
     # ---- hold at the bottom across yields: maximize the park/resume race ------
     for _ in range(HOLD_YIELDS):
-        runloom.yield_now()
+        stackweave.yield_now()
         if token_cell[idx] != wid:
             H.fail("owner-token of {0} lock {1} changed to {2} while held at full "
                    "depth by wid {3} -- a foreign fiber overwrote the owner under "
@@ -230,7 +230,7 @@ def held_ladder(H, wid, rlock, token_cell, idx, depth, acq_tally, rel_tally,
             return False
         rel_tally[slot] += 1
         if contended:
-            runloom.yield_now()
+            stackweave.yield_now()
 
     # Fully unwound: this fiber no longer owns the lock.  _recursion_count() must
     # be 0 for us now (it reports 0 for a non-owner / fully-released lock).
@@ -290,10 +290,10 @@ def orphan_probe(H, wid, rng, state, slot):
     import threading
     rlock = threading.RLock()
 
-    enter = runloom.WaitGroup()            # holder trips this once it is at depth 2
+    enter = stackweave.WaitGroup()            # holder trips this once it is at depth 2
     enter.add(1)
-    release_gate = runloom.Chan(1)         # holder waits here before unwinding
-    wg = runloom.WaitGroup()
+    release_gate = stackweave.Chan(1)         # holder waits here before unwinding
+    wg = stackweave.WaitGroup()
     wg.add(2)
     result = {"contender_acquired": False, "holder_ok": True}
 
@@ -306,7 +306,7 @@ def orphan_probe(H, wid, rng, state, slot):
                 H.fail("orphan-probe holder: _recursion_count()={0} at depth 2 "
                        "(expected 2)".format(rlock._recursion_count()))
             enter.done()                   # tell the contender we are held at d2
-            runloom.yield_now()            # park inside the held region
+            stackweave.yield_now()            # park inside the held region
             release_gate.recv()            # wait until the contender has tried
             rlock.release()
             rlock.release()                # fully unwind
@@ -327,7 +327,7 @@ def orphan_probe(H, wid, rng, state, slot):
                     rlock.release()
                 except RuntimeError:
                     pass
-            runloom.yield_now()
+            stackweave.yield_now()
             release_gate.send(True)        # let the holder unwind
         finally:
             wg.done()

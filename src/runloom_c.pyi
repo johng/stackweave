@@ -1,4 +1,4 @@
-"""Type stubs for the runloom_c C extension."""
+"""Type stubs for the stackweave_c C extension."""
 from collections.abc import Callable
 from typing import Any, Literal, overload
 

@@ -6,14 +6,14 @@ fragments:
                                               multishot handle teardown)
 
 The functions here are only reached when TCPConn's recv/send routes through
-io_uring -- the env knob RUNLOOM_TCPCONN_IOURING=1, resolved ONCE at first use
+io_uring -- the env knob STACKWEAVE_TCPCONN_IOURING=1, resolved ONCE at first use
 (runloom_tcp.c:runloom_tcpconn_resolve_mode).  Because that resolution is a
 process-global latch, every scenario runs in a SUBPROCESS with the env set, and
 each child EXITS CLEANLY so the gcov counters flush (a crash/_exit never does).
 
 Two reachability dimensions select which fragment lines run:
 
-  HUB ring (M:N, runloom.run(n>=2)):  runloom_mn_current_iouring_ring() returns
+  HUB ring (M:N, stackweave.run(n>=2)):  runloom_mn_current_iouring_ring() returns
     the running hub's ring, so TCPConn recv/send with a non-zero MSG_* flag take
     the SINGLE-SHOT hub-ring path -> runloom_iouring_ring_recv / _ring_send /
     _ring_do, and the inline runloom_iouring_ring_drain processes the CQE.
@@ -48,8 +48,8 @@ pytestmark = pytest.mark.skipif(
 
 def _iou_available():
     try:
-        import runloom_c
-        return bool(runloom_c.iouring_available())
+        import stackweave_c
+        return bool(stackweave_c.iouring_available())
     except Exception:
         return False
 
@@ -57,12 +57,12 @@ def _iou_available():
 needs_iouring = pytest.mark.skipif(
     not _iou_available(), reason="io_uring unavailable (need Linux >= 5.1)")
 
-# RUNLOOM_TCPCONN_IOURING=1 forces TCPConn.recv/send through the io_uring
-# backend.  We do NOT set RUNLOOM_IOURING_LOOP: the per-hub ring is created
+# STACKWEAVE_TCPCONN_IOURING=1 forces TCPConn.recv/send through the io_uring
+# backend.  We do NOT set STACKWEAVE_IOURING_LOOP: the per-hub ring is created
 # unconditionally in hub_main (defer_taskrun), so the hub-ring recv/send paths
 # are reached on the plain readiness pump too -- which is exactly the path these
 # fragments implement.
-TCPCONN_ENV = {"RUNLOOM_TCPCONN_IOURING": "1"}
+TCPCONN_ENV = {"STACKWEAVE_TCPCONN_IOURING": "1"}
 
 
 def _run(script, env_extra=None, timeout=240):
@@ -87,15 +87,15 @@ def _no_crash(p, label):
            p.stdout[-500:], p.stderr[-1800:]))
 
 
-# Shared subprocess preamble: in-tree runloom_c + a watchdog that dumps stacks
+# Shared subprocess preamble: in-tree stackweave_c + a watchdog that dumps stacks
 # and _exits if a hub-ring op ever leaks a wake (so a hang surfaces as a clean
 # child failure with a traceback, never a wedged pytest).
 _PRE = r'''
 import sys, os, socket, errno
 sys.path.insert(0, "src")
-import runloom
-import runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave
+import stackweave_c as rc
+from stackweave.sync import WaitGroup
 import faulthandler
 faulthandler.dump_traceback_later(60, exit=True)
 '''
@@ -151,7 +151,7 @@ def main():
     res["echo"] = bytes(got)
     wg.wait()
     client.close(); lconn.close()
-runloom.run(2, main)
+stackweave.run(2, main)
 ''' + _POST + r'''
 ok = res.get("echo") == bytes((i % 251) for i in range(4096))
 sys.stdout.write("HUB_ECHO ok=%r len=%d\n" % (ok, len(res.get("echo", b""))))
@@ -202,7 +202,7 @@ def main():
     # Send first + settle, so the bytes are sitting in sc's recv buffer BEFORE
     # the server submits its RECV -> FAST_POLL completes the op inline.
     client.send_all(b"INLINE42")
-    runloom.sleep(0.05)
+    stackweave.sleep(0.05)
 
     wg = WaitGroup(); wg.add(1)
     def reader():
@@ -215,7 +215,7 @@ def main():
     rc.mn_fiber(reader)
     wg.wait()
     sc.close(); client.close(); lconn.close()
-runloom.run(2, main)
+stackweave.run(2, main)
 ''' + _POST + r'''
 sys.stdout.write("HUB_INLINE got=%r err=%r\n" % (res.get("got"), res.get("err")))
 '''
@@ -280,7 +280,7 @@ def main():
         rc.mn_fiber(lambda i=i: client(i))
     wg.wait()
     for L in listeners: L.close()
-runloom.run(4, main)
+stackweave.run(4, main)
 ''' + _POST + r'''
 sys.stdout.write("HUB_STORM total=%d expected=%d\n" % (sum(got), N * ROUNDS))
 '''
@@ -343,12 +343,12 @@ def main():
     res["woke"] = woke                   # -> iouring_cancel_g global path
     for _ in range(2000):
         if rd.get("done"): break
-        runloom.sleep(0.01)
+        stackweave.sleep(0.01)
     res["errno"] = rd.get("errno"); res["done"] = rd.get("done")
     for fd in (rfd, wfd):
         try: os.close(fd)
         except OSError: pass
-runloom.run(2, main)
+stackweave.run(2, main)
 ''' + _POST + r'''
 sys.stdout.write("GLOBAL_CANCEL woke=%r errno=%r done=%r\n" %
                  (res.get("woke"), res.get("errno"), res.get("done")))
@@ -501,11 +501,11 @@ def main():
             wgB.done()
     rc.mn_fiber(serverB)
     clientB.send_all(b"EOFCLOSE")
-    runloom.sleep(0.05)
+    stackweave.sleep(0.05)
     clientB.close()                    # peer EOF
     wgB.wait()
     lconn.close()
-runloom.run(2, main)
+stackweave.run(2, main)
 ''' + _POST + r'''
 sys.stdout.write("MS_CLOSE a=%r b1=%r b2=%r\n" %
                  (res.get("a"), res.get("b1"), res.get("b2")))
@@ -528,7 +528,7 @@ def test_multishot_close_armed_and_immediate_free_branches():
 
 
 # ===========================================================================
-# 7. HUB-RING CANCEL under the READINESS PUMP (NO RUNLOOM_IOURING_LOOP) -- the
+# 7. HUB-RING CANCEL under the READINESS PUMP (NO STACKWEAVE_IOURING_LOOP) -- the
 #    pump (netpoll_pump.c.inc:88) drains the hub ring via runloom_iouring_ring_
 #    drain, so BOTH the recv's -ECANCELED CQE and the ASYNC_CANCEL's own CQE flow
 #    through that function (the sibling cov100_mn_api cancel tests run under the
@@ -592,7 +592,7 @@ def main():
     res["woke"] = woke                 # hub mailbox -> submit_cancel_for_op
     wg.wait()                          # the pump's ring_drain MUST wake it
     sc.close(); client.close(); lconn.close()
-runloom.run(2, main)
+stackweave.run(2, main)
 ''' + _POST + r'''
 sys.stdout.write("HUB_CANCEL woke=%r errno=%r\n" % (res.get("woke"), res.get("errno")))
 '''
@@ -600,7 +600,7 @@ sys.stdout.write("HUB_CANCEL woke=%r errno=%r\n" % (res.get("woke"), res.get("er
 
 @needs_iouring
 def test_hub_ring_cancel_drives_ring_drain_cancel_and_wake():
-    # Explicitly does NOT enable RUNLOOM_IOURING_LOOP, so the readiness pump
+    # Explicitly does NOT enable STACKWEAVE_IOURING_LOOP, so the readiness pump
     # drains the hub ring through runloom_iouring_ring_drain.
     p = _run(_HUB_CANCEL)
     _no_crash(p, "hub-ring cancel via pump")

@@ -10,7 +10,7 @@ per-hub kqueue branch), which hub A's pump drains and discards
 (netpoll_pump.c.inc:193-201). Cross-hub g.wake() / cancel_wait_fd() both route
 through that same per-hub doorbell.
 
-These run in-process under runloom.run(hubs, main) -- the same in-process M:N
+These run in-process under stackweave.run(hubs, main) -- the same in-process M:N
 harness test_mn_park.py uses -- because they exercise the live per-hub hub
 threads, which a subprocess would only duplicate. They will run ONLY on a kqueue
 host (skip below); a human runs + fixes them on the mac.
@@ -34,11 +34,11 @@ pytestmark = pytest.mark.skipif(
 # Run from the repo root; the in-tree build lives under src/.
 sys.path.insert(0, "src")
 
-import runloom        # noqa: E402  high-level go/sleep/run (monkey-free)
-import runloom_c      # noqa: E402  raw scheduler: current_g / wait_fd / cancel
+import stackweave        # noqa: E402  high-level go/sleep/run (monkey-free)
+import stackweave_c      # noqa: E402  raw scheduler: current_g / wait_fd / cancel
 
 READ, WRITE = 1, 2
-WAIT_FD_CANCELLED = runloom_c.WAIT_FD_CANCELLED   # 0x40000000
+WAIT_FD_CANCELLED = stackweave_c.WAIT_FD_CANCELLED   # 0x40000000
 
 
 # --------------------------------------------------------------------------- #
@@ -51,7 +51,7 @@ WAIT_FD_CANCELLED = runloom_c.WAIT_FD_CANCELLED   # 0x40000000
 def _reset_registration():
     for fd in range(3, 1024):
         try:
-            runloom_c.netpoll_unregister(fd)
+            stackweave_c.netpoll_unregister(fd)
         except Exception:
             pass
 
@@ -66,7 +66,7 @@ def teardown_function(_fn):
 
 def test_backend_is_kqueue():
     """Guard: this whole module is meaningless off kqueue."""
-    assert runloom_c.netpoll_backend() == "kqueue"
+    assert stackweave_c.netpoll_backend() == "kqueue"
 
 
 def _pair():
@@ -97,15 +97,15 @@ def _cross_hub_waves(hubs, n, waves):
         pairs[i] = (a, b)
         # deadline keeps the test from hanging if a wake is ever lost; it is
         # long enough that a correctly-delivered readiness ALWAYS wins it.
-        r = runloom_c.wait_fd(a.fileno(), READ, 5000)
+        r = stackweave_c.wait_fd(a.fileno(), READ, 5000)
         if r & READ:
             woke[i] = 1
 
     def main():
         for i in range(n):
-            runloom.fiber(waiter, i)
+            stackweave.fiber(waiter, i)
         # let every waiter link + commit its park across the hubs
-        runloom.sleep(0.2)
+        stackweave.sleep(0.2)
         per = max(1, n // waves)
         i = 0
         for _ in range(waves):
@@ -115,15 +115,15 @@ def _cross_hub_waves(hubs, n, waves):
                 a, b = pairs[i]
                 b.send(b"x")     # makes pairs[i][0] READ-ready in ITS hub's kq
                 i += 1
-            runloom.sleep(0.05)  # let the readied wave wake before the next
+            stackweave.sleep(0.05)  # let the readied wave wake before the next
         # flush any remainder
         while i < n:
             pairs[i][1].send(b"x")
             i += 1
-        runloom.sleep(0.4)
+        stackweave.sleep(0.4)
         main.total = sum(woke)
 
-    runloom.run(hubs, main)
+    stackweave.run(hubs, main)
     for p in pairs:
         if p:
             p[0].close()
@@ -152,7 +152,7 @@ def _same_hub(hubs, n, busy):
 
     def waiter(i, a, b):
         b.send(b"q")             # ready BEFORE the park: EV_ADD re-checks NOW
-        r = runloom_c.wait_fd(a.fileno(), READ, 5000)
+        r = stackweave_c.wait_fd(a.fileno(), READ, 5000)
         if r & READ:
             woke[i] = 1
 
@@ -160,21 +160,21 @@ def _same_hub(hubs, n, busy):
         s = 0
         for _ in range(20000):
             s += 1
-            runloom.yield_now()
+            stackweave.yield_now()
 
     socks = []
 
     def main():
         for _ in range(busy):
-            runloom.fiber(spinner)
+            stackweave.fiber(spinner)
         for i in range(n):
             a, b = _pair()
             socks.append((a, b))
-            runloom.fiber(waiter, i, a, b)
-        runloom.sleep(0.5)
+            stackweave.fiber(waiter, i, a, b)
+        stackweave.sleep(0.5)
         main.total = sum(woke)
 
-    runloom.run(hubs, main)
+    stackweave.run(hubs, main)
     for a, b in socks:
         a.close()
         b.close()
@@ -211,20 +211,20 @@ def _many_via_kqueue(hubs, n):
     def waiter(i):
         a, b = _pair()
         pairs[i] = (a, b)
-        r = runloom_c.wait_fd(a.fileno(), READ, 8000)
+        r = stackweave_c.wait_fd(a.fileno(), READ, 8000)
         if r & READ:
             woke[i] = 1
 
     def main():
         for i in range(n):
-            runloom.fiber(waiter, i)
-        runloom.sleep(0.3)       # all parked across hubs
+            stackweave.fiber(waiter, i)
+        stackweave.sleep(0.3)       # all parked across hubs
         for i in range(n):       # one burst: a big ready set into the kqueues
             pairs[i][1].send(b"z")
-        runloom.sleep(0.6)
+        stackweave.sleep(0.6)
         main.total = sum(woke)
 
-    runloom.run(hubs, main)
+    stackweave.run(hubs, main)
     for p in pairs:
         if p:
             p[0].close()
@@ -259,15 +259,15 @@ def test_foreign_thread_peer_close_wakes_parked(hubs):
     def waiter(i):
         a, b = _pair()
         pairs[i] = (a, b)
-        r = runloom_c.wait_fd(a.fileno(), READ, 5000)
+        r = stackweave_c.wait_fd(a.fileno(), READ, 5000)
         # EOF folds into READ; a timeout (0) would mean a lost EOF wake.
         if r != 0 and r != WAIT_FD_CANCELLED:
             woke[i] = 1
 
     def main():
         for i in range(n):
-            runloom.fiber(waiter, i)
-        runloom.sleep(0.25)      # all parked across the hubs
+            stackweave.fiber(waiter, i)
+        stackweave.sleep(0.25)      # all parked across the hubs
 
         def closer():
             # foreign OS thread: close every PEER -> EV_EOF on each parked fd.
@@ -276,10 +276,10 @@ def test_foreign_thread_peer_close_wakes_parked(hubs):
         t = threading.Thread(target=closer)
         t.start()
         t.join()
-        runloom.sleep(0.5)
+        stackweave.sleep(0.5)
         main.total = sum(woke)
 
-    runloom.run(hubs, main)
+    stackweave.run(hubs, main)
     for p in pairs:
         if p:
             try:
@@ -309,16 +309,16 @@ def test_foreign_thread_cancel_wait_fd(hubs):
     def waiter(i):
         a, b = _pair()
         socks.append((a, b))
-        handles[i] = runloom_c.current_g()
+        handles[i] = stackweave_c.current_g()
         # never made ready: only a cancel can wake this within the deadline.
-        r = runloom_c.wait_fd(a.fileno(), READ, 6000)
+        r = stackweave_c.wait_fd(a.fileno(), READ, 6000)
         if r == WAIT_FD_CANCELLED:
             cancelled[i] = 1
 
     def main():
         for i in range(n):
-            runloom.fiber(waiter, i)
-        runloom.sleep(0.3)       # all parked; handles recorded
+            stackweave.fiber(waiter, i)
+        stackweave.sleep(0.3)       # all parked; handles recorded
 
         def canceller():
             for h in handles:
@@ -327,10 +327,10 @@ def test_foreign_thread_cancel_wait_fd(hubs):
         t = threading.Thread(target=canceller)
         t.start()
         t.join()
-        runloom.sleep(0.5)
+        stackweave.sleep(0.5)
         main.total = sum(cancelled)
 
-    runloom.run(hubs, main)
+    stackweave.run(hubs, main)
     for a, b in socks:
         a.close()
         b.close()
@@ -359,26 +359,26 @@ def test_cross_hub_g_wake_breaks_parking_hub(hubs):
     def waiter(i):
         a, b = _pair()
         socks.append((a, b))
-        handles[i] = runloom_c.current_g()
+        handles[i] = stackweave_c.current_g()
         # short deadline so a missed wake still terminates the run cleanly,
         # but long enough that a delivered wake wins it.
-        runloom_c.wait_fd(a.fileno(), READ, 4000)
+        stackweave_c.wait_fd(a.fileno(), READ, 4000)
         resumed[i] = 1
 
     def main():
         for i in range(n):
-            runloom.fiber(waiter, i)
-        runloom.sleep(0.3)
+            stackweave.fiber(waiter, i)
+        stackweave.sleep(0.3)
         for h in handles:        # root hub wakes each parked fiber cross-hub
             if h is not None:
                 # a wait_fd parker is woken out-of-band via cancel_wait_fd (g.wake()
                 # is for the generic park()); this drives the cross-hub self-pipe
                 # doorbell that breaks the parking hub's idle kevent.
                 h.cancel_wait_fd()
-        runloom.sleep(0.4)
+        stackweave.sleep(0.4)
         main.total = sum(resumed)
 
-    runloom.run(hubs, main)
+    stackweave.run(hubs, main)
     for a, b in socks:
         a.close()
         b.close()
@@ -408,19 +408,19 @@ def test_cancel_all_parked_drains_every_hub(hubs):
         a, b = _pair()
         socks.append((a, b))
         # NO deadline (block forever): only cancel_all_parked can free it.
-        r = runloom_c.wait_fd(a.fileno(), READ)
+        r = stackweave_c.wait_fd(a.fileno(), READ)
         if r == WAIT_FD_CANCELLED:
             cancelled[i] = 1
 
     def main():
         for i in range(n):
-            runloom.fiber(waiter, i)
-        runloom.sleep(0.3)       # all parked, blocking-forever, across hubs
-        box["ret"] = runloom_c.cancel_all_parked()
-        runloom.sleep(0.4)
+            stackweave.fiber(waiter, i)
+        stackweave.sleep(0.3)       # all parked, blocking-forever, across hubs
+        box["ret"] = stackweave_c.cancel_all_parked()
+        stackweave.sleep(0.4)
         main.total = sum(cancelled)
 
-    runloom.run(hubs, main)
+    stackweave.run(hubs, main)
     for a, b in socks:
         a.close()
         b.close()

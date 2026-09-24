@@ -39,7 +39,7 @@ POPL'17) instead *searches* with Alloy/SMT for litmus tests that distinguish
 two memory models — useful for discovering corner cases you didn't think to
 template (e.g. "find an execution where RC11 and IMM disagree on this fence").
 Wiring it in needs Alloy + the memalloy framework
-(<https://github.com/johnwickerson/memalloy>); point it at the runloom `.cat` /
+(<https://github.com/johnwickerson/memalloy>); point it at the stackweave `.cat` /
 the RC11 model and harvest distinguishing tests into `generated/`. Deferred
 until Alloy is in the toolchain; the enumerative sweep covers the park/wake
 question completely in the meantime.

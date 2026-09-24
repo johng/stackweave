@@ -1,4 +1,4 @@
-"""lifefuzz -- a generative, seed-replayable LIFE-CYCLE fuzzer for runloom.
+"""lifefuzz -- a generative, seed-replayable LIFE-CYCLE fuzzer for stackweave.
 
 Where the existing fuzzers vary the SCHEDULE (tools/dst, tools/pct,
 tools/mn_controlled) or the CONFIG (tools/combinatorial) over a mostly-fixed
@@ -11,14 +11,14 @@ channels -- and runs each under the LIFE-CYCLE ORACLES those models point at:
   * token conservation         (every value sent is received exactly once)
   * goroutine completion        (mn_run's completed count == goroutines spawned)
   * parked-leak                 (sleeping / netpoll-parked drain to 0 after run)
-  * scheduler self-check        (runloom_c._self_check)
-  * the runtime DBG oracles     (RUNLOOM_DBG_GSTATE freed-state, RUNLOOM_DBG_MIGRATE)
+  * scheduler self-check        (stackweave_c._self_check)
+  * the runtime DBG oracles     (RUNLOOM_DBG_GSTATE freed-state, STACKWEAVE_DBG_MIGRATE)
   * a hang watchdog             (a lost wakeup becomes a TimeoutError, not a wedge)
   * ASan/TSan                   (if the ext was built with a sanitizer)
 
 It reuses the proven conservation kernel from tools/mn_stress.py and COMPOSES
 with the existing replay levers rather than duplicating them: each program is
-`f(seed)`, the schedule is pinned by RUNLOOM_MN_SEED, so a finding reduces to a
+`f(seed)`, the schedule is pinned by STACKWEAVE_MN_SEED, so a finding reduces to a
 single (seed, env) one-liner that replays the exact execution.  Always-
 terminating by construction, so a hang is a real bug.
 
@@ -66,8 +66,8 @@ def build_spec(seed):
     """Deterministically derive a program spec from an integer seed.
 
     Program KINDS:
-      core    -- runloom_c goroutines + channels + select + timers (the default).
-      aio     -- a small asyncio program under runloom.aio (queue + create_task +
+      core    -- stackweave_c goroutines + channels + select + timers (the default).
+      aio     -- a small asyncio program under stackweave.aio (queue + create_task +
                  cancel + call_later + run_in_executor) -- reaches the timer-leak,
                  task-cancel, and blockpool-job seams the core path can't.
       grammar -- a syzlang-style RESOURCE-TYPED op sequence (LIFEFUZZ_KIND=grammar);
@@ -275,7 +275,7 @@ def run_program(spec, timeout=20.0):
 
     Returns (ok, reason).  ok=False reason is a short finding tag.  Raises
     TimeoutError (via the watchdog) on a hang."""
-    import runloom_c
+    import stackweave_c
     from tools.watchdog import run_guarded
 
     if spec.get("kind") == "aio":
@@ -284,19 +284,19 @@ def run_program(spec, timeout=20.0):
         return run_grammar_program(spec, timeout=timeout)
     if spec.get("kind") == "sim":
         sys.path.insert(0, os.path.join(ROOT, "tools", "dst"))
-        import simnet                             # sets RUNLOOM_LOGICAL_CLOCK on import
+        import simnet                             # sets STACKWEAVE_LOGICAL_CLOCK on import
         return simnet.sim_program(spec["seed"], timeout=timeout)
     if spec.get("kind") == "simfd":
         sys.path.insert(0, os.path.join(ROOT, "tools", "dst"))
-        import simnet_fd                          # sets RUNLOOM_SIM + LOGICAL_CLOCK on import
+        import simnet_fd                          # sets STACKWEAVE_SIM + LOGICAL_CLOCK on import
         return simnet_fd.simfd_program(spec["seed"], timeout=timeout)
     if spec.get("kind") in ("simfd_mn", "simfd_dgram_mn"):
         sys.path.insert(0, os.path.join(ROOT, "tools", "dst"))
         # Native mn-sim env: the opt-in flag once; the SEED per program run
         # (getenv-read fresh at each mn_init's ctrl_init, not latched).
-        os.environ.setdefault("RUNLOOM_SIM_MN", "1")
-        os.environ["RUNLOOM_MN_SEED"] = str(spec["seed"])
-        import simnet_fd                          # sets RUNLOOM_SIM on import
+        os.environ.setdefault("STACKWEAVE_SIM_MN", "1")
+        os.environ["STACKWEAVE_MN_SEED"] = str(spec["seed"])
+        import simnet_fd                          # sets STACKWEAVE_SIM on import
         fn = (simnet_fd.simfd_mn_program if spec["kind"] == "simfd_mn"
               else simnet_fd.simfd_dgram_mn_program)
         # Hub count is PART of the seed universe (MN_SIM_DST_PLAN.md I7):
@@ -330,7 +330,7 @@ def run_program(spec, timeout=20.0):
     def spawn(fn, stack):
         # M:N and single-thread spawn, with an optional pinned stack size.
         # (stack_size must be omitted, not passed None, when unset.)
-        gofn = runloom_c.mn_fiber if mode == "mn" else runloom_c.fiber
+        gofn = stackweave_c.mn_fiber if mode == "mn" else stackweave_c.fiber
         if stack is None:
             return gofn(fn)
         try:
@@ -345,27 +345,27 @@ def run_program(spec, timeout=20.0):
         # the whole M:N lifecycle (init/run/fini) must run on ONE thread -- here,
         # the watchdog's guarded worker thread (mirrors tools/mn_stress.py).
         if mode == "mn":
-            runloom_c.mn_init(spec["nhubs"])
-        chans = [runloom_c.Chan(caps[i]) for i in range(nchan)]
-        prod_done = runloom_c.Chan(nprod)
-        results = runloom_c.Chan(ncons)
+            stackweave_c.mn_init(spec["nhubs"])
+        chans = [stackweave_c.Chan(caps[i]) for i in range(nchan)]
+        prod_done = stackweave_c.Chan(nprod)
+        results = stackweave_c.Chan(ncons)
 
         def producer(pid):
             def run():
                 # optional nested children: pure stack/migration stress, no tokens
                 for k in range(nest):
                     def child():
-                        runloom_c.sched_yield()
+                        stackweave_c.sched_yield()
                         return None
                     spawn(child, spec["prod_stacks"][pid])
                 for seq in range(per_prod):
                     token = pid * 1000 + seq
                     ch = chans[(pid + seq) % nchan]
                     if timer_s and (seq % 4 == 0):
-                        runloom_c.sched_sleep(timer_s)
+                        stackweave_c.sched_sleep(timer_s)
                     ch.send(token)
                     if yield_mask and (seq & yield_mask) == 0:
-                        runloom_c.sched_yield()
+                        stackweave_c.sched_yield()
                 prod_done.send(pid)
             return run
 
@@ -395,7 +395,7 @@ def run_program(spec, timeout=20.0):
                     cases = [("recv", chans[i]) for i in range(nchan) if not closed[i]]
                     if not cases:
                         break
-                    idx, (val, ok) = runloom_c.select(cases)
+                    idx, (val, ok) = stackweave_c.select(cases)
                     live = [i for i in range(nchan) if not closed[i]]
                     ci = live[idx]
                     if ok:
@@ -410,7 +410,7 @@ def run_program(spec, timeout=20.0):
             # Create a buffered channel, fill it with PyObjects, DROP it undrained
             # -> Chan dealloc must release the buffered refs (model #8).
             def run():
-                sc = runloom_c.Chan(4)
+                sc = stackweave_c.Chan(4)
                 for j in range(3):
                     sc.try_send(("scratch", sid, j))
                 # no drain, no close: let sc go out of scope -> dealloc path
@@ -431,13 +431,13 @@ def run_program(spec, timeout=20.0):
 
         # run + capture the completion count
         if mode == "mn":
-            completed = runloom_c.mn_run()
+            completed = stackweave_c.mn_run()
         else:
-            runloom_c.run()
+            stackweave_c.run()
             completed = None
 
         # parked-leak snapshot BEFORE teardown (all gs done -> nothing parked)
-        st = runloom_c.stats()
+        st = stackweave_c.stats()
 
         recv_count = 0
         recv_sum = 0
@@ -453,7 +453,7 @@ def run_program(spec, timeout=20.0):
             recv_sum += s
             drained += 1
         if mode == "mn":
-            runloom_c.mn_fini()
+            stackweave_c.mn_fini()
         return completed, st, recv_count, recv_sum, drained
 
     # --- run the whole program under the hang watchdog ---
@@ -471,23 +471,23 @@ def run_program(spec, timeout=20.0):
     if parked != 0:
         return False, ("PARKED_LEAK sleeping={0} netpoll_parked={1} running={2}"
                        .format(st.get("sleeping"), st.get("netpoll_parked"), st.get("running")))
-    v = runloom_c._self_check(0)
+    v = stackweave_c._self_check(0)
     if v != 0:
-        runloom_c._self_check(1)
+        stackweave_c._self_check(1)
         return False, "SELF_CHECK violations={0}".format(v)
     return True, "ok"
 
 
 def run_aio_program(spec, timeout=20.0):
-    """Build + run a small asyncio program under runloom.aio, checked against the
+    """Build + run a small asyncio program under stackweave.aio, checked against the
     same life-cycle oracles.  Reaches the seams the core path can't: call_later +
     cancel (timer-leak), task cancel mid-flight (task lifecycle / cancel-of-wait_fd),
     and run_in_executor (the blockpool stack-job, model #3).  Always-terminating:
     producers put a known token multiset on an asyncio.Queue, a consumer drains
     exactly that many; decoy tasks + timers are cancelled and carry no tokens."""
     import asyncio
-    import runloom.aio as paio
-    import runloom_c
+    import stackweave.aio as paio
+    import stackweave_c
     from tools.watchdog import run_guarded
 
     P = spec["aio_prod"]
@@ -538,7 +538,7 @@ def run_aio_program(spec, timeout=20.0):
     def work():
         res = paio.run(main())
         # snapshot oracles on THIS (worker) thread, where the loop's sched lives
-        return res, dict(runloom_c.stats()), runloom_c._self_check(0)
+        return res, dict(stackweave_c.stats()), stackweave_c._self_check(0)
 
     (got_sum, got_count, executor_ok), st, sc = run_guarded(
         work, seconds=timeout, label="lifefuzz-aio seed={0}".format(spec["seed"]))
@@ -559,11 +559,11 @@ def run_aio_program(spec, timeout=20.0):
 
 def run_grammar_program(spec, timeout=20.0):
     """Interpret a resource-typed op list (build_grammar_spec) into a real
-    runloom goroutine graph and check the SAME life-cycle oracles as run_program:
+    stackweave goroutine graph and check the SAME life-cycle oracles as run_program:
     exact token conservation (against the generator-tracked exp_count/exp_sum),
     completion, parked-leak, self_check.  A closer waits for every producer then
     closes every channel, so all range/select consumers terminate."""
-    import runloom_c
+    import stackweave_c
     from tools.watchdog import run_guarded
 
     mode = spec["mode"]
@@ -574,7 +574,7 @@ def run_grammar_program(spec, timeout=20.0):
     yield_mask = spec.get("yield_mask", 0)
 
     def spawn(fn, stack):
-        gofn = runloom_c.mn_fiber if mode == "mn" else runloom_c.fiber
+        gofn = stackweave_c.mn_fiber if mode == "mn" else stackweave_c.fiber
         if stack is None:
             return gofn(fn)
         try:
@@ -584,29 +584,29 @@ def run_grammar_program(spec, timeout=20.0):
 
     def driver():
         if mode == "mn":
-            runloom_c.mn_init(spec["nhubs"])
+            stackweave_c.mn_init(spec["nhubs"])
         chans = [None] * nchan
         for o in ops:
             if o["t"] == "chan":
-                chans[o["id"]] = runloom_c.Chan(o["cap"])
+                chans[o["id"]] = stackweave_c.Chan(o["cap"])
         ncons = sum(1 for o in ops if o["t"] in ("range_cons", "select_cons"))
-        prod_done = runloom_c.Chan(max(1, nprod))
-        results = runloom_c.Chan(max(1, ncons))
+        prod_done = stackweave_c.Chan(max(1, nprod))
+        results = stackweave_c.Chan(max(1, ncons))
 
         def make_producer(o):
             def run():
                 for _ in range(o["nest"]):
                     def child():
-                        runloom_c.sched_yield()
+                        stackweave_c.sched_yield()
                         return None
                     spawn(child, o["stack"])
                 ch = chans[o["chan"]]
                 for i in range(o["n"]):
                     if timer_s and (i % 4 == 0):
-                        runloom_c.sched_sleep(timer_s)
+                        stackweave_c.sched_sleep(timer_s)
                     ch.send(o["base"] + i)
                     if yield_mask and (i & yield_mask) == 0:
-                        runloom_c.sched_yield()
+                        stackweave_c.sched_yield()
                 prod_done.send(1)
             return run
 
@@ -630,7 +630,7 @@ def run_grammar_program(spec, timeout=20.0):
                     live = [c for c in cids if not closed[c]]
                     if not live:
                         break
-                    idx, (val, ok) = runloom_c.select([("recv", chans[c]) for c in live])
+                    idx, (val, ok) = stackweave_c.select([("recv", chans[c]) for c in live])
                     c = live[idx]
                     if ok:
                         cnt += 1
@@ -648,7 +648,7 @@ def run_grammar_program(spec, timeout=20.0):
             # (scheduler self_check) does not see PyObject refcounts -- a dedicated
             # refcount-delta oracle is a follow-up.
             def run():
-                sc = runloom_c.Chan(4)
+                sc = stackweave_c.Chan(4)
                 for j in range(3):
                     sc.try_send(("scratch", j))
                 return None
@@ -675,11 +675,11 @@ def run_grammar_program(spec, timeout=20.0):
         spawn(closer, None)
 
         if mode == "mn":
-            completed = runloom_c.mn_run()
+            completed = stackweave_c.mn_run()
         else:
-            runloom_c.run()
+            stackweave_c.run()
             completed = None
-        st = runloom_c.stats()
+        st = stackweave_c.stats()
         recv_count = recv_sum = recv_sumsq = drained = 0
         while drained < ncons:
             got = results.try_recv()
@@ -693,7 +693,7 @@ def run_grammar_program(spec, timeout=20.0):
             recv_sumsq += s2
             drained += 1
         if mode == "mn":
-            runloom_c.mn_fini()
+            stackweave_c.mn_fini()
         return completed, st, recv_count, recv_sum, recv_sumsq, drained, ncons
 
     completed, st, recv_count, recv_sum, recv_sumsq, drained, ncons = run_guarded(
@@ -712,9 +712,9 @@ def run_grammar_program(spec, timeout=20.0):
     if parked != 0:
         return False, ("PARKED_LEAK sleeping={0} netpoll_parked={1} running={2}"
                        .format(st.get("sleeping"), st.get("netpoll_parked"), st.get("running")))
-    v = runloom_c._self_check(0)
+    v = stackweave_c._self_check(0)
     if v != 0:
-        runloom_c._self_check(1)
+        stackweave_c._self_check(1)
         return False, "SELF_CHECK violations={0}".format(v)
     return True, "ok"
 
@@ -727,9 +727,9 @@ def run_grammar_program(spec, timeout=20.0):
 # workload x schedule x CONFIG space -- where interaction bugs hide -- and stays
 # replayable because the choice is a pure function of the seed.
 KNOB_FACTORS = (
-    ("RUNLOOM_NETPOLL", ["epoll", "select", "io_uring"]),
-    ("RUNLOOM_PREEMPT", ["0", "1"]),
-    ("RUNLOOM_SYSMON",  ["0", "1"]),
+    ("STACKWEAVE_NETPOLL", ["epoll", "select", "io_uring"]),
+    ("STACKWEAVE_PREEMPT", ["0", "1"]),
+    ("STACKWEAVE_SYSMON",  ["0", "1"]),
 )
 
 
@@ -741,20 +741,20 @@ def knobs_for_seed(seed):
 def worker_env(seed, mn_seed, knobs=True, unsafe_migrate=False, extra=None):
     env = dict(os.environ)
     env["PYTHON_GIL"] = "0"
-    env["RUNLOOM_GIL"] = "0"
+    env["STACKWEAVE_GIL"] = "0"
     env["PYTHONPATH"] = os.path.join(ROOT, "src") + os.pathsep + env.get("PYTHONPATH", "")
-    env["RUNLOOM_DEBUG"] = "ring,gstate"        # flight recorder for crash dumps
+    env["STACKWEAVE_DEBUG"] = "ring,gstate"        # flight recorder for crash dumps
     env["RUNLOOM_DBG_GSTATE"] = "1"             # freed-state timer oracle
     if mn_seed is not None:
-        env["RUNLOOM_MN_SEED"] = str(mn_seed)   # deterministic baton -> replay
+        env["STACKWEAVE_MN_SEED"] = str(mn_seed)   # deterministic baton -> replay
     if knobs:
         env.update(knobs_for_seed(seed))
     if unsafe_migrate:
         # Teeth check: actually ENABLE the gated per-g-tstate migration so the
         # known mimalloc hazard manifests and the oracle (or a crash) is caught.
-        env["RUNLOOM_PER_G_TSTATE"] = "1"
-        env["RUNLOOM_ALLOW_UNSAFE_MIGRATION"] = "1"
-        env["RUNLOOM_DBG_MIGRATE"] = "1"
+        env["STACKWEAVE_PER_G_TSTATE"] = "1"
+        env["STACKWEAVE_ALLOW_UNSAFE_MIGRATION"] = "1"
+        env["STACKWEAVE_DBG_MIGRATE"] = "1"
     if extra:
         env.update(extra)
     return env

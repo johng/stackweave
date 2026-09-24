@@ -17,8 +17,8 @@ import os
 import sys
 
 sys.path.insert(0, "src")
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
 
 class Obj:
@@ -37,7 +37,7 @@ ITERS = int(os.environ.get("VITERS", "20000"))
 MODE = os.environ.get("MODE", "shared")
 SHARED = Obj()
 if os.environ.get("IMMORTAL") == "1":
-    runloom_c.immortalize(SHARED)        # A1b: freeze the shared instance's refcount
+    stackweave_c.immortalize(SHARED)        # A1b: freeze the shared instance's refcount
 
 
 def worker(i):
@@ -52,8 +52,8 @@ def worker(i):
 
 
 def root():
-    runloom_c.fiber_n(worker, G, indexed=True)
+    stackweave_c.fiber_n(worker, G, indexed=True)
 
 
-runloom.run(H, root)
+stackweave.run(H, root)
 sys.stderr.write("done MODE={0} H={1} G={2} ITERS={3}\n".format(MODE, H, G, ITERS))

@@ -15,8 +15,8 @@ longer reproduces), so a 1M-goroutine run must not re-probe it per worker.
 Stresses: recursion counters / C-recursion budget, frame state across yields.
 """
 import harness
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
 
 def plain(n):
@@ -29,7 +29,7 @@ def plain(n):
 def deep_sum(n):
     if n == 0:
         return 0
-    runloom.yield_now()
+    stackweave.yield_now()
     return n + deep_sum(n - 1)
 
 
@@ -81,7 +81,7 @@ def setup(H):
 
 
 def body(H):
-    runloom_c.set_stack_size(4 * 1024 * 1024)
+    stackweave_c.set_stack_size(4 * 1024 * 1024)
     # Measure the ceiling ONCE on a goroutine that has the 4 MB stack the
     # workers get, and share it.  Re-probing per worker is O(ceiling^2) and
     # never finishes at 1M.

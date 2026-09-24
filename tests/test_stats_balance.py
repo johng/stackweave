@@ -1,4 +1,4 @@
-"""R0 acceptance: the runloom.stats() gauge surface must BALANCE.
+"""R0 acceptance: the stackweave.stats() gauge surface must BALANCE.
 
 The reliability program (docs/dev/RELIABILITY_PROGRAM.md R0) turns every
 internal population into a stats() counter so a soak sees a leak as a rising
@@ -26,10 +26,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import pytest
 
-import runloom
-import runloom.monkey
-runloom.monkey.patch()
-import runloom_c
+import stackweave
+import stackweave.monkey
+stackweave.monkey.patch()
+import stackweave_c
 
 
 # Cumulative odometers + context values that legitimately move; excluded from
@@ -53,14 +53,14 @@ _DEFAULT_TOL = 2
 
 def _drive(fn):
     box = []
-    runloom_c.fiber(lambda: box.append(fn()), stack_size=8 << 20)
-    runloom_c.run()
+    stackweave_c.fiber(lambda: box.append(fn()), stack_size=8 << 20)
+    stackweave_c.run()
     return box[0] if box else None
 
 
 def _numeric_stats():
     gc.collect()
-    return {k: v for k, v in runloom.stats().items() if isinstance(v, int)}
+    return {k: v for k, v in stackweave.stats().items() if isinstance(v, int)}
 
 
 def _check_balance(workload, name, iters=25, warmup=5):
@@ -90,7 +90,7 @@ def _check_balance(workload, name, iters=25, warmup=5):
 def _wl_spawn_join():
     # A burst of child fibers that each return -- exercises the g slab +
     # coro-stack acquire/release balance.
-    import runloom_c as rc
+    import stackweave_c as rc
     done = [0]
     def child():
         done[0] += 1
@@ -108,7 +108,7 @@ def _wl_chan_pipeline():
     # before returning.  No stranded fiber (which would leak a stack by design
     # and is a workload bug, not a runtime leak).  Exercises chan waiter
     # park/unpark + close-wakes-receiver.
-    import runloom_c as rc
+    import stackweave_c as rc
     ch = rc.Chan()
     done = rc.Chan()
     def consumer():
@@ -129,7 +129,7 @@ def _wl_chan_pipeline():
 
 def _wl_timer_storm():
     # Many short sleeps -- exercises the sleep heap + timer parkers.
-    import runloom_c as rc
+    import stackweave_c as rc
     def sleeper():
         rc.sched_sleep(0.001)
     for _ in range(16):
@@ -157,7 +157,7 @@ def _wl_offload():
     # A blocking-pool offload round -- exercises the offload backend + parker.
     def blocking():
         return sum(range(100))
-    runloom.blocking(blocking)
+    stackweave.blocking(blocking)
 
 
 @pytest.mark.parametrize("wl,name", [
@@ -173,7 +173,7 @@ def test_gauge_balance(wl, name):
 
 def test_stats_has_r0_gauges():
     # The R0 keys must all be present and integer-typed.
-    s = _drive(lambda: runloom.stats())
+    s = _drive(lambda: stackweave.stats())
     for key in ("g_structs_total", "coro_stack_live", "mn_pending_total",
                 "netpoll_deadline_heap", "netpoll_fd_armed", "stale_arm_heals",
                 "blockpool_inflight", "iouring_inflight",

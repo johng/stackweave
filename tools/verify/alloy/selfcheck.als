@@ -1,5 +1,5 @@
 /*
- * selfcheck.als -- Alloy model of runloom's runtime structural invariant.
+ * selfcheck.als -- Alloy model of stackweave's runtime structural invariant.
  *
  * runloom_self_check (src/runloom_c/runloom_diag.c) walks the netpoll parker graph
  * at runtime and flags four structural violations:

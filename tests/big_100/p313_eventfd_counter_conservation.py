@@ -1,11 +1,11 @@
 """big_100 / 313 -- park directly on a USER eventfd; strict counter conservation.
 
 Parks goroutines DIRECTLY on a user-created `os.eventfd` (not a socket, not the
-runtime's internal hub-kick fd) via the generic `runloom_c.wait_fd` /
+runtime's internal hub-kick fd) via the generic `stackweave_c.wait_fd` /
 per-fd arm-cache path, and checks a true COUNTING law: every unit a producer
 writes is drained exactly once by the consumer.
 
-Why this is its own program (vs the channel-framed wake tests p224/p225): runloom
+Why this is its own program (vs the channel-framed wake tests p224/p225): stackweave
 uses an eventfd INTERNALLY for per-hub wake kicks, and `runloom_epoll_handle_event`
 explicitly distinguishes that internal kick fd and routes everything else through
 the generic `runloom_pump_dispatch_event` / arm-cache.  A USER eventfd parked on
@@ -56,7 +56,7 @@ import os
 import sys
 
 import harness
-import runloom
+import stackweave
 
 # ---- availability guard ---------------------------------------------------
 # os.eventfd is Linux-only; wait_fd is the generic-fd park primitive.  Detect
@@ -65,14 +65,14 @@ _HAVE_EVENTFD = hasattr(os, "eventfd") and hasattr(os, "eventfd_write") \
     and hasattr(os, "eventfd_read")
 
 try:
-    import runloom_c
-    _HAVE_WAITFD = hasattr(runloom_c, "wait_fd")
+    import stackweave_c
+    _HAVE_WAITFD = hasattr(stackweave_c, "wait_fd")
 except Exception:                       # pragma: no cover - import guard
-    runloom_c = None
+    stackweave_c = None
     _HAVE_WAITFD = False
 
 READ = 1                                # wait_fd events bitmask: 1 = readable
-CANCELLED = getattr(runloom_c, "WAIT_FD_CANCELLED", -1) if runloom_c else -1
+CANCELLED = getattr(stackweave_c, "WAIT_FD_CANCELLED", -1) if stackweave_c else -1
 
 # Per-park ceiling (ms).  A bounded ceiling means the consumer periodically wakes
 # to re-check the producer's done flag and re-drain the counter -- so a lost EDGE
@@ -96,7 +96,7 @@ def consumer(efd, done_ch, counts, slot):
     producer_done = False
     while True:
         try:
-            ready = runloom_c.wait_fd(efd, READ, CEILING_MS)
+            ready = stackweave_c.wait_fd(efd, READ, CEILING_MS)
         except OSError:
             # fd error -> stop; the conservation check will flag the shortfall.
             break
@@ -150,9 +150,9 @@ def producer(efd, n, done_ch, rng):
             # Periodically yield so the consumer drains to 0 and must re-arm
             # between our writes -- exercising the value-semantics re-arm path.
             if (i & 7) == 0:
-                runloom.yield_now()
+                stackweave.yield_now()
             elif rng.getrandbits(6) == 0:
-                runloom.sleep(0.0)
+                stackweave.sleep(0.0)
     finally:
         done_ch.send(True)
 
@@ -172,11 +172,11 @@ def worker(H, wid, rng, state):
             if not H.running():
                 break
             continue
-        done_ch = runloom.Chan(1)
+        done_ch = stackweave.Chan(1)
         n = WRITES_PER_ROUND
         cseed = rng.getrandbits(48)
 
-        wg = runloom.WaitGroup()
+        wg = stackweave.WaitGroup()
         wg.add(2)
 
         def run_consumer(efd=efd, done_ch=done_ch, slot=slot):
@@ -199,7 +199,7 @@ def worker(H, wid, rng, state):
         # Drop the idle arm and close (releases the per-fd arm-cache entry so a
         # reused fd number re-registers cleanly next round).
         try:
-            runloom_c.netpoll_release_if_idle(efd)
+            stackweave_c.netpoll_release_if_idle(efd)
         except Exception:
             pass
         try:
@@ -221,7 +221,7 @@ def setup(H):
         return
     if not _HAVE_WAITFD:
         H.note_scale_limit(
-            "runloom_c.wait_fd unavailable -- cannot park on a raw fd; skipping")
+            "stackweave_c.wait_fd unavailable -- cannot park on a raw fd; skipping")
         H.state = None
         return
     # ONE slot per worker (race-free counter rule, CLAUDE.md Benching): a shared

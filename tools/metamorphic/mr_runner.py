@@ -9,7 +9,7 @@ a nondeterministic M:N runtime where you cannot write down "the" answer.
     The same program, same --seed / --funcs / --rounds, run at different --hubs
     counts, must (a) all PASS (a program that passes at --hubs 2 but hangs or
     fails at --hubs 16 is a scheduler-shape-dependent bug -- the single best fit
-    for runloom's documented M:N nondeterminism), and (b) AGREE on any
+    for stackweave's documented M:N nondeterminism), and (b) AGREE on any
     deterministic metric it emits (a conservation checksum is invariant to how
     many hubs drained it).
 
@@ -41,7 +41,7 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PYBIN = os.environ.get(
-    "RUNLOOM_PYTHON",
+    "STACKWEAVE_PYTHON",
     os.path.expanduser("~/.pyenv/versions/3.14.4t/bin/python3"),
 )
 

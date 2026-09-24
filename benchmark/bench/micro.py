@@ -1,6 +1,6 @@
 """Core single-hub scheduler microbenchmarks.
 
-These isolate the cost of runloom's scheduler primitives with no I/O:
+These isolate the cost of stackweave's scheduler primitives with no I/O:
 
   * spawn+run   -- dispatch N no-op goroutines and drain to empty
                    (go() + run() round-trip per goroutine)
@@ -15,7 +15,7 @@ per-operation overhead, not core scaling.  M:N scaling lives in bench/mn.py.
 Run:
     PYTHONPATH=src ~/.pyenv/versions/3.14.4t/bin/python -m bench.micro
 """
-import runloom_c
+import stackweave_c
 
 from bench.gil import ensure_nogil
 from bench.harness import Suite
@@ -23,8 +23,8 @@ from bench.harness import Suite
 
 def make_spawn(n):
     """Spawn n no-op goroutines, run to empty.  inner = n goroutines."""
-    go = runloom_c.fiber
-    run = runloom_c.run
+    go = stackweave_c.fiber
+    run = stackweave_c.run
 
     def noop():
         pass
@@ -44,14 +44,14 @@ def make_yield(n_coros, m_yields):
     (few-long vs many-short) expose ready-queue vs per-goroutine cost.
 
     NB: m_yields is captured via the closure, NOT passed as a second
-    positional to go() -- `runloom_c.fiber(fn, stack_size=None)` reads its
+    positional to go() -- `stackweave_c.fiber(fn, stack_size=None)` reads its
     second positional as the stack size, so `go(worker, m)` would set the
     stack to m bytes and call worker() with no args (silent TypeError,
     swallowed by the scheduler -> zero work measured).
     """
-    go = runloom_c.fiber
-    run = runloom_c.run
-    sched_yield = runloom_c.sched_yield
+    go = stackweave_c.fiber
+    run = stackweave_c.run
+    sched_yield = stackweave_c.sched_yield
 
     def worker():
         for _ in range(m_yields):
@@ -71,12 +71,12 @@ def make_pingpong(n):
     Each round-trip = a.send + a.recv + b.send + b.recv = 4 chan ops and
     2 cross-goroutine wakeups -- the unbuffered (always-park) hot path.
     """
-    go = runloom_c.fiber
-    run = runloom_c.run
+    go = stackweave_c.fiber
+    run = stackweave_c.run
 
     def once():
-        a = runloom_c.Chan()
-        b = runloom_c.Chan()
+        a = stackweave_c.Chan()
+        b = stackweave_c.Chan()
 
         def pinger():
             for i in range(n):
@@ -101,11 +101,11 @@ def make_buffered(n, cap):
     With a cap-deep buffer most sends don't park, so this measures the
     buffered fast path rather than the wakeup machinery.
     """
-    go = runloom_c.fiber
-    run = runloom_c.run
+    go = stackweave_c.fiber
+    run = stackweave_c.run
 
     def once():
-        ch = runloom_c.Chan(cap)
+        ch = stackweave_c.Chan(cap)
 
         def producer():
             for i in range(n):

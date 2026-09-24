@@ -1,7 +1,7 @@
 """Split r13: (a) awaiting self deadlocks instead of RuntimeError;
 (b) cancel() of a self-awaiting task recurses infinitely."""
 import sys, asyncio
-import runloom.aio as aio
+import stackweave.aio as aio
 
 which = sys.argv[1] if len(sys.argv) > 1 else "a"
 

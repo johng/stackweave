@@ -44,13 +44,13 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY.
   A single-owner proxy that after its own resize (across a park) reads a stale or
   torn table -- a wrong value, a missing/extra key, a ``len`` disagreeing with
   the key set, a non-universe key, or a proxy that suddenly permits assignment --
-  is a runloom M:N view-coherence bug.  (Verified with a plain-threads control:
+  is a stackweave M:N view-coherence bug.  (Verified with a plain-threads control:
   8 OS threads each owning their own dict+proxy, resizing across a yield, GIL on
   AND off, show 0 discrepancies -- documented CPython behavior.)
 
   MEASURED -- SHARED PROXY, report-ONLY (NEVER fails).  A single shared dict +
   shared proxy is read by all fibers.  Under a cooperative Lock (so no crash /
-  no torn read -- Counter/dict shared mutation is documented-racy, NOT a runloom
+  no torn read -- Counter/dict shared mutation is documented-racy, NOT a stackweave
   bug) a fiber reads ``len(P)`` and ``P[k]`` for a shared key, yields, then a
   sibling has mutated that key, so the second read differs.  We MEASURE how often
   the live proxy reflects a sibling's write (the "live view" property, like p67's
@@ -87,7 +87,7 @@ fires.
 import types
 
 import harness
-import runloom
+import stackweave
 
 # Finite sentinel UNIVERSE of keys.  A key the proxy ever yields that is NOT in
 # this set is a torn/freed-slot read -- a hard fault.  Sized to push the backing
@@ -123,7 +123,7 @@ def proxy_check(H, wid, idx, state):
     proxy, parks with the proxy live, single-owner-resizes the backing dict past
     several growth boundaries, then asserts the proxy reflects D EXACTLY and is
     still read-only.  A stale/torn table read after the owner's own resize (across
-    the park) is a runloom view-coherence bug."""
+    the park) is a stackweave view-coherence bug."""
     d = {k: f(k) for k in SEED_KEYS}
     p = types.MappingProxyType(d)
 
@@ -139,9 +139,9 @@ def proxy_check(H, wid, idx, state):
     # PARK with the proxy object LIVE on this grown-down C stack.  A sibling on
     # another hub runs here and this fiber may resume on a different hub -- the
     # boundary a table-pointer coherence bug would surface at.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
 
     # SINGLE-OWNER resize: insert the rest of the universe, crossing several
     # dictresize growth boundaries (each frees the old dk_entries the proxy
@@ -151,7 +151,7 @@ def proxy_check(H, wid, idx, state):
         d[k] = f(k)
         grown += 1
         if grown & 63 == 0:
-            runloom.yield_now()
+            stackweave.yield_now()
 
     # ---- coherence oracle: the proxy must reflect D EXACTLY -----------------
     if len(p) != len(d):
@@ -215,7 +215,7 @@ def shared_proxy_check(H, wid, r, state):
 
     One shared dict + one shared proxy are read by all fibers.  Under the
     cooperative Lock (so no crash / no torn read -- shared dict mutation is
-    documented-racy, NOT a runloom bug) we read len(P) and P[k], yield, and a
+    documented-racy, NOT a stackweave bug) we read len(P) and P[k], yield, and a
     sibling has mutated that shared key, so the second read differs.  We MEASURE
     how often the live proxy reflects a sibling's write (proving it is a live
     alias, not a snapshot) and REPORT it.  We NEVER fail on it."""
@@ -228,7 +228,7 @@ def shared_proxy_check(H, wid, r, state):
         len0 = len(p)
         v0 = p.get(key)
 
-    runloom.yield_now()                       # siblings mutate the shared dict here
+    stackweave.yield_now()                       # siblings mutate the shared dict here
 
     with lock:
         # Write our own view of this shared key (fibers aliasing the same key
@@ -280,7 +280,7 @@ def setup(H):
     shared_d = {k: f(k) for k in SEED_KEYS}
     H.state = {
         "checks": [0] * 1024,                 # LOAD-BEARING single-owner checks
-        "lock": runloom.sync.Lock(),
+        "lock": stackweave.sync.Lock(),
         "shared_d": shared_d,                 # shared backing dict (MEASURED)
         "shared_p": types.MappingProxyType(shared_d),  # shared live proxy
         "shared_checks": [0] * 1024,          # MEASURED shared-proxy reads
@@ -309,7 +309,7 @@ def post(H):
               "checks -- a mappingproxy is a LIVE alias of its backing dict, so a "
               "sibling's mutation is visible on the next read (a shared Python "
               "object, like p67's threading.local).  This is documented M:N "
-              "shared-object behavior, NOT a runloom bug, and never reaches the "
+              "shared-object behavior, NOT a stackweave bug, and never reaches the "
               "load-bearing single-owner oracle".format(sleaks, schecks))
 
     # NON-VACUITY: the load-bearing single-owner hazard was actually exercised.

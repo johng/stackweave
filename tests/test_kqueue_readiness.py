@@ -2,7 +2,7 @@
 
 Drives the kqueue drain loop in src/runloom_c/netpoll_pump.c.inc:131-211 and the
 dispatch in netpoll_pump_helpers.c.inc through BEHAVIOUR on real socketpairs +
-runloom_c.wait_fd (the proven test_netpoll_conformance convention), single-thread
+stackweave_c.wait_fd (the proven test_netpoll_conformance convention), single-thread
 scheduler (_drive).  Multiple instances per branch.
 
 Branch map:
@@ -34,7 +34,7 @@ pytestmark = pytest.mark.skipif(
 
 sys.path.insert(0, "src")
 
-import runloom_c  # noqa: E402
+import stackweave_c  # noqa: E402
 
 READ = 1
 WRITE = 2
@@ -52,8 +52,8 @@ def _drive(*fibers):
         return runner
 
     for g in fibers:
-        runloom_c.fiber(wrap(g))
-    runloom_c.run()
+        stackweave_c.fiber(wrap(g))
+    stackweave_c.run()
     if box:
         raise box[0]
 
@@ -83,7 +83,7 @@ def _fill_send_buffer(s):
 def _reset_registration():
     for fd in range(3, 1024):
         try:
-            runloom_c.netpoll_unregister(fd)
+            stackweave_c.netpoll_unregister(fd)
         except Exception:           # noqa: BLE001
             pass
 
@@ -96,7 +96,7 @@ def _reg_reset():
 
 
 def test_backend_is_kqueue():
-    assert runloom_c.netpoll_backend() == "kqueue"
+    assert stackweave_c.netpoll_backend() == "kqueue"
 
 
 # -- ready BEFORE park -------------------------------------------------------
@@ -106,7 +106,7 @@ def test_ready_before_park_read(payload):
     a, b = _pair()
     b.send(payload)                      # readable before the fiber parks
     out = []
-    _drive(lambda: out.append(runloom_c.wait_fd(a.fileno(), READ, 1000)))
+    _drive(lambda: out.append(stackweave_c.wait_fd(a.fileno(), READ, 1000)))
     assert out == [READ]
     a.close(); b.close()
 
@@ -115,7 +115,7 @@ def test_ready_before_park_read(payload):
 def test_ready_before_park_write(events):
     a, b = _pair()                       # born writable
     out = []
-    _drive(lambda: out.append(runloom_c.wait_fd(a.fileno(), events, 1000)))
+    _drive(lambda: out.append(stackweave_c.wait_fd(a.fileno(), events, 1000)))
     assert out[0] & WRITE                # WRITE ready; (rw subset allowed)
     a.close(); b.close()
 
@@ -127,10 +127,10 @@ def test_park_then_ready_read(n):
     out = []
 
     def reader(a):
-        out.append(runloom_c.wait_fd(a.fileno(), READ, 2000))
+        out.append(stackweave_c.wait_fd(a.fileno(), READ, 2000))
 
     def waker():
-        runloom_c.sched_yield()
+        stackweave_c.sched_yield()
         for _a, b in pairs:
             b.send(b"go")
 
@@ -146,10 +146,10 @@ def test_park_then_ready_write():
     out = []
 
     def writer():
-        out.append(runloom_c.wait_fd(a.fileno(), WRITE, 2000))
+        out.append(stackweave_c.wait_fd(a.fileno(), WRITE, 2000))
 
     def drainer():
-        runloom_c.sched_yield()
+        stackweave_c.sched_yield()
         while True:
             try:
                 if not b.recv(65536):
@@ -167,7 +167,7 @@ def test_park_then_ready_write():
 def test_timeout_deadline_wakes(timeout_ms):
     a, b = _pair()                       # never made readable
     out = []
-    _drive(lambda: out.append(runloom_c.wait_fd(a.fileno(), READ, timeout_ms)))
+    _drive(lambda: out.append(stackweave_c.wait_fd(a.fileno(), READ, timeout_ms)))
     assert out == [0]                    # 0 == deadline timeout
     a.close(); b.close()
 
@@ -178,7 +178,7 @@ def test_rw_subset_returns_read_only():
     _fill_send_buffer(a)                 # WRITE not ready
     b.send(b"r")                         # READ ready
     out = []
-    _drive(lambda: out.append(runloom_c.wait_fd(a.fileno(), READ | WRITE, 1500)))
+    _drive(lambda: out.append(stackweave_c.wait_fd(a.fileno(), READ | WRITE, 1500)))
     assert out and (out[0] & READ) and not (out[0] & WRITE)
     a.close(); b.close()
 
@@ -187,7 +187,7 @@ def test_rw_subset_returns_read_only():
 def test_no_spurious_wake_on_unrequested_direction():
     a, b = _pair()                       # writable, but we only ask READ
     out = []
-    _drive(lambda: out.append(runloom_c.wait_fd(a.fileno(), READ, 150)))
+    _drive(lambda: out.append(stackweave_c.wait_fd(a.fileno(), READ, 150)))
     assert out == [0]                    # WRITE-ready must NOT wake a READ waiter
     a.close(); b.close()
 
@@ -199,11 +199,11 @@ def test_drain_many_ready_in_one_pump(n):
     woke = bytearray(n)
 
     def reader(i, a):
-        if runloom_c.wait_fd(a.fileno(), READ, 3000) == READ:
+        if stackweave_c.wait_fd(a.fileno(), READ, 3000) == READ:
             woke[i] = 1
 
     def waker():
-        runloom_c.sched_yield()
+        stackweave_c.sched_yield()
         for _a, b in pairs:             # make ALL ready before the pump runs
             b.send(b"x")
 

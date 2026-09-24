@@ -14,13 +14,13 @@ makes true.
     closed-conn guards, bad-arg parse failures, the `fd < 0` ctor guard, the
     `family` getter, a non-local bind (EADDRNOTAVAIL), an unresolvable host
     (getaddrinfo failure on a reserved .invalid TLD), a failing setsockopt.
-    Driven directly under runloom.run(2).
+    Driven directly under stackweave.run(2).
 
  2. SIGNAL-INTERRUPTED COOPERATIVE PARK (the `wait_fd_coop(...) < 0` arms that
     propagate a raised Python signal handler instead of overwriting it with
     OSError): a SIGALRM handler that raises lands on a fiber parked in
     recv / recv_into / send_all / connect. The signal must be installed in the
-    MAIN thread, so these run on the SINGLE-THREAD scheduler (runloom_c.run()),
+    MAIN thread, so these run on the SINGLE-THREAD scheduler (stackweave_c.run()),
     where the parked fiber lives on the main OS thread.
 
  3. SYNCHRONOUS SYSCALL HARD-ERROR branches that loopback never produces on its
@@ -31,7 +31,7 @@ makes true.
 
  4. IO_URING TCPConn backend paths (recv multishot + single-shot, recv_into,
     send, send_all, the ms-handle close, and their r<0 error arms). Reached only
-    with RUNLOOM_TCPCONN_IOURING=1 under the io_uring-as-loop backend, which the
+    with STACKWEAVE_TCPCONN_IOURING=1 under the io_uring-as-loop backend, which the
     runtime resolves ONCE at first run(); so these run in a SUBPROCESS with the
     env set and EXIT CLEANLY so gcov counters flush. A peer RST drives the
     iouring r<0 error arms (ECONNRESET on recv, EPIPE on send) with a real
@@ -59,9 +59,9 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PY = sys.executable
 FT = needs_free_threading()
 
-import runloom  # noqa: E402
-import runloom_c as rc  # noqa: E402
-from runloom.sync import WaitGroup  # noqa: E402
+import stackweave  # noqa: E402
+import stackweave_c as rc  # noqa: E402
+from stackweave.sync import WaitGroup  # noqa: E402
 
 
 # ===========================================================================
@@ -173,7 +173,7 @@ def test_ctor_and_closed_and_family_and_setsockopt():
             box["connect_parse"] = True
 
     with hang_guard(60, "ctor/closed/family/setsockopt"):
-        runloom.run(2, main)
+        stackweave.run(2, main)
 
     assert box.get("ctor_parse") is True
     assert box.get("ctor_neg") == "fd must be >= 0"
@@ -217,7 +217,7 @@ def test_bind_failure_and_resolve_failure():
             box["connect_resolve_fail"] = True
 
     with hang_guard(60, "bind/resolve failure"):
-        runloom.run(2, main)
+        stackweave.run(2, main)
 
     import errno as _errno
     assert box.get("bind_errno") == _errno.EADDRNOTAVAIL, box
@@ -242,7 +242,7 @@ def test_recv_partial_resize():
         L.close()
 
     with hang_guard(60, "recv partial resize"):
-        runloom.run(2, main)
+        stackweave.run(2, main)
     assert box.get("data") == b"tiny", box
 
 
@@ -258,7 +258,7 @@ def test_recv_partial_resize():
 _SIG_TEMPLATE = r'''
 import os, socket, signal, sys
 sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 
 box = {}
 def raiser(signum, frame):
@@ -351,7 +351,7 @@ sys.stdout.write("SIG OP=%s interrupt=%r rv=%r\n" % (OP, box.get("interrupt"), b
 _CONNECT_SIG = r'''
 import signal, sys
 sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 box = {}
 def raiser(signum, frame):
     raise KeyboardInterrupt("alarm")
@@ -444,7 +444,7 @@ needs_strace = pytest.mark.skipif(
 _CONNECT_HARD = r'''
 import os, socket, sys
 sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 box = {}
 def client():
     lsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -468,7 +468,7 @@ print("OK"); sys.exit(0)
 _RECVINTO_HARD = r'''
 import os, socket, sys
 sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 box = {}
 def client():
     lsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -523,7 +523,7 @@ def test_recv_into_synchronous_econnreset():
 
 
 # ===========================================================================
-# Class 4: the io_uring TCPConn backend (RUNLOOM_TCPCONN_IOURING=1 under the
+# Class 4: the io_uring TCPConn backend (STACKWEAVE_TCPCONN_IOURING=1 under the
 # io_uring-as-loop backend). Drives the iouring recv/recv_into/send/send_all
 # paths, the multishot ms-handle open+close, and the r<0 error arms.
 # ===========================================================================
@@ -539,8 +539,8 @@ needs_iouring = pytest.mark.skipif(
     not (FT and _iou_available()),
     reason="io_uring TCPConn backend needs a GIL-disabled build + io_uring")
 
-_IOU_ENV = {"RUNLOOM_IOURING_LOOP": "1", "RUNLOOM_IOURING_MS": "1",
-            "RUNLOOM_TCPCONN_IOURING": "1"}
+_IOU_ENV = {"STACKWEAVE_IOURING_LOOP": "1", "STACKWEAVE_IOURING_MS": "1",
+            "STACKWEAVE_TCPCONN_IOURING": "1"}
 
 # Exercises every iouring success arm: multishot recv (flags=0, opens self->ms),
 # single-shot recv via MSG_PEEK (flags!=0 bypasses multishot), recv_into both
@@ -549,8 +549,8 @@ _IOU_ENV = {"RUNLOOM_IOURING_LOOP": "1", "RUNLOOM_IOURING_MS": "1",
 _IOU_OK = r'''
 import sys, struct, socket, gc
 sys.path.insert(0, "src")
-import runloom, runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave, stackweave_c as rc
+from stackweave.sync import WaitGroup
 MSG_PEEK = socket.MSG_PEEK
 N = 24
 got = [None] * N
@@ -588,7 +588,7 @@ def main():
     del leak
     gc.collect()
     for ln in lst: ln.close()
-runloom.run(4, main)
+stackweave.run(4, main)
 ok = sum(1 for i in range(N) if got[i] == struct.pack(">Q", i) and peek[i] == struct.pack(">Q", i))
 sys.stdout.write("IOU_OK %d\n" % ok)
 '''
@@ -599,8 +599,8 @@ sys.stdout.write("IOU_OK %d\n" % ok)
 _IOU_ERR = r'''
 import sys, struct, socket, os
 sys.path.insert(0, "src")
-import runloom, runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave, stackweave_c as rc
+from stackweave.sync import WaitGroup
 res = {}
 def main():
     L = rc.TCPConn.listen("127.0.0.1", 0)
@@ -616,7 +616,7 @@ def main():
     sc = holder["sc"]                                  # server-side TCPConn (iouring)
     raw.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
     raw.close()                                        # hard RST from the peer
-    runloom.sleep(0.1)
+    stackweave.sleep(0.1)
     try: sc.recv(64)                                   # iouring recv r<0 (io ms_recv / single-shot)
     except OSError as e: res["recv_errno"] = e.errno
     try: sc.recv_into(bytearray(64))                   # iouring recv_into r<0
@@ -626,7 +626,7 @@ def main():
     try: sc.send_all(b"y" * 64)                        # iouring send_all r<0 (send.c.inc L86-88)
     except OSError as e: res["sendall_errno"] = e.errno
     sc.close(); L.close()
-runloom.run(2, main)
+stackweave.run(2, main)
 sys.stdout.write("IOU_ERR recv=%r recvinto=%r send=%r sendall=%r\n" %
                  (res.get("recv_errno"), res.get("recvinto_errno"),
                   res.get("send_errno"), res.get("sendall_errno")))

@@ -82,7 +82,7 @@ def main():
             L.append("> **io_uring:** driven through the Stage-2 proactor (`loop_recv`), the "
                      "io_uring loop backend is a major win &mdash; the Cython handler on io_uring "
                      "reaches a **1.16M req/s server ceiling (+2.17× over epoll)**, the fastest "
-                     "runloom config measured. \"io_uring loses on loopback\" was an artifact of "
+                     "stackweave config measured. \"io_uring loses on loopback\" was an artifact of "
                      "driving it through the readiness path; see the findings writeup.[^bench]")
             L.append("")
 
@@ -171,9 +171,9 @@ def main():
                 L.append("> Two bands by handler language: the compiled handlers (runloom-Cython, Go, "
                          "both on the full core set) sit together under load, the interpreted ones "
                          "(runloom-py, asyncio, uvloop, gevent) sit together below. Cores differ — "
-                         "runloom and Go use the whole machine, the event loops one core (the cores "
+                         "stackweave and Go use the whole machine, the event loops one core (the cores "
                          "column makes that explicit, so compare within a matched core count). "
-                         "runloom's edge: it reaches the compiled band while keeping M:N across all "
+                         "stackweave's edge: it reaches the compiled band while keeping M:N across all "
                          "cores automatically; one asyncio process serialises the same work onto one "
                          "core. Delegate to a C lib and all runtimes re-converge.[^bench]")
                 L.append("")
@@ -210,7 +210,7 @@ def main():
             L.append("")
             L.append("| Runtime | spawn (tasks/s) | ctx-switch (ns) |")
             L.append("|---|--:|--:|")
-            rts = ["runloom", "go", "asyncio", "uvloop", "greenlet"]
+            rts = ["stackweave", "go", "asyncio", "uvloop", "greenlet"]
             for rt in rts:
                 s = sp.get(rt, {})
                 c = cx.get(rt, {})
@@ -218,7 +218,7 @@ def main():
                     rt, commafy(s.get("rate_per_s")) if s.get("rate_per_s") else "n/a",
                     commafy(c.get("ns_per_switch")) if c.get("ns_per_switch") else "n/a"))
             L.append("")
-            L.append("> Runloom fibers carry real C stacks (heavier to spawn than goroutines); "
+            L.append("> Stackweave fibers carry real C stacks (heavier to spawn than goroutines); "
                      "its loaded-yield context-switch hits the free-threaded refcount wall at high "
                      "hub counts. Strength is parallel I/O throughput, not single-stream latency.[^bench]")
             L.append("")

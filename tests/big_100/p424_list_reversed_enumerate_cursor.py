@@ -117,7 +117,7 @@ out-of-universe value under replay, localizes the freed-slot read before the
 universe assert even closes.
 """
 import harness
-import runloom
+import stackweave
 
 # Finite sentinel UNIVERSE: a fixed, recognizable set of int values.  A value
 # yielded by a reverse/enumerate cursor that is NOT in this set is a torn/freed
@@ -206,7 +206,7 @@ def walk_reversed(H, lst):
             # Park with it_index live: the sibling's append-realloc / pop lands
             # here, freeing/shrinking ob_item under the reverse cursor.
             parked = True
-            runloom.yield_now()
+            stackweave.yield_now()
         # A reverse walk over a list the appender keeps growing could in principle
         # run unbounded if it_index were corrupted to never reach 0; bound it.
         if seen > UNIVERSE_SIZE + GROW_BY + SEED_LEN + 16:
@@ -251,7 +251,7 @@ def walk_enumerate(H, lst):
         seen += 1
         if not parked and seen >= 2:
             parked = True
-            runloom.yield_now()        # resize/pop lands during the enumerate park
+            stackweave.yield_now()        # resize/pop lands during the enumerate park
         if seen > UNIVERSE_SIZE + GROW_BY + SEED_LEN + 16:
             H.fail("enumerate() walk exceeded the maximum possible list length "
                    "({0}) -- en_index/underlying cursor not terminating".format(seen))
@@ -295,7 +295,7 @@ def grow_shrink(lst, case, lock, rng):
                 for _ in range(5):
                     if len(lst) > 1:
                         lst.pop()
-            runloom.yield_now()        # readers' reverse/enumerate park overlaps us
+            stackweave.yield_now()        # readers' reverse/enumerate park overlaps us
 
 
 def control_arm(H, rng):
@@ -378,7 +378,7 @@ def run_round_impl(H, wid, rng, slot, state):
     drv_seed = rng.getrandbits(48)
     r1_seed = rng.getrandbits(48)            # reserved for reader jitter if needed
 
-    wg = runloom.WaitGroup()
+    wg = stackweave.WaitGroup()
     wg.add(3)
     rev_box = [0]
     enum_box = [0]
@@ -401,7 +401,7 @@ def run_round_impl(H, wid, rng, slot, state):
                 if n < 0:
                     break
                 rev_box[0] += n
-                runloom.yield_now()
+                stackweave.yield_now()
         finally:
             wg.done()
 
@@ -414,7 +414,7 @@ def run_round_impl(H, wid, rng, slot, state):
                 if n < 0:
                     break
                 enum_box[0] += n
-                runloom.yield_now()
+                stackweave.yield_now()
         finally:
             wg.done()
 
@@ -470,12 +470,12 @@ def worker(H, wid, rng, state):
 
 
 def setup(H):
-    # Built INSIDE the root (monkey.patch() already ran), so runloom.sync.Lock is
+    # Built INSIDE the root (monkey.patch() already ran), so stackweave.sync.Lock is
     # the cooperative, M:N-safe lock.  It serializes WRITES to the shared list
     # (list is documented thread-unsafe) so the oracle is a CONSERVATION/IDENTITY
     # test of the reverse/enumerate cursors while the readers race it UNLOCKED.
     H.state = {
-        "lock": runloom.sync.Lock(),
+        "lock": stackweave.sync.Lock(),
         "rev_seen": [0] * SLOTS,           # values seen via reversed() (per slot)
         "enum_seen": [0] * SLOTS,          # values seen via enumerate() (per slot)
         "ctrl": [0] * SLOTS,               # single-owner control rounds passed

@@ -13,7 +13,7 @@ fibers, so the failure showed up as EITHER a hang OR a segfault.
 This drove the mnweb dogfood server into a full-scheduler wedge after ~2.8 h
 (all hubs blocked in ``_Py_dict_lookup_threadsafe`` on ``app.routes``).
 """
-import runloom_c
+import stackweave_c
 
 
 class CollidingKey:
@@ -29,7 +29,7 @@ class CollidingKey:
         return 1
 
     def __eq__(self, other):
-        runloom_c.sched_sleep(0.0005)        # park INSIDE the dict critical section
+        stackweave_c.sched_sleep(0.0005)        # park INSIDE the dict critical section
         return isinstance(other, CollidingKey) and self.v == other.v
 
 
@@ -46,13 +46,13 @@ def test_park_in_dict_critical_section_no_deadlock():
             table.get(CollidingKey(i % 8))
         done[i] = 1
 
-    runloom_c.mn_init(4)
+    stackweave_c.mn_init(4)
     try:
         for i in range(n_workers):
-            runloom_c.mn_fiber(lambda i=i: worker(i))
-        runloom_c.mn_run()        # would hang here pre-fix (or the process segfaults)
+            stackweave_c.mn_fiber(lambda i=i: worker(i))
+        stackweave_c.mn_run()        # would hang here pre-fix (or the process segfaults)
     finally:
-        runloom_c.mn_fini()
+        stackweave_c.mn_fini()
 
     assert sum(done) == n_workers, "expected all workers to finish, got %d" % sum(done)
 

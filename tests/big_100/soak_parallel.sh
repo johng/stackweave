@@ -80,7 +80,7 @@ if [ "$_cur" -lt "$_needed" ] && [ "$_cur" != "unlimited" ]; then
     ulimit -n "$_needed" 2>/dev/null || true
 fi
 
-export RUNLOOM_SYSMON_QUIET=1 PYTHON_GIL=0 HUBS JOBS FUNCS DUR
+export STACKWEAVE_SYSMON_QUIET=1 PYTHON_GIL=0 HUBS JOBS FUNCS DUR
 
 echo "=====================================================================" | tee -a "$SOAK_LOG"
 echo "soak_parallel: cores=$CORES  reserved=$RESERVE_CORES  usable=$_USABLE  available_RAM=${RAM_GB}GB" | tee -a "$SOAK_LOG"

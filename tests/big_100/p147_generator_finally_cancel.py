@@ -13,7 +13,7 @@ correctness across migrations.
 import gc
 
 import harness
-import runloom
+import stackweave
 
 
 def setup(H):
@@ -60,7 +60,7 @@ def worker(H, wid, rng, state):
             for _i in range(pull):
                 next(g)
                 if rng.random() < 0.3:
-                    runloom.sleep(0.0002)
+                    stackweave.sleep(0.0002)
         except StopIteration:
             pass
         # Three fates, all of which MUST run the finally exactly once:

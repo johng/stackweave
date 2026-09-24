@@ -1,7 +1,7 @@
 """Is the RSS growth a PER-CALL leak in RunloomG_stack (PyDict_SetItemString
 with an unconsumed PyUnicode_FromString ref), not a per-thread sched leak?
 Single thread, one fiber handle, N stack() calls."""
-import runloom_c as rc
+import stackweave_c as rc
 
 
 def rss_kb():

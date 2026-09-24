@@ -3,8 +3,8 @@ side is parked fibers on M:N hubs.  Hunts crashes in the foreign-thread wake
 path (wake_waiter -> mn_wake_g / sched_wake from a non-hub thread)."""
 import threading
 import time
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 
 ch_in = rc.Chan(0)     # foreign -> fibers (unbuffered: direct handoff + wake)
 ch_out = rc.Chan(0)    # fibers -> foreign (fiber parks as sender; foreign try_recv pops+wakes)
@@ -52,7 +52,7 @@ threads = [threading.Thread(target=foreign_producer, daemon=True) for _ in range
           [threading.Thread(target=foreign_consumer, daemon=True) for _ in range(2)]
 for t in threads:
     t.start()
-runloom.run(8, main)
+stackweave.run(8, main)
 stop.set()
 for t in threads:
     t.join(timeout=5)

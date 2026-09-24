@@ -1,7 +1,7 @@
 """big_100 / 139 -- __del__ that touches the scheduler, incl. at shutdown.
 
 Objects whose __del__ tries to do SCHEDULER work -- spawn a goroutine
-(runloom.fiber), yield (runloom.yield_now), and/or set a runloom Event -- are
+(stackweave.fiber), yield (stackweave.yield_now), and/or set a stackweave Event -- are
 churned through create/drop by thousands of goroutines, with periodic
 gc.collect() under load.  The finalizers fire from arbitrary points: a plain
 drop, a cyclic-GC sweep, the free-threaded biased-refcount cross-thread merge,
@@ -24,7 +24,7 @@ import sys
 import threading
 
 import harness
-import runloom
+import stackweave
 
 
 def noop():
@@ -51,11 +51,11 @@ class Finalizes(object):
         kind = self.idx % 3
         try:
             if kind == 0:
-                runloom.fiber(noop)                 # spawn from a destructor
+                stackweave.fiber(noop)                 # spawn from a destructor
                 with st["lock"]:
                     st["spawned"][0] += 1
             elif kind == 1:
-                runloom.yield_now()              # yield from a destructor
+                stackweave.yield_now()              # yield from a destructor
             else:
                 st["event"].set()                # wake a waiter from a destructor
         except Exception:
@@ -84,7 +84,7 @@ def worker(H, wid, rng, state):
         H.op(wid)
         H.task_done(wid)
         if rng.random() < 0.1:
-            runloom.yield_now()
+            stackweave.yield_now()
 
 
 def setup(H):
@@ -92,7 +92,7 @@ def setup(H):
         "lock": threading.Lock(),
         "created": [0], "finalized": [0], "spawned": [0],
         "touch_errors": [0], "unraisable": [0],
-        "event": runloom.sync.Event(),
+        "event": stackweave.sync.Event(),
     }
     counter = H.state["unraisable"]
 

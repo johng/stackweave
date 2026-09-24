@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# run.sh -- bounded Atheris (coverage-guided) run of the runloom C-API fuzzer.
+# run.sh -- bounded Atheris (coverage-guided) run of the stackweave C-API fuzzer.
 # Safe: scheduler-free surface, one transient object/iter, bounded by -max_total_time.
 #   tools/fuzz/atheris/run.sh [seconds]   (default 30)
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../../.." && pwd)"
-PY="${RUNLOOM_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
+PY="${STACKWEAVE_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
 SECS="${1:-30}"
 CORPUS="$HERE/corpus"; mkdir -p "$CORPUS"
 

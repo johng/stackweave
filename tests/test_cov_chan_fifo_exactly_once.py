@@ -21,14 +21,14 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
 
 class TestChanFifoExactlyOnce(unittest.TestCase):
     def _run(self, nsenders, per_sender, cap, hubs):
         total = nsenders * per_sender
-        ch = runloom_c.Chan(cap)
+        ch = stackweave_c.Chan(cap)
         received = []                    # single receiver -> a real total order
 
         def sender(gid):
@@ -40,11 +40,11 @@ class TestChanFifoExactlyOnce(unittest.TestCase):
                 received.append(ch.recv()[0])
 
         def root():
-            runloom.fiber(receiver)
+            stackweave.fiber(receiver)
             for g in range(nsenders):
-                runloom.fiber(lambda g=g: sender(g))
+                stackweave.fiber(lambda g=g: sender(g))
 
-        runloom.run(hubs, main_fn=root)
+        stackweave.run(hubs, main_fn=root)
 
         # exactly-once: multiset equality with the sent set.
         self.assertEqual(len(received), total,

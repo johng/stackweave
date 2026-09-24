@@ -1,7 +1,7 @@
 """Verify: netpoll_release_if_idle only checks the DEFAULT pool for parkers.
 
 An M:N hub fiber parks on fd (parker lives in pool[hub], not runloom_pool).
-Another OS thread then calls runloom_c.netpoll_release_if_idle(fd) -- exactly
+Another OS thread then calls stackweave_c.netpoll_release_if_idle(fd) -- exactly
 what the aio bridge's _release_fd_after does after every loop.sock_* op on a
 user-owned socket.  The guard `runloom_pool.by_fd[fd] == NULL` does not see
 the hub parker, so it EPOLL_CTL_DELs the still-waited fd and zeroes the arm
@@ -17,8 +17,8 @@ import sys
 import threading
 import time
 
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 
 READ = 1
 DO_RELEASE = os.environ.get("RELEASE", "1") == "1"
@@ -46,12 +46,12 @@ def main():
         rv = rc.wait_fd(fd, READ, 3000)   # 3s timeout
         result["rv"] = rv
         result["el"] = time.monotonic() - t0
-    runloom.fiber(waiter)
+    stackweave.fiber(waiter)
     while "rv" not in result:
-        runloom.sleep(0.01)
+        stackweave.sleep(0.01)
 
 
-runloom.run(2, main)   # M:N: 2 hubs -> parker lands in a HUB pool, not default
+stackweave.run(2, main)   # M:N: 2 hubs -> parker lands in a HUB pool, not default
 
 rv = result["rv"]
 el = result["el"]

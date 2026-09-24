@@ -70,7 +70,7 @@ import codecs
 import encodings
 
 import harness
-import runloom
+import stackweave
 
 # DISTINCT encodings to cycle through. Each has a unique codec name and
 # specific behavior (e.g., utf-8 is variable-width, latin-1 is 1:1).
@@ -164,9 +164,9 @@ def worker(H, wid, rng, state):
                 # YIELD + PARK: race the _cache. A sibling fiber on this hub
                 # is now looking up a DIFFERENT encoding, racing _cache dict
                 # operations.
-                runloom.yield_now()
+                stackweave.yield_now()
                 if rng.random() < 0.5:
-                    runloom.sleep(0.0002)
+                    stackweave.sleep(0.0002)
 
                 # Second lookup: must return an equivalent codec (same name,
                 # same behavior). If the _cache was corrupted/torn, we get a
@@ -268,5 +268,5 @@ if __name__ == "__main__":
                  "the codec name, encode/decode functionality, and consistency across "
                  "a yield -- a wrong codec name or torn codec is the _cache data-race "
                  "bug (0 under plain threads GIL on AND off; a corruption is a "
-                 "runloom M:N race)."
+                 "stackweave M:N race)."
     )

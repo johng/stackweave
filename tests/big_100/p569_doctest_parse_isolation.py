@@ -27,7 +27,7 @@ be a corrupted parse.
 WHERE M:N COULD BREAK IT (the gap this program probes).  Each fiber owns its OWN
 DocTestParser instance and its OWN fiber-private docstring, and parses it TWICE
 with a yield in between (baseline parse -> yield so a sibling parses ITS OWN string
-mid-flight -> re-parse).  runloom gives each fiber its own frame stack; the parser
+mid-flight -> re-parse).  stackweave gives each fiber its own frame stack; the parser
 instance, the docstring, and the produced Example/DocTest objects are all
 fiber-local, never shared.  If per-fiber state were NOT isolated -- if a sibling's
 parse (its regex match objects, its intermediate Example list, its scan cursor)
@@ -53,7 +53,7 @@ WHICH ORACLES ARE LOAD-BEARING, AND WHY:
     parse their own strings mid-flight.  parser.get_examples(src) again -> compare:
     the second snapshot MUST equal the first tuple-for-tuple (byte-identical text,
     same linenos), AND both MUST equal the closed-form specs.  Single-owner: the
-    parser + string + Example objects are fiber-local.  A mismatch is a runloom
+    parser + string + Example objects are fiber-local.  A mismatch is a stackweave
     per-instance parse-isolation bug.
 
   * LOAD-BEARING -- DocTest OBJECT STABILITY + CLOSED FORM (worker, HARD,
@@ -81,7 +81,7 @@ shifted lineno, dropped/doubled Example), or a parse that disagrees with the
 closed-form specs the string was built from, or a SIGSEGV mid-scan.  There is NO
 shared parser and NO shared string in the load-bearing path, and the oracle never
 RUNS an example (so it never touches sys.stdout / sys.displayhook), so a failure
-cannot be documented shared-object behavior -- only a runloom per-instance parse-
+cannot be documented shared-object behavior -- only a stackweave per-instance parse-
 isolation bug.
 
 Stresses: doctest.DocTestParser.get_examples / get_doctest example extraction
@@ -99,7 +99,7 @@ cursor, localizes the leak before the Example-tuple oracle fires.
 import doctest
 
 import harness
-import runloom
+import stackweave
 
 # Pool of pure, single-line expressions whose interactive repr output is a fixed,
 # known string.  Every (expr, want) pair is exercised by doctest's example scanner
@@ -202,9 +202,9 @@ def examples_isolation_check(H, wid, idx, state):
 
     # YIELD between the two parses: this fiber is between parses of its OWN string.
     # A sibling parsing ITS OWN docstring must not perturb this fiber's next parse.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0003)
+        stackweave.sleep(0.0003)
 
     again = snapshot(parser.get_examples(src))
 
@@ -266,9 +266,9 @@ def doctest_object_check(H, wid, idx, state):
 
     baseline_name, baseline_lineno, baseline_exs = make()
 
-    runloom.yield_now()                          # sibling parses mid-flight
+    stackweave.yield_now()                          # sibling parses mid-flight
     if idx & 1:
-        runloom.sleep(0.0003)
+        stackweave.sleep(0.0003)
 
     again_name, again_lineno, again_exs = make()
 
@@ -376,5 +376,5 @@ if __name__ == "__main__":
                  "examples) is stable across the yield AND closed-form correct -- "
                  "no example is ever RUN, so doctest's sys.stdout/displayhook "
                  "globals are never touched.  Nothing is shared, so a mismatch is a "
-                 "runloom per-instance parse-isolation bug, never shared-object "
+                 "stackweave per-instance parse-isolation bug, never shared-object "
                  "doctest semantics")

@@ -15,7 +15,7 @@ Usage:
 
   # accelerated-life (max lifecycle turnover), with mode knobs:
   python3 tools/soak/soak.py --workload mixed --hours 1 --compress \\
-        --env RUNLOOM_PERHUB_EPOLL=1 --env RUNLOOM_IOURING_LOOP=1
+        --env STACKWEAVE_PERHUB_EPOLL=1 --env STACKWEAVE_IOURING_LOOP=1
 
 A worker that misses ~3 heartbeat intervals (mtime stale) OR whose progress
 counter freezes while it should be running is a HANG: we capture a gdb triage
@@ -278,8 +278,8 @@ def main(argv):
                          "fd pressure + allocator thrash, plus orchestrator "
                          "SIGSTOP/SIGCONT freeze chaos (recovery must be clean)")
     ap.add_argument("--env", action="append",
-                    help="KEY=VAL passed to workers (RUNLOOM_PERHUB_EPOLL, "
-                         "RUNLOOM_IOURING_LOOP, RUNLOOM_STACK_PARK_SWEEP, ...)")
+                    help="KEY=VAL passed to workers (STACKWEAVE_PERHUB_EPOLL, "
+                         "STACKWEAVE_IOURING_LOOP, STACKWEAVE_STACK_PARK_SWEEP, ...)")
     ap.add_argument("--out", default=os.path.join(ROOT, "docs", "dev", "soak"))
     ap.add_argument("--stamp", default=None,
                     help="run id for the output dir (default: a counter)")

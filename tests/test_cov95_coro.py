@@ -8,7 +8,7 @@ copy-on-grow path, and the invariant sanitizer.
 
 Almost every uncovered region lives behind an env-gated MODE or an error
 branch the normal corpus never trips.  An env mode is resolved ONCE (first
-getenv, cached static), so the parent pytest's already-imported runloom_c has
+getenv, cached static), so the parent pytest's already-imported stackweave_c has
 it fixed -- every mode test therefore runs in a SUBPROCESS with the env set.
 For gcov to count a subprocess's lines it MUST exit cleanly (a crash / _exit /
 SIGKILL does not flush counters), so every worker prints a unique stdout marker
@@ -17,26 +17,26 @@ worker counts the fibers that actually RAN (race-free, one bytearray slot per
 fiber) or asserts the concrete return value the target line produces.
 
 Regions driven (uncovered coro.c line -> how):
-  L266-269  RUNLOOM_STACK_DEPOT_CAP=<n> static-override of the AUTO depot cap
+  L266-269  STACKWEAVE_STACK_DEPOT_CAP=<n> static-override of the AUTO depot cap
             -> set it + churn >TLS_CAP fibers so a cache flush consults
             runloom_global_stack_cap() and resolves mode=static.
   L490,494-509,515-516  test stack ARENA carve / in-arena / acquire
-            -> RUNLOOM_STACK_ARENA=1: mn_fiber fibers carve their stacks as slices
+            -> STACKWEAVE_STACK_ARENA=1: mn_fiber fibers carve their stacks as slices
             of the one big arena (lock-free bump) instead of mmap+depot.
   L608-618  ARENA stack release path -> the same fibers COMPLETE, so their
             arena slices are madvise'd + returned to the bump allocator;
             churn rounds force the cursor-reset-on-empty reuse.
-  L572,594  RUNLOOM_STACK_MADV=off -> the reclaim flag resolves to 0 (no
+  L572,594  STACKWEAVE_STACK_MADV=off -> the reclaim flag resolves to 0 (no
             madvise) and is cached.
-  L575,594  RUNLOOM_STACK_MADV=dontneed -> flag resolves to MADV_DONTNEED and
+  L575,594  STACKWEAVE_STACK_MADV=dontneed -> flag resolves to MADV_DONTNEED and
             every pooled-stack release madvise's the body.
-  L1500-1502 fiber_n fresh-flag DEFERRED materialize -> RUNLOOM_GON_BULK=1 +
-            RUNLOOM_GON_FRESH=1 + RUNLOOM_STACK_ARENA=1: bulk_init skips the
+  L1500-1502 fiber_n fresh-flag DEFERRED materialize -> STACKWEAVE_GON_BULK=1 +
+            STACKWEAVE_GON_FRESH=1 + STACKWEAVE_STACK_ARENA=1: bulk_init skips the
             per-g asm_make_ctx and marks each coro `fresh`; the first
             runloom_coro_resume on the owning hub materializes the frame.
             Oracle: all N indexed fibers run -> the deferred frame write is
             correct.
-  L181,1507,1510  invariant sanitizer -> RUNLOOM_DEBUG_DIAG=invariants arms
+  L181,1507,1510  invariant sanitizer -> STACKWEAVE_DEBUG_DIAG=invariants arms
             RUNLOOM_DBG_INVARIANTS, so coro_resume sets/clears c->dbg_running
             (1507/1510) and assert_idle reads it on destroy (181).  Oracle: a
             clean run still completes (no false invariant abort).
@@ -75,7 +75,7 @@ import textwrap
 
 import pytest
 
-import runloom_c as rc
+import stackweave_c as rc
 from adv_util import needs_free_threading
 
 FT = needs_free_threading()
@@ -98,7 +98,7 @@ def _run_worker(body, env_extra=None, timeout=240):
     """
     src = ("import sys\n"
            "sys.path.insert(0, 'src')\n"
-           "import runloom_c as rc\n"
+           "import stackweave_c as rc\n"
            + textwrap.dedent(body))
     env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
     if env_extra:
@@ -124,8 +124,8 @@ def _assert_clean(p, marker):
 # no lost-increment race with the GIL off) and signal a WaitGroup; we assert
 # every fiber in every round ran.  ROUNDS forces stack release + reuse.
 _CHURN = r'''
-import runloom
-from runloom.sync import WaitGroup
+import stackweave
+from stackweave.sync import WaitGroup
 ROUNDS = {rounds}
 PER = {per}
 def main():
@@ -140,22 +140,22 @@ def main():
         wg.wait()
         assert sum(done) == PER, ("round %d only %d/%d ran" % (r, sum(done), PER))
     print("{marker} %d" % (ROUNDS * PER))
-runloom.run({hubs}, main)
+stackweave.run({hubs}, main)
 '''
 
 
 # --------------------------------------------------------------------------
-# L266-269 : RUNLOOM_STACK_DEPOT_CAP static override of the AUTO cap.
+# L266-269 : STACKWEAVE_STACK_DEPOT_CAP static override of the AUTO cap.
 # --------------------------------------------------------------------------
 def test_depot_cap_static_override():
-    """An explicit RUNLOOM_STACK_DEPOT_CAP forces the depot cap to STATIC mode
+    """An explicit STACKWEAVE_STACK_DEPOT_CAP forces the depot cap to STATIC mode
     (mode=0), overriding the default AUTO sizing.  The static value is read +
     cached on the first runloom_global_stack_cap() call, which happens when a
     per-thread cache overflows (>TLS_CAP=64) and flushes excess to the depot.
     PER=300 per round guarantees the overflow.  Drives L266-269.  Oracle: every
     churned fiber still ran with the cap forced low (correctness, not perf)."""
     body = _CHURN.format(rounds=5, per=300, hubs=3, marker="DEPOTCAP_OK")
-    p = _run_worker(body, {"RUNLOOM_STACK_DEPOT_CAP": "2000"})
+    p = _run_worker(body, {"STACKWEAVE_STACK_DEPOT_CAP": "2000"})
     _assert_clean(p, "DEPOTCAP_OK 1500")
 
 
@@ -164,7 +164,7 @@ def test_depot_cap_static_override():
 # L608-618 : ARENA stack release (madvise + return slot + cursor reset).
 # --------------------------------------------------------------------------
 def test_stack_arena_carve_and_release_churn():
-    """RUNLOOM_STACK_ARENA=1 makes every mn_fiber fiber carve its stack as a slice
+    """STACKWEAVE_STACK_ARENA=1 makes every mn_fiber fiber carve its stack as a slice
     of ONE pre-mmap'd arena (runloom_stack_arena_carve, L494-500) via a lock-free
     bump (runloom_arena_alloc), instead of mmap + the depot.  On completion the
     slice is recognised by runloom_stack_in_arena (L504-509), madvise-reclaimed,
@@ -174,36 +174,36 @@ def test_stack_arena_carve_and_release_churn():
     address space is reused.  Oracle: all 1000 fibers ran, distinct stacks, no
     corruption / crash."""
     body = _CHURN.format(rounds=5, per=200, hubs=3, marker="ARENA_OK")
-    p = _run_worker(body, {"RUNLOOM_STACK_ARENA": "1",
-                           "RUNLOOM_STACK_ARENA_N": "8192"})
+    p = _run_worker(body, {"STACKWEAVE_STACK_ARENA": "1",
+                           "STACKWEAVE_STACK_ARENA_N": "8192"})
     _assert_clean(p, "ARENA_OK 1000")
 
 
 # --------------------------------------------------------------------------
-# L572, L594 : RUNLOOM_STACK_MADV=off -> reclaim flag resolves to 0 (no madvise).
+# L572, L594 : STACKWEAVE_STACK_MADV=off -> reclaim flag resolves to 0 (no madvise).
 # --------------------------------------------------------------------------
 def test_stack_madv_off_no_reclaim():
-    """RUNLOOM_STACK_MADV=off makes runloom_stack_madv_reclaim resolve its cached
+    """STACKWEAVE_STACK_MADV=off makes runloom_stack_madv_reclaim resolve its cached
     flag to 0 (L571-572) and store it (L594); every subsequent pooled-stack
     release then skips madvise (L596 guard `flag != 0` is false).  Reached on the
     FIRST stack release in the run.  Drives L571-572 + L594.  Churn so many
     stacks are released; oracle is the clean churn count."""
     body = _CHURN.format(rounds=4, per=250, hubs=3, marker="MADVOFF_OK")
-    p = _run_worker(body, {"RUNLOOM_STACK_MADV": "off"})
+    p = _run_worker(body, {"STACKWEAVE_STACK_MADV": "off"})
     _assert_clean(p, "MADVOFF_OK 1000")
 
 
 # --------------------------------------------------------------------------
-# L575, L594 : RUNLOOM_STACK_MADV=dontneed -> flag = MADV_DONTNEED (eager reclaim).
+# L575, L594 : STACKWEAVE_STACK_MADV=dontneed -> flag = MADV_DONTNEED (eager reclaim).
 # --------------------------------------------------------------------------
 def test_stack_madv_dontneed_eager_reclaim():
-    """RUNLOOM_STACK_MADV=dontneed makes the reclaim flag resolve to MADV_DONTNEED
+    """STACKWEAVE_STACK_MADV=dontneed makes the reclaim flag resolve to MADV_DONTNEED
     (L573-575) and store it (L594); every pooled-stack release then madvise's the
     stack body (L596).  This is the OLD/tight-RSS behaviour vs the default lazy
     MADV_FREE.  Drives L573-575 + L594 + L596.  Oracle: the eager per-release
     reclaim does not corrupt a reused stack -> all fibers run."""
     body = _CHURN.format(rounds=4, per=250, hubs=3, marker="MADVDN_OK")
-    p = _run_worker(body, {"RUNLOOM_STACK_MADV": "dontneed"})
+    p = _run_worker(body, {"STACKWEAVE_STACK_MADV": "dontneed"})
     _assert_clean(p, "MADVDN_OK 1000")
 
 
@@ -211,16 +211,16 @@ def test_stack_madv_dontneed_eager_reclaim():
 # L1500-1502 : fiber_n fresh-flag DEFERRED materialize at first resume.
 # --------------------------------------------------------------------------
 def test_fiber_n_fresh_flag_deferred_materialize():
-    """RUNLOOM_GON_BULK=1 takes fiber_n's bulk-arena fast path; RUNLOOM_GON_FRESH=1
+    """STACKWEAVE_GON_BULK=1 takes fiber_n's bulk-arena fast path; STACKWEAVE_GON_FRESH=1
     makes runloom_coro_bulk_init SKIP the per-g asm_make_ctx (the scattered
     stack-top page fault) and mark each coro `fresh`, leaving self.sp/caller.sp
     zero.  The first runloom_coro_resume on the OWNING hub then materializes the
     fcontext frame just before the swap (coro.c L1491-1502) and clears the flag.
-    RUNLOOM_STACK_ARENA=1 supplies the arena the bulk path needs.  Oracle: all N
+    STACKWEAVE_STACK_ARENA=1 supplies the arena the bulk path needs.  Oracle: all N
     indexed fibers run their body exactly once -> the deferred frame write lands
     correctly on every hub (a wrong sp would crash or skip the body)."""
     body = r'''
-import runloom
+import stackweave
 N = 600
 ran = bytearray(N)            # one writer per slot -> race-free under M:N
 def main():
@@ -228,14 +228,14 @@ def main():
     rc.fiber_n(lambda i: ran.__setitem__(i, 1), N, 0, True)
     for _ in range(150):
         rc.sched_yield()      # let every hub resume its bulk fibers
-runloom.run(2, main)
+stackweave.run(2, main)
 assert sum(ran) == N, "only %d/%d fresh-deferred fibers ran" % (sum(ran), N)
 print("FRESH_OK %d" % sum(ran))
 '''
-    p = _run_worker(body, {"RUNLOOM_GON_BULK": "1",
-                           "RUNLOOM_GON_FRESH": "1",
-                           "RUNLOOM_STACK_ARENA": "1",
-                           "RUNLOOM_STACK_ARENA_N": "8192"})
+    p = _run_worker(body, {"STACKWEAVE_GON_BULK": "1",
+                           "STACKWEAVE_GON_FRESH": "1",
+                           "STACKWEAVE_STACK_ARENA": "1",
+                           "STACKWEAVE_STACK_ARENA_N": "8192"})
     _assert_clean(p, "FRESH_OK 600")
 
 
@@ -243,7 +243,7 @@ print("FRESH_OK %d" % sum(ran))
 # L181, L1507, L1510 : invariant sanitizer dbg_running set/clear + assert_idle.
 # --------------------------------------------------------------------------
 def test_invariants_dbg_running_set_clear_on_resume():
-    """RUNLOOM_DEBUG_DIAG=invariants arms RUNLOOM_DBG_INVARIANTS.  Under it,
+    """STACKWEAVE_DEBUG_DIAG=invariants arms RUNLOOM_DBG_INVARIANTS.  Under it,
     runloom_coro_resume stores c->dbg_running=1 before the swap (L1507) and =0
     after (L1510), and runloom_coro_assert_idle reads dbg_running (L181) on every
     destroy/recycle/reacquire.  We drive BOTH a raw Coro (direct resume cycles)
@@ -251,8 +251,8 @@ def test_invariants_dbg_running_set_clear_on_resume():
     trips the invariant -- assert_idle's load sees 0 at every idle point, so the
     process completes cleanly instead of aborting via runloom_invariant_fail."""
     body = r'''
-import runloom
-from runloom.sync import WaitGroup
+import stackweave
+from stackweave.sync import WaitGroup
 
 # (a) raw Coro: each resume sets dbg_running=1 (L1507) then 0 (L1510); the
 #     final dealloc -> runloom_coro_destroy -> assert_idle reads it (L181).
@@ -279,11 +279,11 @@ def main():
         rc.mn_fiber(lambda i=i: (ran.__setitem__(i, 1), wg.done()))
     wg.wait()
 assert sum(ran) == 0 or True  # set below after run completes
-runloom.run(2, main)
+stackweave.run(2, main)
 assert sum(ran) == 80, sum(ran)
 print("INVAR_OK")
 '''
-    p = _run_worker(body, {"RUNLOOM_DEBUG_DIAG": "invariants"})
+    p = _run_worker(body, {"STACKWEAVE_DEBUG_DIAG": "invariants"})
     _assert_clean(p, "INVAR_OK")
 
 
@@ -347,8 +347,8 @@ def test_default_churn_baseline_in_process():
     same race-free oracle the subprocess workers use, proving the baseline holds
     here so a subprocess failure isolates to its mode.  Also exercises the
     ordinary depot acquire/release/pop_local fast path."""
-    import runloom
-    from runloom.sync import WaitGroup
+    import stackweave
+    from stackweave.sync import WaitGroup
     from adv_util import hang_guard
     ran = bytearray(120)
 
@@ -359,5 +359,5 @@ def test_default_churn_baseline_in_process():
         wg.wait()
 
     with hang_guard(30, "default churn baseline"):
-        runloom.run(2, main)
+        stackweave.run(2, main)
     assert sum(ran) == 120, sum(ran)

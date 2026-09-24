@@ -2,7 +2,7 @@
 """Focused io_uring-vs-epoll comparison, to settle whether the loop backend's
 "+20% over epoll" reproduces and whether it transfers to a real handler.
 
-Two tests, each epoll vs RUNLOOM_IOURING_LOOP=1, same server otherwise:
+Two tests, each epoll vs STACKWEAVE_IOURING_LOOP=1, same server otherwise:
 
   Test 1  all-C 8-byte echo (serve handler=None -> runloom_io_c_echo, a
           tstate-free c_entry fiber). This is the ORIGINAL +20% condition:
@@ -24,7 +24,7 @@ Results (2026-06-19, Xeon E5-2696 v3, free-threaded 3.13t; full record in
   Test 2  1 KiB Cython      : epoll 455k (server-bound) vs io_uring 639k
           (client-bound); server ceiling 533k -> 1.16M = +2.17x, server CPU
           85% -> 55%. The proactor batching beats epoll decisively for a real
-          handler -- and runloom_cython on io_uring becomes the FASTEST runloom
+          handler -- and runloom_cython on io_uring becomes the FASTEST stackweave
           config in the suite. "io_uring loses on loopback" was an artifact of
           driving it through the readiness path instead of loop_recv.
 """
@@ -81,7 +81,7 @@ def main():
     results = {}
     port = 9300
     try:
-        IOU = {"RUNLOOM_IOURING_LOOP": "1"}
+        IOU = {"STACKWEAVE_IOURING_LOOP": "1"}
         cases = [
             # io_uring vs epoll (8-byte all-C echo + 1 KiB Cython handler)
             ("cecho_epoll", "srv_runloom_cecho.py", [], {}, 8),

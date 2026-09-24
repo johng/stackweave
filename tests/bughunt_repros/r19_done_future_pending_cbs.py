@@ -1,9 +1,9 @@
 """run_until_complete(already-done future): stock asyncio still runs the loop
 one iteration, so previously-scheduled call_soon callbacks execute."""
 import sys, asyncio
-import runloom.aio as aio
+import stackweave.aio as aio
 
-loop = aio.RunloomEventLoop()
+loop = aio.StackweaveEventLoop()
 asyncio.set_event_loop(loop)
 ran = []
 loop.call_soon(ran.append, 1)

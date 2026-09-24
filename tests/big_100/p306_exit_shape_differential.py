@@ -1,6 +1,6 @@
 """big_100 / 306 -- root-exit shape differential over identical in-flight state.
 
-A runloom root can END in four distinct ways, and each takes a DIFFERENT path
+A stackweave root can END in four distinct ways, and each takes a DIFFERENT path
 through the M:N teardown (mn_run join / mn_fini / atexit / interpreter
 finalization):
 
@@ -22,7 +22,7 @@ adversarial part: at the shape-dispatch instant the child has
   * 1 accept loop parked in accept() on a bound listener,
   * K goroutines parked in recv() on live socketpairs,
   * K short-sleep-loop goroutines cycling the timer heap, and
-  * 1 outstanding runloom.blocking() offload still running on a pool thread.
+  * 1 outstanding stackweave.blocking() offload still running on a pool thread.
 
 The bug hunted: a teardown path that frees the hub array (or runs Python
 finalization on a live hub thread) BEFORE a parked goroutine's netpoll arm is
@@ -90,9 +90,9 @@ K = 8
 CHILD = r'''
 import sys, os, socket, threading, time
 sys.path.insert(0, {src!r})
-import runloom
-import runloom.monkey
-runloom.monkey.patch()                    # cooperative socket I/O on the hubs
+import stackweave
+import stackweave.monkey
+stackweave.monkey.patch()                    # cooperative socket I/O on the hubs
 
 SHAPE = sys.argv[1] if len(sys.argv) > 1 else "return"
 K = {K}
@@ -115,7 +115,7 @@ def recv_parked(s):
 def sleep_loop():
     # Cycles the timer heap so the timer subsystem is live at the exit instant.
     while not stop[0]:
-        runloom.sleep(0.01)
+        stackweave.sleep(0.01)
 
 def accept_loop(srv):
     # Parked in accept() until the listener is closed.
@@ -130,7 +130,7 @@ def accept_loop(srv):
         pass
 
 def slow_blocking():
-    # A genuinely blocking call run on a pool thread via runloom.blocking; the
+    # A genuinely blocking call run on a pool thread via stackweave.blocking; the
     # 0.4s real sleep guarantees the offload is STILL OUTSTANDING at the
     # shape-dispatch instant (it must not be trivially drained).
     time.sleep(0.4)
@@ -138,7 +138,7 @@ def slow_blocking():
 
 def offload_g():
     try:
-        runloom.blocking(slow_blocking)
+        stackweave.blocking(slow_blocking)
     except Exception:
         pass
 
@@ -147,14 +147,14 @@ def main():
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.bind(("127.0.0.1", 0))
     srv.listen(64)
-    runloom.fiber(accept_loop, srv)
+    stackweave.fiber(accept_loop, srv)
     for _ in range(K):
         a, b = socket.socketpair()
         track(a); track(b)
-        runloom.fiber(recv_parked, a)     # parked recv on a live socketpair
-        runloom.fiber(sleep_loop)         # short-sleep loop on the timer heap
-    runloom.fiber(offload_g)              # one outstanding runloom.blocking offload
-    runloom.sleep(0.05)                   # let every arm actually park
+        stackweave.fiber(recv_parked, a)     # parked recv on a live socketpair
+        stackweave.fiber(sleep_loop)         # short-sleep loop on the timer heap
+    stackweave.fiber(offload_g)              # one outstanding stackweave.blocking offload
+    stackweave.sleep(0.05)                   # let every arm actually park
     sys.stdout.write("DONE-MARKER\n"); sys.stdout.flush()
 
     if SHAPE == "osexit":
@@ -179,7 +179,7 @@ def main():
         raise RuntimeError("shape=raise: unhandled exception out of root")
     # SHAPE == "return": fall through, run() joins the woken goroutines.
 
-runloom.run(4, main)
+stackweave.run(4, main)
 # Reached for return / sysexit / raise (run() swallows the exception and
 # returns); osexit never gets here.
 sys.stdout.write("MAIN-EXIT\n"); sys.stdout.flush()
@@ -281,7 +281,7 @@ def post(H):
 if __name__ == "__main__":
     harness.main("p306_exit_shape_differential", body, setup=setup, post=post,
                  default_funcs=100,
-                 describe="child runloom ends via return / SystemExit / "
+                 describe="child stackweave ends via return / SystemExit / "
                           "unhandled-exc / os._exit over IDENTICAL in-flight "
                           "state (parked accept+recv+sleep + outstanding "
                           "offload); per-shape expected returncode, >=0, no hang")

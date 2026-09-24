@@ -113,7 +113,7 @@ GIL-off.
 import random
 
 import harness
-import runloom
+import stackweave
 
 # Length of the fresh per-round bytearray.  Chosen to span SEVERAL of bytearray's
 # realloc growth boundaries when the mutator extends it (CPython overallocates
@@ -248,7 +248,7 @@ def walk_checked(H, wid, ba, gate, counts, slot):
                 # LIVE on this fiber's C stack -- the resize lands here.
                 parked = True
                 gate.done()
-                runloom.yield_now()
+                stackweave.yield_now()
             elif parked:
                 # Keep handing the scheduler back AFTER resuming, on every
                 # subsequent position, so the live cursor's it_index dereference
@@ -256,7 +256,7 @@ def walk_checked(H, wid, ba, gate, counts, slot):
                 # the cursor stays "parked mid-walk while a sibling resizes",
                 # widening the realloc / stale-ob_bytes-pointer window across the
                 # whole remaining walk rather than a single park point.
-                runloom.yield_now()
+                stackweave.yield_now()
         counts["clean"][slot] += 1
         return "clean"
     except RuntimeError:
@@ -320,9 +320,9 @@ def run_crosshub(H, wid, rng, counts, slot):
 
     # gate: the iterator trips it the instant before it parks; the mutator waits on
     # it, so the resize provably lands inside the park window.
-    gate = runloom.WaitGroup()
+    gate = stackweave.WaitGroup()
     gate.add(1)
-    wg = runloom.WaitGroup()
+    wg = stackweave.WaitGroup()
     wg.add(2)
     mseed = rng.getrandbits(48)
 
@@ -349,7 +349,7 @@ def run_crosshub(H, wid, rng, counts, slot):
             # it_seq->ob_bytes pointer (the use-after-free we are hunting).  THEN
             # shrink, so a slower-to-resume iterator instead meets a shrunk array.
             cut = grow_extend(ba, mrng)     # PyByteArray_Resize grow -> realloc/move
-            runloom.yield_now()             # hand the cursor back into the grown window
+            stackweave.yield_now()             # hand the cursor back into the grown window
             shrink_del(ba, cut)             # PyByteArray_Resize shrink
         except Exception:
             # The mutator's own resize never legally raises here; swallow so a
@@ -393,7 +393,7 @@ def worker(H, wid, rng, state):
 
 def setup(H):
     # Per-slot tallies allocated here, inside the root (monkey.patch() already ran
-    # so runloom.WaitGroup / yield_now are the cooperative M:N-safe primitives).
+    # so stackweave.WaitGroup / yield_now are the cooperative M:N-safe primitives).
     # Single-writer-per-slot lists -> race-free without a hot lock; summed in post.
     H.state = {"counts": {
         "clean": [0] * SLOTS,             # cross-hub walks that completed clean

@@ -1,4 +1,4 @@
-"""Shared configuration for the Runloom benchmark suite.
+"""Shared configuration for the Stackweave benchmark suite.
 
 Everything that the spec pins to os.cpu_count() is derived here so every program
 agrees on the same numbers, and the report can print them as the assumed
@@ -13,7 +13,7 @@ import os
 # ---------------------------------------------------------------------------
 CPU_COUNT = os.cpu_count() or 1
 
-HUBS = int(CPU_COUNT * 0.7)          # runloom M:N hubs  (spec: int(cpu*0.7))
+HUBS = int(CPU_COUNT * 0.7)          # stackweave M:N hubs  (spec: int(cpu*0.7))
 GO_SERVER_CORES = int(CPU_COUNT * 0.7)  # go GOMAXPROCS    (spec: int(cpu*0.7))
 CLIENT_CORES = int(CPU_COUNT * 0.25)    # go loadgen cores (spec: int(cpu*0.25))
 
@@ -96,7 +96,7 @@ PLATEAU_PATIENCE = 2
 # Interpreters (decision #4 + #7)
 # ---------------------------------------------------------------------------
 PYENV = os.path.expanduser("~/.pyenv/versions")
-FT_PYTHON = os.path.join(PYENV, "3.14.4t", "bin", "python3")   # runloom (GIL off)
+FT_PYTHON = os.path.join(PYENV, "3.14.4t", "bin", "python3")   # stackweave (GIL off)
 GIL_PYTHON = os.path.join(PYENV, "3.13.13", "bin", "python3")   # asyncio/uvloop/gevent best-case
 
 # Repo paths
@@ -122,12 +122,12 @@ def git_commit():
 
 
 def base_env(gil_off=True):
-    """A clean child env: PYTHONPATH=src, GIL toggled, RUNLOOM_DEBUG cleared
+    """A clean child env: PYTHONPATH=src, GIL toggled, STACKWEAVE_DEBUG cleared
     (decision #7: as-shipped release, debug OFF)."""
     e = dict(os.environ)
     e["PYTHONPATH"] = SRC + (os.pathsep + e["PYTHONPATH"] if e.get("PYTHONPATH") else "")
     e["PYTHON_GIL"] = "0" if gil_off else "1"
-    e.pop("RUNLOOM_DEBUG", None)
+    e.pop("STACKWEAVE_DEBUG", None)
     return e
 
 

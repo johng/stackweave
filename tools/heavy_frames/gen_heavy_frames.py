@@ -27,7 +27,7 @@ import os
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROFILE = os.path.join(HERE, "stdlib_fat_frames.json")
-OUT = os.path.join(HERE, "..", "..", "src", "runloom_c", "runloom_heavy_frames.h")
+OUT = os.path.join(HERE, "..", "..", "src", "stackweave_c", "runloom_heavy_frames.h")
 
 # module -> Python-visible symbols that reach that module's fat C frames.
 # Hand-maintained (C symbol -> Python API is not mechanically derivable).

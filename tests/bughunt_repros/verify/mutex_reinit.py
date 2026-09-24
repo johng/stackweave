@@ -1,4 +1,4 @@
-import runloom_c as rc
+import stackweave_c as rc
 m = rc.Mutex()
 m.lock()
 print('locked before reinit:', m.locked())

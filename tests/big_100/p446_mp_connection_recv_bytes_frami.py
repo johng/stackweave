@@ -4,7 +4,7 @@ under a concurrent second reader on ONE pipe fd.
 The subject is multiprocessing.connection.Connection (the duplex socketpair end
 returned by multiprocessing.Pipe(duplex=True); on Linux its _handle is a pollable
 socket fd, so under monkey.patch() every os.read/os.write on it is COOPERATIVE --
-osio.py's _patched_os_read parks the fiber on runloom_c.wait_fd(fd, READ) when the
+osio.py's _patched_os_read parks the fiber on stackweave_c.wait_fd(fd, READ) when the
 pipe would block).  Connection is documented as NOT safe for concurrent readers,
 and the exact non-atomic state we attack is the read-side reassembly carried
 ACROSS that park inside _ConnectionBase._recv / _recv_bytes (Lib/multiprocessing/
@@ -95,7 +95,7 @@ import struct
 import zlib
 
 import harness
-import runloom
+import stackweave
 
 # Finite sentinel UNIVERSE of body keys.  Every frame's payload is built from ONE
 # of these 4-byte keys; a decoded key NOT in this set is a torn/spliced body
@@ -219,7 +219,7 @@ SEQ_STRIDE = 1 << 24
 # Exception classes that a TEARDOWN-WINDOW fd-close raises on an in-flight
 # send_bytes/recv_bytes.  At funcs>=~6000 the funcs*PAIRS frames serialized through
 # the one shared pipe fd cannot all drain within --duration; at the deadline the
-# harness closes the registered Connection fds and runloom_c.cancel_all_parked()
+# harness closes the registered Connection fds and stackweave_c.cancel_all_parked()
 # wakes every parked send/recv.  A recv/send caught in that window surfaces several
 # ways, all benign:
 #   * OSError "handle is closed" / EBADF / BrokenPipe -- the fd was closed.
@@ -292,9 +292,9 @@ def run_shared_round(H, wid, rng, slot, state):
         else:
             long_tbl[slot] += 1
 
-    send_wg = runloom.WaitGroup()
+    send_wg = stackweave.WaitGroup()
     send_wg.add(PAIRS)
-    recv_wg = runloom.WaitGroup()
+    recv_wg = stackweave.WaitGroup()
     recv_wg.add(PAIRS)
 
     def run_sender(offer):
@@ -374,7 +374,7 @@ def run_control_round(H, wid, rng, slot, state):
     each prefix->wait_fd-park->body just like the shared arm but with NO competing
     reader.  A torn/dropped/duplicated frame HERE is the cooperative pipe transport
     itself losing or splicing bytes across the wait_fd park (NOT contention) -- a
-    real runloom os.read/os.write framing bug.  Conservation is exact PER ROUND."""
+    real stackweave os.read/os.write framing bug.  Conservation is exact PER ROUND."""
     import multiprocessing
 
     base_seq = wid * SEQ_STRIDE + state["cseq_local"][slot]
@@ -391,7 +391,7 @@ def run_control_round(H, wid, rng, slot, state):
 
     priv_a, priv_b = multiprocessing.Pipe(duplex=True)
     received = []
-    wg = runloom.WaitGroup()
+    wg = stackweave.WaitGroup()
     wg.add(2)                             # one sender fiber + one receiver fiber
 
     def run_sender():
@@ -521,7 +521,7 @@ def worker(H, wid, rng, state):
 
 def setup(H):
     # Built INSIDE the root (monkey.patch() already ran), so multiprocessing.Pipe's
-    # fds are pollable socketpairs and runloom.sync.Lock is the cooperative M:N-safe
+    # fds are pollable socketpairs and stackweave.sync.Lock is the cooperative M:N-safe
     # lock.  ONE shared duplex Connection pair takes all the cross-hub frame
     # traffic; send/recv each get their OWN cooperative lock (send_bytes and
     # recv_bytes both issue several os.write/os.read calls per frame that would
@@ -534,14 +534,14 @@ def setup(H):
     H.register_close(conn_b)
     H.state = {
         "shared": (conn_a, conn_b),
-        "send_lock": runloom.sync.Lock(),
-        "recv_lock": runloom.sync.Lock(),
+        "send_lock": stackweave.sync.Lock(),
+        "recv_lock": stackweave.sync.Lock(),
         # GLOBAL shared-arm registries (the shared Connection is global, so frames
         # from concurrent rounds interleave -> conservation is global, in post).
         "sent_set": {},                   # seq -> key, every shared frame sent
-        "sent_guard": runloom.sync.Lock(),
+        "sent_guard": stackweave.sync.Lock(),
         "recv_list": [],                  # every verified shared frame received
-        "recv_guard": runloom.sync.Lock(),
+        "recv_guard": stackweave.sync.Lock(),
         # CONTROL arm per-slot tallies (single-owner, exact per round).
         "csent": [0] * SLOTS,             # control-arm frames sent
         "crecv": [0] * SLOTS,             # control-arm frames received+verified

@@ -46,8 +46,8 @@ DEFAULT_PAIRS = [
 
 def run_pair(a_spec, b_site, b_spec, timeout):
     env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src", SWEEP_SITE=b_site)
-    env["RUNLOOM_FAULT_" + PAIR_A] = a_spec          # A persistent / baseline
-    env["RUNLOOM_FAULT_" + b_site] = b_spec          # B swept
+    env["STACKWEAVE_FAULT_" + PAIR_A] = a_spec          # A persistent / baseline
+    env["STACKWEAVE_FAULT_" + b_site] = b_spec          # B swept
     try:
         p = subprocess.run([PY, "-c", WORKLOAD], cwd=ROOT, env=env,
                            capture_output=True, text=True, timeout=timeout)

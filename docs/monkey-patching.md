@@ -1,6 +1,6 @@
 # Monkey-patching the stdlib
 
-`runloom.monkey.patch()` replaces blocking stdlib calls with cooperative
+`stackweave.monkey.patch()` replaces blocking stdlib calls with cooperative
 equivalents that park the current fiber instead of blocking the OS
 thread.  After the patch, ordinary `socket.recv`, `time.sleep`,
 `select.select`, `ssl.read`, file I/O, `subprocess` waits, DNS lookups,
@@ -14,9 +14,9 @@ becomes cooperative.
 ## The basic call
 
 ```python
-import runloom
+import stackweave
 
-runloom.monkey.patch()                    # patch everything
+stackweave.monkey.patch()                    # patch everything
 ```
 
 After this:
@@ -33,8 +33,8 @@ def worker():
     s.close()
     return data
 
-runloom.fiber(worker)
-runloom.run(1)
+stackweave.fiber(worker)
+stackweave.run(1)
 ```
 
 ## What gets patched
@@ -46,7 +46,7 @@ enable/disable:
 | --- | --- |
 | `socket` | `socket.socket`'s `connect`, `recv`, `send`, `sendall`, `accept`, `recv_into`, `recvfrom`, `sendto` park on `wait_fd` instead of blocking. |
 | `time` | `time.sleep` becomes cooperative (uses scheduler's sleep heap). |
-| `select` | `select.select`, `select.poll`, `selectors.*` rerouted through runloom's netpoll. |
+| `select` | `select.select`, `select.poll`, `selectors.*` rerouted through stackweave's netpoll. |
 | `os` | `os.read`, `os.write` on regular files dispatch to a worker thread (`run_in_executor`-style) so the fiber doesn't block. |
 | `ssl` | `ssl.SSLSocket` reads/writes park on `wait_fd`; handshake is cooperative. |
 | `subprocess` | `Popen.wait` / `communicate` poll the child's exit cooperatively. |
@@ -59,14 +59,14 @@ enable/disable:
 All default to enabled.  Opt out with kwargs:
 
 ```python
-runloom.monkey.patch(threading=False, queue=False)
+stackweave.monkey.patch(threading=False, queue=False)
 ```
 
 ## Unpatch
 
 ```python
-runloom.monkey.unpatch()              # reverse everything
-runloom.monkey.unpatch(socket=False)  # keep socket patched, reverse the rest
+stackweave.monkey.unpatch()              # reverse everything
+stackweave.monkey.unpatch(socket=False)  # keep socket patched, reverse the rest
 ```
 
 Patching is **idempotent** -- calling `patch()` twice does nothing the
@@ -75,10 +75,10 @@ second time.  Unpatch is the inverse.
 ## Recipe: a fully synchronous-looking HTTP fetcher
 
 ```python
-import runloom
+import stackweave
 import urllib.request
 
-runloom.monkey.patch()
+stackweave.monkey.patch()
 
 def fetch(url):
     with urllib.request.urlopen(url, timeout=5) as resp:
@@ -90,14 +90,14 @@ def main():
         "http://example.org",
         "http://example.net",
     ]
-    results = runloom.Chan(len(urls))
+    results = stackweave.Chan(len(urls))
     for u in urls:
-        runloom.fiber(lambda url=u: results.send((url, len(fetch(url)))))
+        stackweave.fiber(lambda url=u: results.send((url, len(fetch(url)))))
     for _ in urls:
         print(results.recv()[0])
 
-runloom.fiber(main)
-runloom.run(1)
+stackweave.fiber(main)
+stackweave.run(1)
 ```
 
 Three HTTP requests, fully concurrent, written in completely linear
@@ -107,10 +107,10 @@ monkey-patched.
 ## Recipe: a database pool with `pymysql`
 
 ```python
-import runloom
+import stackweave
 import pymysql                                # plain blocking driver
 
-runloom.monkey.patch()
+stackweave.monkey.patch()
 
 def query(sql):
     conn = pymysql.connect(host="db", user="x", password="y", db="z")
@@ -126,8 +126,8 @@ def worker(i):
     print("bucket", i, "->", len(rows), "rows")
 
 for i in range(32):
-    runloom.fiber(lambda i=i: worker(i))
-runloom.run(1)
+    stackweave.fiber(lambda i=i: worker(i))
+stackweave.run(1)
 ```
 
 32 concurrent MySQL queries on one OS thread, no thread pool, no
@@ -138,8 +138,8 @@ runloom.run(1)
 ### Patch early
 
 ```python
-import runloom
-runloom.monkey.patch()        # <-- before importing modules that capture sockets
+import stackweave
+stackweave.monkey.patch()        # <-- before importing modules that capture sockets
 
 import some_library        # this sees patched socket from the start
 ```
@@ -160,10 +160,10 @@ still gets the patched version because we rebind the class attribute.
 
 Patching doesn't turn `threading.Thread` into a fiber -- it would
 break too many assumptions.  If you spawn an OS thread, it runs
-independently of the runloom scheduler.
+independently of the stackweave scheduler.
 
-For "I want runloom, not threads," use `runloom.fiber(fn)` or
-`runloom.sync.fiber(fn)`.
+For "I want stackweave, not threads," use `stackweave.fiber(fn)` or
+`stackweave.sync.fiber(fn)`.
 
 ### `os.read` on a regular file dispatches to a thread
 
@@ -171,15 +171,15 @@ The Linux io_uring backend (when available) lets us do truly async
 file I/O, but the default path is a small executor that runs the
 read/write off the scheduler's OS thread.  This means file I/O won't
 *block* your fibers, but it does pay a thread-hop on each call.
-See [io_uring](https://github.com/robertsdotpm/runloom/blob/main/src/runloom_c/io_uring.c)
+See [io_uring](https://github.com/johng/stackweave/blob/main/src/runloom_c/io_uring.c)
 for direct ring access.
 
-That executor is the same backend `runloom.monkey.offload()` uses, and it is
+That executor is the same backend `stackweave.monkey.offload()` uses, and it is
 the mechanism described in the next section.
 
 ### How offloading works, and where it is going
 
-A blocking call that runloom cannot make cooperative -- buffered file
+A blocking call that stackweave cannot make cooperative -- buffered file
 `read`/`write`, a C-extension database driver, `socket.gethostbyaddr` (libc,
 and it takes no timeout), CPU-bound hashing -- has to run somewhere other than
 the fiber's hub, or it stops that hub's scheduler loop.
@@ -195,7 +195,7 @@ have historically lived.
 
 **The replacement**, live now, is offload hubs (see
 [API reference](api-reference.md#offload-hubs)): reserve K extra hubs with
-`runloom.run(n, main, offload_hubs=K)`, run the blocking call there as an
+`stackweave.run(n, main, offload_hubs=K)`, run the blocking call there as an
 ordinary fiber, and let the result come back over a normal channel. Submit, completion and wake then reuse the same scheduler code
 every other fiber uses, and there is no completion protocol left to get wrong.
 
@@ -203,7 +203,7 @@ Two consequences worth knowing:
 
 - It needs **no patched CPython**. Nothing migrates between hubs -- the offload
   fiber is born and dies on its hub, the caller never leaves its own -- so the
-  cross-hub tstate problem (`runloom.migration_available()`) does not arise.
+  cross-hub tstate problem (`stackweave.migration_available()`) does not arise.
 - It does **not** raise blocking concurrency. A blocked hub cannot run its
   scheduler loop, so K offload hubs carry K concurrent blocking calls, the same
   arithmetic as the thread pool. The gain is correctness and maintainability,
@@ -212,7 +212,7 @@ Two consequences worth knowing:
 `monkey.offload()` routes through offload hubs automatically whenever any are
 reserved, and falls back to the thread pool when none are -- so the default
 build behaves exactly as before. Reserve them with
-`runloom.run(n, main, offload_hubs=K)` (or `RUNLOOM_OFFLOAD_HUBS=K`).
+`stackweave.run(n, main, offload_hubs=K)` (or `STACKWEAVE_OFFLOAD_HUBS=K`).
 
 The pool is not going away: it is still the only route for a caller outside any
 fiber (foreign OS threads must never park a non-existent fiber), for a
@@ -228,9 +228,9 @@ goes through the same executor path.
 ## Listing applied patches
 
 ```python
-import runloom
-runloom.monkey.patch()
-print(runloom.monkey._applied)
+import stackweave
+stackweave.monkey.patch()
+print(stackweave.monkey._applied)
 # {'socket', 'time', 'select', 'os', 'ssl', 'subprocess',
 #  'threading', 'queue', 'stdio', 'dns'}
 ```
@@ -240,10 +240,10 @@ print(runloom.monkey._applied)
 ## When NOT to monkey-patch
 
 If your entire program is written in `async def` and uses
-`runloom.aio.run` for I/O, you don't need monkey-patching -- the asyncio
-bridge already drives I/O through runloom's netpoll.  Monkey-patching is
+`stackweave.aio.run` for I/O, you don't need monkey-patching -- the asyncio
+bridge already drives I/O through stackweave's netpoll.  Monkey-patching is
 for **mixing** sync code with the scheduler.
 
-If you're embedding runloom inside another process that also uses
+If you're embedding stackweave inside another process that also uses
 threads + blocking I/O for unrelated work, don't patch -- confining
-runloom to its own region keeps the rest unaffected.
+stackweave to its own region keeps the rest unaffected.

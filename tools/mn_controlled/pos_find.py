@@ -2,7 +2,7 @@
 """Partial-Order Sampling (POS, Yuan et al. CAV'18) over the controlled M:N baton
 -- QA-steal-V2 #18, the Python-only first increment.
 
-The C baton's PCT (RUNLOOM_MN_PCT) assigns priorities PER HUB.  POS assigns them
+The C baton's PCT (STACKWEAVE_MN_PCT) assigns priorities PER HUB.  POS assigns them
 per OPERATION and, crucially, only RE-DRAWS the priority of an enabled operation
 when a DEPENDENT operation (one that touches the SAME shared object) executes --
 so reordering two INDEPENDENT operations never disturbs the rest of the schedule.
@@ -12,7 +12,7 @@ total orders that collapse to the same class.
 
 This is a Python sampler, NOT a change to the correctness-critical C baton grant
 loop (mn_sched_hub_resume_preempt.c.inc): it drives whole schedules through the
-existing chess_explore.run_prefix() replay harness (RUNLOOM_MN_SCHEDULE), so it is
+existing chess_explore.run_prefix() replay harness (STACKWEAVE_MN_SCHEDULE), so it is
 zero-risk to the runtime.  Operation identity is (hub, next-object), and the
 next-object is EXACT pending-operation lookahead -- discovered by replaying
 base+[j] and reading the object the granted segment goes on to touch
@@ -49,7 +49,7 @@ TIMEOUT = 30
 
 # --- memoized replay -------------------------------------------------------
 # run_prefix is a deterministic function of (workload, prefix, env) under
-# RUNLOOM_MN_SEED=1, so cache it: the sampler probes the same schedule-tree nodes
+# STACKWEAVE_MN_SEED=1, so cache it: the sampler probes the same schedule-tree nodes
 # across every sample, and one process can reuse them all.
 _CACHE = {}
 
@@ -134,7 +134,7 @@ class POS:
 
 class PCTBounded:
     """Baseline: per-HUB random priority + d-1 demotions (a Python echo of
-    RUNLOOM_MN_PCT=d).  The demotions fire with a per-decision probability rather
+    STACKWEAVE_MN_PCT=d).  The demotions fire with a per-decision probability rather
     than at fixed step indices, so they land WITHIN these short schedules (a fixed
     [1,k] index almost never hits a 3-8 step schedule); each demotion drops the
     just-picked hub below every base priority = one preemption."""

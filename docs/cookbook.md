@@ -1,13 +1,13 @@
 # Cookbook
 
-Patterns and complete recipes for common runloom use cases.
+Patterns and complete recipes for common stackweave use cases.
 
 ## Worker pool
 
 A fixed pool of workers pulling jobs from a channel:
 
 ```python
-import runloom
+import stackweave
 
 def worker(jobs, results):
     while True:
@@ -20,11 +20,11 @@ def main():
     N_WORKERS = 8
     N_JOBS = 200
 
-    jobs = runloom.Chan(N_JOBS)
-    results = runloom.Chan(N_JOBS)
+    jobs = stackweave.Chan(N_JOBS)
+    results = stackweave.Chan(N_JOBS)
 
     for _ in range(N_WORKERS):
-        runloom.fiber(lambda: worker(jobs, results))
+        stackweave.fiber(lambda: worker(jobs, results))
 
     # Feed jobs
     for i in range(N_JOBS):
@@ -38,8 +38,8 @@ def main():
         total += v
     print("sum:", total)
 
-runloom.fiber(main)
-runloom.run(1)
+stackweave.fiber(main)
+stackweave.run(1)
 ```
 
 ## Pipeline (3-stage)
@@ -48,7 +48,7 @@ Stage 1 emits values; stage 2 transforms; stage 3 aggregates.  Each
 stage is its own fiber connected by channels.
 
 ```python
-import runloom
+import stackweave
 
 def stage1(out):
     for i in range(100):
@@ -67,41 +67,41 @@ def stage3(in_, result):
     result.send(total)
 
 def main():
-    a, b = runloom.Chan(10), runloom.Chan(10)
-    result = runloom.Chan(1)
+    a, b = stackweave.Chan(10), stackweave.Chan(10)
+    result = stackweave.Chan(1)
 
-    runloom.fiber(lambda: stage1(a))
-    runloom.fiber(lambda: stage2(a, b))
-    runloom.fiber(lambda: stage3(b, result))
+    stackweave.fiber(lambda: stage1(a))
+    stackweave.fiber(lambda: stage2(a, b))
+    stackweave.fiber(lambda: stage3(b, result))
 
     print(result.recv()[0])
 
-runloom.fiber(main)
-runloom.run(1)
+stackweave.fiber(main)
+stackweave.run(1)
 ```
 
 ## Fan-in (many producers, one consumer)
 
 ```python
-import runloom
+import stackweave
 
 def producer(id, out):
     for i in range(10):
         out.send((id, i))
 
 def main():
-    ch = runloom.Chan(100)
+    ch = stackweave.Chan(100)
     PRODUCERS = 5
     for p in range(PRODUCERS):
-        runloom.fiber(lambda p=p: producer(p, ch))
+        stackweave.fiber(lambda p=p: producer(p, ch))
 
     # Drain everything (sender count × items per sender)
     for _ in range(PRODUCERS * 10):
         prod_id, value = ch.recv()[0]
         print(prod_id, value)
 
-runloom.fiber(main)
-runloom.run(1)
+stackweave.fiber(main)
+stackweave.run(1)
 ```
 
 If producers might close the channel, use `for v in ch`.  If they
@@ -113,7 +113,7 @@ Multiple consumers pull from the same channel; the runtime picks one
 for each value.
 
 ```python
-import runloom
+import stackweave
 
 def producer(out):
     for i in range(100):
@@ -125,13 +125,13 @@ def consumer(id, in_):
         print("consumer", id, "got", v)
 
 def main():
-    ch = runloom.Chan(10)
-    runloom.fiber(lambda: producer(ch))
+    ch = stackweave.Chan(10)
+    stackweave.fiber(lambda: producer(ch))
     for c in range(4):
-        runloom.fiber(lambda c=c: consumer(c, ch))
+        stackweave.fiber(lambda c=c: consumer(c, ch))
 
-runloom.fiber(main)
-runloom.run(1)
+stackweave.fiber(main)
+stackweave.run(1)
 ```
 
 ## Cancellation via a "done" channel
@@ -140,11 +140,11 @@ Go's idiomatic pattern: pass a `done` channel that callers close to
 signal cancellation.
 
 ```python
-import runloom
+import stackweave
 
 def worker(done):
     while True:
-        idx, _ = runloom.select([
+        idx, _ = stackweave.select([
             ("recv", done),         # case 0: cancellation
             ("send", out, "work"),  # case 1: emit a value
         ])
@@ -153,16 +153,16 @@ def worker(done):
             return
 
 def main():
-    done = runloom.Chan(0)        # unbuffered; close to broadcast
-    out = runloom.Chan(10)
-    runloom.fiber(lambda: worker(done))
+    done = stackweave.Chan(0)        # unbuffered; close to broadcast
+    out = stackweave.Chan(10)
+    stackweave.fiber(lambda: worker(done))
 
     # ... do stuff with out ...
-    runloom.sched_sleep(0.05)
+    stackweave.sched_sleep(0.05)
     done.close()                    # wakes every recv on done
 
-runloom.fiber(main)
-runloom.run(1)
+stackweave.fiber(main)
+stackweave.run(1)
 ```
 
 `select` on a closed `done` channel returns immediately -- `recv` from
@@ -171,17 +171,17 @@ a closed channel never blocks.
 ## Timeouts via `select`
 
 ```python
-import runloom
+import stackweave
 import threading
 
 def with_timeout(ch, seconds):
-    timer = runloom.Chan(1)
+    timer = stackweave.Chan(1)
     def fire():
-        runloom.sched_sleep(seconds)
+        stackweave.sched_sleep(seconds)
         timer.send(None)
-    runloom.fiber(fire)
+    stackweave.fiber(fire)
 
-    idx, payload = runloom.select([
+    idx, payload = stackweave.select([
         ("recv", ch),
         ("recv", timer),
     ])
@@ -190,16 +190,16 @@ def with_timeout(ch, seconds):
     return payload[0]               # got the real value
 
 def main():
-    data = runloom.Chan(1)
+    data = stackweave.Chan(1)
     # Don't send anything to data; the timeout will fire
     print(with_timeout(data, 0.1))  # None
 
-runloom.fiber(main)
-runloom.run(1)
+stackweave.fiber(main)
+stackweave.run(1)
 ```
 
 For asyncio code, just use `asyncio.wait_for(coro, timeout=N)` --
-`runloom.aio` handles it natively.
+`stackweave.aio` handles it natively.
 
 ## Graceful shutdown
 
@@ -209,7 +209,7 @@ shutdown signal, close the input channel and wait for workers to
 finish.
 
 ```python
-import signal, threading, runloom
+import signal, threading, stackweave
 
 def worker(jobs, finished):
     for job in jobs:
@@ -218,11 +218,11 @@ def worker(jobs, finished):
     finished.send(None)
 
 def main():
-    jobs = runloom.Chan(100)
-    finished = runloom.Chan(4)        # one slot per worker
+    jobs = stackweave.Chan(100)
+    finished = stackweave.Chan(4)        # one slot per worker
 
     for _ in range(4):
-        runloom.fiber(lambda: worker(jobs, finished))
+        stackweave.fiber(lambda: worker(jobs, finished))
 
     shutdown = threading.Event()
     signal.signal(signal.SIGINT, lambda *_: shutdown.set())
@@ -238,24 +238,24 @@ def main():
             finished.recv()
         print("clean shutdown")
 
-runloom.fiber(main)
-runloom.run(1)
+stackweave.fiber(main)
+stackweave.run(1)
 ```
 
-## Mixing runloom with `threading`
+## Mixing stackweave with `threading`
 
-You can spawn an OS thread that drives its own runloom scheduler:
+You can spawn an OS thread that drives its own stackweave scheduler:
 
 ```python
-import threading, runloom
+import threading, stackweave
 
 def worker_thread():
     def task():
         # ... cooperative work ...
         pass
     for _ in range(100):
-        runloom.fiber(task)
-    runloom.run(1)
+        stackweave.fiber(task)
+    stackweave.run(1)
 
 threads = [threading.Thread(target=worker_thread) for _ in range(4)]
 for t in threads: t.start()
@@ -271,10 +271,10 @@ M:N is for.
 A buffered channel makes a great semaphore:
 
 ```python
-import runloom
+import stackweave
 
 # Allow at most 4 concurrent slow operations
-sem = runloom.Chan(4)
+sem = stackweave.Chan(4)
 for _ in range(4):
     sem.try_send(None)              # fill it; tokens
 
@@ -282,13 +282,13 @@ def slow_op():
     sem.recv()                      # acquire (blocks if no token)
     try:
         # ... slow thing ...
-        runloom.sched_sleep(0.5)
+        stackweave.sched_sleep(0.5)
     finally:
         sem.send(None)              # release
 
 for _ in range(20):
-    runloom.fiber(slow_op)
-runloom.run(1)
+    stackweave.fiber(slow_op)
+stackweave.run(1)
 ```
 
 20 fibers compete for 4 tokens; at most 4 ever run simultaneously.
@@ -299,7 +299,7 @@ A useful pattern for routing: producers send *channels* through a
 "router" channel; consumers receive a channel and read from it.
 
 ```python
-import runloom
+import stackweave
 
 def consumer(work):
     chan = work.recv()[0]
@@ -308,7 +308,7 @@ def consumer(work):
 
 def producer(work):
     for batch in range(3):
-        ch = runloom.Chan(10)
+        ch = stackweave.Chan(10)
         work.send(ch)
         for i in range(10):
             ch.send((batch, i))
@@ -316,12 +316,12 @@ def producer(work):
     work.close()
 
 def main():
-    work = runloom.Chan(1)
-    runloom.fiber(lambda: producer(work))
-    runloom.fiber(lambda: consumer(work))
+    work = stackweave.Chan(1)
+    stackweave.fiber(lambda: producer(work))
+    stackweave.fiber(lambda: consumer(work))
 
-runloom.fiber(main)
-runloom.run(1)
+stackweave.fiber(main)
+stackweave.run(1)
 ```
 
 ## Echo server with per-connection cancellation
@@ -330,9 +330,9 @@ A complete server: each connection gets a fiber; closing the
 listener cancels every active connection cleanly.
 
 ```python
-import socket, runloom
+import socket, stackweave
 
-runloom.monkey.patch()
+stackweave.monkey.patch()
 
 def handle(conn, done):
     try:
@@ -355,14 +355,14 @@ def serve(addr):
     try:
         while not done.is_set():
             conn, _ = srv.accept()
-            runloom.fiber(lambda c=conn: handle(c, done))
+            stackweave.fiber(lambda c=conn: handle(c, done))
     except KeyboardInterrupt:
         done.set()
         srv.close()
 
 import threading
-runloom.fiber(lambda: serve(("127.0.0.1", 9000)))
-runloom.run(1)
+stackweave.fiber(lambda: serve(("127.0.0.1", 9000)))
+stackweave.run(1)
 ```
 
 ## Replacing `threading.Thread` for I/O-bound work
@@ -377,32 +377,32 @@ t = threading.Thread(target=worker)
 t.start()
 
 # After
-import runloom
-g = runloom.fiber(worker)             # plus runloom.run(1) at top level
+import stackweave
+g = stackweave.fiber(worker)             # plus stackweave.run(1) at top level
 ```
 
 You go from 8 MB per thread (Linux default) to ~16 KB per fiber.
 Spawn rate goes from ~10k/sec to ~1.7M/sec.
 
-## Bridging runloom with `asyncio` libraries
+## Bridging stackweave with `asyncio` libraries
 
-You can call `runloom.fiber(fn)` from inside an async coroutine -- the
+You can call `stackweave.fiber(fn)` from inside an async coroutine -- the
 fiber runs concurrently with the awaiting code:
 
 ```python
-import asyncio, runloom
+import asyncio, stackweave
 
 def background_worker():
     while True:
         # ... cooperative work ...
-        runloom.sched_sleep(1.0)
+        stackweave.sched_sleep(1.0)
 
 async def main():
-    runloom.fiber(background_worker)
+    stackweave.fiber(background_worker)
     # ... your async code runs in parallel with the background fiber ...
     await asyncio.sleep(5)
 
-runloom.aio.run(main())
+stackweave.aio.run(main())
 ```
 
 The async coroutine and the raw fiber share the same scheduler;

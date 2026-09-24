@@ -12,8 +12,8 @@ import sys
 
 import pytest
 
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 from adv_util import hang_guard, needs_free_threading
 
 FT = needs_free_threading()
@@ -116,13 +116,13 @@ def test_introspection_during_single_thread_churn():
 @pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_introspection_during_mn_churn():
     # Poll the introspection surface from inside hubs while many gs run/park.
-    from runloom.sync import WaitGroup
+    from stackweave.sync import WaitGroup
     errors = []
     def main():
         wg = WaitGroup(); wg.add(200)
         def worker():
             try:
-                runloom.sleep(0.001)
+                stackweave.sleep(0.001)
             finally:
                 wg.done()
         for _ in range(200):
@@ -138,7 +138,7 @@ def test_introspection_during_mn_churn():
             rc.sched_yield()
         wg.wait()
     with hang_guard(60, "mn introspect churn"):
-        runloom.run(4, main)
+        stackweave.run(4, main)
     assert not errors, "introspection raced under M:N churn: %r" % errors
 
 

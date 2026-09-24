@@ -176,7 +176,7 @@ static int runloom_per_g_tstate_flag(void)
     static int v = -1;
     int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
     if (cur < 0) {
-        const char *e = getenv("RUNLOOM_PER_G_TSTATE");
+        const char *e = getenv("STACKWEAVE_PER_G_TSTATE");
         cur = (e != NULL && e[0] != '0') ? 1 : 0;
         __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
     }
@@ -206,7 +206,7 @@ static int runloom_steal_woken_flag(void)
     static int v = -1;
     int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
     if (cur < 0) {
-        const char *e = getenv("RUNLOOM_STEAL_WOKEN");
+        const char *e = getenv("STACKWEAVE_STEAL_WOKEN");
         cur = (e != NULL && e[0] != '0') ? 1 : 0;
         __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
     }
@@ -228,7 +228,7 @@ static int runloom_unsafe_migration_acked(void)
     static int v = -1;
     int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
     if (cur < 0) {
-        const char *e = getenv("RUNLOOM_ALLOW_UNSAFE_MIGRATION");
+        const char *e = getenv("STACKWEAVE_ALLOW_UNSAFE_MIGRATION");
         cur = (e != NULL && e[0] != '0' && e[0] != '\0') ? 1 : 0;
         __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
     }
@@ -244,7 +244,7 @@ static int runloom_migration_flag(void)
     static int v = -1;
     int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
     if (cur < 0) {
-        const char *e = getenv("RUNLOOM_MIGRATION");
+        const char *e = getenv("STACKWEAVE_MIGRATION");
         cur = (e != NULL && e[0] != '0' && e[0] != '\0') ? 1 : 0;
         __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
     }
@@ -301,8 +301,8 @@ static int runloom_resolve_migratable_mode(void)
     /* Anything less is still unsound -> require the explicit dev escape hatch. */
     if (runloom_unsafe_migration_acked()) return 1;
     fprintf(stderr,
-        "[runloom] cross-hub migration (RUNLOOM_MIGRATION / RUNLOOM_PER_G_TSTATE / "
-        "RUNLOOM_STEAL_WOKEN) is GATED OFF: this CPython is missing %s.\n"
+        "[stackweave] cross-hub migration (STACKWEAVE_MIGRATION / STACKWEAVE_PER_G_TSTATE / "
+        "STACKWEAVE_STEAL_WOKEN) is GATED OFF: this CPython is missing %s.\n"
         "  alloc-home (Py_TSTATE_ALLOC_HOME): %s -- without it a per-g "
         "PyThreadState's mimalloc heap migrates across hub threads -> SEGV under "
         "churn at H>=2.\n"
@@ -314,7 +314,7 @@ static int runloom_resolve_migratable_mode(void)
         "patches/cpython313t-tstate-alloc-home.patch and "
         "patches/cpython314t-tstate-exec-home.patch (and rebuild extension modules "
         "against it -- _Py_ThreadId() inlines into Py_INCREF/Py_DECREF). For "
-        "dev/fuzzing, set RUNLOOM_ALLOW_UNSAFE_MIGRATION=1 to enable anyway. "
+        "dev/fuzzing, set STACKWEAVE_ALLOW_UNSAFE_MIGRATION=1 to enable anyway. "
         "Running the default (per-hub-tstate) scheduler instead.\n",
         (!have_alloc && !have_exec) ? "both migration patches"
                                     : (!have_alloc ? "the alloc-home patch"

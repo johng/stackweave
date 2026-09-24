@@ -1,4 +1,4 @@
-runloom supply-chain / backdoor scan
+stackweave supply-chain / backdoor scan
 ====================================
 
 Complements the `security` phase (which fuzzes the RUNTIME).  This phase looks for
@@ -15,13 +15,13 @@ a NEW finding reds the gate:
   bandit       Python security AST patterns in src/, NEW vs bandit_baseline.json
                (the current legit exec/subprocess uses are baselined).  OFFLINE.
   osv-scanner  vulnerable / malicious dependencies vs the OSV DB, on the resolved
-               dev/test env.  NETWORK -- opt-in (RUNLOOM_SC_DEPS=1).
+               dev/test env.  NETWORK -- opt-in (STACKWEAVE_SC_DEPS=1).
 
 Run
 ---
   tools/supplychain/scan.sh                    # offline 3 + (dep audit off)
-  RUNLOOM_SC_DEPS=1 tools/supplychain/scan.sh  # + osv-scanner (network)
-  RUNLOOM_SC_FAST=1 tools/supplychain/scan.sh  # offline subset only
+  STACKWEAVE_SC_DEPS=1 tools/supplychain/scan.sh  # + osv-scanner (network)
+  STACKWEAVE_SC_FAST=1 tools/supplychain/scan.sh  # offline subset only
 
 Wired into check_all as the `supplychain` phase (extensive, with the dep audit) and
 `supplychain-fast` (offline subset, in check_all_fast).  Any tool absent -> that

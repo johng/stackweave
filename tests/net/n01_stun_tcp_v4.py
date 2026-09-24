@@ -6,7 +6,7 @@ reply, and asserts the response echoes OUR txid + carries an XOR-MAPPED-ADDRESS
 that xor-decodes to a plausible PUBLIC IPv4:port.  Tying the oracle to the txid
 we picked makes a flaky/hostile server unable to fake a finding: a server that
 doesn't echo our txid is ENV (skip), only a txid-MATCHED but structurally
-corrupt reply implicates TCPConn/netpoll framing.  Opt-in (RUNLOOM_NET_TESTS=1),
+corrupt reply implicates TCPConn/netpoll framing.  Opt-in (STACKWEAVE_NET_TESTS=1),
 never in any gate.
 """
 import os

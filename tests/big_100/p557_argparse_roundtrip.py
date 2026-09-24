@@ -11,7 +11,7 @@ resolved values live on the returned namespace), so the SAME parser parsing the
 SAME argv must return the SAME namespace values every time -- a closed-form,
 bit-identical round trip.
 
-WHERE M:N COULD BREAK IT (the gap this program probes).  runloom runs fibers in
+WHERE M:N COULD BREAK IT (the gap this program probes).  stackweave runs fibers in
 PARALLEL across hubs with the GIL off.  argparse's parse path threads a mutable
 `namespace`, an intermediate `seen_actions` set, an `arg_strings` list, and the
 per-action `_get_values` type-conversion loop through many small helper calls
@@ -41,7 +41,7 @@ SINGLE-OWNER, why it is load-bearing (verified against plain threads):
       returned another fiber's resolved value).
   A plain-threads control (8 OS threads, each its own parser+argv, GIL on AND
   off) returns the closed-form namespace 100% of the time, 0 cross-parse leaks.
-  Under a CORRECT runloom it must also hold; this oracle PASSES (exit 0) when
+  Under a CORRECT stackweave it must also hold; this oracle PASSES (exit 0) when
   there is no bug.
 
   argv is built with repr() for the float and str() for the ints, and every
@@ -66,7 +66,7 @@ FAIL ON: a single-owner parser returning a namespace attribute that is not the
 closed-form expected value, an attribute that changes across a yield, or a
 SystemExit raised by parsing a VALID fiber-local argv (all real runtime faults).
 There is no shared-parser arm: an ArgumentParser shared across fibers and mutated
-concurrently would race exactly like any shared object (documented, not a runloom
+concurrently would race exactly like any shared object (documented, not a stackweave
 bug), so this program keeps the parser strictly single-owner.
 
 Stresses: argparse ArgumentParser construction (_actions / _option_string_actions
@@ -77,7 +77,7 @@ across hub migration + a yield, per-fiber parser + argv isolation under M:N.
 import argparse
 
 import harness
-import runloom
+import stackweave
 
 # The choices offered to the --color option.  The fiber picks one by wid % 3,
 # so every parse exercises the choices-validation path with a valid pick.
@@ -201,9 +201,9 @@ def roundtrip_check(H, wid, idx):
 
     # YIELD at the hazard boundary: siblings on other hubs run their own parses
     # through the same argparse helper code before this fiber re-parses.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0003)
+        stackweave.sleep(0.0003)
 
     try:
         ns2 = parser.parse_args(argv)        # SAME parser, SAME argv
@@ -291,5 +291,5 @@ if __name__ == "__main__":
                  "all round-trip exactly) before and after a yield; a second "
                  "parse on the same parser+argv must equal the first field-by-"
                  "field.  A wrong attribute value, a value that changes across "
-                 "the yield, or a SystemExit from a VALID argv is the runloom "
+                 "the yield, or a SystemExit from a VALID argv is the stackweave "
                  "parse-isolation bug")

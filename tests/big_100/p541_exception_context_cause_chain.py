@@ -19,7 +19,7 @@ handling.
 
 WHERE M:N BREAKS IT (the gap this program probes).  ``exc_info`` (the current-
 exception state read by the implicit-context stamp) is per-PyThreadState.  A
-runloom fiber runs on a hub's OS thread; when it PARKS at a cooperative yield it
+stackweave fiber runs on a hub's OS thread; when it PARKS at a cooperative yield it
 may resume on a DIFFERENT hub, and its exc_info stack must travel with the FIBER,
 not stay pinned to the hub's tstate.  If a hub-migration -- or a sibling fiber
 running on the same tstate while this fiber is parked INSIDE its ``except A:``
@@ -41,10 +41,10 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (matches plain-thread semantics):
   implicit exception chaining and by plain OS threads (each thread raising its own
   A/B/C chain observes B.__context__ IS its own A and B.__cause__ IS its own C,
   0 cross-thread leaks, GIL on or off) -- the single-owner chain oracle below
-  ALWAYS holds.  Under a correct runloom it must also hold across an arbitrary hub
+  ALWAYS holds.  Under a correct stackweave it must also hold across an arbitrary hub
   migration parked inside the handler.  If B.__context__ is NOT this fiber's A (or
   carries another fiber's wid/nonce), or B.__cause__ is NOT this fiber's C, the
-  per-fiber exc_info isolation is broken -- a runloom bug -- and the oracle FAILS
+  per-fiber exc_info isolation is broken -- a stackweave bug -- and the oracle FAILS
   fast.  With no bug the program exits 0.
 
 ORACLES:
@@ -57,7 +57,7 @@ ORACLES:
       - B.__context__ IS the exact A it is handling      (implicit context intact)
       - both links carry THIS fiber's wid and nonce      (no sibling leak)
     Single-owner: A, B, C are locals of one fiber, never shared.  A failure is a
-    cross-fiber leak of per-thread exc_info -- a runloom isolation desync.
+    cross-fiber leak of per-thread exc_info -- a stackweave isolation desync.
 
   * NON-VACUITY (post, HARD): the load-bearing arm actually ran (chain_checks > 0),
     so the implicit-context stamp was really exercised across the yield.
@@ -83,7 +83,7 @@ current-exception was left set by a sibling -- is the cleanest signal before the
 identity/tag oracle fires.
 """
 import harness
-import runloom
+import stackweave
 
 
 # Three distinct fiber-local exception types.  Distinct types make the intent
@@ -136,9 +136,9 @@ def chain_check(H, wid, nonce, state):
         # YIELD here: this is the hazard boundary.  If a hub-migration or a sibling
         # running on this tstate overwrote the current-exception slot, the raise of
         # B below would stamp the wrong __context__.
-        runloom.yield_now()
+        stackweave.yield_now()
         if nonce & 1:
-            runloom.sleep(0.0002)
+            stackweave.sleep(0.0002)
 
         b = make_exc(ExcB, wid, nonce)
         try:
@@ -261,4 +261,4 @@ if __name__ == "__main__":
                  "yield_now(); raise B from C -- and asserts B.__cause__ IS the "
                  "exact C and B.__context__ IS the exact A (identity + wid + "
                  "nonce).  Any chain link pointing at a sibling's exception is the "
-                 "runloom exc_info-isolation bug")
+                 "stackweave exc_info-isolation bug")

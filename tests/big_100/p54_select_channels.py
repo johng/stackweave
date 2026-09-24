@@ -7,11 +7,11 @@ losing waits.  Conservation: the sum sent equals the sum received.
 
 Stresses: select wakeups, cancellation of non-chosen cases, fairness.
 
-NOTE: runloom.select(default=True) returns a BARE int -1 when nothing is ready
+NOTE: stackweave.select(default=True) returns a BARE int -1 when nothing is ready
 (not a tuple) -- see FINDINGS BUG #3 -- so we branch on isinstance(r, int).
 """
 import harness
-import runloom
+import stackweave
 
 NCHAN = 8
 
@@ -19,7 +19,7 @@ NCHAN = 8
 def setup(H):
     # sent_sum/recv_sum: one slot per goroutine (indexed by wid) — no sharing,
     # no data race under GIL=0.
-    H.state = {"chans": [runloom.Chan(16) for _ in range(NCHAN)],
+    H.state = {"chans": [stackweave.Chan(16) for _ in range(NCHAN)],
                "sent_sum": [0] * H.funcs, "recv_sum": [0] * H.funcs}
 
 
@@ -29,9 +29,9 @@ def producer(H, wid, rng, state):
     v = wid * 1000003 + 1
     while H.running():
         cases = [("send", ch, v) for ch in chans]
-        r = runloom.select(cases, default=True)
+        r = stackweave.select(cases, default=True)
         if isinstance(r, int):          # -1: every channel full right now
-            runloom.sleep(0.0005)
+            stackweave.sleep(0.0005)
             continue
         s += v
         v += 1
@@ -44,11 +44,11 @@ def consumer(H, wid, rng, state):
     s = 0
     while True:
         cases = [("recv", ch) for ch in chans]
-        r = runloom.select(cases, default=True)
+        r = stackweave.select(cases, default=True)
         if isinstance(r, int):          # -1: nothing ready
             if not H.running():
                 break                   # producers stopped + all drained
-            runloom.sleep(0.0005)
+            stackweave.sleep(0.0005)
             continue
         _idx, payload = r
         val, ok = payload

@@ -1,9 +1,9 @@
-"""Tests for runloom.time (After, Timer, Ticker)."""
+"""Tests for stackweave.time (After, Timer, Ticker)."""
 import time as _time
 import unittest
 
-import runloom_c
-import runloom.time as ptime
+import stackweave_c
+import stackweave.time as ptime
 
 
 class TestAfter(unittest.TestCase):
@@ -18,8 +18,8 @@ class TestAfter(unittest.TestCase):
             _v2, ok2 = ch.recv()
             out.append(ok2)
 
-        runloom_c.fiber(waiter)
-        runloom_c.run()
+        stackweave_c.fiber(waiter)
+        stackweave_c.run()
 
         self.assertEqual(len(out), 2)
         self.assertTrue(out[0][0])     # first recv: ok=True
@@ -35,8 +35,8 @@ class TestTimer(unittest.TestCase):
             _v, ok = t.c.recv()
             out.append(ok)
 
-        runloom_c.fiber(waiter)
-        runloom_c.run()
+        stackweave_c.fiber(waiter)
+        stackweave_c.run()
         self.assertEqual(out, [True])
 
     def test_stop_prevents_fire(self):
@@ -45,15 +45,15 @@ class TestTimer(unittest.TestCase):
         # Stop before it fires.
 
         def stopper():
-            runloom_c.sched_sleep(0.01)
+            stackweave_c.sched_sleep(0.01)
             stopped = t.Stop()
             out.append(("stopped", stopped))
             # Drain in case of race; with-timeout to avoid hanging
             ok = t.c.try_recv()
             out.append(("try_recv", ok))
 
-        runloom_c.fiber(stopper)
-        runloom_c.run()
+        stackweave_c.fiber(stopper)
+        stackweave_c.run()
         self.assertEqual(out[0], ("stopped", True))
         # try_recv should be None (no value) since Stop fired before timer.
         self.assertIsNone(out[1][1])
@@ -72,8 +72,8 @@ class TestTicker(unittest.TestCase):
                 out.append(v)
             t.Stop()
 
-        runloom_c.fiber(collector)
-        runloom_c.run()
+        stackweave_c.fiber(collector)
+        stackweave_c.run()
 
         self.assertEqual(len(out), 3)
 
@@ -91,8 +91,8 @@ class TestSleep(unittest.TestCase):
             t0 = _time.monotonic()
             ptime.Sleep(0.02)
             out.append(_time.monotonic() - t0)
-        runloom_c.fiber(g)
-        runloom_c.run()
+        stackweave_c.fiber(g)
+        stackweave_c.run()
         self.assertGreaterEqual(out[0], 0.015)
 
 

@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """offload_geom.py -- blocking-offload / blockpool GEOMETRY fuzzer.
 
-The single most-cited OPEN runloom bug is the offload wedge: at high concurrent-
+The single most-cited OPEN stackweave bug is the offload wedge: at high concurrent-
 offload counts (~100k on Linux p23/p17, lower on mac p92) a goroutine parked in
-`runloom.blocking()` is never re-queued -- a lost wake on the foreign-waker
+`stackweave.blocking()` is never re-queued -- a lost wake on the foreign-waker
 (offload-thread -> parked-caller) path.  The existing fuzzers (mn_stress,
 lifefuzz, p96/p97/p227) hammer chan/cldeque/select and a FIXED offload workload;
 none SWEEP the offload geometry looking for the wedge boundary.
 
 This does: each seed draws a random geometry -- (hubs, concurrent offloads, pool
 worker count, per-job duration profile, submit burstiness, job kind) -- runs a
-runloom M:N program that fires exactly that many `runloom.blocking()` calls each
+stackweave M:N program that fires exactly that many `stackweave.blocking()` calls each
 returning a unique token, and checks TOKEN CONSERVATION (every offload result
 received exactly once).  A lost wake shows as a wedge (no progress) or a
 conservation shortfall, reported WITH the exact reproducing geometry+seed.
@@ -40,12 +40,12 @@ import sys
 SAFE_MAX = 5000
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
-PYBIN = os.environ.get("RUNLOOM_PYTHON",
+PYBIN = os.environ.get("STACKWEAVE_PYTHON",
                        os.path.expanduser("~/.pyenv/versions/3.14.4t/bin/python3"))
 
 
 # ---------------------------------------------------------------------------
-# CHILD: runs ONE geometry under runloom M:N, checks token conservation.
+# CHILD: runs ONE geometry under stackweave M:N, checks token conservation.
 # Re-exec of this file with --child; geometry comes in via OG_* env vars.
 # ---------------------------------------------------------------------------
 def child_main():
@@ -59,7 +59,7 @@ def child_main():
 
     import random
     import hashlib
-    import runloom
+    import stackweave
 
     n = G["OFFLOADS"]
     received = [0] * n               # one writer per slot -> race-free
@@ -92,7 +92,7 @@ def child_main():
         return tok
 
     def main():
-        wg = runloom.WaitGroup()
+        wg = stackweave.WaitGroup()
         wg.add(n)
         rng = random.Random(G["SEED"])
         durs = [0 if G["JOBMS_MAX"] == 0 else rng.randint(0, G["JOBMS_MAX"]) for _ in range(n)]
@@ -101,8 +101,8 @@ def child_main():
             try:
                 if selftest_wedge and i == 0:
                     # deliberately never-returning offload to prove wedge detection
-                    runloom.blocking(REAL_SLEEP, 10_000)
-                r = runloom.blocking(job, i, durs[i])
+                    stackweave.blocking(REAL_SLEEP, 10_000)
+                r = stackweave.blocking(job, i, durs[i])
                 if r == i:
                     received[i] += 1
                 progress[0] += 1
@@ -111,15 +111,15 @@ def child_main():
 
         if G["BURST"]:
             for i in range(n):
-                runloom.fiber(one, i)
+                stackweave.fiber(one, i)
         else:
             for i in range(n):
-                runloom.fiber(one, i)
+                stackweave.fiber(one, i)
                 if (i & 1023) == 0:
-                    runloom.sleep(0)        # stagger submission
+                    stackweave.sleep(0)        # stagger submission
         wg.wait()
 
-    runloom.run(max(2, G["HUBS"]), main)
+    stackweave.run(max(2, G["HUBS"]), main)
     done[0] = True
     got = sum(received)
     if got == n:
@@ -156,8 +156,8 @@ def run_child(geom, timeout, selftest_wedge=False):
     env = dict(os.environ)
     env["PYTHON_GIL"] = "0"
     env["PYTHONPATH"] = os.path.join(ROOT, "src") + os.pathsep + env.get("PYTHONPATH", "")
-    env["RUNLOOM_BLOCKPOOL_WORKERS"] = str(geom["POOL"])
-    env["RUNLOOM_SYSMON_QUIET"] = "1"
+    env["STACKWEAVE_BLOCKPOOL_WORKERS"] = str(geom["POOL"])
+    env["STACKWEAVE_SYSMON_QUIET"] = "1"
     for k in ("HUBS", "OFFLOADS", "POOL", "JOBMS_MAX", "BURST", "SEED"):
         env["OG_" + k] = str(geom[k])
     env["OG_JOBKIND"] = geom["JOBKIND"]
@@ -182,7 +182,7 @@ def run_child(geom, timeout, selftest_wedge=False):
 def repro(geom):
     return ("OG_HUBS={HUBS} OG_OFFLOADS={OFFLOADS} OG_POOL={POOL} "
             "OG_JOBMS_MAX={JOBMS_MAX} OG_BURST={BURST} OG_JOBKIND={JOBKIND} "
-            "OG_SEED={SEED} RUNLOOM_BLOCKPOOL_WORKERS={POOL} "
+            "OG_SEED={SEED} STACKWEAVE_BLOCKPOOL_WORKERS={POOL} "
             "PYTHON_GIL=0 PYTHONPATH=src {py} tools/fuzz/offload_geom.py --child"
             ).format(py=PYBIN, **geom)
 

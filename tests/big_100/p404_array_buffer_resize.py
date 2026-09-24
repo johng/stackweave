@@ -70,7 +70,7 @@ import array
 import struct
 
 import harness
-import runloom
+import stackweave
 
 # Typecode 'q' = signed 64-bit; itemsize 8.  A wide item makes a torn value
 # (key read through a freed slot) overwhelmingly likely to leave the universe.
@@ -329,13 +329,13 @@ def worker(H, wid, rng, state):
         #                  you may release the view now.
         #   gate_released  viewer -> churner: view released (ob_exports==0), the
         #                  SUCCESS-resize phase may begin.
-        gate_parked = runloom.WaitGroup()
+        gate_parked = stackweave.WaitGroup()
         gate_parked.add(1)
-        gate_churned = runloom.WaitGroup()
+        gate_churned = stackweave.WaitGroup()
         gate_churned.add(1)
-        gate_released = runloom.WaitGroup()
+        gate_released = stackweave.WaitGroup()
         gate_released.add(1)
-        wg = runloom.WaitGroup()
+        wg = stackweave.WaitGroup()
         wg.add(2)
 
         def run_viewer(arr=arr, gate_parked=gate_parked,

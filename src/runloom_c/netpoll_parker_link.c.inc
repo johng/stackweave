@@ -117,7 +117,7 @@ static void runloom_parker_link(runloom_parker_pool_t *pool, runloom_parked_t *p
      * upstream missed-unlink path. */
     if (p->slot != NULL || p->next != NULL) {
         fprintf(stderr,
-                "[runloom] parker has nonnull slot/next at link entry: "
+                "[stackweave] parker has nonnull slot/next at link entry: "
                 "parker=%p fd=%d g=%p slot=%p next=%p\n",
                 (void *)p, p->fd, (void *)p->g,
                 (void *)p->slot, (void *)p->next);
@@ -179,7 +179,7 @@ static int runloom_parker_unlink(runloom_parker_pool_t *pool, runloom_parked_t *
 #ifdef RUNLOOM_PARKER_DEBUG
     if (p->prev_by_fd == p || p->next_by_fd == p) {
         fprintf(stderr,
-                "[runloom] UNLINK on self-looped bucket entry parker=%p fd=%d "
+                "[stackweave] UNLINK on self-looped bucket entry parker=%p fd=%d "
                 "g=%p hub=%p prev_by_fd=%p next_by_fd=%p bucket=%p\n",
                 (void *)p, p->fd, (void *)p->g, p->hub,
                 (void *)p->prev_by_fd, (void *)p->next_by_fd,

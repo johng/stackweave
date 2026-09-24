@@ -2,7 +2,7 @@
 thread (loop_net.py:357), unlike getaddrinfo which is offloaded. A slow
 reverse-DNS lookup freezes EVERY task on the loop. Simulate slowness."""
 import sys, time, socket, asyncio
-import runloom.aio as aio
+import stackweave.aio as aio
 
 orig = socket.getnameinfo
 def slow_getnameinfo(sockaddr, flags):

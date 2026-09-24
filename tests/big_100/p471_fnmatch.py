@@ -5,7 +5,7 @@ cache the compiled Pattern objects returned by fnmatch._compile_pattern.  The
 cache key is the pattern string; each cached value is a Pattern object that
 matches strings against that ONE pattern.
 
-WHERE M:N BREAKS IT (the gap this program catches).  Under runloom's M:N
+WHERE M:N BREAKS IT (the gap this program catches).  Under stackweave's M:N
 scheduler many fibers ("goroutines") share ONE hub OS-thread, and the cache is
 a module-global object.  While fiber A is mid-match using pattern X (its
 compiled Pattern in the cache), and yields at a scheduling point, a SIBLING
@@ -20,13 +20,13 @@ the shared-module-global-mutable-state class: the cache assumes single-owner
 per-pattern access, which holds under serialized GIL execution but NOT for M:N
 fibers multiplexed onto one hub thread.
 
-This is a runloom M:N-SPECIFIC gap: the fnmatch module is CORRECT under genuine
+This is a stackweave M:N-SPECIFIC gap: the fnmatch module is CORRECT under genuine
 OS-thread semantics (each thread's cache access is serialized by the GIL).
-Verified with a standalone plain-threads control (same hazard, NO runloom):
+Verified with a standalone plain-threads control (same hazard, NO stackweave):
 0 mismatches under PYTHON_GIL=1 AND PYTHON_GIL=0 -- the GIL serializes cache
 access, so a sibling thread's eviction never corrupts another thread's cached
 Pattern.  The gap is NOT in fnmatch, which is correct under real OS-thread
-semantics; it lives in runloom's M:N isolation model (module-globals are not
+semantics; it lives in stackweave's M:N isolation model (module-globals are not
 per-fiber isolated).
 
 WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain threads):
@@ -34,16 +34,16 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain threads):
   fnmatch.fnmatch(string, pattern) is DOCUMENTED to return True iff the string
   matches the pattern according to Unix shell rules.  The match is deterministic:
   the same (string, pattern) pair always yields the same result.  We verified
-  with a standalone plain-threads control (same hazard, NO runloom) that
+  with a standalone plain-threads control (same hazard, NO stackweave) that
   calling fnmatch.fnmatch(string_FIXED, pattern_DISTINCT) from many threads,
   each thread using its OWN pattern, yields the CORRECT match result for each
   thread's (string, pattern) pair under PYTHON_GIL=1 AND PYTHON_GIL=0:
   0 mismatches in 100k+ checks each. The GIL serializes cache access so the
-  cache eviction never corrupts a thread's live Pattern. Under a CORRECT runloom
+  cache eviction never corrupts a thread's live Pattern. Under a CORRECT stackweave
   it must ALSO hold (each fiber using its distinct pattern gets the right result).
-  If runloom leaks a sibling's Pattern into fiber A's cache lookup -- A's
+  If stackweave leaks a sibling's Pattern into fiber A's cache lookup -- A's
   fnmatch result is WRONG (it matched the string against the sibling's pattern,
-  not its own) -- that is the runloom cache-isolation bug, and the LOAD-BEARING
+  not its own) -- that is the stackweave cache-isolation bug, and the LOAD-BEARING
   oracle PASSES on a correct runtime (program exits 0 when there is no bug).
 
 ORACLES:
@@ -58,9 +58,9 @@ ORACLES:
         (single-owner, no cache);
       - fiber calls fnmatch with its OWN (string, pattern);
       - got != expected => H.fail "cache isolation breach" -- a sibling's
-        Pattern leaked into this fiber's lookup (runloom M:N bug).
+        Pattern leaked into this fiber's lookup (stackweave M:N bug).
     Single-owner: nothing but THIS fiber should touch its (string, pattern)
-    pair.  A failure is a runloom per-fiber pattern-cache isolation desync.
+    pair.  A failure is a stackweave per-fiber pattern-cache isolation desync.
 
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber that vanished mid-
     match (stranded inside fnmatch on a corrupted cache entry) never returns; the
@@ -90,7 +90,7 @@ import fnmatch
 import functools
 
 import harness
-import runloom
+import stackweave
 
 # Fixed test string: the same string is used by all fibers.
 TEST_STRING = "test_file_with_some_content.txt"
@@ -184,7 +184,7 @@ def worker(H, wid, rng, state):
                 H.fail("fnmatch cache isolation BREACH: fnmatch.fnmatch({0!r}, "
                        "{1!r}) returned {2} but expected {3} (wid {4} idx {5}) -- "
                        "a sibling fiber's compiled Pattern leaked into this fiber's "
-                       "cache lookup (runloom M:N cache-isolation bug: the shared "
+                       "cache lookup (stackweave M:N cache-isolation bug: the shared "
                        "module-global _compile_pattern LRU cache is not per-fiber "
                        "isolated).".format(
                            TEST_STRING, pattern, got_result, expected_result,
@@ -192,9 +192,9 @@ def worker(H, wid, rng, state):
                 return
 
             # Yield to let other fibers run and contend on the cache.
-            runloom.yield_now()
+            stackweave.yield_now()
             if idx & 1:
-                runloom.sleep(0.0003)
+                stackweave.sleep(0.0003)
 
             H.op(wid)
             idx += 1
@@ -244,7 +244,7 @@ if __name__ == "__main__":
         "p471_fnmatch", body, setup=setup, post=post,
         default_funcs=8000,
         describe="fnmatch._compile_pattern uses an LRU cache to cache "
-                 "compiled Pattern objects; runloom M:N fibers share one hub "
+                 "compiled Pattern objects; stackweave M:N fibers share one hub "
                  "thread and the cache is module-global.  LOAD-BEARING: each "
                  "fiber calls fnmatch.fnmatch(string, pattern_DISTINCT) with a "
                  "pattern unique to that fiber; the result MUST match the "
@@ -252,5 +252,5 @@ if __name__ == "__main__":
                  "pool).  A sibling's Pattern leaking into the cache -- cache "
                  "eviction interleaving a fiber's lookup -- causes a mismatch "
                  "(0 under plain threads GIL on AND off; the shared module-"
-                 "global cache is the runloom M:N bug).  Same class as p66/p67/"
-                 "p460; fix is per-fiber cache isolation in runloom")
+                 "global cache is the stackweave M:N bug).  Same class as p66/p67/"
+                 "p460; fix is per-fiber cache isolation in stackweave")

@@ -13,9 +13,9 @@ OUT=/tmp/hunt_capture.txt
 : > "$OUT"
 echo "par-hunt: N=$N H=$H M=$M total=$TOTAL P=$P watchdog=${WD}s"
 
-# Launch the sweep in the background.  RUNLOOM_DEBUG_DIAG so a captured
+# Launch the sweep in the background.  STACKWEAVE_DEBUG_DIAG so a captured
 # hang has a populated event ring.
-export RUNLOOM_DEBUG_DIAG=ring,gstate
+export STACKWEAVE_DEBUG_DIAG=ring,gstate
 ( seq 1 "$TOTAL" | xargs -P"$P" -I{} "$BIN" "$N" "$H" "$M" {} >/dev/null 2>&1 ) &
 SWEEP=$!
 echo "sweep pid=$SWEEP"

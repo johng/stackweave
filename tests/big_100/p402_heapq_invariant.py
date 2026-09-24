@@ -11,7 +11,7 @@ stale index and can publish a torn/duplicated element; worse, an append-driven
 realloc on one hub can move the array out from under a live index on another --
 a refcount + buffer-realloc memory-safety hazard, not merely a lost update.
 
-We serialize every heapq-API call behind ONE shared `runloom.sync.Lock`, which
+We serialize every heapq-API call behind ONE shared `stackweave.sync.Lock`, which
 SHOULD make the structure correct.  Concurrency then enters two ways the lock
 does not by itself fix:
 
@@ -56,8 +56,8 @@ lock hand-off across hubs, lock-free list snapshot racing slot writes, torn-tupl
 import heapq
 
 import harness
-import runloom
-import runloom.sync as sync
+import stackweave
+import stackweave.sync as sync
 
 # Finite UNIVERSE of keys 0..UNIVERSE_SIZE-1.  Big enough that the shared heap
 # grows and shrinks across several list-realloc boundaries (the realloc is what
@@ -170,7 +170,7 @@ def role_drainer(H, wid, rng, heap, lock, pushed, popped, slot):
                 # hold the lock for heapq-API safety; yielding here parks WITH the
                 # list in a mid-rebuild shape, which the unlocked reader below and
                 # other heaps' readers observe.
-                runloom.yield_now()
+                stackweave.yield_now()
     # Validate the drained sequence: non-decreasing + every tuple whole.
     prev = None
     for item in drained:
@@ -193,7 +193,7 @@ def reader(H, heap, done):
         snap = list(heap)                   # NO lock -- intentional race
         if not snapshot_ok(H, snap):
             return
-        runloom.yield_now()
+        stackweave.yield_now()
 
 
 def worker(H, wid, rng, state):
@@ -225,7 +225,7 @@ def worker(H, wid, rng, state):
         # of this op, so a snapshot is always racing some sift somewhere.
         done = [False]
         rseed = rng.getrandbits(48)
-        wg = runloom.WaitGroup()
+        wg = stackweave.WaitGroup()
         wg.add(1)
 
         def run_reader(heap=heap, done=done):

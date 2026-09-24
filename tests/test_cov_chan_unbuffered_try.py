@@ -15,8 +15,8 @@ already-parked peer --
 and the peer-less case must be a clean would-block (True->False / (v,True)->None)
 WITHOUT buffering anything (cap==0 so the `cap>0 && len<cap` branch is skipped).
 
-Conventions copied from tests/test_chan.py (`_run_in_sched` over runloom_c.fiber
-+ runloom_c.run, runloom_c.sched_yield to force a peer to park first) and from
+Conventions copied from tests/test_chan.py (`_run_in_sched` over stackweave_c.fiber
++ stackweave_c.run, stackweave_c.sched_yield to force a peer to park first) and from
 tests/test_swarm_chan_select_sync.py (adv_util.hang_guard so a lost-wake shows as
 a timeout with a cooperative-state dump, not a silent wedge).
 """
@@ -25,7 +25,7 @@ import unittest
 
 sys.path.insert(0, "src")
 
-import runloom_c
+import stackweave_c
 
 from adv_util import hang_guard
 
@@ -33,8 +33,8 @@ from adv_util import hang_guard
 def _run_in_sched(*fibers):
     """Spawn each callable as a fiber, run the scheduler to completion."""
     for g in fibers:
-        runloom_c.fiber(g)
-    runloom_c.run()
+        stackweave_c.fiber(g)
+    stackweave_c.run()
 
 
 class TestUnbufferedTrySend(unittest.TestCase):
@@ -42,7 +42,7 @@ class TestUnbufferedTrySend(unittest.TestCase):
         # A receiver parks on the empty cap-0 channel; a later try_send must find
         # it via the receivers queue, hand off the value, wake it, and report True
         # (the non-blocking DIRECT-RENDEZVOUS success path, chan_ops.c.inc:41-48).
-        ch = runloom_c.Chan(0)
+        ch = stackweave_c.Chan(0)
         out = []
 
         def receiver():
@@ -50,7 +50,7 @@ class TestUnbufferedTrySend(unittest.TestCase):
             out.append(("recv", v, ok))
 
         def sender():
-            runloom_c.sched_yield()      # let the receiver park first
+            stackweave_c.sched_yield()      # let the receiver park first
             out.append(("try", ch.try_send(7)))
 
         with hang_guard(15, "try_send to parked receiver"):
@@ -66,7 +66,7 @@ class TestUnbufferedTrySend(unittest.TestCase):
     def test_try_send_peerless_returns_false_and_buffers_nothing(self):
         # cap-0 + no parked receiver: try_send must NOT block and must NOT invent a
         # buffer slot (the `cap>0 && len<cap` branch is skipped) -> would-block False.
-        ch = runloom_c.Chan(0)
+        ch = stackweave_c.Chan(0)
         out = []
 
         def runner():
@@ -83,7 +83,7 @@ class TestUnbufferedTryRecv(unittest.TestCase):
         # A sender parks on the cap-0 channel (no receiver); try_recv must steal its
         # value, return (v, True), AND wake the sender so its send() completes
         # (send_result=0) rather than raising or hanging (chan_ops.c.inc:144-152).
-        ch = runloom_c.Chan(0)
+        ch = stackweave_c.Chan(0)
         out = []
 
         def sender():
@@ -91,7 +91,7 @@ class TestUnbufferedTryRecv(unittest.TestCase):
             out.append("sent")           # only reached if try_recv woke us cleanly
 
         def receiver():
-            runloom_c.sched_yield()      # let the sender park first
+            stackweave_c.sched_yield()      # let the sender park first
             out.append(("try", ch.try_recv()))
 
         with hang_guard(15, "try_recv from parked sender"):
@@ -106,7 +106,7 @@ class TestUnbufferedTryRecv(unittest.TestCase):
     def test_try_recv_peerless_open_returns_none(self):
         # cap-0, open, empty, no parked sender: would-block -> None (NOT the
         # (None, False) closed sentinel -- would-block and closed are distinct).
-        ch = runloom_c.Chan(0)
+        ch = stackweave_c.Chan(0)
         out = []
 
         def runner():
@@ -118,7 +118,7 @@ class TestUnbufferedTryRecv(unittest.TestCase):
     def test_try_send_then_try_recv_peerless_are_independent_noops(self):
         # Symmetric peer-less pair in one fiber: try_send -> False leaves the
         # channel empty, so the following try_recv sees would-block -> None.
-        ch = runloom_c.Chan(0)
+        ch = stackweave_c.Chan(0)
         out = []
 
         def runner():

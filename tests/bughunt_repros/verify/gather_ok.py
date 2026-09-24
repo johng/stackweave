@@ -1,4 +1,4 @@
-import runloom
+import stackweave
 def main():
-    print(runloom.gather(lambda: 1, lambda: 2))
-runloom.run(1, main)
+    print(stackweave.gather(lambda: 1, lambda: 2))
+stackweave.run(1, main)

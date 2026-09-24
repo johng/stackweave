@@ -1,7 +1,7 @@
 """monkey.patch() then stdlib torture: threads+fibers mixed, socketpair ping-pong, subprocess."""
 import sys
-import runloom
-runloom.monkey.patch()
+import stackweave
+stackweave.monkey.patch()
 
 import threading, socket, subprocess, queue, time
 
@@ -18,15 +18,15 @@ if mode in ("all", "thread"):
     def main():
         t = threading.Thread(target=os_producer)
         t.start()
-        done = runloom.Chan(0)
+        done = stackweave.Chan(0)
         def fib_consumer():
             n = 0
             for _ in range(500):
                 got.append(q.get())
                 n += 1
             done.send(n)
-        runloom.fiber(fib_consumer)
-        runloom.fiber(fib_consumer)
+        stackweave.fiber(fib_consumer)
+        stackweave.fiber(fib_consumer)
         def w():
             tot = 0
             for _ in range(2):
@@ -35,13 +35,13 @@ if mode in ("all", "thread"):
             t.join()
             assert tot == 1000 and sorted(got) == list(range(1000)), (tot, len(got))
             print("thread+queue OK")
-        runloom.fiber(w)
-    runloom.run(HUBS, main)
+        stackweave.fiber(w)
+    stackweave.run(HUBS, main)
 
 if mode in ("all", "sock"):
     def main():
         a, b = socket.socketpair()
-        done = runloom.Chan(0)
+        done = stackweave.Chan(0)
         ROUNDS = 2000
         def ping():
             for i in range(ROUNDS):
@@ -62,17 +62,17 @@ if mode in ("all", "sock"):
                 n += 1
             b.close()
             done.send(n)
-        runloom.fiber(ping)
-        runloom.fiber(pong)
+        stackweave.fiber(ping)
+        stackweave.fiber(pong)
         def w():
             done.recv(); done.recv()
             print("socketpair ping-pong OK (%d rounds)" % ROUNDS)
-        runloom.fiber(w)
-    runloom.run(HUBS, main)
+        stackweave.fiber(w)
+    stackweave.run(HUBS, main)
 
 if mode in ("all", "subproc"):
     def main():
-        done = runloom.Chan(0)
+        done = stackweave.Chan(0)
         def spawn_loop(k):
             for i in range(10):
                 out = subprocess.run(["/bin/echo", "hi%d-%d" % (k, i)],
@@ -80,28 +80,28 @@ if mode in ("all", "subproc"):
                 assert out.stdout.strip() == "hi%d-%d" % (k, i), out.stdout
             done.send(1)
         for k in range(8):
-            runloom.fiber(spawn_loop, k)
+            stackweave.fiber(spawn_loop, k)
         def w():
             for _ in range(8):
                 done.recv()
             print("subprocess loop OK")
-        runloom.fiber(w)
-    runloom.run(HUBS, main)
+        stackweave.fiber(w)
+    stackweave.run(HUBS, main)
 
 if mode in ("all", "sleep"):
     def main():
         t0 = time.monotonic()
-        done = runloom.Chan(0)
+        done = stackweave.Chan(0)
         def s():
             time.sleep(0.2)   # patched -> cooperative
             done.send(1)
         for _ in range(50):
-            runloom.fiber(s)
+            stackweave.fiber(s)
         def w():
             for _ in range(50):
                 done.recv()
             dt = time.monotonic() - t0
             assert dt < 2.0, "50 parallel sleeps took %.1fs (serialized?)" % dt
             print("patched sleep parallel OK (%.2fs)" % dt)
-        runloom.fiber(w)
-    runloom.run(HUBS, main)
+        stackweave.fiber(w)
+    stackweave.run(HUBS, main)

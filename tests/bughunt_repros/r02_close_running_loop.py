@@ -1,9 +1,9 @@
 """Contract: BaseEventLoop.close() while the loop is running raises
 RuntimeError("Cannot close a running event loop")."""
 import sys, asyncio
-import runloom.aio as aio
+import stackweave.aio as aio
 
-loop = aio.RunloomEventLoop()
+loop = aio.StackweaveEventLoop()
 asyncio.set_event_loop(loop)
 out = {}
 

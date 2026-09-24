@@ -6,7 +6,7 @@ this suite is split accordingly:
   REACHABLE (driven here, via the io_uring-as-loop backend):
     * L39-42  runloom_mn_current_iouring_ring(): returns the running hub's
               per-hub io_uring ring.  Only non-NULL -- and only *called* -- under
-              the io_uring-as-loop backend (RUNLOOM_IOURING_LOOP=1), where each
+              the io_uring-as-loop backend (STACKWEAVE_IOURING_LOOP=1), where each
               hub thread creates its own ring (mn_sched_hub_main.c.inc:204) and
               the C echo handler / TCPConn iouring recv resolve the ring through
               this accessor (module_io.c.inc:158, io_uring_l_msclose.c.inc:63).
@@ -14,7 +14,7 @@ this suite is split accordingly:
               fiber parked on a *hub-ring* (SINGLE_ISSUER) io_uring op.  The only
               ops with op->ring != NULL are hub-ring recv/send; a Python-reachable
               one is a TCPConn.recv() that takes the single-shot iouring path
-              (RUNLOOM_TCPCONN_IOURING=1 + a non-zero recv flag to bypass the
+              (STACKWEAVE_TCPCONN_IOURING=1 + a non-zero recv flag to bypass the
               multishot branch).  G.cancel_wait_fd() -> runloom_iouring_cancel_g()
               sees op->ring != NULL and routes the cancel through this mailbox
               (io_uring_l_ring.c.inc:407).
@@ -26,11 +26,11 @@ this suite is split accordingly:
     * L285-310 runloom_mn_sweep_try_claim / runloom_mn_sweep_claim_release.
     All require runloom_use_global_runq() == true, i.e. per-g-tstate mode, which
     runloom_resolve_migratable_mode() (mn_sched_runq.c.inc) enables ONLY when
-    RUNLOOM_ALLOW_UNSAFE_MIGRATION=1 -- a KNOWN-CRASH migration mode at H>=2 and a
+    STACKWEAVE_ALLOW_UNSAFE_MIGRATION=1 -- a KNOWN-CRASH migration mode at H>=2 and a
     HARD-forbidden env for this task.  There is no Python setter and no
     hub-count carve-out, so they cannot be reached safely.
 
-Both reachable scenarios depend on env (RUNLOOM_IOURING_LOOP / _TCPCONN_IOURING)
+Both reachable scenarios depend on env (STACKWEAVE_IOURING_LOOP / _TCPCONN_IOURING)
 that the C runtime resolves once at hub-main init, so each runs in a SUBPROCESS
 with that env set; for gcov to count the lines the subprocess must EXIT CLEANLY,
 so every scenario asserts a returncode of 0 AND a stdout marker carrying the
@@ -50,8 +50,8 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PY = sys.executable
 
 # The loop backend must be genuinely active (io_uring available on this box).
-LOOP_ENV = {"RUNLOOM_IOURING_LOOP": "1"}
-LOOP_TCPCONN_ENV = {"RUNLOOM_IOURING_LOOP": "1", "RUNLOOM_TCPCONN_IOURING": "1"}
+LOOP_ENV = {"STACKWEAVE_IOURING_LOOP": "1"}
+LOOP_TCPCONN_ENV = {"STACKWEAVE_IOURING_LOOP": "1", "STACKWEAVE_TCPCONN_IOURING": "1"}
 
 pytestmark = pytest.mark.skipif(not FT, reason="M:N + io_uring loop need GIL-disabled build")
 
@@ -89,8 +89,8 @@ def _no_crash(p, label):
 _SERVE_CECHO = r'''
 import sys, os, socket
 sys.path.insert(0, "src")
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 
 res = {}
 def main():
@@ -108,7 +108,7 @@ def main():
         for L in listeners:
             L.close()
     rc.mn_fiber(client)
-runloom.run(4, main)
+stackweave.run(4, main)
 ok = (len(res.get("replies", [])) == 12 and
       all(r == b"abcdefgh" for r in res["replies"]))
 sys.stdout.write("CECHO_OK %d\n" % (1 if ok else 0))
@@ -152,9 +152,9 @@ def test_iouring_loop_cecho_drives_current_ring_accessor():
 _CANCEL_HUBRING = r'''
 import sys, os, socket, errno
 sys.path.insert(0, "src")
-import runloom
-import runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave
+import stackweave_c as rc
+from stackweave.sync import WaitGroup
 
 MSG_PEEK = socket.MSG_PEEK
 res = {"cancel_ret": None, "exc_errno": None, "exc_type": None, "got_data": None}
@@ -190,8 +190,8 @@ def main():
 
     for _ in range(400):
         if "g" in holder: break
-        runloom.sleep(0.003)
-    runloom.sleep(0.05)                      # ensure parked on the ring op
+        stackweave.sleep(0.003)
+    stackweave.sleep(0.05)                      # ensure parked on the ring op
 
     g = holder["g"]
     res["cancel_ret"] = g.cancel_wait_fd()   # -> runloom_mn_hub_request_iouring_cancel
@@ -200,7 +200,7 @@ def main():
     server_conn.close(); client.close(); lconn.close()
 
 import faulthandler; faulthandler.dump_traceback_later(40, exit=True)
-runloom.run(2, main)
+stackweave.run(2, main)
 faulthandler.cancel_dump_traceback_later()
 sys.stdout.write("CANCEL_OK cancel_ret=%r exc_type=%r exc_errno=%r is_canceled=%r got_data=%r\n" %
                  (res["cancel_ret"], res["exc_type"], res["exc_errno"],
@@ -241,9 +241,9 @@ def test_iouring_hubring_recv_cancel_routes_through_mailbox():
 _CANCEL_DOUBLE = r'''
 import sys, os, socket, errno
 sys.path.insert(0, "src")
-import runloom
-import runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave
+import stackweave_c as rc
+from stackweave.sync import WaitGroup
 
 MSG_PEEK = socket.MSG_PEEK
 res = {"c1": None, "c2": None, "exc_errno": None}
@@ -272,8 +272,8 @@ def main():
     rc.mn_fiber(reader)
     for _ in range(400):
         if "g" in holder: break
-        runloom.sleep(0.003)
-    runloom.sleep(0.05)
+        stackweave.sleep(0.003)
+    stackweave.sleep(0.05)
     g = holder["g"]
     res["c1"] = g.cancel_wait_fd()           # publishes the cancel (True)
     res["c2"] = g.cancel_wait_fd()           # already pending / already cancelled -> False
@@ -281,7 +281,7 @@ def main():
     server_conn.close(); client.close(); lconn.close()
 
 import faulthandler; faulthandler.dump_traceback_later(40, exit=True)
-runloom.run(2, main)
+stackweave.run(2, main)
 faulthandler.cancel_dump_traceback_later()
 sys.stdout.write("DOUBLE_OK c1=%r c2=%r exc_errno=%r is_canceled=%r\n" %
                  (res["c1"], res["c2"], res["exc_errno"],

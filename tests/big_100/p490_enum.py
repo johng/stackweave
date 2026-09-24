@@ -9,7 +9,7 @@ distinct enum classes by name alone (not by class + name), multiple fibers creat
 distinct enum classes with the SAME member names but DIFFERENT values could pollute
 each other's member access.
 
-WHERE M:N BREAKS IT (the gap this program probes).  runloom gives each fiber its
+WHERE M:N BREAKS IT (the gap this program probes).  stackweave gives each fiber its
 own Python frame stack and ContextVar/contextvar isolation, but if enum member
 caching (e.g. a module-global member-name registry, a per-thread-ID cache, or a
 shallow-copied contextvar ContextVar->value binding) is not fiber-aware, a fiber
@@ -30,10 +30,10 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain threads):
   different enum class).  We verified this with a standalone plain-threads control
   (8 OS threads, each creating its own enum class with the same member names but
   distinct values, GIL on AND off) that 100% of member accesses return the correct
-  fiber-local/thread-local value -- 0 cross-fiber leaks.  Under a CORRECT runloom
+  fiber-local/thread-local value -- 0 cross-fiber leaks.  Under a CORRECT stackweave
   it must also hold.  If a fiber's member access returns a value from another
   fiber's enum class (a value distinct from what its OWN class's _member_map_
-  points to), that is an enum member-caching isolation bug in runloom, and the
+  points to), that is an enum member-caching isolation bug in stackweave, and the
   single-owner load-bearing oracle PASSES on a correct runtime (program exits 0
   when there is no bug).
 
@@ -44,7 +44,7 @@ ORACLES:
     The fiber then:
       - Accesses CLASS.MEMBER to retrieve the member (this calls __getattribute__
         on the class and looks up the name in the class's __dict__ and _member_map_).
-      - Yields (runloom.sleep / yield_now) to allow siblings to run and potentially
+      - Yields (stackweave.sleep / yield_now) to allow siblings to run and potentially
         create their own conflicting enum classes or access members.
       - Re-accesses CLASS.MEMBER and asserts it returns the SAME member as before
         the yield (same object, same value).
@@ -52,7 +52,7 @@ ORACLES:
         leaked sibling value).
       - Checks that member identity (id()) is stable across the yield.
     Single-owner: each fiber's enum class is created in a fiber-local variable,
-    never shared.  A failure is a runloom enum-member-isolation desync.
+    never shared.  A failure is a stackweave enum-member-isolation desync.
 
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber that vanished mid-access
     (stranded inside __getattribute__ or _member_map_ lookup on a desynced object
@@ -92,7 +92,7 @@ signal before the value/identity oracle fires.
 import enum
 
 import harness
-import runloom
+import stackweave
 
 # Per-fiber enum member values are drawn from this band.  Each wid gets a distinct
 # base (wid * VALUE_SCALE) so values differ visibly across fibers.  The offset
@@ -156,9 +156,9 @@ def enum_check(H, wid, idx, state):
     # YIELD: allow siblings to run and potentially create conflicting enums.
     # If enum member caching is NOT fiber-isolated, a sibling's member creation
     # or access might corrupt this fiber's baseline.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0003)
+        stackweave.sleep(0.0003)
 
     # Re-access every member and verify stability.
     for name in member_names:
@@ -294,10 +294,10 @@ def post(H):
 
     if sleaks:
         H.log("note: the shared enum pool observed {0} cross-fiber member-value "
-              "leaks across {1} checks -- runloom hub fibers may see mutations "
+              "leaks across {1} checks -- stackweave hub fibers may see mutations "
               "on shared enum class objects (the shared class is a shared Python "
               "object, like p67's threading.local shared container).  This is "
-              "documented M:N shared-object behavior, NOT a runloom bug, and never "
+              "documented M:N shared-object behavior, NOT a stackweave bug, and never "
               "reaches the load-bearing single-owner oracle".format(sleaks, schecks))
 
     # NON-VACUITY: the load-bearing single-owner hazard was actually exercised.
@@ -324,5 +324,5 @@ if __name__ == "__main__":
                  "sibling's enum).  MEASURED shared-pool (expected to show cross-"
                  "fiber leaks on shared enums, like p67) proves the hazard "
                  "exists.  A member value that changes to a sibling's value "
-                 "across a yield, or identity change, is the runloom enum-"
+                 "across a yield, or identity change, is the stackweave enum-"
                  "isolation bug")

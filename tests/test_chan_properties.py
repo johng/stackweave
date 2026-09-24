@@ -1,6 +1,6 @@
 """Property-based tests for channel + select semantics (single-thread sched).
 
-These run on the deterministic single-thread scheduler (runloom_c.fiber +
+These run on the deterministic single-thread scheduler (stackweave_c.fiber +
 run), so Hypothesis can explore buffer sizes, value sequences, and
 producer/consumer fan-outs while we assert the algebraic invariants Go
 channels must satisfy:
@@ -20,7 +20,7 @@ import sys
 
 sys.path.insert(0, "src")
 
-import runloom_c
+import stackweave_c
 import pytest
 
 # hypothesis needs a Rust/PyO3 core that has no free-threaded wheel below 3.14t,
@@ -39,7 +39,7 @@ ints = st.integers(min_value=-(10 ** 6), max_value=10 ** 6)
 def test_buffered_fifo(cap, values):
     """A single producer/consumer over a buffered channel preserves order
     and loses nothing, for any cap and value sequence."""
-    ch = runloom_c.Chan(cap)
+    ch = stackweave_c.Chan(cap)
     out = []
 
     def producer():
@@ -52,8 +52,8 @@ def test_buffered_fifo(cap, values):
             out.append(v)
 
     for g in (producer, consumer):
-        runloom_c.fiber(g)
-    runloom_c.run()
+        stackweave_c.fiber(g)
+    stackweave_c.run()
     assert out == values
 
 
@@ -67,8 +67,8 @@ def test_buffered_fifo(cap, values):
 def test_fanin_conservation(nprod, ncons, per, cap):
     """N producers, M consumers, one channel: every (pid, seq) token is
     received exactly once regardless of buffering."""
-    ch = runloom_c.Chan(cap)
-    done = runloom_c.Chan(nprod)
+    ch = stackweave_c.Chan(cap)
+    done = stackweave_c.Chan(nprod)
     got = []
 
     def producer(pid):
@@ -88,11 +88,11 @@ def test_fanin_conservation(nprod, ncons, per, cap):
             got.append(v)
 
     for c in range(ncons):
-        runloom_c.fiber(consumer)
+        stackweave_c.fiber(consumer)
     for p in range(nprod):
-        runloom_c.fiber(producer(p))
-    runloom_c.fiber(closer)
-    runloom_c.run()
+        stackweave_c.fiber(producer(p))
+    stackweave_c.fiber(closer)
+    stackweave_c.run()
 
     expected = sorted((p, s) for p in range(nprod) for s in range(per))
     assert sorted(got) == expected
@@ -109,7 +109,7 @@ def test_close_drains_then_stops(cap, buffered, extra_recv):
     drain exactly those (ok=True, in order), then every further recv is
     (None, False).  Buffered values out-rank closed-ness."""
     buffered = buffered[:cap]               # only what fits without blocking
-    ch = runloom_c.Chan(cap)
+    ch = stackweave_c.Chan(cap)
     out = []
 
     def runner():
@@ -124,8 +124,8 @@ def test_close_drains_then_stops(cap, buffered, extra_recv):
         for _ in range(extra_recv):
             out.append(ch.recv())
 
-    runloom_c.fiber(runner)
-    runloom_c.run()
+    stackweave_c.fiber(runner)
+    stackweave_c.run()
 
     expect = [(v, True) for v in buffered] + [(None, False)] * extra_recv
     assert out == expect
@@ -143,18 +143,18 @@ def test_select_default_picks_ready(vals):
     result = {}
 
     def runner():
-        chans = [runloom_c.Chan(1) for _ in range(n)]
+        chans = [stackweave_c.Chan(1) for _ in range(n)]
         ready = {}
         for i, v in enumerate(vals):
             if v is not None:
                 chans[i].send(v)
                 ready[i] = v
-        r = runloom_c.select([("recv", chans[i]) for i in range(n)], default=True)
+        r = stackweave_c.select([("recv", chans[i]) for i in range(n)], default=True)
         result["r"] = r
         result["ready"] = ready
 
-    runloom_c.fiber(runner)
-    runloom_c.run()
+    stackweave_c.fiber(runner)
+    stackweave_c.run()
 
     r = result["r"]
     ready = result["ready"]

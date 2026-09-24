@@ -41,7 +41,7 @@ import os
 
 import pytest
 
-import runloom_c as rc
+import stackweave_c as rc
 from adv_util import needs_free_threading
 from test_mn import run_mn
 
@@ -60,7 +60,7 @@ IDLE_SECONDS = 1.5
 MAX_CPU_RATIO = 0.30
 
 _TEMPLATE = """
-import os, socket, runloom, runloom_c
+import os, socket, stackweave, stackweave_c
 READ, WRITE = 1, 2
 IDLE = {idle!r}
 keep = []
@@ -76,10 +76,10 @@ def armed_pair(direction):
     keep.extend((a, b))
     if direction == READ:
         b.send(b"x")
-        runloom_c.wait_fd(a.fileno(), READ, 2000)
+        stackweave_c.wait_fd(a.fileno(), READ, 2000)
         a.recv(64)
     else:
-        runloom_c.wait_fd(a.fileno(), WRITE, 2000)
+        stackweave_c.wait_fd(a.fileno(), WRITE, 2000)
     return a, b
 
 def setup():
@@ -91,7 +91,7 @@ def measure():
     c.setblocking(False); d.setblocking(False)
     keep.extend((c, d))
     e0, c0 = cpu()
-    runloom_c.wait_fd(c.fileno(), READ, int(IDLE * 1000))
+    stackweave_c.wait_fd(c.fileno(), READ, int(IDLE * 1000))
     e1, c1 = cpu()
     res["wall"] = e1 - e0
     res["cpu"] = c1 - c0
@@ -110,15 +110,15 @@ _DRIVER_SINGLE = """
 def main():
     setup()
     measure()
-runloom.run(1, main)
+stackweave.run(1, main)
 """
 
 _DRIVER_MN = """
-runloom_c.mn_init(4)
-runloom_c.mn_fiber(setup)
-runloom_c.mn_fiber(measure)
-runloom_c.mn_run()
-runloom_c.mn_fini()
+stackweave_c.mn_init(4)
+stackweave_c.mn_fiber(setup)
+stackweave_c.mn_fiber(measure)
+stackweave_c.mn_run()
+stackweave_c.mn_fini()
 """
 
 
@@ -172,8 +172,8 @@ a, b = socket.socketpair()
 a.setblocking(False); b.setblocking(False)
 keep.extend((a, b))
 b.send(b"x")
-runloom_c.wait_fd(a.fileno(), READ, 2000)
-runloom_c.wait_fd(a.fileno(), WRITE, 2000)
+stackweave_c.wait_fd(a.fileno(), READ, 2000)
+stackweave_c.wait_fd(a.fileno(), WRITE, 2000)
 a.recv(64)
 b.close()
 """)
@@ -212,7 +212,7 @@ keep.append(lst)
 cli = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 cli.connect(lst.getsockname())
 keep.append(cli)
-runloom_c.wait_fd(lst.fileno(), READ, 2000)
+stackweave_c.wait_fd(lst.fileno(), READ, 2000)
 conn, _ = lst.accept()
 keep.append(conn)
 cli2 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

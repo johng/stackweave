@@ -1,4 +1,4 @@
-"""Tests for the function-bound stack grow-down (runloom.set_grow_down).
+"""Tests for the function-bound stack grow-down (stackweave.set_grow_down).
 
 The grow-down is the default-on, M:N-only auto-sizer: each fiber starts at
 the fixed default stack ("cold start"), measures its real C-stack high-water-mark
@@ -16,14 +16,14 @@ import os
 
 import pytest
 
-import runloom
-import runloom_c
-from runloom.runtime import GROW_DOWN_KEY, GROW_DOWN_MIN, GROW_DOWN_SAMPLES
+import stackweave
+import stackweave_c
+from stackweave.runtime import GROW_DOWN_KEY, GROW_DOWN_MIN, GROW_DOWN_SAMPLES
 
 # Stack high-water-mark is precise only on a POSIX guard-page backend
 # (fcontext-asm / ucontext) with 4 KB pages -- see test_stack_autosize.py.
 _RELIABLE_HWM = (os.name == "posix"
-                 and runloom_c.backend() in ("fcontext-asm", "ucontext")
+                 and stackweave_c.backend() in ("fcontext-asm", "ucontext")
                  and os.sysconf("SC_PAGESIZE") == 4096)
 pytestmark = pytest.mark.skipif(
     not _RELIABLE_HWM,
@@ -62,7 +62,7 @@ pytestmark = pytest.mark.skipif(
 # still fails; only the last bit of precision is given up, and that precision
 # is genuinely not available once painting is off.
 def _assert_shrunk_to_floorish(learned):
-    default = runloom_c.get_stack_size()
+    default = stackweave_c.get_stack_size()
     assert learned & (learned - 1) == 0, (
         "learned size must be a power of two, got %d" % (learned,))
     assert GROW_DOWN_MIN <= learned < default, (
@@ -81,23 +81,23 @@ for _ in range(80):
 
 @pytest.fixture(autouse=True)
 def _clean():
-    runloom.set_grow_down(True)
-    runloom.inspect.enable_stack_autosize(False)
+    stackweave.set_grow_down(True)
+    stackweave.inspect.enable_stack_autosize(False)
     yield
-    runloom.set_grow_down(True)
-    runloom.inspect.enable_stack_autosize(False)
+    stackweave.set_grow_down(True)
+    stackweave.inspect.enable_stack_autosize(False)
 
 
 def _spawn_mn(fn, n, hubs=4, **go_kw):
     """Spawn fn n times under run(hubs); mn_run joins them all before returning."""
     def main():
         for _ in range(n):
-            runloom.fiber(fn, **go_kw)
-    runloom.run(hubs, main)
+            stackweave.fiber(fn, **go_kw)
+    stackweave.run(hubs, main)
 
 
 def test_on_by_default():
-    assert runloom.grow_down_enabled() is True
+    assert stackweave.grow_down_enabled() is True
 
 
 def test_light_learns_to_floor():
@@ -111,7 +111,7 @@ def test_light_learns_to_floor():
 
 
 def test_deep_learns_a_real_size_below_default():
-    default = runloom_c.get_stack_size()
+    default = stackweave_c.get_stack_size()
     def worker():
         json.dumps(NESTED)       # ~14 KiB of real C stack
     _spawn_mn(worker, 80)
@@ -127,17 +127,17 @@ def test_n1_does_not_learn():
     # single-thread run(1) keeps the fixed default -- no learning, no store
     def worker():
         json.dumps(NESTED)
-    runloom.run(1, lambda: [runloom.fiber(worker) for _ in range(40)])
+    stackweave.run(1, lambda: [stackweave.fiber(worker) for _ in range(40)])
     assert worker.__dict__.get(GROW_DOWN_KEY) is None
 
 
 def test_disable_bypasses():
-    runloom.set_grow_down(False)
+    stackweave.set_grow_down(False)
     def worker():
         return 1
     _spawn_mn(worker, 40)
     assert worker.__dict__.get(GROW_DOWN_KEY) is None
-    assert runloom.grow_down_enabled() is False
+    assert stackweave.grow_down_enabled() is False
 
 
 def test_explicit_pin_bypasses():
@@ -151,10 +151,10 @@ def test_defers_to_c_autosizer_when_enabled():
     def worker():
         return 1
     def main():
-        runloom.inspect.enable_stack_autosize(True)
+        stackweave.inspect.enable_stack_autosize(True)
         for _ in range(40):
-            runloom.fiber(worker)
-    runloom.run(4, main)
+            stackweave.fiber(worker)
+    stackweave.run(4, main)
     # the explicitly-enabled C autosizer wins; grow-down backs off entirely
     assert worker.__dict__.get(GROW_DOWN_KEY) is None
 
@@ -190,14 +190,14 @@ def test_non_introspectable_callable_is_safe():
 
 
 def test_arg_bearing_binds_to_real_function():
-    # runloom.fiber(fn, arg) wraps fn in an arg-binding lambda; the learned size must
+    # stackweave.fiber(fn, arg) wraps fn in an arg-binding lambda; the learned size must
     # bind to fn (shared across all arg variants), not the per-call wrapper
     def worker(x):
         json.dumps(NESTED)
         return x
     def main():
         for i in range(80):
-            runloom.fiber(worker, i)
-    runloom.run(4, main)
+            stackweave.fiber(worker, i)
+    stackweave.run(4, main)
     store = worker.__dict__.get(GROW_DOWN_KEY)
     assert store is not None and store[0] >= 32 * 1024

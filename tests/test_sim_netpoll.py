@@ -1,4 +1,4 @@
-"""Slice 2 -- the deterministic simulated-I/O netpoll backend (RUNLOOM_SIM).
+"""Slice 2 -- the deterministic simulated-I/O netpoll backend (STACKWEAVE_SIM).
 
 Exercises the REAL wait_fd path (park/commit FSM, deadline heap, drain_expired,
 M:N-agnostic single-thread wake routing) with its deadline clock routed through
@@ -8,7 +8,7 @@ a one-hour logical wait completes in ~zero wall time (logical compression), many
 timeouts fire in deadline order, and a mixed sched_sleep + wait_fd workload
 interleaves on ONE clock.
 
-RUNLOOM_SIM + RUNLOOM_LOGICAL_CLOCK are read once and cached in the extension, so
+STACKWEAVE_SIM + STACKWEAVE_LOGICAL_CLOCK are read once and cached in the extension, so
 they are set before import and this whole file runs under sim (run_isolated gives
 it its own subprocess).  See docs/dev/soak/SIM_IO_DST.md.
 """
@@ -19,9 +19,9 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 os.environ["PYTHON_GIL"] = "0"
-os.environ["RUNLOOM_SIM"] = "1"                 # sim on (implies the logical clock)
-os.environ.setdefault("RUNLOOM_LOGICAL_CLOCK", "1")
-import runloom_c  # noqa: E402
+os.environ["STACKWEAVE_SIM"] = "1"                 # sim on (implies the logical clock)
+os.environ.setdefault("STACKWEAVE_LOGICAL_CLOCK", "1")
+import stackweave_c  # noqa: E402
 
 READ = 0x1
 
@@ -49,11 +49,11 @@ class TestSimNetpollTimeout(unittest.TestCase):
         out = {}
 
         def waiter():
-            out["r"] = runloom_c.wait_fd(p.r, READ, 3600 * 1000)   # 1 logical hour
+            out["r"] = stackweave_c.wait_fd(p.r, READ, 3600 * 1000)   # 1 logical hour
 
         t0 = time.monotonic()
-        runloom_c.fiber(waiter)
-        runloom_c.run()
+        stackweave_c.fiber(waiter)
+        stackweave_c.run()
         elapsed = time.monotonic() - t0
         p.close()
 
@@ -72,13 +72,13 @@ class TestSimNetpollTimeout(unittest.TestCase):
         timeouts_ms = [800, 100, 500, 200, 400, 50, 700]
 
         def waiter(ms):
-            r = runloom_c.wait_fd(p.r, READ, ms)
+            r = stackweave_c.wait_fd(p.r, READ, ms)
             order.append((ms, r))
 
         t0 = time.monotonic()
         for ms in timeouts_ms:
-            runloom_c.fiber(lambda ms=ms: waiter(ms))
-        runloom_c.run()
+            stackweave_c.fiber(lambda ms=ms: waiter(ms))
+        stackweave_c.run()
         elapsed = time.monotonic() - t0
         p.close()
 
@@ -99,12 +99,12 @@ class TestSimNetpollTimeout(unittest.TestCase):
             tos = [300, 100, 400, 100, 200]      # includes a tie (two 100s)
 
             def waiter(i, ms):
-                r = runloom_c.wait_fd(p.r, READ, ms)
+                r = stackweave_c.wait_fd(p.r, READ, ms)
                 order.append((i, ms, r))
 
             for i, ms in enumerate(tos):
-                runloom_c.fiber(lambda i=i, ms=ms: waiter(i, ms))
-            runloom_c.run()
+                stackweave_c.fiber(lambda i=i, ms=ms: waiter(i, ms))
+            stackweave_c.run()
             p.close()
             return order
 
@@ -120,19 +120,19 @@ class TestSimNetpollTimeout(unittest.TestCase):
         order = []
 
         def wf(label, ms):
-            runloom_c.wait_fd(p.r, READ, ms)
+            stackweave_c.wait_fd(p.r, READ, ms)
             order.append(label)
 
         def sl(label, secs):
-            runloom_c.sched_sleep(secs)
+            stackweave_c.sched_sleep(secs)
             order.append(label)
 
         t0 = time.monotonic()
-        runloom_c.fiber(lambda: wf("wf_1000ms", 1000))
-        runloom_c.fiber(lambda: sl("sleep_500ms", 0.5))
-        runloom_c.fiber(lambda: wf("wf_200ms", 200))
-        runloom_c.fiber(lambda: sl("sleep_50ms", 0.05))
-        runloom_c.run()
+        stackweave_c.fiber(lambda: wf("wf_1000ms", 1000))
+        stackweave_c.fiber(lambda: sl("sleep_500ms", 0.5))
+        stackweave_c.fiber(lambda: wf("wf_200ms", 200))
+        stackweave_c.fiber(lambda: sl("sleep_50ms", 0.05))
+        stackweave_c.run()
         elapsed = time.monotonic() - t0
         p.close()
 
@@ -154,13 +154,13 @@ class TestSimSettledDeadlock(unittest.TestCase):
 
         def waiter():
             try:
-                out["r"] = runloom_c.wait_fd(p.r, READ, -1)   # forever
+                out["r"] = stackweave_c.wait_fd(p.r, READ, -1)   # forever
             except OSError as e:
                 out["err"] = repr(e)
 
         t0 = time.monotonic()
-        runloom_c.fiber(waiter)
-        runloom_c.run()                                       # must RETURN
+        stackweave_c.fiber(waiter)
+        stackweave_c.run()                                       # must RETURN
         elapsed = time.monotonic() - t0
         p.close()
 
@@ -178,18 +178,18 @@ class TestSimSettledDeadlock(unittest.TestCase):
         order = []
 
         def finite(ms):
-            order.append(("finite", ms, runloom_c.wait_fd(p.r, READ, ms)))
+            order.append(("finite", ms, stackweave_c.wait_fd(p.r, READ, ms)))
 
         def forever():
             try:
-                runloom_c.wait_fd(p.r, READ, -1)
+                stackweave_c.wait_fd(p.r, READ, -1)
             except OSError:
                 order.append(("forever", "reaped"))
 
-        runloom_c.fiber(forever)
-        runloom_c.fiber(lambda: finite(100))
-        runloom_c.fiber(lambda: finite(50))
-        runloom_c.run()
+        stackweave_c.fiber(forever)
+        stackweave_c.fiber(lambda: finite(100))
+        stackweave_c.fiber(lambda: finite(50))
+        stackweave_c.run()
         p.close()
 
         # the two finite timeouts fire in deadline order, THEN the forever is reaped
@@ -214,10 +214,10 @@ class TestSimPrereqFixes(unittest.TestCase):
         p = _NeverReady()
 
         def scenario():
-            r1 = runloom_c.wait_fd(p.r, READ, 100)      # arms p.r; times out @0.1s logical
+            r1 = stackweave_c.wait_fd(p.r, READ, 100)      # arms p.r; times out @0.1s logical
             assert r1 == 0
             try:
-                runloom_c.wait_fd(p.r, READ, -1)        # forever on ARMED fd (probe target)
+                stackweave_c.wait_fd(p.r, READ, -1)        # forever on ARMED fd (probe target)
             except OSError:
                 pass                                     # settled-reap terminates it
 
@@ -226,11 +226,11 @@ class TestSimPrereqFixes(unittest.TestCase):
         # accumulates; only the delta this scenario adds is meaningful).  The
         # timed park advances it 0.1s; the forever park must add ~0 (gated) rather
         # than leap by a wall value (~1e14 ns, monotonic_ns) if the probe fired.
-        before = runloom_c._logical_ns()
-        runloom_c.fiber(scenario)
-        runloom_c.run()
+        before = stackweave_c._logical_ns()
+        stackweave_c.fiber(scenario)
+        stackweave_c.run()
         p.close()
-        delta = runloom_c._logical_ns() - before
+        delta = stackweave_c._logical_ns() - before
         self.assertLess(delta, 10 ** 9,
                         "logical clock advanced %d ns (~%.1fs) for a 0.1s timed "
                         "park + a forever park -- the stale-arm probe stamped a "
@@ -240,8 +240,8 @@ class TestSimPrereqFixes(unittest.TestCase):
     def test_io_uring_forced_off_under_sim(self):
         """io_uring must be OFF under sim so the TCP fast paths take the
         socketpair/netpoll route the sim pump drives, not the CQ backend."""
-        self.assertFalse(runloom_c.iouring_available(),
-                         "io_uring must be forced off under RUNLOOM_SIM")
+        self.assertFalse(stackweave_c.iouring_available(),
+                         "io_uring must be forced off under STACKWEAVE_SIM")
 
 
 class TestSimEqualDeadlineTieBreak(unittest.TestCase):
@@ -254,12 +254,12 @@ class TestSimEqualDeadlineTieBreak(unittest.TestCase):
         order = []
 
         def waiter(i):
-            runloom_c.wait_fd(p.r, READ, 500)     # SAME 500 ms timeout for all
+            stackweave_c.wait_fd(p.r, READ, 500)     # SAME 500 ms timeout for all
             order.append(i)
 
         for i in range(6):                        # spawn i-th -> goid ascending
-            runloom_c.fiber(lambda i=i: waiter(i))
-        runloom_c.run()
+            stackweave_c.fiber(lambda i=i: waiter(i))
+        stackweave_c.run()
         p.close()
         # goid == spawn order at H=1, so equal-deadline wakes are ascending spawn index
         self.assertEqual(order, [0, 1, 2, 3, 4, 5],
@@ -271,12 +271,12 @@ class TestSimEqualDeadlineTieBreak(unittest.TestCase):
             order = []
 
             def waiter(i):
-                runloom_c.wait_fd(p.r, READ, 300)
+                stackweave_c.wait_fd(p.r, READ, 300)
                 order.append(i)
 
             for i in range(8):
-                runloom_c.fiber(lambda i=i: waiter(i))
-            runloom_c.run()
+                stackweave_c.fiber(lambda i=i: waiter(i))
+            stackweave_c.run()
             p.close()
             return order
 
@@ -286,7 +286,7 @@ class TestSimEqualDeadlineTieBreak(unittest.TestCase):
 class TestSimGate(unittest.TestCase):
     def test_backend_and_sim_on(self):
         # Backend is still epoll (sim replaces the pump, not the platform pick).
-        self.assertIn(runloom_c.netpoll_backend(), ("epoll", "kqueue", "select"))
+        self.assertIn(stackweave_c.netpoll_backend(), ("epoll", "kqueue", "select"))
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# bench.sh -- run the runloom benchmark suite in the cleanest env this box allows,
+# bench.sh -- run the stackweave benchmark suite in the cleanest env this box allows,
 # write JSON + a dated report, and gate each suite against its committed
 # baseline. This is the LOCAL perf gate (we have no hosted CI -- see CLAUDE.md),
 # the perf-side analogue of scripts/check_all.sh.
@@ -10,7 +10,7 @@
 #
 # Usage:
 #   scripts/bench.sh                 # micro + mn, gate vs committed baseline
-#   RUNLOOM_BENCH_NOGATE=1 scripts/bench.sh    # run + report, don't fail on regress
+#   STACKWEAVE_BENCH_NOGATE=1 scripts/bench.sh    # run + report, don't fail on regress
 #   PYTHON=~/.pyenv/versions/3.14.4t/bin/python3 scripts/bench.sh
 set -eu
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -24,13 +24,13 @@ REPORT="$REPORT_DIR/bench-$STAMP.md"
 # 15% default: even with >25ms samples the shared-VM noise floor is ~6-8% on
 # the fastest micros, so a tighter gate false-positives. Use interleaved A/B
 # (like the F6a TLS A/B) for smaller, real deltas.
-TOL="${RUNLOOM_BENCH_TOL:-0.15}"
+TOL="${STACKWEAVE_BENCH_TOL:-0.15}"
 
 RUN="env PYTHONPATH=src:benchmark PYTHON_GIL=0"   # benchmark/ on path so `-m bench.X` resolves benchmark/bench
 SETARCH=""
 command -v setarch >/dev/null 2>&1 && SETARCH="setarch -R"
 
-printf '# runloom bench run %s\n\n' "$STAMP" | tee "$REPORT"
+printf '# stackweave bench run %s\n\n' "$STAMP" | tee "$REPORT"
 rc=0
 for suite in micro mn; do
     printf '>> bench.%s\n' "$suite"
@@ -48,8 +48,8 @@ for suite in micro mn; do
 done
 
 printf 'report: %s\n' "$REPORT"
-if [ "$rc" = 1 ] && [ "${RUNLOOM_BENCH_NOGATE:-0}" != 1 ]; then
-    printf 'PERF GATE: regression detected (set RUNLOOM_BENCH_NOGATE=1 to ignore)\n'
+if [ "$rc" = 1 ] && [ "${STACKWEAVE_BENCH_NOGATE:-0}" != 1 ]; then
+    printf 'PERF GATE: regression detected (set STACKWEAVE_BENCH_NOGATE=1 to ignore)\n'
     exit 1
 fi
 printf 'PERF GATE: ok\n'

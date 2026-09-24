@@ -7,10 +7,10 @@ callbacks.  Under M:N, if the atexit module is not thread-safe or if fiber
 scheduling interferes with the callback list, the count may become inconsistent
 (grow non-monotonically, skip numbers, or exhibit data-race artifacts).
 
-WHERE M:N BREAKS IT (the gap this program catches).  Under runloom's M:N
+WHERE M:N BREAKS IT (the gap this program catches).  Under stackweave's M:N
 scheduler many fibers ("goroutines") share ONE hub OS-thread.  All fibers
 mutate the same module-global atexit callback list without per-fiber isolation.
-If runloom's scheduler preempts a fiber during register() (mid-list-mutation),
+If stackweave's scheduler preempts a fiber during register() (mid-list-mutation),
 or if a fiber's view of the count becomes stale due to concurrent modifications,
 the module's internal invariants may break: the count and the actual list may
 desynchronize, or the list may become corrupted (elements lost, order wrong).
@@ -49,7 +49,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified empirically, not assumed):
   preempted between the list mutation and the count increment), but the module's
   internal bookkeeping must remain consistent: every completed registration must
   be counted exactly once.  A final count != completed-count is a data-structure
-  desync (the runloom M:N bug).
+  desync (the stackweave M:N bug).
 
 ARMS:
   * LOAD-BEARING -- REGISTRATION-COUNT CONSERVATION (post, HARD).  Each fiber
@@ -92,7 +92,7 @@ registers concurrently, localizes the corruption before the count oracle fires.
 import atexit
 
 import harness
-import runloom
+import stackweave
 
 
 def make_callback(wid, seq):
@@ -156,9 +156,9 @@ def worker(H, wid, rng, state):
 
         # Yield to allow siblings to run concurrently.
         if seq & 1:
-            runloom.yield_now()
+            stackweave.yield_now()
         else:
-            runloom.sleep(0.0001)
+            stackweave.sleep(0.0001)
 
         H.op(wid)
 
@@ -206,7 +206,7 @@ def post(H):
                "during concurrent registrations under M:N.  Each fiber counted "
                "every register() call that completed; the count should equal "
                "that sum exactly.  This indicates data-structure corruption in "
-               "the atexit module under M:N (the runloom bug).".format(
+               "the atexit module under M:N (the stackweave bug).".format(
                    final_count, actual_regs, final_count - actual_regs))
 
     # NON-VACUITY: the oracle was actually exercised.
@@ -235,5 +235,5 @@ if __name__ == "__main__":
                  "run, final _ncallbacks() MUST equal the completed-registration "
                  "count.  A mismatch is data-structure corruption under "
                  "concurrent registration (the M:N bug; fix is thread-safe "
-                 "register() or per-fiber isolation in runloom, not in stdlib "
+                 "register() or per-fiber isolation in stackweave, not in stdlib "
                  "atexit)")

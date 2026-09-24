@@ -1,7 +1,7 @@
 """Bisect: is the 8.6kB/iter leak per-run() or per-fiber? Test drain-only run(),
 raw mn_fiber cycle, and per-fiber scaling inside one run."""
 import os, sys, gc
-import runloom, runloom_c
+import stackweave, stackweave_c
 
 MODE = sys.argv[1]
 ITERS = int(sys.argv[2]) if len(sys.argv) > 2 else 300
@@ -15,24 +15,24 @@ def rss_kb():
 def noop():
     pass
 
-def cycle_drain():                 # runloom.run(4) with no main_fn
-    runloom.run(4)
+def cycle_drain():                 # stackweave.run(4) with no main_fn
+    stackweave.run(4)
 
-def cycle_runwrap():               # runloom.run(4, noop): the leaking case
-    runloom.run(4, noop)
+def cycle_runwrap():               # stackweave.run(4, noop): the leaking case
+    stackweave.run(4, noop)
 
 def cycle_rawfiber():              # raw C: one fiber per cycle
-    runloom_c.mn_init(4)
-    runloom_c.mn_fiber(noop)
-    runloom_c.mn_run()
-    runloom_c.mn_fini()
+    stackweave_c.mn_init(4)
+    stackweave_c.mn_fiber(noop)
+    stackweave_c.mn_run()
+    stackweave_c.mn_fini()
 
 def cycle_manyfiber():             # raw C: 100 fibers per cycle
-    runloom_c.mn_init(4)
+    stackweave_c.mn_init(4)
     for _ in range(100):
-        runloom_c.mn_fiber(noop)
-    runloom_c.mn_run()
-    runloom_c.mn_fini()
+        stackweave_c.mn_fiber(noop)
+    stackweave_c.mn_run()
+    stackweave_c.mn_fini()
 
 f = {"drain": cycle_drain, "runwrap": cycle_runwrap,
      "rawfiber": cycle_rawfiber, "manyfiber": cycle_manyfiber}[MODE]

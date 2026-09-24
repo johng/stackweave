@@ -10,13 +10,13 @@ objects (different ids), so no two fibers contend on the same object's copy
 state -- the hazard is purely around the _deepcopy_dispatch table and any
 shallow-copy semantics that persist across a yield.
 
-WHERE M:N COULD BREAK IT (the gap this program probes).  If runloom's fiber
+WHERE M:N COULD BREAK IT (the gap this program probes).  If stackweave's fiber
 allocation or the copy module's internal state (e.g. a memo dict, copy flags)
 is shared or corrupted across hubs, a fiber's copied object could be
 aliased with another fiber's (both pointing at the same copy), or a
 deepcopy-in-progress could be interrupted mid-recursion.  This is unlikely
 under normal CPython because copy is careful with state isolation, BUT if
-runloom leaks ANY mutable aliasing of the copied object (e.g. a shared memo
+stackweave leaks ANY mutable aliasing of the copied object (e.g. a shared memo
 dict reference, or a tstate-keyed cache), the copies would not be independent.
 
 WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain threads):
@@ -27,11 +27,11 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain threads):
   the original) is a basic invariant for ANY concurrency model.  We verified
   this holds under PLAIN OS THREADS with PYTHON_GIL=1 AND PYTHON_GIL=0 on this
   very interpreter (100k checks, 0 failures): each fiber's copy is independent,
-  id(copy1) != id(copy2) != id(obj).  Under a CORRECT runloom it must ALSO
-  hold (each fiber an independent copy).  If runloom LEAKS a shared-memo dict
+  id(copy1) != id(copy2) != id(obj).  Under a CORRECT stackweave it must ALSO
+  hold (each fiber an independent copy).  If stackweave LEAKS a shared-memo dict
   or aliases two fibers' copies (both copies point at the same object), the
   oracle catches it: id(copy1) would == id(copy2) or would == id(obj) -- a
-  violation of copy's contract (the runloom isolation bug).
+  violation of copy's contract (the stackweave isolation bug).
 
 ORACLES:
   * LOAD-BEARING -- DEEP-COPY OBJECT INDEPENDENCE (worker, HARD, fail-fast).
@@ -43,7 +43,7 @@ ORACLES:
       - copy1 == obj and copy2 == obj (copied values match the original)
       - copy1 is not obj and copy2 is not obj (shallow !=, not identity)
     A fiber's deepcopy is private (no other fiber touches it) -- the hazard is
-    purely isolation: if runloom corrupts the deepcopy machinery (a shared memo
+    purely isolation: if stackweave corrupts the deepcopy machinery (a shared memo
     dict, tstate keying, or fiber-isolation bug), two independent fibers could
     end up with ALIASED copies (id(copy1) == id(copy2)) or a copy that IS the
     original (copy is obj, violating the copy contract).  That is the bug.
@@ -83,7 +83,7 @@ the leak before the id oracle fires.
 import copy
 
 import harness
-import runloom
+import stackweave
 
 # A test object payload: a frozen structure that is EASY to deepcopy and whose
 # value is DISTINCT per fiber (so a leaked/aliased copy is detectable).
@@ -134,9 +134,9 @@ def deep_check(H, wid, idx, state):
     copy1_id = id(copy1)
 
     # Yield: exercise preemption + potential hub migration mid-copy workflow.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0001)
+        stackweave.sleep(0.0001)
 
     # Second deepcopy (same wid, same obj definition but new instance).
     copy2 = copy.deepcopy(obj)
@@ -147,7 +147,7 @@ def deep_check(H, wid, idx, state):
         H.fail("deepcopy IDENTITY LEAK: copy1 IS the original object "
                "(id(copy1) == id(obj) == {0}, wid {1}) -- copy did not "
                "produce a new object, the deepcopy machinery is broken or "
-               "runloom leaked the object via a shared memo dict".format(
+               "stackweave leaked the object via a shared memo dict".format(
                    obj_id, wid))
         return
 
@@ -161,7 +161,7 @@ def deep_check(H, wid, idx, state):
         H.fail("deepcopy ALIASING: copy1 and copy2 are ALIASES (id(copy1) == "
                "id(copy2) == {0}, wid {1}) -- the two independent deepcopies "
                "returned the SAME object.  A shared memo dict keyed by object "
-               "id (not fiber-local) could cause this; runloom is leaking memo "
+               "id (not fiber-local) could cause this; stackweave is leaking memo "
                "dict state across fibers".format(copy1_id, wid))
         return
 
@@ -198,7 +198,7 @@ def deep_check(H, wid, idx, state):
 # its object, yields (potentially migrating hubs), then checks the id is still
 # the same.  Shallow-copy is not mutated by the fiber, so any id change is
 # suspicious (could mean a fiber leaked its copy to a sibling, which is a
-# runloom leak, though unlikely under normal copy semantics).  Measured and
+# stackweave leak, though unlikely under normal copy semantics).  Measured and
 # reported; must stay 0% to validate the attribution (if it fires, it means
 # both arms are corrupted, not just deepcopy).
 # --------------------------------------------------------------------------
@@ -212,12 +212,12 @@ def shallow_check(H, wid, idx, state):
     scopy_value = scopy
 
     # Yield
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0001)
+        stackweave.sleep(0.0001)
 
     # Re-measure: the shallow copy's id should be unchanged (it is not mutated
-    # by this fiber, and we own it, so a different id would mean runloom leaked
+    # by this fiber, and we own it, so a different id would mean stackweave leaked
     # it or the copy machinery is deeply broken).
     scopy_id_after = id(scopy)
 
@@ -227,7 +227,7 @@ def shallow_check(H, wid, idx, state):
             H.fail("shallow_copy OBJECT DRIFT: shallow copy's id changed across "
                    "a yield (wid {0}, idx {1}, before {2} != after {3}) -- a "
                    "fiber's own shallow copy drifted, indicating a serious "
-                   "runloom leak or memory corruption".format(
+                   "stackweave leak or memory corruption".format(
                        wid, idx, scopy_id, scopy_id_after))
         return
 
@@ -236,7 +236,7 @@ def shallow_check(H, wid, idx, state):
         state["shallow_drifts"][wid & 1023] += 1
         H.fail("shallow_copy VALUE DRIFT: shallow copy value changed across "
                "the yield (wid {0}, idx {1}) -- the copy's contents were "
-               "mutated, indicating a shared mutable sub-object or a runloom "
+               "mutated, indicating a shared mutable sub-object or a stackweave "
                "leak".format(wid, idx))
         return
 
@@ -294,7 +294,7 @@ def post(H):
           "value_failures={2}".format(deep, deep_id_fail, deep_val_fail))
     H.log("copy.copy[shallow MEASURED]: {0} checks  drifts={1} ({2:.2f}%) -- "
           "MUST stay 0% (each fiber owns its shallow copy; a drift means "
-          "runloom leaked the copy or corrupted both arms)".format(
+          "stackweave leaked the copy or corrupted both arms)".format(
               shallow, shallow_drift, shallow_pct))
 
     # NON-VACUITY: the load-bearing deepcopy independence hazard was exercised.
@@ -313,7 +313,7 @@ def post(H):
         H.log("note: the shallow-copy arm observed object drifts ({0}/{1} -- "
               "{2:.2f}%) -- a fiber's own shallow copy's id or value changed "
               "across a yield.  This is unexpected and indicates a SERIOUS "
-              "runloom leak or memory corruption affecting BOTH shallow and "
+              "stackweave leak or memory corruption affecting BOTH shallow and "
               "deep copy machinery, not just deepcopy isolation."
               .format(shallow_drift, shallow, shallow_pct))
 

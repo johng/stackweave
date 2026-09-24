@@ -22,7 +22,7 @@ round spawns four sub-goroutines on the shared deque:
     silently pops the far end -- the bounded-evict path);
   * a ROTATOR: rotate(+k) / rotate(-k) -- the unlocked relink path;
   * a POPPER: pop()/popleft() (tolerating IndexError on an empty deque);
-  * an ITERATOR: walks the deque, yields once mid-walk via runloom.yield_now()
+  * an ITERATOR: walks the deque, yields once mid-walk via stackweave.yield_now()
     with its internal block pointer LIVE, and on every element checks
     `elem in UNIVERSE`.
 
@@ -53,7 +53,7 @@ import random
 from collections import deque
 
 import harness
-import runloom
+import stackweave
 
 # Finite sentinel UNIVERSE: a fixed, recognizable set of element values.  Any
 # value NOT in this set yielded/resident is a corrupted element from a freed or
@@ -102,7 +102,7 @@ def appender(H, wid, d, rng):
         else:
             d.appendleft(k)
         if i == BURST // 2:
-            runloom.yield_now()
+            stackweave.yield_now()
 
 
 def rotator(H, wid, d, rng):
@@ -114,7 +114,7 @@ def rotator(H, wid, d, rng):
         else:
             d.rotate(-k)
         if i == BURST // 2:
-            runloom.yield_now()
+            stackweave.yield_now()
 
 
 def popper(H, wid, d, rng):
@@ -130,7 +130,7 @@ def popper(H, wid, d, rng):
             # Deque momentarily empty -- legal, not a corruption.
             pass
         if i == BURST // 2:
-            runloom.yield_now()
+            stackweave.yield_now()
 
 
 def iterate(H, wid, d, counts, slot):
@@ -153,7 +153,7 @@ def iterate(H, wid, d, counts, slot):
                 # Park with the iterator's block pointer LIVE; the appender/
                 # rotator/popper relink the chain DURING this park.
                 parked = True
-                runloom.yield_now()
+                stackweave.yield_now()
         counts["clean"][slot] += 1
         return "clean"
     except RuntimeError as exc:
@@ -216,7 +216,7 @@ def worker(H, wid, rng, state):
         r_seed = rng.getrandbits(48)
         p_seed = rng.getrandbits(48)
 
-        wg = runloom.WaitGroup()
+        wg = stackweave.WaitGroup()
         wg.add(4)
 
         def run_iter(d=d, slot=slot):

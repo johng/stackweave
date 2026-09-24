@@ -30,8 +30,8 @@
 #
 # Exit 1 = bug present.
 import os, socket, sys
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 
 READ, WRITE = 1, 2
 res = {}
@@ -89,18 +89,18 @@ def main():
     def keeper():
         rc.wait_fd(c.fileno(), READ, 4000)   # parks for the whole measurement
 
-    runloom.fiber(keeper)
-    runloom.yield_now()                      # let it reach the park
+    stackweave.fiber(keeper)
+    stackweave.yield_now()                      # let it reach the park
 
     e0, c0 = cpu_seconds()
-    runloom.sleep(3.0)          # runtime is idle: expect ~0 CPU
+    stackweave.sleep(3.0)          # runtime is idle: expect ~0 CPU
     e1, c1 = cpu_seconds()
     res["idle_wall"] = e1 - e0
     res["idle_cpu"] = c1 - c0
     res["socks"] = (a,)
 
 
-runloom.run(1, main)
+stackweave.run(1, main)
 print("read park result:", res["r"])
 print("idle wall=%.2fs cpu=%.2fs" % (res["idle_wall"], res["idle_cpu"]))
 if res["idle_cpu"] > 0.5 * res["idle_wall"]:

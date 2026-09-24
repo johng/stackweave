@@ -1,6 +1,6 @@
-"""big_100 / 620 -- object integrity across a runloom hub migration.
+"""big_100 / 620 -- object integrity across a stackweave hub migration.
 
-A live Python object is created on one hub (producer), sent through a runloom
+A live Python object is created on one hub (producer), sent through a stackweave
 channel, and resumed/read on a DIFFERENT hub (consumer).  The consumer proves
 the object survived the cross-hub transfer intact:
   * FIELD CHECKSUM equals the value independently re-derived from (chan, seq) --
@@ -25,7 +25,7 @@ import sys
 import _thread                      # real OS-thread id == hub id (never patched)
 
 import harness
-import runloom
+import stackweave
 
 HUB_TID = _thread.get_ident        # current hub's OS thread id
 
@@ -69,7 +69,7 @@ def expected_checksum(chan, seq):
 
 def setup(H):
     n = max(1, H.funcs // 2)                       # one producer+consumer / chan
-    chans = [runloom.Chan(1 if (i & 1) == 0 else BIG_CAP) for i in range(n)]
+    chans = [stackweave.Chan(1 if (i & 1) == 0 else BIG_CAP) for i in range(n)]
     for ch in chans:
         H.register_close(ch)
     H.state = {
@@ -97,7 +97,7 @@ def producer(H, wid, rng, state):
             p.rc_before = sys.getrefcount(p)
         except (AttributeError, TypeError):
             p.rc_before = None
-        runloom.yield_now()                         # migrate holding a live obj
+        stackweave.yield_now()                         # migrate holding a live obj
         try:
             ch.send(p)
         except Exception:
@@ -123,7 +123,7 @@ def consumer(H, wid, rng, state):
             break
         if not ok:
             break                                   # closed and drained
-        runloom.yield_now()                         # resume/migrate holding it
+        stackweave.yield_now()                         # resume/migrate holding it
         # ground truth from (channel, FIFO seq) -- independent of the object
         want = expected_checksum(cidx, exp_seq)
         cs = field_checksum(p)

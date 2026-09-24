@@ -18,7 +18,7 @@ import ctypes
 import ctypes.util
 
 import harness
-import runloom
+import stackweave
 
 # usleep(useconds_t) is portable enough on Linux/macOS via libc.  Fall back to
 # nanosleep if usleep is unavailable.
@@ -56,8 +56,8 @@ def cooperative(H, wid):
         coop[wid] += 1
         H.op(wid)
         H.task_done(wid)
-        runloom.yield_now()
-        runloom.sleep(0.0002)
+        stackweave.yield_now()
+        stackweave.sleep(0.0002)
 
 
 def heavy(H, wid, rng):

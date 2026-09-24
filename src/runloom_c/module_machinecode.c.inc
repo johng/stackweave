@@ -238,7 +238,7 @@ static PyGetSetDef runloom_mc_getset[] = {
 
 static PyTypeObject RunloomMachineCodeType = {
     PyVarObject_HEAD_INIT(NULL, 0)
-    .tp_name = "runloom_c.MachineCode",
+    .tp_name = "stackweave_c.MachineCode",
     .tp_basicsize = sizeof(RunloomMachineCode),
     .tp_dealloc = (destructor)runloom_mc_dealloc,
     .tp_call = (ternaryfunc)runloom_mc_call,

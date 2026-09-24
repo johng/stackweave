@@ -1,6 +1,6 @@
 """A diverse M:N workload reused by the coverage tests (tests/test_cov_*.py).
 
-Exercises, under runloom.run(N): cross-hub channels (wake_g / hub_submit),
+Exercises, under stackweave.run(N): cross-hub channels (wake_g / hub_submit),
 sleeps (timer/sleep heap), CPU spins (preempt/sysmon), blocking offload
 (blockpool), socket + file I/O (netpoll + io_uring), sched_yield (fastpath),
 fiber_n bulk spawn, and introspection.  Importing as a module gives `workload()`;
@@ -15,9 +15,9 @@ import sys
 import tempfile
 
 sys.path.insert(0, "src")
-import runloom
-import runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave
+import stackweave_c as rc
+from stackweave.sync import WaitGroup
 
 
 def workload(producers=4, consumers=4, per=80):
@@ -32,7 +32,7 @@ def workload(producers=4, consumers=4, per=80):
         try:
             for j in range(per):
                 if j % 7 == 0:
-                    runloom.sleep(0.0003)          # sleep heap / timer drain
+                    stackweave.sleep(0.0003)          # sleep heap / timer drain
                 ch.send(pid * per + j)
         finally:
             wg.done()
@@ -47,9 +47,9 @@ def workload(producers=4, consumers=4, per=80):
             n += 1
 
     # CPU spin: env-tunable so the sysmon/preempt tests can make a fiber occupy
-    # its hub long enough (> RUNLOOM_SYSMON_MS / RUNLOOM_PREEMPT_MS) to trip the
+    # its hub long enough (> STACKWEAVE_SYSMON_MS / STACKWEAVE_PREEMPT_MS) to trip the
     # detector, while the default-path tests keep it cheap.
-    _cpu_iters = int(os.environ.get("RUNLOOM_COV_CPU", "200000"))
+    _cpu_iters = int(os.environ.get("STACKWEAVE_COV_CPU", "200000"))
     def cpu():
         x = 0
         for i in range(_cpu_iters):
@@ -102,7 +102,7 @@ def workload(producers=4, consumers=4, per=80):
 
 def run(hubs=4):
     main, sink, total = workload()
-    runloom.run(hubs, main)
+    stackweave.run(hubs, main)
     assert sink[0] == total, "lost %d/%d" % (total - sink[0], total)
     return sink[0]
 

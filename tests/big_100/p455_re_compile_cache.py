@@ -40,7 +40,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified empirically, not assumed):
   AND PYTHON_GIL=0 -- i.e. re.compile keeps returning the CORRECT Pattern even
   with the GIL off in plain threads (64000/64000 correct matches each).  So a
   wrong match is NOT documented-unsafe usage for any concurrency model -- it would
-  be a genuine runloom M:N corruption of the shared cache.  A SINGLE-OWNER control
+  be a genuine stackweave M:N corruption of the shared cache.  A SINGLE-OWNER control
   fiber does the identical compile+match loop on its own private patterns and must
   also always be correct (proves the machinery itself is sound -- a wrong result
   THERE would be a CPython count-machinery bug, not contention).
@@ -51,7 +51,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified empirically, not assumed):
   (`del _cache[next(iter(_cache))]`) loses to concurrent inserts and the cap is
   not enforced -- the identical lru_cache-exceeds-maxsize overshoot the suite
   pinned upstream.  Crucially this overshoot REPRODUCES under plain-threads-GIL-
-  OFF (no runloom), so hard-failing on it would be a FALSE-POSITIVE detector.  We
+  OFF (no stackweave), so hard-failing on it would be a FALSE-POSITIVE detector.  We
   MEASURE the peak cache size + compile count and REPORT them (an eviction-
   pressure rate), NEVER assert on them -- like p67's TLS leak rate.  The identity
   oracle stays GREEN even while the cache overshoots, which is the whole point:
@@ -61,8 +61,8 @@ ORACLES:
   * LOAD-BEARING -- CACHE IDENTITY (per-op, HARD, fail-fast): every re.compile of
     a fiber's own marker-pattern, matched against its own input, returns the
     CORRECT group; the sibling/foreign input never matches.  A wrong/None/torn
-    match or an exception/crash out of re.compile/match is a runloom corruption of
-    the shared cache.  GREEN under plain-threads-GIL-on AND a correct runloom.
+    match or an exception/crash out of re.compile/match is a stackweave corruption of
+    the shared cache.  GREEN under plain-threads-GIL-on AND a correct stackweave.
   * SINGLE-OWNER CONTROL (per-op, HARD): a lone fiber doing the identical
     compile+match on its OWN private patterns is ALWAYS correct -- isolates the
     machinery from contention.
@@ -87,7 +87,7 @@ identity oracle even fires.
 import re
 
 import harness
-import runloom
+import stackweave
 
 # Cap the load-bearing pool: this is a correctness probe of the shared-cache
 # identity, not a scale soak.
@@ -125,7 +125,7 @@ def compile_and_check(H, who, marker, salt):
         H.fail("CACHE IDENTITY CORRUPTED ({0}): own pattern for marker {1} did "
                "NOT match its OWN input {2!r} -- re.compile returned a torn / "
                "SIBLING Pattern from the shared global re._cache under M:N "
-               "(re.compile is documented thread-safe, so this is a runloom "
+               "(re.compile is documented thread-safe, so this is a stackweave "
                "corruption of the shared cache)".format(who, marker, text))
         return False
     g = m.group(1)
@@ -169,9 +169,9 @@ def worker(H, wid, rng, state):
             # Yield / sleep BETWEEN compiles so this fiber is preempted / migrated
             # while siblings + purgers mutate the shared cache around it.
             if (slot & 1) == 0:
-                runloom.yield_now()
+                stackweave.yield_now()
             else:
-                runloom.sleep(0.0002)
+                stackweave.sleep(0.0002)
         H.op(wid)
         r += 1
     state["compiles"][wid & 1023] += n
@@ -193,7 +193,7 @@ def purger(H, wid, rng, state):
                    "shared global re._cache under M:N".format(exc))
             return
         p += 1
-        runloom.sleep(0.0005)
+        stackweave.sleep(0.0005)
     state["purges"][wid & 1023] += p
     H.task_done(wid)
 
@@ -202,7 +202,7 @@ def control_worker(H, state):
     """SINGLE-OWNER CONTROL: one fiber doing the identical compile+match on its
     OWN private marker space.  Must ALWAYS be correct -- isolates the compile/
     match machinery from contention (a wrong result here would be a CPython bug,
-    not runloom contention).  Records progressively so a partial run still counts.
+    not stackweave contention).  Records progressively so a partial run still counts.
 
     Does a FIXED block of work up front (independent of the deadline, so it is
     never starved to zero by the flooded worker pool), then keeps going while the
@@ -218,7 +218,7 @@ def control_worker(H, state):
             if not compile_and_check(H, "single-owner control", marker, marker):
                 return
             state["control_checks"][0] += 1      # progressive, single-writer
-            runloom.yield_now()
+            stackweave.yield_now()
         r += 1
 
 
@@ -257,7 +257,7 @@ def cache_sampler(H, state):
     while not H.failed and (i < min_samples or H.running()):
         sample()
         i += 1
-        runloom.sleep(0.002)
+        stackweave.sleep(0.002)
     sample()                       # one last peak read at teardown
 
 
@@ -298,7 +298,7 @@ def post(H):
         "len(re._cache)={3} (cap _MAXCACHE={4}), peak len(re._cache2)={5} (cap "
         "_MAXCACHE2={6}) -- REPORT ONLY: GIL-off the evict-oldest RMW loses to "
         "concurrent inserts so the cache overshoots its cap (reproduces under "
-        "plain-threads-GIL-off, NOT a runloom bug; identity stays correct "
+        "plain-threads-GIL-off, NOT a stackweave bug; identity stays correct "
         "anyway)".format(
             compiles, ctl, purges, peak, re._MAXCACHE, peak2, re._MAXCACHE2))
 
@@ -332,6 +332,6 @@ if __name__ == "__main__":
                  "IDENTITY oracle: every fiber's own pattern matches its own input "
                  "with the right group, a sibling input never does -- a torn/"
                  "sibling cached Pattern (wrong/None match or exception) is a REAL "
-                 "runloom bug (re.compile is documented thread-safe).  The cache-"
+                 "stackweave bug (re.compile is documented thread-safe).  The cache-"
                  "size OVERSHOOT past _MAXCACHE (eviction-RMW loss, reproduces "
                  "under plain GIL-off threads) is MEASURED + reported only")

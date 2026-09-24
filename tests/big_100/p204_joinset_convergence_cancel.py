@@ -18,8 +18,8 @@ Invariant (post): join returned for every batch (joined_batches == batches);
 finished + cancelled == spawned; no task lost.
 """
 import harness
-import runloom
-import runloom.sync as sync
+import stackweave
+import stackweave.sync as sync
 import cancelutil
 
 BATCH = 12                 # tasks per JoinSet
@@ -53,7 +53,7 @@ def worker(H, wid, rng, state):
         def task(longish):
             if not longish:
                 # quick task: a touch of work, then done.
-                runloom.yield_now()
+                stackweave.yield_now()
                 return "done"
             # long task: cooperatively wait on the ctx; if cancelled, exit as
             # "cancelled" -- but STILL exit (no hang).
@@ -67,7 +67,7 @@ def worker(H, wid, rng, state):
 
         # Cancel partway so some long tasks are caught waiting; a couple may
         # already be done, a few quick tasks finish regardless.
-        runloom.sleep(0.001)
+        stackweave.sleep(0.001)
         cancel()
 
         results = js.join_all()        # MUST return -- a hung task wedges here

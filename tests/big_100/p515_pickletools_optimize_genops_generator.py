@@ -11,7 +11,7 @@ generator internally: it does a first genops pass to find which memo PUTs are
 actually GET-referenced, then a second pass to emit a shrunk pickle with the
 dead PUTs (and the FRAME) stripped.
 
-WHERE M:N COULD BREAK IT (the gap this program probes).  runloom gives each
+WHERE M:N COULD BREAK IT (the gap this program probes).  stackweave gives each
 fiber its own Python frame stack, so a genops() generator instance created and
 iterated entirely inside ONE fiber is single-owner: its frame, its `pos`
 cursor, its arg-reader closure all belong to that fiber alone.  BUT the fiber
@@ -36,7 +36,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain threads):
   bytes:
 
     (1) Manually drives pickletools.genops(data) to completion, PARKING
-        (runloom.yield_now / sleep) INSIDE the iteration loop so a sibling
+        (stackweave.yield_now / sleep) INSIDE the iteration loop so a sibling
         reliably interleaves while this generator frame is suspended, and after
         each resume asserts the generator cursor is still sane:
           - `pos` is STRICTLY MONOTONE increasing across the whole walk (the
@@ -57,17 +57,17 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain threads):
   thread repeatedly building its own reuse-graph, walking genops, and calling
   optimize) that 100% of walks are monotone, every opcode name is known, and
   every optimize() round-trips with len(optimized) <= len(data) -- 0 desyncs.
-  Under a CORRECT runloom the single-owner oracle must also hold: the program
+  Under a CORRECT stackweave the single-owner oracle must also hold: the program
   exits 0 when there is no bug.  A monotonicity break, an unknown opcode, an
   optimize() that fails to round-trip or grows, or a SIGSEGV mid-genops is a
-  runloom generator-frame / shared-decode-table corruption -- a real runtime
+  stackweave generator-frame / shared-decode-table corruption -- a real runtime
   bug.
 
 ORACLES:
   * LOAD-BEARING -- GENOPS CURSOR STABILITY + OPTIMIZE ROUND-TRIP (worker,
     HARD, fail-fast).  Single-owner: the pickle bytes, the genops generator
     instance, and the optimized bytes are all fiber-local, never shared.  A
-    failure is a runloom suspended-generator-frame or decode-table desync.
+    failure is a stackweave suspended-generator-frame or decode-table desync.
 
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber stranded inside a
     suspended genops generator (parked mid-iteration and never resumed) never
@@ -105,7 +105,7 @@ import pickle
 import pickletools
 
 import harness
-import runloom
+import stackweave
 
 # The set of ALL valid pickle opcode names, taken from the shared read-only
 # pickletools decode table.  Any name genops() yields that is NOT in here is a
@@ -154,7 +154,7 @@ def walk_and_optimize(H, wid, idx, state):
     mid-iteration, assert cursor stability, then optimize() + round-trip.
 
     All data here (graph, data bytes, generator instance, optimized bytes) is
-    fiber-local.  A failure is a runloom generator-frame / decode-table
+    fiber-local.  A failure is a stackweave generator-frame / decode-table
     corruption, not documented Python behavior."""
     graph = build_reuse_graph(wid, idx)
     try:
@@ -208,9 +208,9 @@ def walk_and_optimize(H, wid, idx, state):
         # PARK mid-iteration: the generator frame is now suspended, live,
         # holding the cursor, while a sibling drives its own genops on another
         # hub.  This is the hazard boundary.
-        runloom.yield_now()
+        stackweave.yield_now()
         if nops & 3 == 0:
-            runloom.sleep(0.0002)
+            stackweave.sleep(0.0002)
 
     # a well-formed pickle's opcode walk must END with STOP and consume it all.
     if not saw_stop:
@@ -356,6 +356,6 @@ if __name__ == "__main__":
                  "opcode names, then optimize()s and asserts "
                  "loads(optimized)==original AND len(optimized)<=len(data). A "
                  "non-monotone cursor, unknown opcode, non-round-tripping or "
-                 "grown optimize output, or SIGSEGV mid-walk is a runloom "
+                 "grown optimize output, or SIGSEGV mid-walk is a stackweave "
                  "suspended-generator-frame / shared-decode-table desync. "
                  "Single-owner throughout -- every observation is load-bearing")

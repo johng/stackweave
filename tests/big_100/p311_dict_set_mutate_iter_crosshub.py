@@ -22,7 +22,7 @@ spawns two goroutines synchronized so the mutation provably lands INSIDE the
 iterator's park window:
 
   * the iterator walks `dict.items()` (and a separate pass over the set),
-    yields once mid-walk via `runloom.yield_now()` with the iterator's internal
+    yields once mid-walk via `stackweave.yield_now()` with the iterator's internal
     index live, and on every element checks `key in UNIVERSE` and (for the dict)
     `value == f(key)`;
   * the mutator waits on a barrier the iterator trips just before it parks, then
@@ -51,7 +51,7 @@ localizes the corruption before the universe-membership assert even fires.
 import random
 
 import harness
-import runloom
+import stackweave
 
 # Finite sentinel UNIVERSE: a fixed, recognizable set of keys.  A key NOT in this
 # set yielded by an iterator is a corrupted/torn key -- a hard fault.  Big enough
@@ -127,7 +127,7 @@ def iterate_dict(H, wid, d, gate, counts, slot):
                 # iterator's internal index LIVE -- the mutation lands here.
                 parked = True
                 gate.done()
-                runloom.yield_now()
+                stackweave.yield_now()
         counts["clean"][slot] += 1
         return "clean"
     except RuntimeError:
@@ -153,7 +153,7 @@ def iterate_set(H, wid, s, gate, counts, slot):
             if not parked and seen >= 2:
                 parked = True
                 gate.done()
-                runloom.yield_now()
+                stackweave.yield_now()
         counts["clean"][slot] += 1
         return "clean"
     except RuntimeError:
@@ -202,9 +202,9 @@ def worker(H, wid, rng, state):
 
         # gate: the iterator trips it the instant before it parks; the mutator
         # waits on it, so the mutation provably lands inside the park window.
-        gate = runloom.WaitGroup()
+        gate = stackweave.WaitGroup()
         gate.add(1)
-        wg = runloom.WaitGroup()
+        wg = stackweave.WaitGroup()
         wg.add(2)
         mseed = rng.getrandbits(48)
 

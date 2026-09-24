@@ -1,22 +1,22 @@
 """run() misuse: sequential re-runs, concurrent run() from OS threads, nested run."""
 import sys, threading, traceback
-import runloom
+import stackweave
 
 mode = sys.argv[1]
 
 if mode == "seq":
     for i in range(5):
         out = []
-        runloom.run(1, lambda: out.append(1))
+        stackweave.run(1, lambda: out.append(1))
         assert out == [1], out
     for i in range(5):
         out = []
-        runloom.run(4, lambda: out.append(1))
+        stackweave.run(4, lambda: out.append(1))
         assert out == [1], out
     # alternate modes
     for i in range(4):
         out = []
-        runloom.run(1 if i % 2 else 4, lambda: out.append(1))
+        stackweave.run(1 if i % 2 else 4, lambda: out.append(1))
         assert out == [1], out
     print("sequential re-run OK")
 
@@ -27,7 +27,7 @@ elif mode == "threads1":
     def t(i):
         try:
             out = []
-            runloom.run(1, lambda: out.append(i))
+            stackweave.run(1, lambda: out.append(i))
             assert out == [i]
             oks.append(i)
         except Exception as e:
@@ -43,7 +43,7 @@ elif mode == "threadsN":
     oks = []
     def t(i):
         try:
-            runloom.run(2, lambda: None)
+            stackweave.run(2, lambda: None)
             oks.append(i)
         except Exception as e:
             errs.append((i, repr(e)))
@@ -59,9 +59,9 @@ elif mode == "nested1":
         out.append("inner")
     def outer():
         out.append("outer")
-        runloom.run(1, inner)
+        stackweave.run(1, inner)
         out.append("after")
-    runloom.run(1, outer)
+    stackweave.run(1, outer)
     print("nested1:", out)
 
 elif mode == "nestedN":
@@ -69,11 +69,11 @@ elif mode == "nestedN":
     res = []
     def outer():
         try:
-            runloom.run(4, lambda: None)
+            stackweave.run(4, lambda: None)
             res.append("no-raise")
         except RuntimeError as e:
             res.append("raised")
-    runloom.run(4, outer)
+    stackweave.run(4, outer)
     print("nestedN:", res)
 
 elif mode == "run1_in_hub":
@@ -81,9 +81,9 @@ elif mode == "run1_in_hub":
     res = []
     def outer():
         try:
-            runloom.run(1, lambda: res.append("inner-ran"))
+            stackweave.run(1, lambda: res.append("inner-ran"))
             res.append("returned")
         except Exception as e:
             res.append("raised:" + repr(e))
-    runloom.run(4, outer)
+    stackweave.run(4, outer)
     print("run1_in_hub:", res)

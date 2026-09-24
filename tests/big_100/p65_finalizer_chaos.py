@@ -13,7 +13,7 @@ import sys
 import threading
 
 import harness
-import runloom
+import stackweave
 
 
 class Noisy(object):
@@ -55,7 +55,7 @@ def worker(H, wid, rng, state):
         H.op(wid)
         H.task_done(wid)
         if rng.random() < 0.1:
-            runloom.yield_now()
+            stackweave.yield_now()
 
 
 def setup(H):

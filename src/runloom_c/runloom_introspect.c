@@ -183,16 +183,16 @@ void runloom_introspect_init(void)
     if (runloom_greg_inited) return;
     runloom_mutex_init(&runloom_greg_lock);
     runloom_greg_inited = 1;
-    env = getenv("RUNLOOM_INTROSPECT_TIME");
+    env = getenv("STACKWEAVE_INTROSPECT_TIME");
     if (env != NULL && env[0] && env[0] != '0')
         runloom_introspect_set_timestamps(1);
-    env = getenv("RUNLOOM_DEADLOCK");   /* off | warn | raise (default warn) */
+    env = getenv("STACKWEAVE_DEADLOCK");   /* off | warn | raise (default warn) */
     if (env != NULL && env[0]) {
         if (strcmp(env, "off") == 0 || env[0] == '0')      runloom_set_deadlock_mode(0);
         else if (strcmp(env, "raise") == 0 || env[0] == '2') runloom_set_deadlock_mode(2);
         else                                                 runloom_set_deadlock_mode(1);
     }
-    env = getenv("RUNLOOM_MAX_GOROUTINES");
+    env = getenv("STACKWEAVE_MAX_GOROUTINES");
     if (env != NULL && env[0]) {
         long n = atol(env);
         if (n > 0) runloom_set_max_fibers(n);
@@ -220,7 +220,7 @@ static int runloom_greg_off(void)
     static int v = -1;
     int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
     if (cur < 0) {
-        const char *e = getenv("RUNLOOM_GREG_OFF");
+        const char *e = getenv("STACKWEAVE_GREG_OFF");
         cur = (e != NULL && *e != '0' && *e != '\0') ? 1 : 0;
         __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
     }
@@ -508,7 +508,7 @@ void runloom_dump_fibers_fd(int fd)
     size_t i;
 
     if (!runloom_greg_inited) {
-        emit(fd, "[runloom] fiber dump: registry not initialised\n", 48);
+        emit(fd, "[stackweave] fiber dump: registry not initialised\n", 48);
         return;
     }
     for (i = 0; i < (size_t)RUNLOOM_GST__LAST; i++) counts[i] = 0;
@@ -518,7 +518,7 @@ void runloom_dump_fibers_fd(int fd)
         /* Contended -- almost certainly a spawn/teardown holding the lock
          * for a few instructions.  Do NOT fall back to any blocking lock
          * (this runs from a SIGQUIT handler); just report and bail. */
-        emit(fd, "[runloom] fiber dump: registry busy, retry\n", 44);
+        emit(fd, "[stackweave] fiber dump: registry busy, retry\n", 44);
         return;
     }
 
@@ -530,7 +530,7 @@ void runloom_dump_fibers_fd(int fd)
     }
 
     m = snprintf(buf, sizeof buf,
-        "\n=== runloom fiber dump: %ld live (default stack %zu KiB) ===\n",
+        "\n=== stackweave fiber dump: %ld live (default stack %zu KiB) ===\n",
         live, runloom_sched_get_default_stack_size() / 1024u);
     if (m > 0) emit(fd, buf, (size_t)m);
     for (i = 0; i < (size_t)RUNLOOM_GST__LAST; i++) {

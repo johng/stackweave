@@ -21,7 +21,7 @@ FROM="${5:-0}"; TO="${6:-999}"
 RES=/tmp/big100_100k_results.txt
 LOGD=/tmp/big100_100k_logs
 mkdir -p "$LOGD"; : > "$RES"
-export PYTHON_GIL=0 PYTHONPATH=src RUNLOOM_SYSMON_QUIET=1
+export PYTHON_GIL=0 PYTHONPATH=src STACKWEAVE_SYSMON_QUIET=1
 echo "big_100 @ funcs=$FUNCS hubs=$HUBS dur=${DUR}s tmo=${TMO}s (mac, sequential)" | tee -a "$RES"
 pass=0; total=0; bad=""
 for prog in big_100/p[0-9]*.py; do

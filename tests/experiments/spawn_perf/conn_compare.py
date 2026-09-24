@@ -113,7 +113,7 @@ def main():
             PY, os.path.join(SRV, "srv_runloom_cdef.py"), "--host", h, "--port", str(p), "--hubs", nc]},
         {"name": "go", "cmd": lambda h, p: [
             os.path.join(SRV, "srv_go"), "-host", h, "-port", str(p), "-gomaxprocs", nc]},
-        {"name": "runloom_c (py handler)", "cmd": lambda h, p: [
+        {"name": "stackweave_c (py handler)", "cmd": lambda h, p: [
             PY, os.path.join(SRV, "srv_runloom_c.py"), "--host", h, "--port", str(p), "--hubs", nc]},
     ]
     print("server-bound conn/s on cores %s (%d core(s)), client=%s, dialers=%d, payload=%dB\n"

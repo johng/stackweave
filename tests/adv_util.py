@@ -20,7 +20,7 @@ this module solves both:
 
 `raw_thread()` spawns a **real** OS thread captured from the unpatched
 `threading` module, so foreign-OS-thread tests keep a genuine non-fiber
-thread even after `runloom.monkey.patch()` has replaced `threading`.
+thread even after `stackweave.monkey.patch()` has replaced `threading`.
 """
 import faulthandler
 import os
@@ -50,7 +50,7 @@ _real_event = threading.Event
 
 
 def dump_cooperative_state(label=""):
-    """Dump the runloom COOPERATIVE state for a wedge / lost-wake post-mortem.
+    """Dump the stackweave COOPERATIVE state for a wedge / lost-wake post-mortem.
 
     faulthandler shows only the OS-thread (hub) stacks; it cannot show the
     PARKED FIBERS -- which is exactly what a lost-wake wedge looks like.  This
@@ -63,7 +63,7 @@ def dump_cooperative_state(label=""):
       * print_hubs    -- per-hub running_g / dwell / pending.
     Safe to call from a foreign OS thread while the scheduler is wedged.
     """
-    import runloom_c as _rc
+    import stackweave_c as _rc
     tag = " (" + label + ")" if label else ""
     sys.stderr.write("\n[wedge-capture] cooperative-state dump{0}:\n".format(tag))
     sys.stderr.flush()
@@ -77,14 +77,14 @@ def dump_cooperative_state(label=""):
     # scheduler appears in the fiber dump only as an absence.  Only meaningful
     # if the aio bridge is actually loaded -- importing it here otherwise would
     # be a surprising side effect mid-wedge.
-    _aio = sys.modules.get("runloom.aio.tasks")
+    _aio = sys.modules.get("stackweave.aio.tasks")
     if _aio is not None:
         try:
             _aio.print_tasks(file=sys.stderr)
         except Exception as e:                   # noqa: BLE001
             sys.stderr.write("[wedge-capture] task dump failed: {0!r}\n".format(e))
     try:
-        from runloom import inspect as _gi
+        from stackweave import inspect as _gi
         _gi.print_hubs(file=sys.stderr)
     except Exception as e:                    # noqa: BLE001
         sys.stderr.write("[wedge-capture] print_hubs failed: {0!r}\n".format(e))
@@ -119,14 +119,14 @@ def hang_guard(seconds, label="", capture=True):
     The only reliable watchdog for a hang that lives inside the C scheduler
     with the GIL off: faulthandler runs its timer on a dedicated thread that
     does not need the interpreter to be responsive.  With ``capture`` (default
-    on), also dump the runloom COOPERATIVE state (dump_cooperative_state) just
+    on), also dump the stackweave COOPERATIVE state (dump_cooperative_state) just
     before the faulthandler exit, so a lost-wake wedge shows which fiber parked
     on which fd -- not just the opaque OS-thread dump.
 
     Also forces UNRAISABLE exceptions to be reported the instant they happen.
-    A fiber whose body raises does not propagate anywhere -- runloom captures it
+    A fiber whose body raises does not propagate anywhere -- stackweave captures it
     into g->error and reports it through sys.unraisablehook (see
-    RUNLOOM_GOROUTINE_PANIC).  That report is the single most useful artifact
+    STACKWEAVE_GOROUTINE_PANIC).  That report is the single most useful artifact
     when a hang is caused by a fiber dying, because it names the line.  But
     pytest's `unraisableexception` plugin replaces the hook to COLLECT
     unraisables and re-raise them at test TEARDOWN -- and this guard exits via
@@ -332,7 +332,7 @@ def pollable_pipe():
     On Windows the readiness backend is iocp-afd, which can ONLY poll Winsock
     sockets -- a wait_fd on an os.pipe() read end fails (AFD has no IRP path for
     a non-socket HANDLE).  A loopback socket.socketpair() IS pollable by AFD and
-    is the same substitute monkey/_base.py + runloom.aio already use, so return
+    is the same substitute monkey/_base.py + stackweave.aio already use, so return
     its fds there.  The socket objects MUST stay referenced or Python closes the
     fds out from under the parked fiber, so the caller keeps `keepalive` alive.
 

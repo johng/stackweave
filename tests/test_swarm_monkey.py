@@ -1,4 +1,4 @@
-"""Adversarial QA swarm: runloom.monkey -- the global stdlib cooperativiser.
+"""Adversarial QA swarm: stackweave.monkey -- the global stdlib cooperativiser.
 
 monkey.patch() is process-global, so (like every existing monkey suite) this
 file patches ONCE at module top and the WHOLE FILE runs under the patch.  The
@@ -26,7 +26,7 @@ break under:
 THE HEADLINE is FOREIGN-OS-THREAD SAFETY (CLAUDE.md "Cooperative primitives must
 be FOREIGN-OS-THREAD-safe"): for each patched primitive, drive it from a genuine
 foreign OS thread (raw_thread / _thread.start_new_thread) WHILE fibers also
-use it under runloom.run(N), asserting no crash and correct behaviour.
+use it under stackweave.run(N), asserting no crash and correct behaviour.
 """
 import os
 import sys
@@ -41,7 +41,7 @@ import _thread as _real_thread_mod
 import pytest
 
 # ---- patch ONCE, at module top, before importing the patched stdlib names ----
-import runloom.monkey as monkey
+import stackweave.monkey as monkey
 monkey.patch()
 
 import threading          # patched
@@ -50,9 +50,9 @@ import socket             # patched
 import selectors          # patched (via select.poll/epoll factories)
 import select as _select_mod  # patched
 
-import runloom
-import runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave
+import stackweave_c as rc
+from stackweave.sync import WaitGroup
 from adv_util import (hang_guard, assert_faster_than, raw_thread,
                       needs_free_threading, free_tcp_port_pair)
 
@@ -83,14 +83,14 @@ def run_child(body, extra_env=None, timeout=60):
     stderr instead of taking down this test process.
     """
     src = ("import sys; sys.path.insert(0, %r)\n" % _SRC +
-           "import runloom, runloom_c\n"
-           "import runloom.monkey as monkey\n"
+           "import stackweave, stackweave_c\n"
+           "import stackweave.monkey as monkey\n"
            "monkey.patch()\n" +
            textwrap.dedent(body))
     env = dict(os.environ)
     env["PYTHON_GIL"] = "0"
     env["PYTHONPATH"] = _SRC
-    env.setdefault("RUNLOOM_GOROUTINE_PANIC", "silent")
+    env.setdefault("STACKWEAVE_GOROUTINE_PANIC", "silent")
     if extra_env:
         env.update(extra_env)
     p = subprocess.run([sys.executable, "-c", src],
@@ -119,7 +119,7 @@ def _run_mn(fn, n=4):
     box = {}
     def main():
         box["r"] = fn()
-    runloom.run(n, main)
+    stackweave.run(n, main)
     return box.get("r")
 
 
@@ -136,7 +136,7 @@ def test_patch_unknown_category_raises_typeerror():
 def test_patch_idempotent_and_keeps_cooperative_types():
     monkey.patch()
     monkey.patch(threading=True, queue=True)   # already-applied -> no-op
-    assert type(threading.Lock()).__module__.startswith("runloom")
+    assert type(threading.Lock()).__module__.startswith("stackweave")
     assert type(threading.Event()).__name__ == "CoEvent"
     assert type(threading.Condition()).__name__ == "CoCondition"
     assert type(threading.Semaphore()).__name__ == "CoSemaphore"
@@ -154,7 +154,7 @@ def test_getattr_resolves_section_internals_live():
 
 
 def test_fiber_wrapper_installed_marks_fiber_context():
-    # After patch(), runloom_c.fiber is wrapped so _in_fiber() is true inside.
+    # After patch(), stackweave_c.fiber is wrapped so _in_fiber() is true inside.
     box = {}
     def main():
         box["in_fiber"] = monkey._in_fiber()
@@ -170,7 +170,7 @@ def test_queue_uses_cooperative_condition_after_patch():
     # Queue builds its internal locks from threading at __init__; under patch
     # they must be the cooperative ones, else a blocking get() freezes the hub.
     assert type(q.not_empty).__name__ == "CoCondition"
-    assert type(q.mutex).__module__.startswith("runloom")
+    assert type(q.mutex).__module__.startswith("stackweave")
 
 
 # ==========================================================================
@@ -211,7 +211,7 @@ def test_lock_exact_count_foreign_plus_fibers_heavy():
         wg.wait()
 
     with hang_guard(90, "lock exact-count foreign+fibers heavy"):
-        runloom.run(4, main)
+        stackweave.run(4, main)
         deadline = time.monotonic() + 40
         while foreign_done[0] < FOREIGN_THREADS and time.monotonic() < deadline:
             time.sleep(0.005)
@@ -226,7 +226,7 @@ def test_lock_exact_count_foreign_plus_fibers_heavy():
 @mn_only
 def test_rlock_exact_count_foreign_plus_fibers():
     # RLock reentrancy + ownership identity differs between a fiber
-    # (runloom.current()) and a foreign thread (get_ident); both must serialize.
+    # (stackweave.current()) and a foreign thread (get_ident); both must serialize.
     rl = threading.RLock()
     counter = [0]
     GOR, GOR_ITERS = 24, 200
@@ -256,7 +256,7 @@ def test_rlock_exact_count_foreign_plus_fibers():
         wg.wait()
 
     with hang_guard(70, "rlock foreign+fibers"):
-        runloom.run(4, main)
+        stackweave.run(4, main)
         deadline = time.monotonic() + 30
         while not fdone[0] and time.monotonic() < deadline:
             time.sleep(0.005)
@@ -298,7 +298,7 @@ def test_semaphore_exact_count_foreign_plus_fibers():
         wg.wait()
 
     with hang_guard(70, "semaphore foreign+fibers"):
-        runloom.run(4, main)
+        stackweave.run(4, main)
         deadline = time.monotonic() + 30
         while not fdone[0] and time.monotonic() < deadline:
             time.sleep(0.005)
@@ -317,7 +317,7 @@ def test_semaphore_exact_count_foreign_plus_fibers():
 def test_foreign_thread_lock_no_scheduler_alloc_subprocess():
     rc_, out = run_child("""
         import threading, time, _thread
-        import runloom, runloom_c as rc
+        import stackweave, stackweave_c as rc
         lk = threading.Lock()
         cond = threading.Condition()
         counter = [0]
@@ -335,7 +335,7 @@ def test_foreign_thread_lock_no_scheduler_alloc_subprocess():
             _thread.start_new_thread(foreign, ())
 
         # Now also run fibers concurrently under M:N on the SAME lock.
-        from runloom.sync import WaitGroup
+        from stackweave.sync import WaitGroup
         def main():
             wg = WaitGroup(); wg.add(8)
             def w():
@@ -348,7 +348,7 @@ def test_foreign_thread_lock_no_scheduler_alloc_subprocess():
             for _ in range(8):
                 rc.mn_fiber(w)
             wg.wait()
-        runloom.run(4, main)
+        stackweave.run(4, main)
         dl = time.monotonic() + 20
         while done[0] < 6 and time.monotonic() < dl:
             time.sleep(0.005)
@@ -364,7 +364,7 @@ def test_foreign_condition_woken_by_fiber_notify_subprocess():
     # real OS blocking and be woken by a fiber's cross-thread notify_all.
     rc_, out = run_child("""
         import threading, time, _thread
-        import runloom, runloom_c as rc
+        import stackweave, stackweave_c as rc
         cv = threading.Condition()
         st = {"ready": False, "woke": 0}
         NW = 4
@@ -380,7 +380,7 @@ def test_foreign_condition_woken_by_fiber_notify_subprocess():
             with cv:
                 st["ready"] = True
                 cv.notify_all()
-        runloom.run(2, main)
+        stackweave.run(2, main)
         dl = time.monotonic() + 5
         while st["woke"] < NW and time.monotonic() < dl:
             time.sleep(0.01)
@@ -457,7 +457,7 @@ def test_event_fanin_mixed_foreign_and_fiber_waiters():
         wg.wait()
 
     with hang_guard(40, "event fan-in mixed"):
-        runloom.run(4, main)
+        stackweave.run(4, main)
         dl = time.monotonic() + 12
         while foreign_woke[0] < NF and time.monotonic() < dl:
             time.sleep(0.005)
@@ -526,10 +526,10 @@ def test_condition_timed_out_waiter_does_not_steal_later_notify():
         rc.fiber(timed_waiter)
         rc.sched_yield()
         # let the timed waiter actually time out
-        runloom.sleep(0.25)
+        stackweave.sleep(0.25)
         rc.fiber(live_waiter)
         rc.sched_yield()
-        runloom.sleep(0.05)
+        stackweave.sleep(0.05)
         with cv:
             cv.notify()     # must wake the LIVE waiter, not the dead one
     with hang_guard(20, "condition no-steal"):
@@ -568,7 +568,7 @@ def test_semaphore_limits_concurrency_exactly():
             live[0] += 1
             if live[0] > peak[0]:
                 peak[0] = live[0]
-            runloom.sleep(0.002)
+            stackweave.sleep(0.002)
             live[0] -= 1
         finally:
             sem.release()
@@ -611,7 +611,7 @@ def test_semaphore_cancel_all_unblocks_waiters_without_permit():
             rc.fiber(waiter)
         while parked[0] < N:
             rc.sched_yield()
-        runloom.sleep(0.02)
+        stackweave.sleep(0.02)
         sem.cancel_all()                # wake all WITHOUT a permit -> all False
     with hang_guard(20, "semaphore cancel_all"):
         rc.fiber(main); rc.run()
@@ -719,7 +719,7 @@ def test_simplequeue_foreign_producer_fiber_consumer():
         rc.mn_fiber(consumer)
         wg.wait()
     with hang_guard(40, "simplequeue foreign producer"):
-        runloom.run(4, main)
+        stackweave.run(4, main)
         dl = time.monotonic() + 10
         while not fdone[0] and time.monotonic() < dl:
             time.sleep(0.005)
@@ -739,11 +739,11 @@ def test_simplequeue_foreign_producer_fiber_consumer():
 _MP_CORPUS_SCRIPT = '''
 import sys
 sys.path.insert(0, {src!r})
-import runloom, runloom_c as rc, time
-import runloom.monkey as monkey
+import stackweave, stackweave_c as rc, time
+import stackweave.monkey as monkey
 monkey.patch()
 import multiprocessing as mp
-from runloom.sync import WaitGroup
+from stackweave.sync import WaitGroup
 
 def child(q, n):
     for i in range(n):
@@ -766,7 +766,7 @@ def run_it(start_method):
         p.start()
         rc.mn_fiber(consumer)
         wg.wait()
-    runloom.run(4, main)
+    stackweave.run(4, main)
     p.join(timeout=15)
     return len(box["got"])
 
@@ -786,7 +786,7 @@ def _mp_corpus_child(start_method):
         env = dict(os.environ)
         env["PYTHON_GIL"] = "0"
         env["PYTHONPATH"] = _SRC
-        env["RUNLOOM_GOROUTINE_PANIC"] = "silent"
+        env["STACKWEAVE_GOROUTINE_PANIC"] = "silent"
         p = subprocess.run([sys.executable, path, start_method],
                            capture_output=True, text=True, env=env, timeout=120)
         return p.returncode, (p.stdout + p.stderr)
@@ -810,7 +810,7 @@ def test_mp_queue_corpus_spawn():
 _FORKSERVER_BOOTSTRAP_SCRIPT = '''
 import sys, os
 sys.path.insert(0, {src!r})
-import runloom.monkey as monkey
+import stackweave.monkey as monkey
 monkey.patch()
 import multiprocessing as mp
 
@@ -835,7 +835,7 @@ def _run_forkserver_bootstrap(timeout):
         env = dict(os.environ)
         env["PYTHON_GIL"] = "0"
         env["PYTHONPATH"] = _SRC
-        env["RUNLOOM_GOROUTINE_PANIC"] = "silent"
+        env["STACKWEAVE_GOROUTINE_PANIC"] = "silent"
         try:
             p = subprocess.run([sys.executable, path],
                                capture_output=True, text=True, env=env,
@@ -854,7 +854,7 @@ def _run_forkserver_bootstrap(timeout):
 # REGRESSION (was finding #4): monkey.patch() + multiprocessing forkserver no
 # longer hangs at Process.start().  Root cause: _patched_open routed EVERY
 # pollable-fd open through pure-Python _pyio, even off a fiber -- so a forked
-# process with no runloom runtime (the forkserver child) wedged in the _pyio
+# process with no stackweave runtime (the forkserver child) wedged in the _pyio
 # buffered reader while os.fdopen(pipe_fd)-reading its pickled process spec.
 # _patched_open now uses the robust C io.open when not in a fiber (where _pyio
 # gives no benefit anyway); the in-fiber cooperative pipe-read path is unchanged.
@@ -1004,7 +1004,7 @@ def test_subprocess_wait_yields_to_sibling():
         def sibling():
             for _ in range(50):
                 out["sib"] += 1
-                runloom.sleep(0.005)
+                stackweave.sleep(0.005)
         rc.fiber(sibling)
         out["rc"] = p.wait()
     with hang_guard(30, "subprocess wait yields"):
@@ -1043,7 +1043,7 @@ def test_selectors_default_selector_read_ready():
         sel = selectors.DefaultSelector()
         sel.register(a, selectors.EVENT_READ)
         def writer():
-            runloom.sleep(0.05)
+            stackweave.sleep(0.05)
             b.send(b"ping")
         rc.fiber(writer)
         events = sel.select(timeout=5.0)
@@ -1094,7 +1094,7 @@ def test_select_two_fds_read_ready_cooperative():
         for s in (a, b, c, d):
             s.setblocking(False)
         def writer():
-            runloom.sleep(0.05)
+            stackweave.sleep(0.05)
             d.send(b"x")
         rc.fiber(writer)
         r, w, x = _select_mod.select([a, c], [], [], 5.0)
@@ -1150,9 +1150,9 @@ def _make_self_signed_cert():
 _SSL_HANDSHAKE_SCRIPT = '''
 import sys, os
 sys.path.insert(0, {src!r})
-import runloom.monkey as monkey
+import stackweave.monkey as monkey
 monkey.patch()
-import runloom, runloom_c as rc, socket, ssl
+import stackweave, stackweave_c as rc, socket, ssl
 from datetime import datetime, timedelta, timezone
 from cryptography import x509
 from cryptography.x509.oid import NameOID
@@ -1218,7 +1218,7 @@ def test_ssl_cooperative_handshake_over_socketpair():
         env = dict(os.environ)
         env["PYTHON_GIL"] = "0"
         env["PYTHONPATH"] = _SRC
-        env["RUNLOOM_GOROUTINE_PANIC"] = "silent"
+        env["STACKWEAVE_GOROUTINE_PANIC"] = "silent"
         with hang_guard(60, "ssl handshake subprocess"):
             p = subprocess.run([sys.executable, path], capture_output=True,
                                text=True, env=env, timeout=45)
@@ -1277,10 +1277,10 @@ def test_socket_echo_baseline():
 
 
 @pytest.mark.parametrize("site,spec", [
-    ("RUNLOOM_FAULT_FD_READ",  "once:%d" % errno.EIO),
-    ("RUNLOOM_FAULT_FD_WRITE", "once:%d" % errno.EIO),
-    ("RUNLOOM_FAULT_SPAWN_G",  "once:%d" % errno.ENOMEM),
-    ("RUNLOOM_FAULT_TCP_RECV", "once:%d" % errno.ECONNRESET),
+    ("STACKWEAVE_FAULT_FD_READ",  "once:%d" % errno.EIO),
+    ("STACKWEAVE_FAULT_FD_WRITE", "once:%d" % errno.EIO),
+    ("STACKWEAVE_FAULT_SPAWN_G",  "once:%d" % errno.ENOMEM),
+    ("STACKWEAVE_FAULT_TCP_RECV", "once:%d" % errno.ECONNRESET),
 ])
 def test_fault_injection_mid_monkey_workload_no_crash(site, spec):
     # Inject a single fault into the C I/O surface while a monkey socket + queue
@@ -1288,8 +1288,8 @@ def test_fault_injection_mid_monkey_workload_no_crash(site, spec):
     # Python OSError/RuntimeError is acceptable -- we only forbid a crash.
     rc_, out = run_child("""
         import socket, threading, queue, errno
-        import runloom, runloom_c as rc
-        from runloom.sync import WaitGroup
+        import stackweave, stackweave_c as rc
+        from stackweave.sync import WaitGroup
 
         def workload():
             lk = threading.Lock()
@@ -1351,7 +1351,7 @@ def test_fault_injection_always_backs_off_bounded():
     # should surface a bounded error and finish, not hang.
     rc_, out = run_child("""
         import os, threading, queue
-        import runloom, runloom_c as rc
+        import stackweave, stackweave_c as rc
         # use os.read on a pipe (cooperative) to hit FD_READ under always-fault
         def main():
             r, w = os.pipe()
@@ -1365,7 +1365,7 @@ def test_fault_injection_always_backs_off_bounded():
             os.close(r); os.close(w)
         rc.fiber(main); rc.run()
         print("DONE")
-    """, extra_env={"RUNLOOM_FAULT_FD_READ": "always:%d" % errno.EIO},
+    """, extra_env={"STACKWEAVE_FAULT_FD_READ": "always:%d" % errno.EIO},
        timeout=30)
     assert_no_signal_death(rc_, out, "fault-always-fd-read")
     assert "DONE" in out, out
@@ -1377,15 +1377,15 @@ def test_fault_injection_always_backs_off_bounded():
 # ==========================================================================
 @mn_only
 @pytest.mark.parametrize("env", [
-    {"RUNLOOM_SYSMON": "1", "RUNLOOM_SYSMON_QUIET": "1", "RUNLOOM_SYSMON_MS": "8"},
-    {"RUNLOOM_PREEMPT": "1", "RUNLOOM_PREEMPT_MS": "8"},
-    {"RUNLOOM_HANDOFF": "1", "RUNLOOM_HANDOFF_POOL": "2"},
+    {"STACKWEAVE_SYSMON": "1", "STACKWEAVE_SYSMON_QUIET": "1", "STACKWEAVE_SYSMON_MS": "8"},
+    {"STACKWEAVE_PREEMPT": "1", "STACKWEAVE_PREEMPT_MS": "8"},
+    {"STACKWEAVE_HANDOFF": "1", "STACKWEAVE_HANDOFF_POOL": "2"},
 ])
 def test_monkey_lock_workload_under_env_gated_mode(env):
     rc_, out = run_child("""
         import threading
-        import runloom, runloom_c as rc
-        from runloom.sync import WaitGroup
+        import stackweave, stackweave_c as rc
+        from stackweave.sync import WaitGroup
         lk = threading.Lock()
         counter = [0]
         N, ITERS = 24, 400
@@ -1405,7 +1405,7 @@ def test_monkey_lock_workload_under_env_gated_mode(env):
             for _ in range(N):
                 rc.mn_fiber(w)
             wg.wait()
-        runloom.run(4, main)
+        stackweave.run(4, main)
         assert counter[0] == N*ITERS, counter[0]
         print("OK", counter[0])
     """, extra_env=env, timeout=90)
@@ -1415,15 +1415,15 @@ def test_monkey_lock_workload_under_env_gated_mode(env):
 
 # ==========================================================================
 # 15. Known-crash flags GATED OFF must warn + run the default scheduler, never
-#     crash (we never set RUNLOOM_ALLOW_UNSAFE_MIGRATION).
+#     crash (we never set STACKWEAVE_ALLOW_UNSAFE_MIGRATION).
 # ==========================================================================
 @mn_only
-@pytest.mark.parametrize("flag", ["RUNLOOM_PER_G_TSTATE", "RUNLOOM_STEAL_WOKEN"])
+@pytest.mark.parametrize("flag", ["STACKWEAVE_PER_G_TSTATE", "STACKWEAVE_STEAL_WOKEN"])
 def test_unsafe_migration_flag_gated_off_warns_not_crash(flag):
     rc_, out = run_child("""
         import threading
-        import runloom, runloom_c as rc
-        from runloom.sync import WaitGroup
+        import stackweave, stackweave_c as rc
+        from stackweave.sync import WaitGroup
         lk = threading.Lock()
         counter = [0]
         def main():
@@ -1438,10 +1438,10 @@ def test_unsafe_migration_flag_gated_off_warns_not_crash(flag):
             for _ in range(8):
                 rc.mn_fiber(w)
             wg.wait()
-        runloom.run(4, main)
+        stackweave.run(4, main)
         assert counter[0] == 8*300, counter[0]
         print("OK", counter[0])
-    """, extra_env={flag: "1"}, timeout=60)   # NO RUNLOOM_ALLOW_UNSAFE_MIGRATION
+    """, extra_env={flag: "1"}, timeout=60)   # NO STACKWEAVE_ALLOW_UNSAFE_MIGRATION
     assert_no_signal_death(rc_, out, "gated-off-%s" % flag)
     assert "OK" in out, out
 
@@ -1462,7 +1462,7 @@ def test_heavy_hash_offload_yields_to_sibling():
         def sibling():
             for _ in range(40):
                 out["sib"] += 1
-                runloom.sleep(0.002)
+                stackweave.sleep(0.002)
         rc.fiber(sibling)
         out["digest"] = hashlib.sha256(big).hexdigest()
     with hang_guard(20, "heavy hash offload"):
@@ -1531,8 +1531,8 @@ import collections as _collections
 def test_foreign_semaphore_no_scheduler_alloc_subprocess():
     rc_, out = run_child("""
         import threading, time, _thread
-        import runloom, runloom_c as rc
-        from runloom.sync import WaitGroup
+        import stackweave, stackweave_c as rc
+        from stackweave.sync import WaitGroup
         sem = threading.Semaphore(1)      # a mutex
         counter = [0]
         done = [0]
@@ -1558,7 +1558,7 @@ def test_foreign_semaphore_no_scheduler_alloc_subprocess():
             for _ in range(8):
                 rc.mn_fiber(w)
             wg.wait()
-        runloom.run(4, main)
+        stackweave.run(4, main)
         dl = time.monotonic() + 20
         while sum(fslots) < NF and time.monotonic() < dl:
             time.sleep(0.005)
@@ -1576,8 +1576,8 @@ def test_foreign_simplequeue_no_scheduler_alloc_subprocess():
     # back to real OS blocking, never park a nonexistent fiber.
     rc_, out = run_child("""
         import queue, time, _thread
-        import runloom, runloom_c as rc
-        from runloom.sync import WaitGroup
+        import stackweave, stackweave_c as rc
+        from stackweave.sync import WaitGroup
         q = queue.SimpleQueue()
         N = 1200
         got_foreign = []
@@ -1613,7 +1613,7 @@ def test_foreign_simplequeue_no_scheduler_alloc_subprocess():
                     wg.done()
             rc.mn_fiber(consumer)
             wg.wait()
-        runloom.run(4, main)
+        stackweave.run(4, main)
         dl = time.monotonic() + 20
         while fdone[0] < 2 and time.monotonic() < dl:
             time.sleep(0.005)
@@ -1631,8 +1631,8 @@ def test_foreign_rlock_reentrant_no_scheduler_alloc_subprocess():
     # the same thread must be granted, and must serialize vs M:N fibers.
     rc_, out = run_child("""
         import threading, time, _thread
-        import runloom, runloom_c as rc
-        from runloom.sync import WaitGroup
+        import stackweave, stackweave_c as rc
+        from stackweave.sync import WaitGroup
         rl = threading.RLock()
         counter = [0]
         NF = 5
@@ -1659,7 +1659,7 @@ def test_foreign_rlock_reentrant_no_scheduler_alloc_subprocess():
             for _ in range(8):
                 rc.mn_fiber(w)
             wg.wait()
-        runloom.run(4, main)
+        stackweave.run(4, main)
         dl = time.monotonic() + 20
         while sum(fslots) < NF and time.monotonic() < dl:
             time.sleep(0.005)
@@ -1689,7 +1689,7 @@ def test_os_read_write_pipe_cooperative_integrity_and_overlap():
                 # one byte per chunk, paced so the reader must PARK between them
                 os.write(w, bytes([i % 256]))
                 progress["writer"] += 1
-                runloom.sleep(0.003)
+                stackweave.sleep(0.003)
             os.write(w, b"\xff")    # terminator distinct sentinel via length
             rc.netpoll_unregister(w)
             os.close(w)
@@ -1723,8 +1723,8 @@ def test_os_write_foreign_thread_os_read_fiber_subprocess():
     # foreign side must not crash and every byte must arrive in order.
     rc_, out = run_child("""
         import os, time, _thread
-        import runloom, runloom_c as rc
-        from runloom.sync import WaitGroup
+        import stackweave, stackweave_c as rc
+        from stackweave.sync import WaitGroup
         r, w = os.pipe()
         os.set_blocking(r, False); os.set_blocking(w, False)
         N = 200
@@ -1758,7 +1758,7 @@ def test_os_write_foreign_thread_os_read_fiber_subprocess():
                     wg.done()
             rc.mn_fiber(reader)
             wg.wait()
-        runloom.run(4, main)
+        stackweave.run(4, main)
         dl = time.monotonic() + 15
         while fdone[0] == 0 and time.monotonic() < dl:
             time.sleep(0.005)
@@ -1804,7 +1804,7 @@ def test_fcntl_flock_cooperative_mutual_exclusion():
                         overlaps[0] += 1
                     if inside[0] > peak[0]:
                         peak[0] = inside[0]
-                    runloom.sleep(0.005)
+                    stackweave.sleep(0.005)
                     inside[0] -= 1
                     fcntl.flock(fd, fcntl.LOCK_UN)
                 finally:
@@ -1849,18 +1849,18 @@ def test_fcntl_flock_yields_to_sibling_while_contended():
         def sibling():
             for _ in range(40):
                 out["sib"] += 1
-                runloom.sleep(0.003)
+                stackweave.sleep(0.003)
         rc.fiber(waiter)
         rc.fiber(sibling)
         # hold the lock a while so the waiter must park and the sibling must run
-        runloom.sleep(0.2)
+        stackweave.sleep(0.2)
         fcntl.flock(fd1, fcntl.LOCK_UN)
         os.close(fd1)
         # give the waiter time to acquire
         for _ in range(50):
             if waiter_got[0]:
                 break
-            runloom.sleep(0.005)
+            stackweave.sleep(0.005)
         out["waiter_got"] = waiter_got[0]
     with hang_guard(30, "fcntl flock yields"):
         rc.fiber(main); rc.run()
@@ -1885,7 +1885,7 @@ def test_udp_recvfrom_sendto_cooperative():
         srv.bind(("127.0.0.1", 0))
         port = srv.getsockname()[1]
         def sender():
-            runloom.sleep(0.04)
+            stackweave.sleep(0.04)
             cli = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             cli.setblocking(False)
             cli.sendto(b"datagram-payload", ("127.0.0.1", port))
@@ -1907,7 +1907,7 @@ def test_udp_recvfrom_sendto_cooperative():
 # recvfrom_into IGNORE the socket timeout -- unlike recv/recv_into/send/sendall/
 # connect/accept (which honor gettimeout() via the `t is not None` deadline
 # branch), the datagram + msg variants park on a bare `wait_fd(fd, READ)` with
-# NO deadline (src/runloom/monkey/sockets.py _patched_recvfrom etc.).  So a
+# NO deadline (src/stackweave/monkey/sockets.py _patched_recvfrom etc.).  So a
 # datagram socket with settimeout(0.2) that never receives a packet HANGS the
 # fiber FOREVER instead of raising socket.timeout.  Lost-deadline class.  Run in
 # a SUBPROCESS with a hard 6s timeout so the hang is bounded (it cannot wedge
@@ -1916,8 +1916,8 @@ def test_udp_recvfrom_sendto_cooperative():
 _UDP_TIMEOUT_PROBE = '''
 import sys
 sys.path.insert(0, {src!r})
-import runloom, runloom_c as rc, socket, time
-import runloom.monkey as monkey
+import stackweave, stackweave_c as rc, socket, time
+import stackweave.monkey as monkey
 monkey.patch()
 out = {{}}
 def main():
@@ -1950,7 +1950,7 @@ def test_udp_recvfrom_honors_socket_timeout_bounded():
             f.write(_UDP_TIMEOUT_PROBE.format(src=_SRC))
         env = dict(os.environ)
         env["PYTHON_GIL"] = "0"; env["PYTHONPATH"] = _SRC
-        env["RUNLOOM_GOROUTINE_PANIC"] = "silent"
+        env["STACKWEAVE_GOROUTINE_PANIC"] = "silent"
         hung = False
         try:
             p = subprocess.run([sys.executable, path], capture_output=True,
@@ -1989,7 +1989,7 @@ def test_sendmsg_recvmsg_scm_rights_fd_passing():
         os.write(pw, b"through-the-pipe")
         os.close(pw)
         def sender():
-            runloom.sleep(0.03)
+            stackweave.sleep(0.03)
             fds = array.array("i", [pr])
             a.sendmsg([b"M"], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, fds)])
         rc.fiber(sender)
@@ -2030,7 +2030,7 @@ def test_select_poll_object_read_ready_cooperative():
         po = _select_mod.poll()
         po.register(a.fileno(), _select_mod.POLLIN)
         def writer():
-            runloom.sleep(0.05)
+            stackweave.sleep(0.05)
             b.send(b"poke")
         rc.fiber(writer)
         events = po.poll(5000)             # ms; cooperative busy-poll
@@ -2083,7 +2083,7 @@ def test_signal_sigtimedwait_bounded_timeout():
         def sibling():
             for _ in range(20):
                 out["sib"] += 1
-                runloom.sleep(0.005)
+                stackweave.sleep(0.005)
         rc.fiber(sibling)
         with assert_faster_than(1.5, "sigtimedwait timeout"):
             out["r"] = _signal.sigtimedwait({_signal.SIGUSR1}, 0.25)
@@ -2168,7 +2168,7 @@ def test_futures_threadpool_map_preserves_order():
         with cf.ThreadPoolExecutor(max_workers=3) as ex:
             # cooperative work that yields so ordering can't be trivially serial
             def work(i):
-                runloom.sleep(0.002 * (5 - (i % 5)))
+                stackweave.sleep(0.002 * (5 - (i % 5)))
                 return i + 100
             out["mapped"] = list(ex.map(work, range(12)))
     with hang_guard(20, "futures map order"):
@@ -2185,7 +2185,7 @@ def test_futures_threadpool_max_workers_caps_concurrency():
             live[0] += 1
             if live[0] > peak[0]:
                 peak[0] = live[0]
-            runloom.sleep(0.01)
+            stackweave.sleep(0.01)
             live[0] -= 1
             return 1
         with cf.ThreadPoolExecutor(max_workers=2) as ex:
@@ -2237,7 +2237,7 @@ def test_getnameinfo_yields_to_sibling():
         def sibling():
             for _ in range(30):
                 out["sib"] += 1
-                runloom.sleep(0.002)
+                stackweave.sleep(0.002)
         rc.fiber(sibling)
         out["res"] = socket.getnameinfo(("127.0.0.1", 22),
                                         socket.NI_NUMERICHOST | socket.NI_NUMERICSERV)
@@ -2281,16 +2281,16 @@ def test_gethostbyaddr_loopback():
 def test_unpatch_selective_then_repatch_restores_cooperative_type():
     # threading is the most load-bearing category; reverse it, confirm the real
     # stdlib type returns, then re-patch and confirm the cooperative type.
-    assert type(threading.Lock()).__module__.startswith("runloom")
+    assert type(threading.Lock()).__module__.startswith("stackweave")
     monkey.unpatch(threading=True)
     try:
         # after unpatch, a fresh Lock is the real _thread.lock
         lk = threading.Lock()
-        assert not type(lk).__module__.startswith("runloom"), type(lk)
+        assert not type(lk).__module__.startswith("stackweave"), type(lk)
         assert "_thread" in type(lk).__module__ or type(lk).__name__ == "lock"
     finally:
         monkey.patch(threading=True)     # restore for the rest of the file
-    assert type(threading.Lock()).__module__.startswith("runloom")
+    assert type(threading.Lock()).__module__.startswith("stackweave")
     # and the cooperative type still works after the round trip
     lk2 = threading.Lock()
     lk2.acquire()
@@ -2319,7 +2319,7 @@ def test_condition_wait_for_predicate_satisfied_by_notify():
                 out["r"] = cv.wait_for(lambda: state["ready"], timeout=5.0)
         rc.fiber(waiter)
         rc.sched_yield()
-        runloom.sleep(0.05)
+        stackweave.sleep(0.05)
         with cv:
             state["ready"] = True
             cv.notify_all()
@@ -2381,12 +2381,12 @@ def test_condition_notify_n_exactly_n_mixed_foreign_fiber():
         dl = time.monotonic() + 8
         while parked[0] < NF + NG and time.monotonic() < dl:
             rc.sched_yield()
-            runloom.sleep(0.005)
+            stackweave.sleep(0.005)
         K = 4
         with cv:
             cv.notify(K)
         # let exactly-K propagate
-        runloom.sleep(0.3)
+        stackweave.sleep(0.3)
         woken_after_k = sum(woke)
         # now release the rest so foreign threads + remaining fibers finish
         with cv:
@@ -2464,11 +2464,11 @@ def test_bounded_semaphore_over_release_counts_pending_waiter():
         rc.fiber(waiter)
         while not parked[0]:
             rc.sched_yield()
-        runloom.sleep(0.02)
+        stackweave.sleep(0.02)
         # state: value 0, waiters 1, initial 2.
         # release(1): 0 + 1 + 1 == 2, NOT > 2 -> legal, hands waiter its permit.
         bs.release()
-        runloom.sleep(0.05)                # let the waiter wake + take the permit
+        stackweave.sleep(0.05)                # let the waiter wake + take the permit
         # now value 0, waiters 0; bring it back to the bound, then over-release.
         bs.release()                       # value 1
         bs.release()                       # value 2 == initial
@@ -2498,7 +2498,7 @@ def test_open_pollable_pipe_fd_buffered_read_is_cooperative():
         f = open(r, "rb", buffering=0)
         def feeder():
             for _ in range(5):
-                runloom.sleep(0.01)
+                stackweave.sleep(0.01)
                 out["sib"] += 1
             os.write(w, b"buffered-payload")
             os.close(w)
@@ -2529,8 +2529,8 @@ def test_open_pollable_pipe_fd_buffered_read_is_cooperative():
 def test_lock_timed_acquire_from_foreign_thread_bounded():
     rc_, out = run_child("""
         import threading, time, _thread
-        import runloom, runloom_c as rc
-        from runloom.sync import WaitGroup
+        import stackweave, stackweave_c as rc
+        from stackweave.sync import WaitGroup
         lk = threading.Lock()
         res = {}
         # A fiber grabs the lock and holds it a while; a foreign thread then
@@ -2544,7 +2544,7 @@ def test_lock_timed_acquire_from_foreign_thread_bounded():
                     lk.acquire()
                     held[0] = True
                     while not release_it[0]:
-                        runloom.sleep(0.005)
+                        stackweave.sleep(0.005)
                     lk.release()
                 finally:
                     wg.done()
@@ -2552,7 +2552,7 @@ def test_lock_timed_acquire_from_foreign_thread_bounded():
             # wait for the foreign thread to do its timed probe, then release
             dl = time.monotonic() + 5
             while not res.get('foreign_done') and time.monotonic() < dl:
-                runloom.sleep(0.005)
+                stackweave.sleep(0.005)
             release_it[0] = True
             wg.wait()
         def foreign():
@@ -2567,7 +2567,7 @@ def test_lock_timed_acquire_from_foreign_thread_bounded():
                 lk.release()
             res['foreign_done'] = True
         _thread.start_new_thread(foreign, ())
-        runloom.run(4, main)
+        stackweave.run(4, main)
         assert res.get('got') is False, res
         assert res['elapsed'] < 1.0, res          # bounded, not a hang
         print("OK", res['elapsed'])
@@ -2590,7 +2590,7 @@ def test_heavy_zlib_offload_roundtrip_and_yields():
         def sibling():
             for _ in range(30):
                 out["sib"] += 1
-                runloom.sleep(0.002)
+                stackweave.sleep(0.002)
         rc.fiber(sibling)
         comp = zlib.compress(big)
         out["comp_ok"] = (comp == expected)
@@ -2619,7 +2619,7 @@ def test_offload_runs_blocking_call_and_yields():
         def sibling():
             for _ in range(30):
                 out["sib"] += 1
-                runloom.sleep(0.003)
+                stackweave.sleep(0.003)
         rc.fiber(sibling)
         out["r"] = monkey.offload(blocking_work)
     with hang_guard(20, "offload yields"):

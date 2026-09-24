@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""Validate that @runloom.hot recovers per-core ctxswitch scaling vs a plain
+"""Validate that @stackweave.hot recovers per-core ctxswitch scaling vs a plain
 shared handler -- the user-facing API delivering the runloom_epoll_py_fiber.py --distinct
 result with no manual code-object juggling.  One mode per process, pinned,
 preempt off (the CPU-preempt watchdog is microbenchmark noise; see
 SCHEDULER_SCALING_FINDINGS.md):
 
-  taskset -c 16-59 env PYTHON_GIL=0 PYTHONPATH=src RUNLOOM_PREEMPT=0 RUNLOOM_SYSMON=0 \
+  taskset -c 16-59 env PYTHON_GIL=0 PYTHONPATH=src STACKWEAVE_PREEMPT=0 STACKWEAVE_SYSMON=0 \
       python3.13t benchmark/suite/speed/hot_validate.py --mode hot --hubs 44
 """
 import argparse
 import time
 
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
 
 def main():
@@ -24,7 +24,7 @@ def main():
     G = a.hubs * 16
     K = max(1, a.n // G)
     SW = G * K
-    SYC = runloom_c.sched_yield
+    SYC = stackweave_c.sched_yield
 
     # A realistic shared-closure handler: it CAPTURES the thing it calls per
     # round (here the yielder, standing in for a captured `config`/client).  One
@@ -37,16 +37,16 @@ def main():
         return worker
 
     if a.mode == "hot":
-        w = runloom.hot(make_worker(K, SYC))
+        w = stackweave.hot(make_worker(K, SYC))
     else:
         w = make_worker(K, SYC)
 
     def root():
         for _ in range(G):
-            runloom.fiber(w)
+            stackweave.fiber(w)
 
     t0 = time.perf_counter()
-    runloom.run(a.hubs, root)
+    stackweave.run(a.hubs, root)
     dt = time.perf_counter() - t0
     print("%-7s %2d hubs  %12.0f switches/s  %8.0f ns/switch"
           % (a.mode, a.hubs, SW / dt, dt * 1e9 / SW), flush=True)

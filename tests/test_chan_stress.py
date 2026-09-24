@@ -1,9 +1,9 @@
 """Channel torture tests, ported in spirit from Go's runtime/chan_test.go.
 
-runloom's ``Chan`` is a near-exact port of Go channels (buffered/unbuffered
+stackweave's ``Chan`` is a near-exact port of Go channels (buffered/unbuffered
 send/recv, close, range, select with send+recv cases), so Go's own channel
 torture suite maps almost 1:1 onto it.  These are the cases that go straight
-at runloom's worst bug class -- the M:N blocking-select + close() crash/loss arc
+at stackweave's worst bug class -- the M:N blocking-select + close() crash/loss arc
 (fixed in 2723164; see test_mn.test_select_close_conservation) -- plus
 cross-hub publication and concurrent close.
 
@@ -18,11 +18,11 @@ Go originals (golang/go, src/runtime/chan_test.go):
   TestChan, TestMultiConsumer, TestSelfSelect, TestSelectStress,
   TestChanSendBarrier, TestChanClose (concurrent), and the close/send race.
 
-NOTE on fairness: Go's select picks a uniformly-random ready case; runloom's
+NOTE on fairness: Go's select picks a uniformly-random ready case; stackweave's
 does not (it has no shuffle).  So the select test here asserts LIVENESS
 (every ready case is eventually serviced -- no case is permanently starved)
 and CONSERVATION, never Go's uniform distribution, which would be a false
-failure against runloom's deterministic select.
+failure against stackweave's deterministic select.
 """
 import os
 import subprocess
@@ -38,11 +38,11 @@ def run_mn(code, timeout=60):
     Returns (returncode, stdout, stderr); the snippet prints 'PASS' on ok."""
     preamble = (
         "import sys; sys.path.insert(0, %r)\n"
-        "import runloom_c\n" % os.path.join(REPO, "src")
+        "import stackweave_c\n" % os.path.join(REPO, "src")
     )
     env = dict(os.environ)
     env["PYTHON_GIL"] = "0"
-    env["RUNLOOM_GIL"] = "0"
+    env["STACKWEAVE_GIL"] = "0"
     try:
         p = subprocess.run(
             [sys.executable, "-c", preamble + code],
@@ -72,9 +72,9 @@ def test_chan_conservation_across_capacities():
     exactly once and the sum is conserved, regardless of cap or interleaving."""
     assert_pass(r"""
 def run_cap(cap, nprod, ncons, per):
-    work = runloom_c.Chan(cap)
-    done = runloom_c.Chan(nprod)
-    res  = runloom_c.Chan(ncons)
+    work = stackweave_c.Chan(cap)
+    done = stackweave_c.Chan(nprod)
+    res  = stackweave_c.Chan(ncons)
     def prod(pid):
         def r():
             for s in range(per):
@@ -90,21 +90,21 @@ def run_cap(cap, nprod, ncons, per):
         for v in work:
             c += 1; t += v
         res.send((c, t))
-    runloom_c.mn_init(4)
-    for _ in range(ncons): runloom_c.mn_fiber(cons)
-    for p in range(nprod): runloom_c.mn_fiber(prod(p))
-    runloom_c.mn_fiber(closer)
-    runloom_c.mn_run()
+    stackweave_c.mn_init(4)
+    for _ in range(ncons): stackweave_c.mn_fiber(cons)
+    for p in range(nprod): stackweave_c.mn_fiber(prod(p))
+    stackweave_c.mn_fiber(closer)
+    stackweave_c.mn_run()
     tc = tt = 0
     for _ in range(ncons):
         g = res.try_recv()
         if g is None: break
         (c, t), ok = g; tc += c; tt += t
-    runloom_c.mn_fini()
+    stackweave_c.mn_fini()
     exp_c = nprod * per
     exp_t = sum(pid*100000 + s for pid in range(nprod) for s in range(per))
     assert (tc, tt) == (exp_c, exp_t), (cap, tc, tt, exp_c, exp_t)
-    assert runloom_c._self_check(0) == 0
+    assert stackweave_c._self_check(0) == 0
 
 for cap in (0, 1, 2, 8, 64):
     run_cap(cap, nprod=6, ncons=5, per=40)
@@ -122,9 +122,9 @@ def test_multi_consumer_sum_conserved():
     produced.  Run repeatedly to shake out cross-hub handoff races."""
     assert_pass(r"""
 def once(nprod, ncons, per):
-    work = runloom_c.Chan(8)
-    done = runloom_c.Chan(nprod)
-    res  = runloom_c.Chan(ncons)
+    work = stackweave_c.Chan(8)
+    done = stackweave_c.Chan(nprod)
+    res  = stackweave_c.Chan(ncons)
     def prod(pid):
         def r():
             for s in range(per):
@@ -139,21 +139,21 @@ def once(nprod, ncons, per):
         for v in work:
             c += 1; t += v
         res.send((c, t))
-    runloom_c.mn_init(4)
-    for _ in range(ncons): runloom_c.mn_fiber(cons)
-    for p in range(nprod): runloom_c.mn_fiber(prod(p))
-    runloom_c.mn_fiber(closer)
-    runloom_c.mn_run()
+    stackweave_c.mn_init(4)
+    for _ in range(ncons): stackweave_c.mn_fiber(cons)
+    for p in range(nprod): stackweave_c.mn_fiber(prod(p))
+    stackweave_c.mn_fiber(closer)
+    stackweave_c.mn_run()
     tc = tt = 0
     for _ in range(ncons):
         g = res.try_recv()
         if g is None: break
         (c, t), ok = g; tc += c; tt += t
-    runloom_c.mn_fini()
+    stackweave_c.mn_fini()
     exp_c = nprod * per
     exp_t = sum((pid * 7 + s) % 9973 + 1 for pid in range(nprod) for s in range(per))
     assert (tc, tt) == (exp_c, exp_t), (tc, tt, exp_c, exp_t)
-    assert runloom_c._self_check(0) == 0
+    assert stackweave_c._self_check(0) == 0
 
 for _ in range(15):
     once(nprod=23, ncons=7, per=20)
@@ -171,30 +171,30 @@ def test_self_select_no_self_pairing():
     `select { case c<-id: ; case v:=<-c: }` on a SHARED channel.  For an
     UNBUFFERED channel a fiber's own select-send must rendezvous with the
     OTHER fiber's select-recv, never its own (v != id); progress must be
-    made for both cap 0 and cap 1.  (Probed: runloom holds this -- selfpair=0.)"""
+    made for both cap 0 and cap 1.  (Probed: stackweave holds this -- selfpair=0.)"""
     assert_pass(r"""
 def run_cap(cap, n):
-    c = runloom_c.Chan(cap)
-    done = runloom_c.Chan(2)
+    c = stackweave_c.Chan(cap)
+    done = stackweave_c.Chan(2)
     selfpair = [0]
     def mk(idv):
         def run():
             for _ in range(n):
-                idx, payload = runloom_c.select([("send", c, idv), ("recv", c)])
+                idx, payload = stackweave_c.select([("send", c, idv), ("recv", c)])
                 if idx == 1:
                     v, ok = payload
                     if cap == 0 and ok and v == idv:
                         selfpair[0] += 1
             done.send(1)
         return run
-    runloom_c.mn_init(4)
-    runloom_c.mn_fiber(mk(0)); runloom_c.mn_fiber(mk(1))
-    runloom_c.mn_run()
+    stackweave_c.mn_init(4)
+    stackweave_c.mn_fiber(mk(0)); stackweave_c.mn_fiber(mk(1))
+    stackweave_c.mn_run()
     a = done.try_recv(); b = done.try_recv()
-    runloom_c.mn_fini()
+    stackweave_c.mn_fini()
     assert a is not None and b is not None, "deadlock: a fiber never finished"
     assert selfpair[0] == 0, ("unbuffered self-select self-paired", cap, selfpair[0])
-    assert runloom_c._self_check(0) == 0
+    assert stackweave_c._self_check(0) == 0
 
 for _ in range(10):
     run_cap(0, 300)
@@ -220,10 +220,10 @@ def test_select_stress_send_and_recv():
 def once(it):
     nchan = 4
     caps = [0, 1, 8, 64]
-    chans = [runloom_c.Chan(caps[i]) for i in range(nchan)]
+    chans = [stackweave_c.Chan(caps[i]) for i in range(nchan)]
     nprod, ncons, per = 6, 5, 30
-    done = runloom_c.Chan(nprod)
-    res  = runloom_c.Chan(ncons)
+    done = stackweave_c.Chan(nprod)
+    res  = stackweave_c.Chan(ncons)
 
     def prod(pid):
         def r():
@@ -232,7 +232,7 @@ def once(it):
                 # push via select-SEND across whichever channel takes it first
                 targets = [("send", chans[(pid + s + k) % nchan], val)
                            for k in range(nchan)]
-                runloom_c.select(targets)
+                stackweave_c.select(targets)
             done.send(1)
         return r
 
@@ -245,28 +245,28 @@ def once(it):
         closed = [False] * nchan
         while not all(closed):
             live = [i for i in range(nchan) if not closed[i]]
-            idx, (v, ok) = runloom_c.select([("recv", chans[i]) for i in live])
+            idx, (v, ok) = stackweave_c.select([("recv", chans[i]) for i in live])
             if ok:
                 c += 1; t += v
             else:
                 closed[live[idx]] = True
         res.send((c, t))
 
-    runloom_c.mn_init(4)
-    for _ in range(ncons): runloom_c.mn_fiber(cons)
-    for p in range(nprod): runloom_c.mn_fiber(prod(p))
-    runloom_c.mn_fiber(closer)
-    runloom_c.mn_run()
+    stackweave_c.mn_init(4)
+    for _ in range(ncons): stackweave_c.mn_fiber(cons)
+    for p in range(nprod): stackweave_c.mn_fiber(prod(p))
+    stackweave_c.mn_fiber(closer)
+    stackweave_c.mn_run()
     tc = tt = 0
     for _ in range(ncons):
         g = res.try_recv()
         if g is None: break
         (c, t), ok = g; tc += c; tt += t
-    runloom_c.mn_fini()
+    stackweave_c.mn_fini()
     exp_c = nprod * per
     exp_t = sum(pid*100000 + s for pid in range(nprod) for s in range(per))
     assert (tc, tt) == (exp_c, exp_t), (it, tc, tt, exp_c, exp_t)
-    assert runloom_c._self_check(0) == 0
+    assert stackweave_c._self_check(0) == 0
 
 for it in range(12):
     once(it)
@@ -275,7 +275,7 @@ print("PASS")
 
 
 # ---------------------------------------------------------------------------
-# Select LIVENESS (runloom's deterministic-select analogue of Go's fairness
+# Select LIVENESS (stackweave's deterministic-select analogue of Go's fairness
 # test): when only one of several cases is ready, select must service THAT
 # case -- so over many rounds with the ready case alternating, EVERY case
 # fires.  No case is permanently starved.
@@ -287,28 +287,28 @@ def test_select_liveness_every_case_served():
     would never record a case-1 hit -> assertion fails."""
     assert_pass(r"""
 N = 4000
-a = runloom_c.Chan(); b = runloom_c.Chan()
-hits = runloom_c.Chan(1)
+a = stackweave_c.Chan(); b = stackweave_c.Chan()
+hits = stackweave_c.Chan(1)
 def selector():
     ca = cb = 0
     for _ in range(N):
-        idx, (v, ok) = runloom_c.select([("recv", a), ("recv", b)])
+        idx, (v, ok) = stackweave_c.select([("recv", a), ("recv", b)])
         if idx == 0: ca += 1
         else:        cb += 1
     hits.send((ca, cb))
 def feeder():
     for i in range(N):
         (a if (i & 1) == 0 else b).send(i)
-runloom_c.mn_init(2)
-runloom_c.mn_fiber(selector)
-runloom_c.mn_fiber(feeder)
-runloom_c.mn_run()
+stackweave_c.mn_init(2)
+stackweave_c.mn_fiber(selector)
+stackweave_c.mn_fiber(feeder)
+stackweave_c.mn_run()
 g = hits.try_recv()
-runloom_c.mn_fini()
+stackweave_c.mn_fini()
 (ca, cb), ok = g
 assert ca + cb == N, (ca, cb, N)
 assert ca > 0 and cb > 0, ("a case was starved", ca, cb)
-assert runloom_c._self_check(0) == 0
+assert stackweave_c._self_check(0) == 0
 print("PASS", ca, cb)
 """, timeout=30)
 
@@ -325,8 +325,8 @@ def test_send_barrier_cross_hub_publication():
     payloads -> any missing publication/visibility shows as a content mismatch."""
     assert_pass(r"""
 ITERS = 3000
-ch = runloom_c.Chan(0)          # unbuffered: direct cross-hub hand-off
-res = runloom_c.Chan(1)
+ch = stackweave_c.Chan(0)          # unbuffered: direct cross-hub hand-off
+res = stackweave_c.Chan(1)
 def sender():
     for i in range(ITERS):
         # fresh object every time, filled with an i-dependent pattern
@@ -344,16 +344,16 @@ def receiver():
             bad += 1
         n += 1
     res.send((n, bad))
-runloom_c.mn_init(4)
-runloom_c.mn_fiber(receiver)
-runloom_c.mn_fiber(sender)
-runloom_c.mn_run()
+stackweave_c.mn_init(4)
+stackweave_c.mn_fiber(receiver)
+stackweave_c.mn_fiber(sender)
+stackweave_c.mn_run()
 g = res.try_recv()
-runloom_c.mn_fini()
+stackweave_c.mn_fini()
 (n, bad), ok = g
 assert n == ITERS, (n, ITERS)
 assert bad == 0, ("torn/partial object seen across hubs", bad)
-assert runloom_c._self_check(0) == 0
+assert stackweave_c._self_check(0) == 0
 print("PASS", n)
 """, timeout=40)
 
@@ -369,30 +369,30 @@ def test_concurrent_close_wakes_all_receivers():
     close-wakes-all-parked-receivers path across hubs."""
     assert_pass(r"""
 def once(nrecv):
-    ch = runloom_c.Chan()        # unbuffered
-    res = runloom_c.Chan(nrecv)
+    ch = stackweave_c.Chan()        # unbuffered
+    res = stackweave_c.Chan(nrecv)
     def recv():
         v, ok = ch.recv()
         res.send((v, ok))
     def closer():
         # let receivers park first
         for _ in range(50):
-            runloom_c.sched_yield_classic()
+            stackweave_c.sched_yield_classic()
         ch.close()
-    runloom_c.mn_init(4)
-    for _ in range(nrecv): runloom_c.mn_fiber(recv)
-    runloom_c.mn_fiber(closer)
-    runloom_c.mn_run()
+    stackweave_c.mn_init(4)
+    for _ in range(nrecv): stackweave_c.mn_fiber(recv)
+    stackweave_c.mn_fiber(closer)
+    stackweave_c.mn_run()
     got = []
     for _ in range(nrecv):
         g = res.try_recv()
         if g is None: break
         (v, ok), _ = g
         got.append((v, ok))
-    runloom_c.mn_fini()
+    stackweave_c.mn_fini()
     assert len(got) == nrecv, ("not every receiver woke", len(got), nrecv)
     assert all(x == (None, False) for x in got), got[:5]
-    assert runloom_c._self_check(0) == 0
+    assert stackweave_c._self_check(0) == 0
 
 for _ in range(12):
     once(32)
@@ -415,8 +415,8 @@ def test_concurrent_close_send_no_loss_no_crash():
     assert_pass(r"""
 def experiment(it):
     nchan = 1 + it % 4
-    chans = [runloom_c.Chan([0, 1, 4][i % 3]) for i in range(nchan)]
-    res = runloom_c.Chan(8)
+    chans = [stackweave_c.Chan([0, 1, 4][i % 3]) for i in range(nchan)]
+    res = stackweave_c.Chan(8)
     ncons = 3 + it % 4
     def prod(pid):
         def r():
@@ -426,10 +426,10 @@ def experiment(it):
                 except ValueError:
                     pass   # send raced close: expected
                 if (s & 3) == 0:
-                    runloom_c.sched_yield_classic()
+                    stackweave_c.sched_yield_classic()
         return r
     def closer():
-        runloom_c.sched_yield_classic()
+        stackweave_c.sched_yield_classic()
         for ch in chans:
             ch.close()
     def cons():
@@ -450,22 +450,22 @@ def experiment(it):
                     got += 1
                 else:
                     closed[i] = True
-            runloom_c.sched_yield_classic()
+            stackweave_c.sched_yield_classic()
         res.send((got, violations))
-    runloom_c.mn_init(3)
-    for _ in range(ncons): runloom_c.mn_fiber(cons)
-    for p in range(3): runloom_c.mn_fiber(prod(p))
-    runloom_c.mn_fiber(closer)
-    runloom_c.mn_run()
+    stackweave_c.mn_init(3)
+    for _ in range(ncons): stackweave_c.mn_fiber(cons)
+    for p in range(3): stackweave_c.mn_fiber(prod(p))
+    stackweave_c.mn_fiber(closer)
+    stackweave_c.mn_run()
     tv = 0
     for _ in range(ncons):
         g = res.try_recv()
         if g is None: break
         (got, viol), _ = g
         tv += viol
-    runloom_c.mn_fini()
+    stackweave_c.mn_fini()
     assert tv == 0, ("post-close delivery", tv)
-    assert runloom_c._self_check(0) == 0
+    assert stackweave_c._self_check(0) == 0
 
 for it in range(40):
     experiment(it)

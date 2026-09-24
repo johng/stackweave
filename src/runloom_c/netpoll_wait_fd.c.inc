@@ -155,7 +155,7 @@ int runloom_netpoll_drain_parked(void)
 static int runloom_sigwake_dbg(void)
 {
     static int c = -1;
-    if (c < 0) { const char *e = getenv("RUNLOOM_DEBUG_SIGWAKE"); c = (e && *e && *e != '0'); }
+    if (c < 0) { const char *e = getenv("STACKWEAVE_DEBUG_SIGWAKE"); c = (e && *e && *e != '0'); }
     return c;
 }
 
@@ -195,7 +195,7 @@ static int runloom_sigwake_at_arm_nth(void)
     static int v = -1;
     int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
     if (cur < 0) {
-        const char *e = getenv("RUNLOOM_FAULT_SIGWAKE_AT_ARM");
+        const char *e = getenv("STACKWEAVE_FAULT_SIGWAKE_AT_ARM");
         cur = (e != NULL && e[0] != '\0') ? atoi(e) : 0;
         if (cur < 0) cur = 0;
         __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
@@ -443,9 +443,9 @@ int runloom_netpoll_wait_fd(int fd, int events, long long timeout_ns)
         if (!runloom_sim_conn_has_fd(fd)) {
             static int warned_unreg = 0;
             if (!__atomic_exchange_n(&warned_unreg, 1, __ATOMIC_RELAXED)) {
-                fprintf(stderr, "runloom mn-sim: wait_fd(%d) on an fd not in "
+                fprintf(stderr, "stackweave mn-sim: wait_fd(%d) on an fd not in "
                         "the sim conn registry (rc.sim_conn_register) -- real "
-                        "fds have no wake source under RUNLOOM_SIM_MN\n", fd);
+                        "fds have no wake source under STACKWEAVE_SIM_MN\n", fd);
             }
             errno = EPERM;
             return -1;
@@ -852,7 +852,7 @@ int runloom_netpoll_wait_fd(int fd, int events, long long timeout_ns)
          pool->by_fd[park->fd] == park)) {
 #ifdef RUNLOOM_PARKER_DEBUG
         fprintf(stderr,
-                "[runloom] wait_fd resumed with parker still linked: "
+                "[stackweave] wait_fd resumed with parker still linked: "
                 "parker=%p gen=%u fd=%d g=%p slot=%p next=%p nbf=%p pbf=%p "
                 "bucket=%p\n",
                 (void *)park, park->gen, park->fd, (void *)park->g,

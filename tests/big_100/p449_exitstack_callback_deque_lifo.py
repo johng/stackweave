@@ -104,7 +104,7 @@ sum even closes.
 import contextlib
 
 import harness
-import runloom
+import stackweave
 
 # Finite sentinel UNIVERSE of registration ordinals.  callback i writes TOKEN(i);
 # a token a drain ever observes that is not TOKEN of a registered ordinal is a
@@ -236,7 +236,7 @@ def drain_locked(stack, lock, yield_at, gate):
             if not tripped and drained >= yield_at:
                 tripped = True
                 gate.done()                 # release the gated sibling
-                runloom.yield_now()         # park with the drain loop-position live
+                stackweave.yield_now()         # park with the drain loop-position live
     finally:
         # If we exit before reaching yield_at (a short stack, or a failure), still
         # trip the gate so a sibling waiting on it never blocks forever (which
@@ -258,10 +258,10 @@ def run_control(H, wid, rng, slot, state):
     # written by two workers at once when funcs>SLOTS and manufacture a phantom
     # "double").  ran/order are owned solely by this round.
     ran = {}
-    ran_lock = runloom.sync.Lock()
-    order_lock = runloom.sync.Lock()        # private to this round
+    ran_lock = stackweave.sync.Lock()
+    order_lock = stackweave.sync.Lock()        # private to this round
     order = []
-    lock = runloom.sync.Lock()              # private per-stack write lock
+    lock = stackweave.sync.Lock()              # private per-stack write lock
 
     stack = contextlib.ExitStack()
     ordinals = register_n(stack, lock, N, ran, ran_lock, order, order_lock)
@@ -317,17 +317,17 @@ def run_append(H, wid, rng, slot, state):
     (the N originals PLUS whatever the sibling appended before the drain passed
     its slot) runs exactly once; none of the N originals is dropped or doubled."""
     ran = {}
-    ran_lock = runloom.sync.Lock()
-    order_lock = runloom.sync.Lock()
+    ran_lock = stackweave.sync.Lock()
+    order_lock = stackweave.sync.Lock()
     order = []
-    lock = runloom.sync.Lock()
+    lock = stackweave.sync.Lock()
 
     stack = contextlib.ExitStack()
     register_n(stack, lock, N, ran, ran_lock, order, order_lock)
 
-    gate = runloom.WaitGroup()
+    gate = stackweave.WaitGroup()
     gate.add(1)
-    wg = runloom.WaitGroup()
+    wg = stackweave.WaitGroup()
     wg.add(2)
     appended = [0]                          # ordinals the sibling actually appended
 
@@ -375,17 +375,17 @@ def run_popall(H, wid, rng, slot, state):
     new stack.  Across the two drains every registered callback must run EXACTLY
     once -- the splice must not drop, duplicate, or double-free a callback."""
     ran = {}
-    ran_lock = runloom.sync.Lock()
-    order_lock = runloom.sync.Lock()
+    ran_lock = stackweave.sync.Lock()
+    order_lock = stackweave.sync.Lock()
     order = []
-    lock = runloom.sync.Lock()
+    lock = stackweave.sync.Lock()
 
     stack = contextlib.ExitStack()
     register_n(stack, lock, N, ran, ran_lock, order, order_lock)
 
-    gate = runloom.WaitGroup()
+    gate = stackweave.WaitGroup()
     gate.add(1)
-    wg = runloom.WaitGroup()
+    wg = stackweave.WaitGroup()
     wg.add(2)
 
     def run_drain():
@@ -434,17 +434,17 @@ def run_sibpop(H, wid, rng, slot, state):
     deque's right end and invokes it.  Across both, every registered callback runs
     exactly once (the sibling's pop removes one unit the drain must NOT also pop)."""
     ran = {}
-    ran_lock = runloom.sync.Lock()
-    order_lock = runloom.sync.Lock()
+    ran_lock = stackweave.sync.Lock()
+    order_lock = stackweave.sync.Lock()
     order = []
-    lock = runloom.sync.Lock()
+    lock = stackweave.sync.Lock()
 
     stack = contextlib.ExitStack()
     register_n(stack, lock, N, ran, ran_lock, order, order_lock)
 
-    gate = runloom.WaitGroup()
+    gate = stackweave.WaitGroup()
     gate.add(1)
-    wg = runloom.WaitGroup()
+    wg = stackweave.WaitGroup()
     wg.add(2)
 
     def run_drain():

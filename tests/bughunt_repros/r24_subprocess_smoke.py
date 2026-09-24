@@ -1,6 +1,6 @@
 """Subprocess smoke: communicate, returncode, stdin round-trip, kill."""
 import sys, asyncio
-import runloom.aio as aio
+import stackweave.aio as aio
 
 async def main():
     p = await asyncio.create_subprocess_exec(

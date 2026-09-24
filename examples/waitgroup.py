@@ -11,7 +11,7 @@ Run:
 
 import os
 
-import runloom
+import stackweave
 
 # Free-threaded build: fan fibers across all cores (M:N scheduler).
 HUBS = os.cpu_count() or 4
@@ -20,7 +20,7 @@ class WaitGroup(object):
     """Minimal sync.WaitGroup built on a channel."""
 
     def __init__(self):
-        self.pending = runloom.Chan(1024)
+        self.pending = stackweave.Chan(1024)
         self.total = 0
 
     def add(self, n):
@@ -35,7 +35,7 @@ class WaitGroup(object):
 
 def task(wg, tid):
     try:
-        runloom.sleep(0.01 * (tid + 1))
+        stackweave.sleep(0.01 * (tid + 1))
         print("task {0} finished".format(tid))
     finally:
         wg.done()                         # always report, even on error
@@ -45,9 +45,9 @@ def main():
     num_tasks = 5
     wg.add(num_tasks)
     for tid in range(num_tasks):
-        runloom.fiber(task, wg, tid)
+        stackweave.fiber(task, wg, tid)
     wg.wait()
     print("all {0} tasks done".format(num_tasks))
 
 if __name__ == "__main__":
-    runloom.run(HUBS, main)
+    stackweave.run(HUBS, main)

@@ -60,7 +60,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (single-owner, exactly-once):
   gc.collect() did NOT collect its own just-orphaned cycle: free-threaded gc.collect()
   is a no-op while another thread's collection is in progress, so under a herd of
   collectors a cycle fires only LATER, on some other thread's sweep.  That is
-  DOCUMENTED gc timing, NOT a runloom bug -- a per-iteration "fired 0->1 after my
+  DOCUMENTED gc timing, NOT a stackweave bug -- a per-iteration "fired 0->1 after my
   gc.collect()" check there would be a FALSE-POSITIVE generator.  The synchronous-
   decref control (16 threads, 320000 registrations) fired 320000/320000 with 0 misses
   and 0 payload errors, so the decref path is the sound exactly-once oracle.  The
@@ -100,7 +100,7 @@ the exactly-once break before the conservation sum even closes.
 import weakref
 
 import harness
-import runloom
+import stackweave
 
 # The payload embeds wid in the high bits and a per-fiber generation counter in the
 # low bits, so a fire delivering a payload whose high bits != wid is a provable
@@ -145,7 +145,7 @@ def one_iteration(H, wid, gen, state):
     obj = Cell()
     weakref.finalize(obj, on_finalize, fired, last_payload, wid, payload)
     registered[wid] += 1
-    runloom.yield_now()                # siblings race the shared registry here
+    stackweave.yield_now()                # siblings race the shared registry here
     obj = None                         # drop the only strong ref -> fires now
 
     got = fired[wid]

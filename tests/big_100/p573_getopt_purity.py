@@ -8,7 +8,7 @@ exact list of (option, value) tuples in encounter order plus the trailing
 positional args.  A GetoptError (unknown option / missing required arg) is
 likewise a deterministic function of the same inputs.
 
-WHERE M:N COULD BREAK IT (the gap this program probes).  runloom runs tens of
+WHERE M:N COULD BREAK IT (the gap this program probes).  stackweave runs tens of
 thousands of goroutines across hubs>1 with the GIL off, migrating a fiber's frame
 between hubs across a cooperative yield.  If any part of the getopt call path
 (argument-list slicing, the `do_shorts` / `do_longs` recursion, the
@@ -36,7 +36,7 @@ SINGLE-OWNER, CLOSED-FORM oracle (load-bearing, fail-fast):
   yield (the error path is pure too).
   Everything -- argv, shortopts view, expected tuples -- is fiber-local and never
   shared, so a mismatch cannot be "documented shared-object races": it can only be
-  a runloom frame/scheduling corruption.  On a correct runtime the oracle PASSES
+  a stackweave frame/scheduling corruption.  On a correct runtime the oracle PASSES
   (program exits 0).
 
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber stranded mid-parse
@@ -57,7 +57,7 @@ GetoptError construction, all across cooperative yields + hub migration under M:
 import getopt
 
 import harness
-import runloom
+import stackweave
 
 # Short-option spec: 'a' and 'b' take an argument, 'c' is a flag.
 SHORTOPTS = "a:b:c"
@@ -147,9 +147,9 @@ def check_valid(H, wid, rng, use_gnu, state):
         return
 
     # YIELD: allow siblings to run and the frame to migrate hubs.
-    runloom.yield_now()
+    stackweave.yield_now()
     if wid & 1:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
 
     # PURITY: an identical call must return an identical result after the yield.
     opts2, args2 = parse(argv, SHORTOPTS, LONGOPTS)
@@ -190,7 +190,7 @@ def check_error(H, wid, rng, state):
         msg1 = str(e)
         opt1 = e.opt
 
-    runloom.yield_now()
+    stackweave.yield_now()
 
     try:
         getopt.getopt(argv, SHORTOPTS, LONGOPTS)
@@ -274,4 +274,4 @@ if __name__ == "__main__":
                  "times and be bit-identical across the yield (an ERROR sub-case "
                  "asserts GetoptError is likewise stable).  A result that mismatches "
                  "the expected, changes across the yield, or an error that "
-                 "appears/vanishes is a runloom frame/scheduling corruption")
+                 "appears/vanishes is a stackweave frame/scheduling corruption")

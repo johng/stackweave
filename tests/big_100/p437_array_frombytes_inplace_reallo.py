@@ -80,7 +80,7 @@ import array
 import struct
 
 import harness
-import runloom
+import stackweave
 
 
 # Typecode 'I' = unsigned 32-bit; itemsize 4.  A multi-byte item is REQUIRED for
@@ -470,13 +470,13 @@ def worker(H, wid, rng, state):
         #   gate_parked    viewer -> churner: view is now live, go attempt resizes.
         #   gate_churned   churner -> viewer: blocked-resize attempts done, release.
         #   gate_released  viewer -> churner: view dropped (ob_exports==0), SUCCESS.
-        gate_parked = runloom.WaitGroup()
+        gate_parked = stackweave.WaitGroup()
         gate_parked.add(1)
-        gate_churned = runloom.WaitGroup()
+        gate_churned = stackweave.WaitGroup()
         gate_churned.add(1)
-        gate_released = runloom.WaitGroup()
+        gate_released = stackweave.WaitGroup()
         gate_released.add(1)
-        wg = runloom.WaitGroup()
+        wg = stackweave.WaitGroup()
         wg.add(2)
 
         def run_viewer(arr=arr, gate_parked=gate_parked,

@@ -23,7 +23,7 @@ free-threading audit).  If a lookup on the shared dict races a hub migration and
 returns a half-published bucket, or if the shared immutable `str` object's cached
 fields (hash, length, char buffer) are observed torn across a yield while a sibling
 touches the same object on another hub, a fiber would see a value that differs from
-the golden content.  runloom parks the fiber across `yield_now`/`sleep` and can
+the golden content.  stackweave parks the fiber across `yield_now`/`sleep` and can
 resume it on a DIFFERENT hub, so the two halves of each check (before/after the
 yield) are the read-before-migration and read-after-migration of the same shared
 object.
@@ -35,7 +35,7 @@ dicts.  A fiber then, for its fiber-local key:
 
   - reads s = D[key] and recomputes crc32 over its ACTUAL bytes (a real read of the
     whole char buffer, so a torn char is caught, not short-circuited by identity);
-  - YIELDs (yield_now / tiny sleep) -- runloom may migrate it to another hub here;
+  - YIELDs (yield_now / tiny sleep) -- stackweave may migrate it to another hub here;
   - re-reads s2 = D[key] and asserts: same object identity as the golden snapshot
     (a read-only dict must hand back the one interned value object), crc32 stable
     across the yield AND equal to the golden crc, byte length equal to golden.
@@ -44,7 +44,7 @@ This is a PURITY law: the recomputed checksum must be bit-identical across the
 yield and match the closed-form golden captured before any fiber ran.  Verified
 against plain threads (8 OS threads hammering the same two dicts, GIL on AND off):
 100% of lookups return the identical object with identical crc -- 0 deviations.
-Under a correct runloom it must also hold, so the oracle PASSES (exit 0) when there
+Under a correct stackweave it must also hold, so the oracle PASSES (exit 0) when there
 is no bug.
 
 The dicts are shared and read-only, so there is NO shared-mutable hazard to
@@ -77,7 +77,7 @@ CPU/stdlib-only; no fds, no subprocess -- runs at full --funcs.
 import zlib
 
 import harness
-import runloom
+import stackweave
 import pydoc_data.topics
 import pydoc_data.module_docs
 
@@ -151,11 +151,11 @@ def purity_check(H, wid, idx, state):
     before_len = len(s)
     before_id = id(s)
 
-    # YIELD: runloom may park + resume this fiber on a DIFFERENT hub here while
+    # YIELD: stackweave may park + resume this fiber on a DIFFERENT hub here while
     # siblings hammer the same shared dict/strings on other hubs.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 3 == 0:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
 
     # Re-read and re-check against the golden import snapshot + the pre-yield read.
     s2 = D[key]

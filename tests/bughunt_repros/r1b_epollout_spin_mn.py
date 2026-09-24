@@ -1,4 +1,4 @@
-"""R1b: same as r1 but under the M:N scheduler (runloom.run), where idle hubs
+"""R1b: same as r1 but under the M:N scheduler (stackweave.run), where idle hubs
 should block in epoll_wait.  Compare idle-window CPU with vs without a prior
 WRITE park."""
 import os
@@ -6,8 +6,8 @@ import socket
 import sys
 import time
 
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 
 TRIGGER_WRITE_PARK = (len(sys.argv) > 1 and sys.argv[1] == "park")
 
@@ -34,14 +34,14 @@ def main():
     lst = rc.TCPConn.listen("127.0.0.1", 0)
     port = _port(lst)
     state = {}
-    from runloom.sync import WaitGroup
+    from stackweave.sync import WaitGroup
     wg = WaitGroup(); wg.add(2)
 
     def server():
         try:
             conn = lst.accept()
             if TRIGGER_WRITE_PARK:
-                runloom.sleep(0.5)
+                stackweave.sleep(0.5)
                 total = 0
                 while total < state["n"]:
                     b = conn.recv(65536)
@@ -64,7 +64,7 @@ def main():
                 state["n"] = len(payload)
                 c.send_all(payload)
             t0 = time.monotonic(); c0 = cpu_seconds()
-            runloom.sleep(2.0)
+            stackweave.sleep(2.0)
             t1 = time.monotonic(); c1 = cpu_seconds()
             result["wall"] = t1 - t0
             result["cpu"] = c1 - c0
@@ -79,6 +79,6 @@ def main():
     wg.wait()
 
 
-runloom.run(2, main)
+stackweave.run(2, main)
 print("mode=%s idle window: wall=%.2fs cpu=%.2fs" %
       ("park" if TRIGGER_WRITE_PARK else "no-park", result["wall"], result["cpu"]))

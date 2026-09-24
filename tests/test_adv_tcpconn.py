@@ -1,4 +1,4 @@
-"""Adversarial QA: the C-level TCPConn (runloom_c.TCPConn).
+"""Adversarial QA: the C-level TCPConn (stackweave_c.TCPConn).
 
 A thin cooperative-I/O socket wrapper: TCPConn.listen / .connect (classmethods),
 .accept (-> a conn, NO addr tuple), .recv / .recv_into / .send / .send_all /
@@ -12,8 +12,8 @@ import sys
 
 import pytest
 
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 from adv_util import hang_guard, needs_free_threading
 
 FT = needs_free_threading()
@@ -150,7 +150,7 @@ def test_tcpconn_many_concurrent_connections():
     N = 40
     ok = bytearray(N)
     def main():
-        from runloom.sync import WaitGroup
+        from stackweave.sync import WaitGroup
         lst = rc.TCPConn.listen("127.0.0.1", 0)
         port = _listener_port(lst)
         wg = WaitGroup(); wg.add(N)
@@ -190,7 +190,7 @@ def test_tcpconn_echo_under_mn():
     N = 60
     ok = bytearray(N)
     def main():
-        from runloom.sync import WaitGroup
+        from stackweave.sync import WaitGroup
         lst = rc.TCPConn.listen("127.0.0.1", 0)
         port = _listener_port(lst)
         wg = WaitGroup(); wg.add(N)
@@ -217,7 +217,7 @@ def test_tcpconn_echo_under_mn():
         wg.wait()
         lst.close()
     with hang_guard(60, "tcpconn M:N"):
-        runloom.run(4, main)
+        stackweave.run(4, main)
     assert sum(ok) == N, "%d/%d M:N TCPConn echoes ok" % (sum(ok), N)
 
 
@@ -237,7 +237,7 @@ def test_tcpconn_echo_under_mn():
 _IOU_CLOSE_CANCEL = r'''
 import sys, os, socket
 sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 FLAGS = socket.MSG_WAITALL          # non-zero flags -> single-shot IORING_OP_RECV
 out = {}
 def main():
@@ -269,7 +269,7 @@ sys.stdout.write("HUNG\n"); sys.stdout.flush(); os._exit(2)
 def test_tcpconn_iouring_close_cancels_parked_single_shot_recv():
     import subprocess
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    env = dict(os.environ, RUNLOOM_TCPCONN_IOURING="1",
+    env = dict(os.environ, STACKWEAVE_TCPCONN_IOURING="1",
                PYTHON_GIL="0", PYTHONPATH="src")
     # -s KILL bounds a regression (a stuck op) so the suite never hangs; on a
     # working build the child exits in well under a second.

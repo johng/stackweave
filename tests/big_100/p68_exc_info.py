@@ -10,7 +10,7 @@ Stresses: per-goroutine exception-state snapshot/restore.
 import sys
 
 import harness
-import runloom
+import stackweave
 
 
 class Outer(Exception):
@@ -27,24 +27,24 @@ def worker(H, wid, rng, state):
         try:
             raise Outer(tag)
         except Outer:
-            runloom.yield_now()
+            stackweave.yield_now()
             cur = sys.exc_info()[1]
             if not H.check(isinstance(cur, Outer) and cur.args[0] == tag,
                            "exc_info wrong in outer wid={0}: {1!r}".format(
                                wid, cur)):
                 return
-            runloom.sleep(0.0003)
+            stackweave.sleep(0.0003)
             try:
                 raise Inner(tag)
             except Inner:
-                runloom.yield_now()
+                stackweave.yield_now()
                 cur = sys.exc_info()[1]
                 if not H.check(isinstance(cur, Inner) and cur.args[0] == tag,
                                "exc_info wrong in inner wid={0}: {1!r}".format(
                                    wid, cur)):
                     return
             # Back in the outer handler: exc_info must restore to Outer.
-            runloom.yield_now()
+            stackweave.yield_now()
             cur = sys.exc_info()[1]
             if not H.check(isinstance(cur, Outer) and cur.args[0] == tag,
                            "exc_info not restored to outer wid={0}: {1!r}".format(

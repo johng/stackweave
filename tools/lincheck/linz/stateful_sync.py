@@ -1,4 +1,4 @@
-"""Stateful (model-based) Hypothesis testing of runloom's sync primitives.
+"""Stateful (model-based) Hypothesis testing of stackweave's sync primitives.
 
 The companion to tools/lincheck/stateful_chan.py (which covers the channel): here
 Hypothesis generates random op sequences over a Lock and a weighted Semaphore and
@@ -30,7 +30,7 @@ import pytest
 # does `pip install -q hypothesis 2>/dev/null` and carries on when that fails.
 # A hard top-level import here turned that tolerated absence into a collection
 # ERROR -- which is how the first scheduled CI run went red on ubuntu/3.13.13
-# with `ModuleNotFoundError: No module named 'hypothesis'` while every runloom
+# with `ModuleNotFoundError: No module named 'hypothesis'` while every stackweave
 # test passed.  Skip the module instead, so "not installed" means "not run"
 # rather than "failed".
 pytest.importorskip("hypothesis", reason="hypothesis is optional (best-effort install)")
@@ -39,15 +39,15 @@ from hypothesis import HealthCheck, settings
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, invariant, precondition, rule
 
-import runloom_c
-from runloom import sync as rsync
+import stackweave_c
+from stackweave import sync as rsync
 
 
 def go1(fn):
     """Run one short, non-blocking goroutine to completion, return its value."""
     box = []
-    runloom_c.fiber(lambda: box.append(fn()))
-    runloom_c.run()
+    stackweave_c.fiber(lambda: box.append(fn()))
+    stackweave_c.run()
     return box[0]
 
 
@@ -67,7 +67,7 @@ def raised(fn, exc):
 class LockStateMachine(RuleBasedStateMachine):
     def __init__(self):
         super(LockStateMachine, self).__init__()
-        self.lock = rsync.Lock()          # == runloom.monkey.CoLock, non-reentrant
+        self.lock = rsync.Lock()          # == stackweave.monkey.CoLock, non-reentrant
         self.held = False
 
     @rule()
@@ -106,7 +106,7 @@ class LockStateMachine(RuleBasedStateMachine):
     def locked_matches_model(self):
         assert self.lock.locked() == self.held, \
             "locked()={0} but model held={1}".format(self.lock.locked(), self.held)
-        assert runloom_c._self_check(0) == 0, "self_check failed"
+        assert stackweave_c._self_check(0) == 0, "self_check failed"
 
 
 # ------------------------------------------------------------------- Semaphore
@@ -153,7 +153,7 @@ class SemaphoreStateMachine(RuleBasedStateMachine):
     @invariant()
     def within_capacity(self):
         assert 0 <= self.free <= CAP, "free={0} out of [0,{1}]".format(self.free, CAP)
-        assert runloom_c._self_check(0) == 0, "self_check failed"
+        assert stackweave_c._self_check(0) == 0, "self_check failed"
 
 
 STATEFUL_SETTINGS = settings(

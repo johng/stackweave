@@ -11,7 +11,7 @@ import time
 sys.path.insert(0, "src")
 sys.path.insert(0, "tools/introspect")
 
-import runloom_c
+import stackweave_c
 import liveness
 
 
@@ -108,7 +108,7 @@ def test_no_false_positive_on_healthy_run():
     violations = []
 
     def body():
-        ch = runloom_c.Chan(1)
+        ch = stackweave_c.Chan(1)
         state = {"n": 0, "stop": False}
 
         def producer():
@@ -128,18 +128,18 @@ def test_no_false_positive_on_healthy_run():
                 b = liveness.deadlock_blame(snap)
                 if b is not None:
                     violations.append(b)
-                runloom_c.sched_yield()
+                stackweave_c.sched_yield()
 
-        runloom_c.fiber(producer)
-        runloom_c.fiber(consumer)
-        runloom_c.fiber(monitor)
+        stackweave_c.fiber(producer)
+        stackweave_c.fiber(consumer)
+        stackweave_c.fiber(monitor)
         # let producer finish, then close so consumer exits cleanly
         while not state["stop"]:
-            runloom_c.sched_yield()
+            stackweave_c.sched_yield()
         ch.close()
 
-    runloom_c.fiber(body)
-    runloom_c.run()
+    stackweave_c.fiber(body)
+    stackweave_c.run()
     assert not violations, "false-positive deadlock verdict on a healthy run: %r" % violations[:2]
 
 

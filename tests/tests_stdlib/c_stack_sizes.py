@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Catalog every CPython stdlib C function and its C-stack FRAME size.
 
-Why: a runloom goroutine runs on a small swapped C stack; a single C function
+Why: a stackweave goroutine runs on a small swapped C stack; a single C function
 whose prologue frame is bigger than that overflows the guard page -> SIGSEGV
 (BUG-001's "large C call" face -- e.g. select_select_impl's ~49 KB FD_SETSIZE
 arrays).  This enumerates the danger surface so the fat single frames are known

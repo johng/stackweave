@@ -1,4 +1,4 @@
-"""Adversarial coverage suite for four runloom scheduler fragments:
+"""Adversarial coverage suite for four stackweave scheduler fragments:
 
   * src/runloom_c/runloom_sched_preempt.c.inc   -- the time-sliced preemption
     timer thread (runloom_preempt_main / runloom_preempt_yield_cb) + init/fini.
@@ -6,7 +6,7 @@
     runloom_g_entry, the g try_incref/decref refcount machine, cal_record.
   * src/runloom_c/runloom_sched_pystate.c.inc    -- the per-fiber CPython state
     snap/load dance: exception-in-flight save/restore, the immortal-context
-    fast path, and the RUNLOOM_DBG_EXCSTATE excobj validator.
+    fast path, and the STACKWEAVE_DBG_EXCSTATE excobj validator.
   * src/runloom_c/runloom_sched_parkwake.c.inc   -- the Dekker park/wake
     handshake (runloom_park_generic / _timed / runloom_sched_park_safe),
     the timer-heap drain + teardown sweep, sched_sleep_real, run_ready.
@@ -21,14 +21,14 @@ strand -> no hang), while the tight cross-thread contention races the abort
 branch.  The oracle is "every park completed and the workload exited cleanly"
 -- a lost wake would hang (caught by hang_guard), a UAF would crash.
 
-Env-gated regions (RUNLOOM_DBG_EXCSTATE excobj validator; RUNLOOM_NO_CTX_COPY
+Env-gated regions (STACKWEAVE_DBG_EXCSTATE excobj validator; STACKWEAVE_NO_CTX_COPY
 immortal-context snap fast path; the multi-hub calibration-freeze race) run in
 SUBPROCESSES that exit cleanly so gcov flushes their counters; a
 TimeoutExpired is treated as box contention (skip), not a bug.
 
 UNREACHABLE-from-a-test lines are NOT faked -- they are catalogued in the
-structured report's exclusions[]: the per-g-tstate teardown (RUNLOOM_PER_G_TSTATE
-is GATED OFF behind RUNLOOM_ALLOW_UNSAFE_MIGRATION, which the rules forbid),
+structured report's exclusions[]: the per-g-tstate teardown (STACKWEAVE_PER_G_TSTATE
+is GATED OFF behind STACKWEAVE_ALLOW_UNSAFE_MIGRATION, which the rules forbid),
 the OOM-cleanup branches with no fault hook, the Go-style abort()-on-panic and
 the corrupt-excobj abort() guard (crash-only / defensive), the thread-create-
 fail branch (no spawn fault hook reaches it), and the cross-thread
@@ -46,8 +46,8 @@ import pytest
 sys.path.insert(0, os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 from adv_util import needs_free_threading, hang_guard
 
 FT = needs_free_threading()
@@ -85,8 +85,8 @@ def _spawn(code, env_extra=None, timeout=240):
 # ==========================================================================
 _PREEMPT = r'''
 import sys, time; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave, stackweave_c as rc
+from stackweave.sync import WaitGroup
 rc.preempt_init(2000)          # 2ms quantum -> the timer fires many times
 def main():
     wg = WaitGroup(); wg.add(2)
@@ -101,7 +101,7 @@ def main():
     rc.mn_fiber(lambda: hog(1))
     rc.mn_fiber(lambda: hog(2))
     wg.wait()
-runloom.run(2, main)
+stackweave.run(2, main)
 rc.preempt_fini()
 sys.stdout.write("PREEMPT_OK\n")
 '''
@@ -120,7 +120,7 @@ def test_preempt_timer_thread_posts_and_yields_subprocess():
 # runloom_sched_yield) -- the branch the M:N hog above doesn't exercise.
 _PREEMPT_ST = r'''
 import sys, time; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
+import stackweave, stackweave_c as rc
 rc.preempt_init(2000)          # 2ms quantum
 done = []
 def hog(i):
@@ -173,7 +173,7 @@ def test_timed_park_in_hub_times_out_via_timer_drain():
     res = {}
 
     def main():
-        from runloom.sync import WaitGroup
+        from stackweave.sync import WaitGroup
         wg = WaitGroup(); wg.add(1)
 
         def f():
@@ -189,7 +189,7 @@ def test_timed_park_in_hub_times_out_via_timer_drain():
         wg.wait()
 
     with hang_guard(40, "timed_park_hub"):
-        runloom.run(3, main)
+        stackweave.run(3, main)
     # Real oracle: it actually timed out (the timer fired), not a spurious wake.
     assert res.get("timed_out") is True
 
@@ -212,7 +212,7 @@ def test_timed_park_in_hub_woken_before_deadline_and_release_timers():
     hbox = {}
 
     def main():
-        from runloom.sync import WaitGroup
+        from stackweave.sync import WaitGroup
         wg = WaitGroup(); wg.add(1)
 
         def parker():
@@ -235,9 +235,9 @@ def test_timed_park_in_hub_woken_before_deadline_and_release_timers():
         wg.wait()
 
     with hang_guard(40, "timed_park_woken_release"):
-        runloom.run(2, main)
+        stackweave.run(2, main)
     assert res.get("woke") is False       # False == woken (not timed out)
-    # mn_fini already ran (inside runloom.run) and swept the stale 30s entry;
+    # mn_fini already ran (inside stackweave.run) and swept the stale 30s entry;
     # the structural walk confirms no leaked entry-ref.
     assert rc._self_check(0) == 0
 
@@ -272,7 +272,7 @@ def test_sched_sleep_real_in_hub():
     out = []
 
     def main():
-        from runloom.sync import WaitGroup
+        from stackweave.sync import WaitGroup
         wg = WaitGroup(); wg.add(1)
 
         def s():
@@ -287,7 +287,7 @@ def test_sched_sleep_real_in_hub():
         wg.wait()
 
     with hang_guard(40, "sched_sleep_real_hub"):
-        runloom.run(2, main)
+        stackweave.run(2, main)
     assert len(out) == 1 and out[0] >= 0.02, out
 
 
@@ -323,7 +323,7 @@ def test_run_ready_in_hub_degrades_to_yield():
     out = []
 
     def main():
-        from runloom.sync import WaitGroup
+        from stackweave.sync import WaitGroup
         wg = WaitGroup(); wg.add(1)
 
         def f():
@@ -337,7 +337,7 @@ def test_run_ready_in_hub_degrades_to_yield():
         wg.wait()
 
     with hang_guard(40, "run_ready_hub"):
-        runloom.run(2, main)
+        stackweave.run(2, main)
     assert out == ["ok"]
 
 
@@ -413,7 +413,7 @@ def test_park_generic_hub_dekker_under_foreign_wake_storm():
     t.start()
 
     def main():
-        from runloom.sync import WaitGroup
+        from stackweave.sync import WaitGroup
         wg = WaitGroup(); wg.add(1)
 
         def parker():
@@ -432,7 +432,7 @@ def test_park_generic_hub_dekker_under_foreign_wake_storm():
         rc.mn_fiber(parker)
         wg.wait()
         # Stop the foreign wake-storm and JOIN it WHILE the runtime is still up.
-        # If the storm outlives runloom.run() (stop/join placed AFTER run
+        # If the storm outlives stackweave.run() (stop/join placed AFTER run
         # returned), the foreign thread keeps executing g.wake() -- i.e. running
         # Python -- while mn_fini tears the free-threaded runtime down and frees
         # the g-slab; that corrupts the foreign thread's eval state and faults
@@ -445,7 +445,7 @@ def test_park_generic_hub_dekker_under_foreign_wake_storm():
         t.join(timeout=3)
 
     with hang_guard(120, "park_generic_hub_dekker"):
-        runloom.run(3, main)
+        stackweave.run(3, main)
     assert res.get("n") == PARKS
 
 
@@ -490,15 +490,15 @@ def _run_capture_hub_parker(hbox, done):
         for _ in range(2000):
             if hbox.get("g") is not None:
                 break
-            runloom.sleep(0.0005)
+            stackweave.sleep(0.0005)
         # wake (in-session, normal path) until the parker completes
         for _ in range(4000):
             if done.get("ok"):
                 break
             hbox["g"].wake()
-            runloom.sleep(0.0005)
+            stackweave.sleep(0.0005)
     with hang_guard(60, "wake_teardown_setup"):
-        runloom.run(3, main)
+        stackweave.run(3, main)
 
 
 @mn
@@ -548,7 +548,7 @@ def test_stale_handle_wake_during_reinit_is_noop():
     res = {}
 
     def main2():
-        from runloom.sync import WaitGroup
+        from stackweave.sync import WaitGroup
         N = 300
         slots = bytearray(N)             # one writer per slot: GIL-off-safe
         wg = WaitGroup()
@@ -557,7 +557,7 @@ def test_stale_handle_wake_during_reinit_is_noop():
 
             def w(i=i):
                 try:
-                    runloom.sleep(0.001)
+                    stackweave.sleep(0.001)
                     slots[i] = 1
                 finally:
                     wg.done()
@@ -566,7 +566,7 @@ def test_stale_handle_wake_during_reinit_is_noop():
         res["sum"] = sum(slots)
 
     with hang_guard(60, "reinit_aliasing"):
-        runloom.run(3, main2)
+        stackweave.run(3, main2)
     stop.set()
     t.join(timeout=3)
     # If the stale wake had corrupted pool #2, this would crash / hang / mis-sum.
@@ -602,7 +602,7 @@ def test_exception_state_survives_park_in_hub():
     carried = {}      # i -> message seen after parks (odd i carry an exception)
 
     def main():
-        from runloom.sync import WaitGroup
+        from stackweave.sync import WaitGroup
         wg = WaitGroup(); wg.add(N)
 
         def with_exc(i):
@@ -632,7 +632,7 @@ def test_exception_state_survives_park_in_hub():
         wg.wait()
 
     with hang_guard(40, "exc_state_park"):
-        runloom.run(3, main)
+        stackweave.run(3, main)
     # Every exc-carrier restored its OWN exception across every park (no bleed).
     assert carried == {i: "exc-%d" % i for i in range(N) if i % 2}, carried
 
@@ -661,14 +661,14 @@ def test_exception_state_survives_park_single_thread():
 # runloom_sched_pystate.c.inc -- the immortal-context snap fast path (L114-115:
 # ts->context immortal -> store the pointer, skip the atomic INCREF).  With the
 # default per-fiber contextvars copy each fiber's context is NON-immortal (the
-# L116-118 else branch).  Under RUNLOOM_NO_CTX_COPY=1 fibers share the immortal
+# L116-118 else branch).  Under STACKWEAVE_NO_CTX_COPY=1 fibers share the immortal
 # empty default context, so a park's snap takes the immortal fast path.
 # Subprocess: the env flag is read once + cached.
 # ==========================================================================
 _IMMORTAL_CTX = r'''
 import sys; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave, stackweave_c as rc
+from stackweave.sync import WaitGroup
 N = 16
 done = bytearray(N)
 def main():
@@ -683,22 +683,22 @@ def main():
     for i in range(N):
         rc.mn_fiber(lambda i=i: f(i))
     wg.wait()
-runloom.run(3, main)
+stackweave.run(3, main)
 sys.stdout.write("IMMORTAL_OK %d\n" % sum(done))
 '''
 
 
 @mn
 def test_immortal_context_snap_fast_path_subprocess():
-    p = _spawn(_IMMORTAL_CTX, env_extra={"RUNLOOM_NO_CTX_COPY": "1"})
+    p = _spawn(_IMMORTAL_CTX, env_extra={"STACKWEAVE_NO_CTX_COPY": "1"})
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1500:])
     assert "IMMORTAL_OK 16" in p.stdout, (p.stdout[-400:], p.stderr[-800:])
 
 
 # ==========================================================================
 # runloom_sched_pystate.c.inc -- runloom_dbg_check_excobj (L62-68) + the
-# RUNLOOM_DBG_EXCSTATE-gated validation calls in snap (L189-192) and load
-# (L272-278).  Under RUNLOOM_DBG_EXCSTATE=1, every snap/load of a fiber that
+# STACKWEAVE_DBG_EXCSTATE-gated validation calls in snap (L189-192) and load
+# (L272-278).  Under STACKWEAVE_DBG_EXCSTATE=1, every snap/load of a fiber that
 # parks with an exception in flight runs the validator against the real (valid)
 # exception objects; a clean exit proves the validator passes legitimate exc
 # state (the abort() at L74 is a defensive corrupt-object guard, classified
@@ -706,8 +706,8 @@ def test_immortal_context_snap_fast_path_subprocess():
 # ==========================================================================
 _DBG_EXCSTATE = r'''
 import sys; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave, stackweave_c as rc
+from stackweave.sync import WaitGroup
 N = 12
 ok = bytearray(N)
 def main():
@@ -726,14 +726,14 @@ def main():
     for i in range(N):
         rc.mn_fiber(lambda i=i: f(i))
     wg.wait()
-runloom.run(3, main)
+stackweave.run(3, main)
 sys.stdout.write("DBGEXC_OK %d\n" % sum(ok))
 '''
 
 
 @mn
 def test_dbg_excstate_validator_passes_live_exceptions_subprocess():
-    p = _spawn(_DBG_EXCSTATE, env_extra={"RUNLOOM_DBG_EXCSTATE": "1"})
+    p = _spawn(_DBG_EXCSTATE, env_extra={"STACKWEAVE_DBG_EXCSTATE": "1"})
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1500:])
     # The validator must NOT have aborted on any legitimate in-flight exception.
     assert "STALE/CORRUPT" not in p.stderr, p.stderr[-1500:]
@@ -800,7 +800,7 @@ def test_g_entry_fiber_n_indexed_pass_index():
 # ==========================================================================
 _CAL_FREEZE = r'''
 import sys, threading; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
+import stackweave, stackweave_c as rc
 THREADS = 6
 PER = 700               # 6*700 = 4200 >> RUNLOOM_CAL_TARGET (1000)
 start = threading.Barrier(THREADS)
@@ -825,8 +825,8 @@ sys.stdout.write("CALFREEZE_OK completed=%d cal=%s\n" % (
 @mn
 def test_calibration_freeze_race_multi_thread_subprocess():
     # Fresh subprocess: calibration is a process-global one-shot, so it must
-    # start unfrozen.  RUNLOOM_SYSMON left OFF (no need; avoids stderr noise).
-    p = _spawn(_CAL_FREEZE, env_extra={"RUNLOOM_SYSMON": "0"}, timeout=120)
+    # start unfrozen.  STACKWEAVE_SYSMON left OFF (no need; avoids stderr noise).
+    p = _spawn(_CAL_FREEZE, env_extra={"STACKWEAVE_SYSMON": "0"}, timeout=120)
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1500:])
     assert "CALFREEZE_OK" in p.stdout, (p.stdout[-400:], p.stderr[-800:])
 

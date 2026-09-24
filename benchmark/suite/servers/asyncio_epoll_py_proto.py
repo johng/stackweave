@@ -6,7 +6,7 @@ Baseline server: canonical asyncio Protocol echo (and uvloop via --loop).
 Single-threaded (decision #4: run on the GIL build, its best case). uvloop uses
 the identical protocol, only the event-loop policy changes.
 
---work N applies the SAME FNV-1a byte hash as the runloom work curve (py_fnv,
+--work N applies the SAME FNV-1a byte hash as the stackweave work curve (py_fnv,
 identical constants) N times over each chunk before echoing, folded into byte 0
 so it can't be elided. work=0 is the plain echo. This is the interpreted-Python
 reference for the cross-runtime handler work curve (1 core, like the echo bench).

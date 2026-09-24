@@ -44,7 +44,7 @@ int main(void)
     int expected[] = {0, 1, 2, 3, 4, 5, 6};
     size_t i;
 
-    printf("runloom aarch64 test (backend=%s)\n", runloom_coro_backend());
+    printf("stackweave aarch64 test (backend=%s)\n", runloom_coro_backend());
 
     EXPECT(runloom_coro_thread_init() == 0, "thread_init");
 

@@ -84,12 +84,12 @@ def _runloom_build_flags(repo):
     srcdir = os.path.join(repo, "src")
     if os.path.isdir(srcdir):
         for f in os.listdir(srcdir):
-            if f.startswith("runloom_c") and f.endswith(".so"):
+            if f.startswith("stackweave_c") and f.endswith(".so"):
                 so = os.path.join(srcdir, f)
                 break
     return {
         "so": os.path.basename(so) if so else None,
-        "RUNLOOM_DEBUG_env": os.environ.get("RUNLOOM_DEBUG", "<unset>"),
+        "RUNLOOM_DEBUG_env": os.environ.get("STACKWEAVE_DEBUG", "<unset>"),
         "expected_cflags": "-O2 -DNDEBUG -D_FORTIFY_SOURCE=2 -fstack-protector-strong (as-shipped release)",
     }
 
@@ -136,7 +136,7 @@ def header_lines(info):
         "CPU:     %s -- %s logical vCPUs; NUMA: %s; governor=%s; steal=%s%%" % (
             n["cpu_model"], n["logical_cpus"], numa, n["cpu_governor"], n["steal_pct_sample"]),
         "Memory:  %s GiB" % n["mem_total_gib"],
-        "Runloom: %s @ %s, build=%s" % (
+        "Stackweave: %s @ %s, build=%s" % (
             n["python_ft_3_13t"], n["runloom_git_sha"], n["runloom_build"]["expected_cflags"]),
         "Baselines: %s (GIL), uvloop=%s, gevent=%s, greenlet=%s; %s" % (
             n["python_gil_3_13"], n["uvloop"], n["gevent"], n["greenlet"], n["go_version"]),

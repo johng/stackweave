@@ -3,7 +3,7 @@
 Spawns one fiber per candidate port and connects to them all at
 once.  This is where fibers shine over threads: a thousand
 in-flight connect()s cost ~thousands of cheap fibers, not a
-thousand 8 MB OS threads.  Under runloom.monkey.patch() the ordinary
+thousand 8 MB OS threads.  Under stackweave.monkey.patch() the ordinary
 blocking socket.connect parks the fiber on netpoll instead of the
 OS thread, so they really do overlap.
 
@@ -17,12 +17,12 @@ import socket
 
 import os
 
-import runloom
+import stackweave
 
 # Free-threaded build: fan fibers across all cores (M:N scheduler).
 HUBS = os.cpu_count() or 4
 
-runloom.monkey.patch()
+stackweave.monkey.patch()
 
 def probe(host, port, results):
     s = socket.socket()
@@ -50,9 +50,9 @@ def main():
     # Candidates: the open ports plus some that are almost certainly closed.
     candidates = sorted(set(open_ports + [40001, 40002, 40003, 40004, 40005]))
 
-    results = runloom.Chan(len(candidates))
+    results = stackweave.Chan(len(candidates))
     for port in candidates:
-        runloom.fiber(probe, host, port, results)
+        stackweave.fiber(probe, host, port, results)
 
     found = []
     for _ in range(len(candidates)):
@@ -66,4 +66,4 @@ def main():
     print("scanned {0} ports; open: {1}".format(len(candidates), sorted(found)))
 
 if __name__ == "__main__":
-    runloom.run(HUBS, main)
+    stackweave.run(HUBS, main)

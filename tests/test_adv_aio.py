@@ -1,4 +1,4 @@
-"""Adversarial QA: the runloom.aio asyncio bridge.
+"""Adversarial QA: the stackweave.aio asyncio bridge.
 
 The aio bridge is where most of the recent compat bugs lived; CLAUDE.md lists a
 dozen fragile invariants.  We target the observable ones:
@@ -14,7 +14,7 @@ dozen fragile invariants.  We target the observable ones:
   * _driver sends None -- a custom awaitable whose __await__ yields a plain
     iterator (no .send) must not raise "object has no attribute 'send'".
 
-Driven through runloom.aio.run() (its asyncio.run drop-in), no pytest-asyncio.
+Driven through stackweave.aio.run() (its asyncio.run drop-in), no pytest-asyncio.
 """
 import asyncio
 import os
@@ -24,8 +24,8 @@ import time
 
 import pytest
 
-import runloom.aio as aio
-import runloom_c as rc
+import stackweave.aio as aio
+import stackweave_c as rc
 from adv_util import hang_guard, assert_faster_than, RealBarrier as _RealBarrier
 
 
@@ -255,7 +255,7 @@ def test_custom_awaitable_without_send_does_not_break():
 # --------------------------------------------------------------------------
 # stress: many concurrent echo connections
 # --------------------------------------------------------------------------
-# TODO(runloom): 50 concurrent aio-bridge echo connections intermittently hang
+# TODO(stackweave): 50 concurrent aio-bridge echo connections intermittently hang
 # under a small shared CI runner's contention (the hang_guard(40) fires), same
 # load-stress class as swarm_aio_bridge::test_many_concurrent_transport_echo_
 # connections.  Passes on a quiet dev box (5/5 in a droplet sweep); it's the
@@ -361,7 +361,7 @@ def test_print_tasks_names_a_waiting_task():
     coroutine is suspended and what it is waiting on -- the one line that
     identifies a strand above the scheduler."""
     import io
-    from runloom.aio.tasks import print_tasks
+    from stackweave.aio.tasks import print_tasks
     out = io.StringIO()
 
     async def body():

@@ -71,7 +71,7 @@ import io
 import random
 
 import harness
-import runloom
+import stackweave
 
 # Each holder/mutator pair contends over ONE BytesIO with a SINGLE export count,
 # so the BufferError invariant is exact: exactly one live view pins it, and any
@@ -166,8 +166,8 @@ def holder(H, wid, bio, ready_evt, done_evt, state, slot):
         # other hub now attempts its resize WHILE this view is outstanding.
         ready_evt.set()
         # PARK while the view is live -- this is the export-across-a-park window.
-        runloom.sleep(PARK_SLEEP)
-        runloom.yield_now()
+        stackweave.sleep(PARK_SLEEP)
+        stackweave.yield_now()
         # Wait until the mutator has finished its (must-fail) resize attempt so the
         # overlap is provable, not merely likely.
         done_evt.wait()
@@ -239,9 +239,9 @@ def worker(H, wid, rng, state):
         # Fresh BytesIO every round: exactly ONE export (the holder's view) pins
         # it, so the BufferError-while-live invariant is exact.
         bio = io.BytesIO(bytes(BIO_LEN))
-        ready_evt = runloom.sync.Event()
-        done_evt = runloom.sync.Event()
-        wg = runloom.WaitGroup()
+        ready_evt = stackweave.sync.Event()
+        done_evt = stackweave.sync.Event()
+        wg = stackweave.WaitGroup()
         wg.add(2)
         mseed = rng.getrandbits(48)
 

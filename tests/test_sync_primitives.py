@@ -1,7 +1,7 @@
-"""Phase 3 runloom.sync primitives: RWMutex, weighted Semaphore, Once/once_value/
+"""Phase 3 stackweave.sync primitives: RWMutex, weighted Semaphore, Once/once_value/
 once_func, singleflight Group, Watch, JoinSet.
 
-All ride the GenMC-verified park()/g.wake() handshake + the runloom_c.Mutex guard +
+All ride the GenMC-verified park()/g.wake() handshake + the stackweave_c.Mutex guard +
 the fiber-resolution contract.  These pin the contract AND the failure mode
 that matters for a park/wake primitive -- a lost wakeup / wrong-mutual-exclusion
 under M:N -- which would hang (caught by the timeout) or miscount (caught by an
@@ -11,9 +11,9 @@ import time
 
 import pytest
 
-import runloom
-import runloom_c
-from runloom import sync
+import stackweave
+import stackweave_c
+from stackweave import sync
 
 
 def _drive(fn, hubs=8):
@@ -25,7 +25,7 @@ def _drive(fn, hubs=8):
         except BaseException as e:  # noqa: BLE001
             box[1] = e
 
-    runloom.run(hubs, runner)
+    stackweave.run(hubs, runner)
     if box[1] is not None:
         raise box[1]
     return box[0]
@@ -48,7 +48,7 @@ def test_rwmutex_mutual_exclusion():
             wg.done()
 
         for _ in range(n):
-            runloom.fiber(writer)
+            stackweave.fiber(writer)
         wg.wait()
         return ctr["n"]
     assert _drive(body) == 8 * 300
@@ -57,7 +57,7 @@ def test_rwmutex_mutual_exclusion():
 def test_rwmutex_readers_concurrent_writer_exclusive():
     def body():
         rw = sync.RWMutex()
-        gd = runloom_c.Mutex()          # guard shared counters (GIL off -> += races)
+        gd = stackweave_c.Mutex()          # guard shared counters (GIL off -> += races)
         state = {"writing": False, "max_readers": 0, "cur_readers": 0,
                  "overlap_violation": False}
         wg = sync.WaitGroup()
@@ -71,7 +71,7 @@ def test_rwmutex_readers_concurrent_writer_exclusive():
             if state["cur_readers"] > state["max_readers"]:
                 state["max_readers"] = state["cur_readers"]
             gd.unlock()
-            runloom.sleep(0.005)
+            stackweave.sleep(0.005)
             gd.lock()
             state["cur_readers"] -= 1
             gd.unlock()
@@ -85,7 +85,7 @@ def test_rwmutex_readers_concurrent_writer_exclusive():
                 if state["cur_readers"] > 0:
                     state["overlap_violation"] = True
                 gd.unlock()
-                runloom.sleep(0.003)
+                stackweave.sleep(0.003)
                 gd.lock()
                 state["writing"] = False
                 gd.unlock()
@@ -93,9 +93,9 @@ def test_rwmutex_readers_concurrent_writer_exclusive():
 
         wg.add(12)
         for _ in range(10):
-            runloom.fiber(reader)
+            stackweave.fiber(reader)
         for _ in range(2):
-            runloom.fiber(writer)
+            stackweave.fiber(writer)
         wg.wait()
         return state
     s = _drive(body)
@@ -119,7 +119,7 @@ def test_rwmutex_runlock_not_held_raises():
 def test_semaphore_weighted_limits_concurrency():
     def body():
         sem = sync.Semaphore(3)
-        gd = runloom_c.Mutex()          # guard the shared counter (GIL off -> += races)
+        gd = stackweave_c.Mutex()          # guard the shared counter (GIL off -> += races)
         state = {"cur": 0, "max": 0}
         wg = sync.WaitGroup()
         wg.add(20)
@@ -131,7 +131,7 @@ def test_semaphore_weighted_limits_concurrency():
             if state["cur"] > state["max"]:
                 state["max"] = state["cur"]
             gd.unlock()
-            runloom.sleep(0.003)
+            stackweave.sleep(0.003)
             gd.lock()
             state["cur"] -= 1
             gd.unlock()
@@ -139,7 +139,7 @@ def test_semaphore_weighted_limits_concurrency():
             wg.done()
 
         for _ in range(20):
-            runloom.fiber(worker)
+            stackweave.fiber(worker)
         wg.wait()
         return state["max"]
     assert _drive(body) == 3            # never more than 3 in the section
@@ -166,7 +166,7 @@ def test_semaphore_weighted_n_and_fifo_no_starvation():
             sem.release(1)
             wg.done()
 
-        runloom.fiber(big)
+        stackweave.fiber(big)
         # Deterministic handshake: spin until big has actually APPENDED itself to
         # the FIFO waiter queue before spawning the small stream.  A sleep here is
         # load-dependent -- if big hasn't run sem.acquire(10) yet when the smalls
@@ -175,14 +175,14 @@ def test_semaphore_weighted_n_and_fifo_no_starvation():
         # bounds a hang (the happy path queues in ~100 yields).
         _spin = 0
         while len(sem._waiters) < 1 and _spin < 200000:
-            runloom_c.sched_yield(); _spin += 1
+            stackweave_c.sched_yield(); _spin += 1
         for i in range(5):
-            runloom.fiber(small, i)
+            stackweave.fiber(small, i)
         # And wait until all 6 (big + 5 small) have queued before releasing, so the
         # release grants strictly in FIFO order from a fully-populated queue.
         _spin = 0
         while len(sem._waiters) < 6 and _spin < 200000:
-            runloom_c.sched_yield(); _spin += 1
+            stackweave_c.sched_yield(); _spin += 1
         sem.release(10)                  # free everything -> big (FIFO front) first
         wg.wait()
         return order
@@ -229,14 +229,14 @@ def test_once_runs_exactly_once_concurrent():
 
         def fn():
             runs["n"] += 1
-            runloom.sleep(0.005)
+            stackweave.sleep(0.005)
 
         def caller():
             once.do(fn)
             wg.done()
 
         for _ in range(30):
-            runloom.fiber(caller)
+            stackweave.fiber(caller)
         wg.wait()
         return runs["n"]
     assert _drive(body) == 1
@@ -262,8 +262,8 @@ def test_once_executor_sees_exception_others_dont():
             caller(i)
             wg.done()
         for i in range(10):
-            runloom.fiber(run, i)
-            runloom.sleep(0.002)
+            stackweave.fiber(run, i)
+            stackweave.sleep(0.002)
         wg.wait()
         return sum(saw)
     # exactly ONE caller (the executor) saw the exception (Go semantics)
@@ -308,7 +308,7 @@ def test_singleflight_dedupes_and_shares():
 
         def fn():
             calls["n"] += 1
-            runloom.sleep(0.02)
+            stackweave.sleep(0.02)
             return "val-%d" % calls["n"]
 
         def caller():
@@ -318,7 +318,7 @@ def test_singleflight_dedupes_and_shares():
             wg.done()
 
         for _ in range(20):
-            runloom.fiber(caller)
+            stackweave.fiber(caller)
         wg.wait()
         return calls["n"], set(results), sum(shared_flags)
     n, vals, n_shared = _drive(body)
@@ -335,7 +335,7 @@ def test_singleflight_exception_shared():
         wg.add(8)
 
         def boom():
-            runloom.sleep(0.01)
+            stackweave.sleep(0.01)
             raise ValueError("x")
 
         def caller(i):
@@ -346,7 +346,7 @@ def test_singleflight_exception_shared():
             wg.done()
 
         for i in range(8):
-            runloom.fiber(caller, i)
+            stackweave.fiber(caller, i)
         wg.wait()
         return sum(caught)
     assert _drive(body) == 8               # the exception reached every caller
@@ -384,8 +384,8 @@ def test_watch_broadcast_and_version():
             wg.done()
 
         for _ in range(5):
-            runloom.fiber(observer)
-        runloom.sleep(0.03)                # all 5 parked on wait_changed
+            stackweave.fiber(observer)
+        stackweave.sleep(0.03)                # all 5 parked on wait_changed
         w.set(99)
         wg.wait()
         return got, w.version()

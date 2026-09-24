@@ -5,7 +5,7 @@ A fiber runs on a small, fixed C stack.  Deep C-level recursion -- a big
 off the end of it and segfault.  Normally that's an opaque ``Segmentation
 fault`` with no clue which fiber or why.
 
-``runloom.inspect.install_crash_handler()`` (or the ``RUNLOOM_CRASH=on`` env var)
+``stackweave.inspect.install_crash_handler()`` (or the ``STACKWEAVE_CRASH=on`` env var)
 installs a fatal-signal handler that turns it into a *classified* dump: it names
 the overflowing fiber and its stack size and tells you what to do about it.
 The fault is unrecoverable -- a SIGSEGV can't be turned into a catchable Python
@@ -27,10 +27,10 @@ import textwrap
 # fiber stack with deep C-level json recursion.
 CHILD = textwrap.dedent("""
     import json
-    import runloom
-    import runloom_c
+    import stackweave
+    import stackweave_c
 
-    runloom.inspect.install_crash_handler()      # classify fatal signals
+    stackweave.inspect.install_crash_handler()      # classify fatal signals
 
     # A 400-deep nested list: the C json encoder recurses once per level, which
     # is far more C stack than the 16 KiB fiber below can hold.
@@ -46,8 +46,8 @@ CHILD = textwrap.dedent("""
 
     # 16 KiB is deliberately too small.  A real bug is usually a default-stack
     # fiber that just happens to recurse deeper than expected.
-    runloom_c.fiber(encode_on_a_tiny_stack, 16 * 1024)
-    runloom_c.run()
+    stackweave_c.fiber(encode_on_a_tiny_stack, 16 * 1024)
+    stackweave_c.run()
 """)
 
 

@@ -1,5 +1,5 @@
 # Files that must ship inside the source distribution (sdist) so that
-# `pip install runloom` can compile the C extension on the user's
+# `pip install stackweave` can compile the C extension on the user's
 # machine -- on ANY supported platform/arch, not just the one the sdist
 # was built on.
 #
@@ -20,8 +20,8 @@ recursive-include src/runloom_c *.c *.h *.inc *.S
 
 # Type stubs + PEP 561 marker.
 include src/runloom_c.pyi
-recursive-include src/runloom *.pyi
-include src/runloom/py.typed
+recursive-include src/stackweave *.pyi
+include src/stackweave/py.typed
 
 # Keep build/test/site artifacts out of the sdist.
 prune build

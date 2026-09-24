@@ -11,7 +11,7 @@ function recomputed as an in-memory model. Any mismatch is silent corruption the
 counters cannot see.
 
 Strongest composed with the chaos + rare-path tools:
-    RUNLOOM_FORCE_STACKGROW=1 python setup.py build_ext --inplace --force  # then
+    STACKWEAVE_FORCE_STACKGROW=1 python setup.py build_ext --inplace --force  # then
     PYTHONPATH=src python tools/verify/result_oracle.py --buggify --seed N
 
 --teeth makes one goroutine return a deliberately-wrong value, to prove the oracle
@@ -56,8 +56,8 @@ def main():
     args = ap.parse_args()
 
     if args.buggify:
-        os.environ["RUNLOOM_BUGGIFY"] = str(args.seed)
-        os.environ.setdefault("RUNLOOM_DELAY_MAX_NS", "3000")
+        os.environ["STACKWEAVE_BUGGIFY"] = str(args.seed)
+        os.environ.setdefault("STACKWEAVE_DELAY_MAX_NS", "3000")
     if args.fault_spawn:
         # Fault-in-the-workload (AWS ShardStore FailDiskOnce in the op alphabet):
         # a spawn OOM at the Nth spawn (nth:N fires exactly once).  Set before import so the site's armed flag
@@ -65,10 +65,10 @@ def main():
         # no channel a death could strand), so a dropped worker just leaves a gap
         # -- no deadlock.  The property: the fault must not CORRUPT a survivor's
         # result or the scheduler state; dropped workers are a relaxed count.
-        os.environ["RUNLOOM_FAULT_SPAWN_G"] = "nth:%d:12" % args.fault_spawn
+        os.environ["STACKWEAVE_FAULT_SPAWN_G"] = "nth:%d:12" % args.fault_spawn
 
-    import runloom
-    import runloom_c as rc
+    import stackweave
+    import stackweave_c as rc
 
     n = args.workers
     results = [None] * n          # one slot per goroutine (distinct index; no shared slot)
@@ -88,7 +88,7 @@ def main():
             except (MemoryError, RuntimeError):
                 spawn_fail[0] += 1   # the injected spawn OOM dropped this worker
 
-    runloom.run(args.hubs, main_fn)
+    stackweave.run(args.hubs, main_fn)
 
     # Verify every returned value against the in-memory model.
     missing = [i for i in range(n) if results[i] is None]

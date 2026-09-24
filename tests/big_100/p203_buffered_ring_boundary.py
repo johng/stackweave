@@ -18,7 +18,7 @@ Invariant (post): produced == consumed; FIFO held on every channel (fifo
 violations == 0).
 """
 import harness
-import runloom
+import stackweave
 
 SEND_COUNT = 64           # values each producer sends per round
 BIG_CAP = 8
@@ -27,7 +27,7 @@ BIG_CAP = 8
 def setup(H):
     n = max(1, H.funcs // 2)          # one producer + one consumer per channel
     # Mix capacities: even channels cap 1, odd channels cap BIG_CAP.
-    chans = [runloom.Chan(1 if (i & 1) == 0 else BIG_CAP) for i in range(n)]
+    chans = [stackweave.Chan(1 if (i & 1) == 0 else BIG_CAP) for i in range(n)]
     for ch in chans:
         H.register_close(ch)
     H.state = {

@@ -3,10 +3,10 @@ r, w = os.pipe()
 os.write(w, b"line-one\nline-two\n")
 os.dup2(r, 0)
 sys.stdin = os.fdopen(0, "r")
-import runloom.monkey as monkey
+import stackweave.monkey as monkey
 monkey.patch()
 import time
-import runloom_c as rc
+import stackweave_c as rc
 results = []
 
 def reader():

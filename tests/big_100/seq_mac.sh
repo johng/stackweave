@@ -19,7 +19,7 @@ PY="$HOME/.pyenv/versions/3.14.4t/bin/python3"
 START="${1:-1}"; END="${2:-100}"; FUNCS="${3:-20000}"; HUBS="${4:-8}"
 DUR="${5:-10}"; TMO="${6:-90}"
 LOGD=/tmp/big100_seq; mkdir -p "$LOGD"
-export PYTHON_GIL=0 PYTHONPATH=src RUNLOOM_SYSMON_QUIET=1 BIG100_BACKLOG=200000
+export PYTHON_GIL=0 PYTHONPATH=src STACKWEAVE_SYSMON_QUIET=1 BIG100_BACKLOG=200000
 echo "seq @ funcs=$FUNCS hubs=$HUBS dur=${DUR}s start=p$START end=p$END"
 for prog in big_100/p[0-9]*.py; do
   name=$(basename "$prog" .py)

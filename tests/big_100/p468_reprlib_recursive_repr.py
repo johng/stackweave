@@ -10,7 +10,7 @@ structure (a list that contains itself) reprs as the fillvalue ('...') instead o
 recursing forever: the SECOND entry for the SAME (object, thread) sees the key
 already present and returns the fillvalue.
 
-WHERE M:N BREAKS IT (the gap this program catches).  Under runloom's M:N
+WHERE M:N BREAKS IT (the gap this program catches).  Under stackweave's M:N
 scheduler many fibers ("goroutines") share ONE hub OS-thread, so they all report
 the SAME get_ident().  While fiber A is mid-repr of a SHARED object X -- its key
 (id(X), hub_ident) live in repr_running -- and yields at a scheduling point, a
@@ -22,12 +22,12 @@ control-flow per (object, ident), which holds for genuine OS threads but NOT for
 M:N fibers multiplexed onto one hub thread (the same root cause as p66's
 contextvar leak and p67's threading.local).
 
-This is a runloom M:N-SPECIFIC gap: stdlib reprlib is CORRECT under genuine
+This is a stackweave M:N-SPECIFIC gap: stdlib reprlib is CORRECT under genuine
 OS-thread semantics (distinct get_ident() per thread).  Verified with a
-standalone plain-threads control (same shared-object logic, NO runloom): 0 false
+standalone plain-threads control (same shared-object logic, NO stackweave): 0 false
 suppressions under PYTHON_GIL=1 AND PYTHON_GIL=0 -- each OS thread keys the guard
 by its own get_ident(), so a sibling thread's live key never collides.  The fix
-therefore lives in runloom (a fiber-local recursion guard / a fiber-aware
+therefore lives in stackweave (a fiber-local recursion guard / a fiber-aware
 recursive_repr that keys by the running FIBER, not get_ident()), not in stdlib
 reprlib, which is correct under real OS-thread semantics.
 
@@ -38,7 +38,7 @@ the fillvalue can ONLY ever appear via FALSE suppression.  A non-recursing fiber
 whose repr(shared_obj) EQUALS the fillvalue (or contains it) means the recursion
 guard fired when there was no recursion -- a wrong value a real program
 (logging / debugging / __repr__ of a shared structure) would actually emit.  We
-inject a runloom scheduling point INSIDE the decorated body, AFTER reprlib has
+inject a stackweave scheduling point INSIDE the decorated body, AFTER reprlib has
 added the key to repr_running but BEFORE it discards it (via a per-call handle
 stashed on the instance), so siblings reliably interleave in the live-key window.
 
@@ -48,7 +48,7 @@ ARMS:
     => key collision.  The oracle: a non-recursing fiber's repr(shared_obj) MUST
     EQUAL the precomputed full string and MUST NEVER be (or contain) the
     fillvalue.  got == fillvalue => H.fail "false recursion suppression" -- the
-    runloom bug.  (On a CORRECT runtime -- and plain threads, GIL on AND off --
+    stackweave bug.  (On a CORRECT runtime -- and plain threads, GIL on AND off --
     this NEVER fires, so the program exits 0 when there is no bug.)
   * PRIVATE CONTROL -- PRIVATE arm (worker, MEASURED, must stay 0%).  Each fiber
     reprs its OWN private Node (distinct id(self)) at the SAME yield, so even with
@@ -62,10 +62,10 @@ the fillvalue, or any other wrong/torn repr value.  The private-control arm is
 report-only and is expected to stay 0% -- a non-zero private rate is itself a
 fail (it would mean the mechanism is not the shared-key collision).
 
-EXPECTED RESULT: this catches a real, currently-UNFIXED runloom bug, so under
-runloom M:N the program is EXPECTED to FAIL exit 1 with the false-fillvalue
+EXPECTED RESULT: this catches a real, currently-UNFIXED stackweave bug, so under
+stackweave M:N the program is EXPECTED to FAIL exit 1 with the false-fillvalue
 diagnostic (it is a bug-catcher, like p460's sibling oracles).  The fix is a
-fiber-local recursion guard in runloom; until then the SHARED arm fires.
+fiber-local recursion guard in stackweave; until then the SHARED arm fires.
 
 Stresses: reprlib.recursive_repr's get_ident()-keyed recursion guard across hub
 fibers, the (id(self), get_ident()) key colliding for siblings on one hub thread,
@@ -74,7 +74,7 @@ a scheduling point inside the live-key window of the decorated __repr__.
 import reprlib
 
 import harness
-import runloom
+import stackweave
 
 FILLVALUE = "<FILL>"
 
@@ -116,9 +116,9 @@ class Node(object):
         rng = self.yield_handle[0]
         if rng is not None:
             if rng.random() < 0.5:
-                runloom.yield_now()
+                stackweave.yield_now()
             else:
-                runloom.sleep(0.0003)
+                stackweave.sleep(0.0003)
         body = ",".join(str(e) for e in self.elems)
         return "R[{0}|{1}]".format(self.tag, body)
 
@@ -170,7 +170,7 @@ def shared_check(H, wid, state):
     if got == FILLVALUE:
         # The WHOLE repr collapsed to the fillvalue: reprlib's recursion guard
         # fired with NO recursion (the object is a flat tuple).  This is the
-        # false-suppression signature -- the runloom M:N bug.
+        # false-suppression signature -- the stackweave M:N bug.
         state["false_fill"][wid & 1023] += 1
         if state["sample"][0] is None:
             state["sample"][0] = (wid, "shared", got)
@@ -180,7 +180,7 @@ def shared_check(H, wid, state):
                "object, so the (id(self), get_ident()) key was already live in "
                "repr_running and this NON-recursing fiber was falsely suppressed.  "
                "M:N fibers share one hub get_ident(); the recursion guard fired "
-               "with no recursion (the runloom shared-hub-identity bug -- 0 under "
+               "with no recursion (the stackweave shared-hub-identity bug -- 0 under "
                "plain threads).".format(FILLVALUE, wid, want))
         return
     if FILLVALUE in got:
@@ -191,7 +191,7 @@ def shared_check(H, wid, state):
         H.fail("reprlib.recursive_repr TORN repr: NON-recursive SHARED object "
                "repr {0!r} embeds the fillvalue {1!r} (wid {2}, expected {3!r}) -- "
                "a sibling's live recursion-guard key corrupted this repr "
-               "(runloom shared-hub-identity bug).".format(
+               "(stackweave shared-hub-identity bug).".format(
                    got, FILLVALUE, wid, want))
         return
     # Any other mismatch is still a corruption of a closed-world-correct value.
@@ -302,10 +302,10 @@ def post(H):
     if ff or torn or wrong:
         H.log("note: the SHARED arm observed false recursion suppression -- "
               "reprlib.recursive_repr keys its guard by (id(self), get_ident()), "
-              "and runloom M:N fibers share one hub get_ident(), so a sibling "
+              "and stackweave M:N fibers share one hub get_ident(), so a sibling "
               "mid-repr of the same object makes this NON-recursing fiber emit the "
-              "fillvalue.  This is a runloom M:N gap (0 under plain threads GIL on "
-              "AND off); the fix is a fiber-local recursion guard in runloom, not "
+              "fillvalue.  This is a stackweave M:N gap (0 under plain threads GIL on "
+              "AND off); the fix is a fiber-local recursion guard in stackweave, not "
               "in stdlib reprlib (correct under real OS-thread semantics).")
     # NON-VACUITY: the load-bearing shared hazard was actually exercised.
     H.check(schecks > 0,
@@ -321,7 +321,7 @@ if __name__ == "__main__":
         "p468_reprlib_recursive_repr", body, setup=setup, post=post,
         default_funcs=8000,
         describe="reprlib.recursive_repr keys its recursion guard by "
-                 "(id(self), get_ident()); runloom M:N fibers share one hub "
+                 "(id(self), get_ident()); stackweave M:N fibers share one hub "
                  "get_ident(), so while one fiber is mid-repr of a SHARED "
                  "NON-recursive object (its key live in repr_running) a sibling "
                  "repr'ing the SAME object is FALSELY suppressed to the fillvalue "
@@ -329,6 +329,6 @@ if __name__ == "__main__":
                  "non-recursing fiber's repr(shared_obj) MUST equal the full "
                  "bracketed string and NEVER the fillvalue (0 under plain threads "
                  "GIL on AND off; the shared-(id, get_ident()) collision is the "
-                 "runloom bug).  PRIVATE control (distinct id) stays 0% -- proves "
+                 "stackweave bug).  PRIVATE control (distinct id) stays 0% -- proves "
                  "the mechanism.  Same class as p66/p67; fix is a fiber-local "
-                 "recursion guard in runloom")
+                 "recursion guard in stackweave")

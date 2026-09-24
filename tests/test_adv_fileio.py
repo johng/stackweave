@@ -17,7 +17,7 @@ import tempfile
 
 import pytest
 
-import runloom_c as rc
+import stackweave_c as rc
 from adv_util import hang_guard
 
 POSIX = sys.platform != "win32"
@@ -70,7 +70,7 @@ def test_many_concurrent_file_ops():
     N = 24
     results = bytearray(N)
     def main():
-        from runloom.sync import WaitGroup
+        from stackweave.sync import WaitGroup
         wg = WaitGroup(); wg.add(N)
         def worker(i):
             try:

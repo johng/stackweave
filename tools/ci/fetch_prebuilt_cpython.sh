@@ -6,7 +6,7 @@
 # interpreter changed (see changed_needs_build.sh), a released tarball built from
 # the SAME patch set is byte-for-byte what a fresh build would produce, so we can
 # skip the ~15-min build AND the full CPython stdlib suite (both already ran when
-# that release was cut) and go straight to the runloom side.
+# that release was cut) and go straight to the stackweave side.
 #
 # It is a drop-in substitute for build_patched_cpython.sh: it extracts the
 # interpreter into the SAME prefix (rl_resolve_prefix) and writes the SAME

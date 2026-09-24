@@ -1,9 +1,9 @@
 """Adversarial QA for the time / context / runtime subsystem.
 
-OWNS: runloom.time (After/Tick/Timer/Ticker/NewTimer/NewTicker/Sleep -- Stop/
-Reset + the generation counter that defeats stale fires), runloom.context
+OWNS: stackweave.time (After/Tick/Timer/Ticker/NewTimer/NewTicker/Sleep -- Stop/
+Reset + the generation counter that defeats stale fires), stackweave.context
 (Background/WithCancel/WithTimeout/WithDeadline + CANCELED/DEADLINE_EXCEEDED),
-and runloom.runtime/__init__ (run(n,main), fiber() single-vs-M:N dispatch, sleep,
+and stackweave.runtime/__init__ (run(n,main), fiber() single-vs-M:N dispatch, sleep,
 yield_now, blocking, current, the Goroutine handle, set_grow_down/
 grow_down_enabled).
 
@@ -47,10 +47,10 @@ import time
 
 import pytest
 
-import runloom
-import runloom_c as rc
-import runloom.time as rt
-import runloom.context as rctx
+import stackweave
+import stackweave_c as rc
+import stackweave.time as rt
+import stackweave.context as rctx
 
 from adv_util import (
     hang_guard,
@@ -83,9 +83,9 @@ def _run_single(fn, guard=10.0, label="single"):
 
 def _run_mn(main, n=2, guard=15.0, label="mn"):
     """Drive main() under run(n) (M:N).  main MUST spawn children via mn_fiber /
-    runloom.fiber, never rc.fiber."""
+    stackweave.fiber, never rc.fiber."""
     with hang_guard(guard, label):
-        runloom.run(n, main)
+        stackweave.run(n, main)
 
 
 def _subproc(script, timeout=40, extra_env=None):
@@ -392,8 +392,8 @@ def test_tick_channel_fires_repeatedly():
     # bounded TIMEOUT, not a wedged in-process test.
     script = r"""
 import sys; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
-import runloom.time as rt
+import stackweave, stackweave_c as rc
+import stackweave.time as rt
 out = {}
 def main():
     c = rt.Tick(0.005)
@@ -486,8 +486,8 @@ def test_context_manual_cancel_before_deadline_is_cancelled():
     # the measurement rather than waiting for run() to drain the orphan.
     script = r"""
 import sys, os, time; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
-import runloom.context as rctx
+import stackweave, stackweave_c as rc
+import stackweave.context as rctx
 def main():
     ctx, cancel = rctx.WithTimeout(rctx.Background(), 5.0)
     cancel()
@@ -514,8 +514,8 @@ def test_context_far_future_deadline_immediate_cancel():
     # Same orphan-fiber caveat as above, so measure recv inside the fiber + exit.
     script = r"""
 import sys, os, time; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
-import runloom.context as rctx
+import stackweave, stackweave_c as rc
+import stackweave.context as rctx
 def main():
     ctx, cancel = rctx.WithDeadline(rctx.Background(), time.monotonic() + 3600.0)
     cancel()
@@ -645,8 +645,8 @@ def test_run1_fiber_returns_fiber_handle_with_result():
     box = {}
 
     def main():
-        g = runloom.fiber(lambda: 6 * 7)
-        assert isinstance(g, runloom.Goroutine)
+        g = stackweave.fiber(lambda: 6 * 7)
+        assert isinstance(g, stackweave.Goroutine)
         # drain so the child completes
         for _ in range(4):
             rc.sched_yield()
@@ -655,7 +655,7 @@ def test_run1_fiber_returns_fiber_handle_with_result():
         box["exc"] = g.exception
 
     with hang_guard(10, "run1-handle"):
-        runloom.run(1, main)
+        stackweave.run(1, main)
     assert box["done"] is True
     assert box["result"] == 42
     assert box["exc"] is None
@@ -663,21 +663,21 @@ def test_run1_fiber_returns_fiber_handle_with_result():
 
 def test_run1_fiber_exception_surfaces_on_handle():
     # A raised error inside a fiber must surface on .exception (and be
-    # silenced from the unraisable hook via RUNLOOM_GOROUTINE_PANIC=silent).
+    # silenced from the unraisable hook via STACKWEAVE_GOROUTINE_PANIC=silent).
     script = r"""
 import sys, os; sys.path.insert(0, "src")
-os.environ["RUNLOOM_GOROUTINE_PANIC"] = "silent"
-import runloom, runloom_c as rc
+os.environ["STACKWEAVE_GOROUTINE_PANIC"] = "silent"
+import stackweave, stackweave_c as rc
 out = {}
 def boom():
     raise ValueError("intentional")
 def main():
-    g = runloom.fiber(boom)
+    g = stackweave.fiber(boom)
     for _ in range(8):
         rc.sched_yield()
     out["done"] = g.done
     out["exc"] = repr(g.exception)
-runloom.run(1, main)
+stackweave.run(1, main)
 assert out["done"] is True, out
 assert "ValueError" in out["exc"] and "intentional" in out["exc"], out
 print("OK", out["exc"])
@@ -694,31 +694,31 @@ def test_current_identity_inside_and_none_outside():
     # but the handles compare EQUAL (==) when they wrap the same C fiber, and
     # UNEQUAL across distinct fibers.  (Comparing id() would be wrong -- the
     # wrappers are distinct objects; the equality is at the C-g level.)
-    assert runloom.current() is None, "current() outside a fiber must be None"
+    assert stackweave.current() is None, "current() outside a fiber must be None"
 
     seen = {}
 
     def main():
-        seen["self1"] = runloom.current()
+        seen["self1"] = stackweave.current()
         assert seen["self1"] is not None
         # identity (==) is stable across a yield within the same fiber
         rc.sched_yield()
-        seen["self2"] = runloom.current()
+        seen["self2"] = stackweave.current()
 
         handles = []
 
         def child(i):
-            handles.append(runloom.current())
+            handles.append(stackweave.current())
 
-        runloom.fiber(lambda: child(0))
-        runloom.fiber(lambda: child(1))
+        stackweave.fiber(lambda: child(0))
+        stackweave.fiber(lambda: child(1))
         for _ in range(4):
             rc.sched_yield()
         seen["handles"] = handles
-        seen["main_self"] = runloom.current()
+        seen["main_self"] = stackweave.current()
 
     with hang_guard(10, "current"):
-        runloom.run(1, main)
+        stackweave.run(1, main)
     assert seen["self1"] is not None
     assert seen["self1"] == seen["self2"], \
         "current() identity changed within a fiber across a yield"
@@ -731,10 +731,10 @@ def test_current_identity_inside_and_none_outside():
 
 
 def test_sleep_outside_fiber_falls_back_to_time_sleep():
-    # runloom.sleep() outside a fiber must NOT crash / hang; it falls back to
+    # stackweave.sleep() outside a fiber must NOT crash / hang; it falls back to
     # time.sleep.
     t0 = time.monotonic()
-    runloom.sleep(0.02)
+    stackweave.sleep(0.02)
     el = time.monotonic() - t0
     assert el >= 0.015, "sleep() outside a fiber returned too early (%.3fs)" % el
 
@@ -749,13 +749,13 @@ def test_sleep_inside_fiber_yields_to_siblings():
     def main():
         def s(tag, d):
             with ov.span():
-                runloom.sleep(d)
+                stackweave.sleep(d)
             order.append(tag)
-        runloom.fiber(lambda: s("a", 0.05))
-        runloom.fiber(lambda: s("b", 0.05))
+        stackweave.fiber(lambda: s("a", 0.05))
+        stackweave.fiber(lambda: s("b", 0.05))
 
     with hang_guard(10, "sleep-overlap"):
-        runloom.run(1, main)
+        stackweave.run(1, main)
     assert set(order) == {"a", "b"}
     # Overlap measured as peak concurrency, not as a wall-clock budget: if the
     # two sleeps serialise the peak is 1 however fast the box is.
@@ -770,17 +770,17 @@ def test_yield_now_is_a_scheduling_point():
     def main():
         def a():
             seq.append("a1")
-            runloom.yield_now()
+            stackweave.yield_now()
             seq.append("a2")
         def b():
             seq.append("b1")
-            runloom.yield_now()
+            stackweave.yield_now()
             seq.append("b2")
-        runloom.fiber(a)
-        runloom.fiber(b)
+        stackweave.fiber(a)
+        stackweave.fiber(b)
 
     with hang_guard(10, "yield"):
-        runloom.run(1, main)
+        stackweave.run(1, main)
     # a1 and b1 both happen before a2/b2 -> the yield interleaved them.
     assert seq.index("b1") < seq.index("a2"), \
         "yield_now did not yield to the sibling: %r" % seq
@@ -795,14 +795,14 @@ def test_nested_fiber_under_run1():
             hits.append(3)
         def lvl2():
             hits.append(2)
-            runloom.fiber(lvl3)
+            stackweave.fiber(lvl3)
         def lvl1():
             hits.append(1)
-            runloom.fiber(lvl2)
-        runloom.fiber(lvl1)
+            stackweave.fiber(lvl2)
+        stackweave.fiber(lvl1)
 
     with hang_guard(10, "nested-go"):
-        runloom.run(1, main)
+        stackweave.run(1, main)
     assert sorted(hits) == [1, 2, 3], "nested fiber() did not run all levels: %r" % hits
 
 
@@ -814,14 +814,14 @@ def test_run_rejects_invalid_n(bad):
     # n must be a real int >= 1.  bool is explicitly excluded (run(True) would
     # otherwise mean run(1)).  None/str/float/list must all raise, not crash.
     with pytest.raises((ValueError, TypeError)):
-        runloom.run(bad, lambda: None)
+        stackweave.run(bad, lambda: None)
 
 
 def test_run_rejects_noncallable_main():
     with pytest.raises(TypeError):
-        runloom.run(1, 123)
+        stackweave.run(1, 123)
     with pytest.raises(TypeError):
-        runloom.run(1, "not callable")
+        stackweave.run(1, "not callable")
 
 
 def test_run_main_none_is_drain_only():
@@ -829,7 +829,7 @@ def test_run_main_none_is_drain_only():
     hits = []
     rc.fiber(lambda: hits.append("drained"))
     with hang_guard(10, "drain-only"):
-        runloom.run(1)
+        stackweave.run(1)
     assert hits == ["drained"]
 
 
@@ -838,9 +838,9 @@ def test_run_n_gt_1_on_gil_build_raises():
     # serialize).  Force the GIL on in a subprocess and assert the RuntimeError.
     script = r"""
 import sys; sys.path.insert(0, "src")
-import runloom
+import stackweave
 try:
-    runloom.run(4, lambda: None)
+    stackweave.run(4, lambda: None)
     print("NO_RAISE")
 except RuntimeError as e:
     print("RAISED" if "GIL" in str(e) or "free-threaded" in str(e) else "WRONG")
@@ -857,17 +857,17 @@ except RuntimeError as e:
 # grow_down toggle API
 # ==========================================================================
 def test_grow_down_toggle_roundtrips():
-    orig = runloom.grow_down_enabled()
+    orig = stackweave.grow_down_enabled()
     try:
-        runloom.set_grow_down(False)
-        assert runloom.grow_down_enabled() is False
-        runloom.set_grow_down(True)
-        assert runloom.grow_down_enabled() is True
-        runloom.set_grow_down(0)
-        assert runloom.grow_down_enabled() is False   # truthiness coerced to bool
+        stackweave.set_grow_down(False)
+        assert stackweave.grow_down_enabled() is False
+        stackweave.set_grow_down(True)
+        assert stackweave.grow_down_enabled() is True
+        stackweave.set_grow_down(0)
+        assert stackweave.grow_down_enabled() is False   # truthiness coerced to bool
     finally:
-        runloom.set_grow_down(orig)
-    assert runloom.grow_down_enabled() == bool(orig)
+        stackweave.set_grow_down(orig)
+    assert stackweave.grow_down_enabled() == bool(orig)
 
 
 # ==========================================================================
@@ -899,7 +899,7 @@ def test_timer_reset_no_stale_fire_under_mn():
     def main():
         t = rt.Timer(0.02)
         t.Reset(0.30)
-        runloom.sleep(0.10)            # past OLD, before NEW
+        stackweave.sleep(0.10)            # past OLD, before NEW
         box["stale"] = t.c.try_recv()
 
     _run_mn(main, n=4, guard=15, label="mn-reset-stale")
@@ -940,12 +940,12 @@ def test_context_cascade_broadcast_under_mn():
             woke.append(i)
 
         for i in range(N):
-            runloom.fiber(lambda i=i: waiter(i))   # mn_fiber under M:N
-        runloom.sleep(0.02)            # let all park
+            stackweave.fiber(lambda i=i: waiter(i))   # mn_fiber under M:N
+        stackweave.sleep(0.02)            # let all park
         root_cancel()                  # cancel the ROOT -> cascades to child
 
     with hang_guard(20, "mn-cascade-broadcast"):
-        runloom.run(4, main)
+        stackweave.run(4, main)
     assert len(woke) == N, \
         "M:N cascade woke only %d/%d grandchild waiters" % (len(woke), N)
 
@@ -962,13 +962,13 @@ def test_blocking_under_mn_overlaps():
     def main():
         def worker(tag):
             with ov.span():
-                r = runloom.blocking(lambda: (time.sleep(0.05), tag)[1])
+                r = stackweave.blocking(lambda: (time.sleep(0.05), tag)[1])
             results.append(r)
-        runloom.fiber(lambda: worker("x"))
-        runloom.fiber(lambda: worker("y"))
+        stackweave.fiber(lambda: worker("x"))
+        stackweave.fiber(lambda: worker("y"))
 
     with hang_guard(15, "mn-blocking"):
-        runloom.run(2, main)
+        stackweave.run(2, main)
     assert sorted(results) == ["x", "y"]
     ov.assert_peak_at_least(2, "two overlapping blocking() offloads")
 
@@ -979,8 +979,8 @@ def test_fiber_returns_none_under_mn():
     box = {}
 
     def main():
-        box["ret"] = runloom.fiber(lambda: None)
-        box["cur"] = runloom.current() is not None
+        box["ret"] = stackweave.fiber(lambda: None)
+        box["cur"] = stackweave.current() is not None
 
     _run_mn(main, n=2, label="mn-go-none")
     assert box.get("ret") is None, "fiber() under M:N must return None"
@@ -1000,7 +1000,7 @@ def test_ticker_drop_under_mn():
         while time.monotonic() - t0 < 0.10:
             _v, ok = tk.c.recv()
             seen += ok
-            runloom.sleep(0.025)
+            stackweave.sleep(0.025)
         tk.Stop()
         box["seen"] = seen
 
@@ -1015,14 +1015,14 @@ def test_ticker_drop_under_mn():
 # is not.  Run in subprocesses so a SIGSEGV is contained.
 # ==========================================================================
 def test_spawn_g_fault_during_timer_does_not_crash():
-    # RUNLOOM_FAULT_SPAWN_G once: fail the next fiber spawn.  After/Timer/
+    # STACKWEAVE_FAULT_SPAWN_G once: fail the next fiber spawn.  After/Timer/
     # context all spawn a backing fiber; the failure must surface as a clean
     # Python error, never a segfault.
     script = r"""
 import sys, os; sys.path.insert(0, "src")
-os.environ["RUNLOOM_GOROUTINE_PANIC"] = "silent"
-import runloom, runloom_c as rc
-import runloom.time as rt
+os.environ["STACKWEAVE_GOROUTINE_PANIC"] = "silent"
+import stackweave, stackweave_c as rc
+import stackweave.time as rt
 def main():
     try:
         # the After() spawn may be the one that hits the injected fault
@@ -1044,18 +1044,18 @@ except Exception as e:
 print("DONE")
 """
     proc = _subproc(script, timeout=30,
-                    extra_env={"RUNLOOM_FAULT_SPAWN_G": "once:12"})
+                    extra_env={"STACKWEAVE_FAULT_SPAWN_G": "once:12"})
     _assert_clean_fault_outcome(proc, "spawn_g-fault-timer")
 
 
 def test_spawn_stack_fault_during_context_does_not_crash():
-    # RUNLOOM_FAULT_SPAWN_STACK: fail the stack reservation of the next spawn.
+    # STACKWEAVE_FAULT_SPAWN_STACK: fail the stack reservation of the next spawn.
     # The WithTimeout deadline fiber spawn must degrade cleanly, not corrupt.
     script = r"""
 import sys, os; sys.path.insert(0, "src")
-os.environ["RUNLOOM_GOROUTINE_PANIC"] = "silent"
-import runloom, runloom_c as rc
-import runloom.context as rctx
+os.environ["STACKWEAVE_GOROUTINE_PANIC"] = "silent"
+import stackweave, stackweave_c as rc
+import stackweave.context as rctx
 def main():
     try:
         ctx, cancel = rctx.WithTimeout(rctx.Background(), 0.02)
@@ -1076,16 +1076,16 @@ except Exception as e:
 print("DONE")
 """
     proc = _subproc(script, timeout=30,
-                    extra_env={"RUNLOOM_FAULT_SPAWN_STACK": "once:12"})
+                    extra_env={"STACKWEAVE_FAULT_SPAWN_STACK": "once:12"})
     _assert_clean_fault_outcome(proc, "spawn_stack-fault-context")
 
 
 def test_spawn_tstate_fault_does_not_crash():
     script = r"""
 import sys, os; sys.path.insert(0, "src")
-os.environ["RUNLOOM_GOROUTINE_PANIC"] = "silent"
-import runloom, runloom_c as rc
-import runloom.time as rt
+os.environ["STACKWEAVE_GOROUTINE_PANIC"] = "silent"
+import stackweave, stackweave_c as rc
+import stackweave.time as rt
 def main():
     try:
         t = rt.Timer(0.01)
@@ -1104,7 +1104,7 @@ except Exception as e:
 print("DONE")
 """
     proc = _subproc(script, timeout=30,
-                    extra_env={"RUNLOOM_FAULT_SPAWN_TSTATE": "once:12"})
+                    extra_env={"STACKWEAVE_FAULT_SPAWN_TSTATE": "once:12"})
     _assert_clean_fault_outcome(proc, "spawn_tstate-fault")
 
 
@@ -1182,9 +1182,9 @@ def test_current_and_sleep_from_foreign_thread():
     out = {}
 
     def foreign():
-        out["cur"] = runloom.current()
+        out["cur"] = stackweave.current()
         t0 = time.monotonic()
-        runloom.sleep(0.02)            # outside a fiber -> time.sleep fallback
+        stackweave.sleep(0.02)            # outside a fiber -> time.sleep fallback
         out["el"] = time.monotonic() - t0
 
     th = raw_thread(foreign)
@@ -1283,7 +1283,7 @@ def test_nested_run1_inside_fiber_drives_correctly():
 
     def main():
         order.append("outer-start")
-        r = runloom.run(1, lambda: order.append("inner"))
+        r = stackweave.run(1, lambda: order.append("inner"))
         order.append(("nested-returned", r))
         order.append("outer-end")
 
@@ -1299,22 +1299,22 @@ def test_nested_run1_inside_fiber_drives_correctly():
 
 @pytest.mark.skipif(not needs_free_threading(),
                     reason="M:N needs GIL-disabled build")
-# REGRESSION (was finding #3): runloom.run(n>1) called re-entrantly from inside
+# REGRESSION (was finding #3): stackweave.run(n>1) called re-entrantly from inside
 # an M:N hub fiber now raises RuntimeError promptly instead of deadlocking on a
 # nested mn_init.  run() guards on mn_hub_count() > 0.  (run(1) re-entrancy stays
 # supported.)
 def test_nested_run_n_inside_mn_hub_hangs_FINDING():
     script = r"""
 import sys, os; sys.path.insert(0, "src")
-import runloom
+import stackweave
 def main():
     try:
-        runloom.run(2, lambda: None)   # re-entrant mn_init inside a hub
+        stackweave.run(2, lambda: None)   # re-entrant mn_init inside a hub
         print("NESTED_RETURNED")
     except RuntimeError:
         print("NESTED_RAISED")
     sys.stdout.flush()
-runloom.run(2, main)
+stackweave.run(2, main)
 print("OUTER_DONE")
 """
     timed_out = False
@@ -1334,9 +1334,9 @@ def test_run_twice_sequentially_resets_state():
     # the scheduler resets between runs (no leftover fibers, no double-drive).
     seen = []
     with hang_guard(10, "run-twice-a"):
-        runloom.run(1, lambda: seen.append(1))
+        stackweave.run(1, lambda: seen.append(1))
     with hang_guard(10, "run-twice-b"):
-        runloom.run(1, lambda: seen.append(2))
+        stackweave.run(1, lambda: seen.append(2))
     assert seen == [1, 2], "sequential run() did not reset cleanly: %r" % seen
 
 
@@ -1438,7 +1438,7 @@ def test_fiber_handle_pre_completion_is_safe():
     box = {}
 
     def main():
-        g = runloom.fiber(lambda: 99)
+        g = stackweave.fiber(lambda: 99)
         # Read the handle BEFORE the child has had a chance to run.
         box["pre_done"] = g.done
         box["pre_result"] = g.result
@@ -1451,7 +1451,7 @@ def test_fiber_handle_pre_completion_is_safe():
         box["post_result"] = g.result
 
     with hang_guard(10, "g-pre-completion"):
-        runloom.run(1, main)
+        stackweave.run(1, main)
     assert box["pre_done"] is False, "handle reported done before the child ran"
     assert box["pre_result"] is None
     assert box["pre_exc"] is None
@@ -1463,20 +1463,20 @@ def test_fiber_handle_pre_completion_is_safe():
 
 # ----- current() returns the bare C-G, not the Python Goroutine wrapper ------
 def test_current_returns_bare_c_g_not_fiber_wrapper():
-    # runtime.current() is documented to return the bare runloom_c.G, NOT the
+    # runtime.current() is documented to return the bare stackweave_c.G, NOT the
     # Python Goroutine wrapper -- callers compare identity / None-ness.  Pin that
     # contract so a future change that wraps it doesn't silently break callers.
     box = {}
 
     def main():
-        cur = runloom.current()
+        cur = stackweave.current()
         box["type_is_G"] = isinstance(cur, rc.G)
-        box["is_fiber_wrapper"] = isinstance(cur, runloom.Goroutine)
+        box["is_fiber_wrapper"] = isinstance(cur, stackweave.Goroutine)
 
     with hang_guard(10, "current-type"):
-        runloom.run(1, main)
+        stackweave.run(1, main)
     assert box["type_is_G"] is True, \
-        "current() inside a fiber should be a bare runloom_c.G"
+        "current() inside a fiber should be a bare stackweave_c.G"
     assert box["is_fiber_wrapper"] is False, \
         "current() must NOT return the Python Goroutine wrapper (contract)"
 
@@ -1492,9 +1492,9 @@ def test_blocking_outside_fiber_runs_inline():
     # the documented inline-fallback contract on a clean process.
     script = r"""
 import sys; sys.path.insert(0, "src")
-import runloom
-assert runloom.current() is None
-r = runloom.blocking(lambda a, b: a * b, 6, 7)
+import stackweave
+assert stackweave.current() is None
+r = stackweave.blocking(lambda a, b: a * b, 6, 7)
 print("RESULT", r)
 """
     proc = _subproc(script, timeout=15)
@@ -1504,7 +1504,7 @@ print("RESULT", r)
         % (proc.stdout, proc.stderr.decode()[-500:]))
 
 
-# REGRESSION (was finding #1): runloom.blocking(fn) called outside any fiber
+# REGRESSION (was finding #1): stackweave.blocking(fn) called outside any fiber
 # AFTER an M:N run(n>1) torn down used to ABORT ("_PyThreadState_Attach: non-NULL
 # old thread state") -- the inline offload ran py_blocking_worker, which
 # PyGILState_Ensure()d a tstate over the still-current main tstate (the gilstate
@@ -1516,10 +1516,10 @@ def test_blocking_outside_fiber_after_mn_run_aborts_FINDING():
         pytest.skip("M:N needs GIL-disabled build")
     script = r"""
 import sys; sys.path.insert(0, "src")
-import runloom
-runloom.run(2, lambda: None)        # exercise + tear down an M:N scheduler
-assert runloom.mn_hub_count() == 0
-r = runloom.blocking(lambda a, b: a * b, 6, 7)   # top-level inline blocking()
+import stackweave
+stackweave.run(2, lambda: None)        # exercise + tear down an M:N scheduler
+assert stackweave.mn_hub_count() == 0
+r = stackweave.blocking(lambda a, b: a * b, 6, 7)   # top-level inline blocking()
 print("RESULT", r)
 """
     proc = _subproc(script, timeout=20)
@@ -1532,11 +1532,11 @@ print("RESULT", r)
 
 def test_yield_now_outside_fiber_does_not_crash():
     # yield_now off a fiber has nothing to yield to; it must not crash or hang.
-    assert runloom.current() is None
+    assert stackweave.current() is None
     with hang_guard(5, "yield-outside"):
-        runloom.yield_now()
+        stackweave.yield_now()
     # still alive + still off a fiber
-    assert runloom.current() is None
+    assert stackweave.current() is None
 
 
 # ----- Ticker stale-fire torture (the first pass only tortured Timer) --------
@@ -1598,13 +1598,13 @@ def test_concurrent_cancel_same_ctx_under_mn_no_crash():
             callers.append(1)
 
         for _ in range(32):
-            runloom.fiber(racer)            # mn_fiber: spread across hubs
-        runloom.sleep(0.05)
+            stackweave.fiber(racer)            # mn_fiber: spread across hubs
+        stackweave.sleep(0.05)
         box["err"] = ctx.err()
         box["closed"] = ctx.done.closed
 
     with hang_guard(20, "mn-concurrent-cancel"):
-        runloom.run(4, main)
+        stackweave.run(4, main)
     assert len(callers) == 32, \
         "only %d/32 concurrent cancellers completed" % len(callers)
     assert box.get("err") == rctx.CANCELED
@@ -1620,8 +1620,8 @@ def test_signal_during_parked_timer_recv_no_crash_no_hang():
     # bounded TimeoutExpired.
     script = r"""
 import sys, os, signal; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
-import runloom.time as rt
+import stackweave, stackweave_c as rc
+import stackweave.time as rt
 def main():
     def handler(sig, frm):
         raise KeyboardInterrupt("alarm")
@@ -1661,9 +1661,9 @@ def test_env_modes_sysmon_preempt_handoff_over_timer_ctx_workload():
     # completes correctly.  Subprocess so a detector-induced crash is contained.
     script = r"""
 import sys, os, time; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
-import runloom.time as rt
-import runloom.context as rctx
+import stackweave, stackweave_c as rc
+import stackweave.time as rt
+import stackweave.context as rctx
 box = {}
 def main():
     def hot():
@@ -1677,16 +1677,16 @@ def main():
     def cancelled():
         ctx, cancel = rctx.WithTimeout(rctx.Background(), 0.03)
         ctx.done.recv(); box["c"] = ctx.err(); cancel()
-    runloom.fiber(hot); runloom.fiber(timed); runloom.fiber(cancelled)
-    runloom.sleep(0.25)
-runloom.run(3, main)
+    stackweave.fiber(hot); stackweave.fiber(timed); stackweave.fiber(cancelled)
+    stackweave.sleep(0.25)
+stackweave.run(3, main)
 ok = box.get("hot") and box.get("t") is True and box.get("c") == "deadline_exceeded"
 print("MODES_OK" if ok else ("MODES_BAD %r" % box))
 """
     proc = _subproc(script, timeout=40, extra_env={
-        "RUNLOOM_SYSMON": "1", "RUNLOOM_SYSMON_QUIET": "1", "RUNLOOM_SYSMON_MS": "8",
-        "RUNLOOM_PREEMPT": "1", "RUNLOOM_PREEMPT_MS": "8",
-        "RUNLOOM_HANDOFF": "1", "RUNLOOM_HANDOFF_POOL": "2",
+        "STACKWEAVE_SYSMON": "1", "STACKWEAVE_SYSMON_QUIET": "1", "STACKWEAVE_SYSMON_MS": "8",
+        "STACKWEAVE_PREEMPT": "1", "STACKWEAVE_PREEMPT_MS": "8",
+        "STACKWEAVE_HANDOFF": "1", "STACKWEAVE_HANDOFF_POOL": "2",
     })
     _assert_no_signal(proc, "env-modes")
     assert b"MODES_OK" in proc.stdout, (
@@ -1697,26 +1697,26 @@ print("MODES_OK" if ok else ("MODES_BAD %r" % box))
 @pytest.mark.skipif(not needs_free_threading(),
                     reason="M:N needs GIL-disabled build")
 def test_mn_barrier_deterministic_replay_timer_ctx():
-    # The deterministic controlled-replay barrier (RUNLOOM_MN_BARRIER + seed)
+    # The deterministic controlled-replay barrier (STACKWEAVE_MN_BARRIER + seed)
     # must still deliver correct timer/context results -- the barrier reorders
     # scheduling decisions but must not break a timer fire or a deadline.  Two
     # runs with the SAME seed must both succeed (stability of the replay).
     script = r"""
 import sys, os; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
-import runloom.time as rt
-import runloom.context as rctx
+import stackweave, stackweave_c as rc
+import stackweave.time as rt
+import stackweave.context as rctx
 box = {}
 def main():
     t = rt.Timer(0.02); v, ok = t.c.recv(); box["t"] = ok
     ctx, cancel = rctx.WithTimeout(rctx.Background(), 0.02)
     ctx.done.recv(); box["c"] = ctx.err(); cancel()
-runloom.run(3, main)
+stackweave.run(3, main)
 print("BARRIER_OK" if (box.get("t") is True
       and box.get("c") == "deadline_exceeded") else ("BAD %r" % box))
 """
-    env = {"RUNLOOM_MN_BARRIER": "1", "RUNLOOM_MN_SEED": "777",
-           "RUNLOOM_MN_PCT": "8"}
+    env = {"STACKWEAVE_MN_BARRIER": "1", "STACKWEAVE_MN_SEED": "777",
+           "STACKWEAVE_MN_PCT": "8"}
     for attempt in range(2):
         proc = _subproc(script, timeout=40, extra_env=env)
         _assert_no_signal(proc, "mn-barrier-replay-%d" % attempt)
@@ -1733,9 +1733,9 @@ def test_spawn_g_fault_during_context_cascade_does_not_crash():
     # cancel() of whatever WAS built must not crash.
     script = r"""
 import sys, os; sys.path.insert(0, "src")
-os.environ["RUNLOOM_GOROUTINE_PANIC"] = "silent"
-import runloom, runloom_c as rc
-import runloom.context as rctx
+os.environ["STACKWEAVE_GOROUTINE_PANIC"] = "silent"
+import stackweave, stackweave_c as rc
+import stackweave.context as rctx
 def main():
     try:
         root, rcancel = rctx.WithCancel(rctx.Background())
@@ -1759,7 +1759,7 @@ except Exception as e:
 print("DONE")
 """
     proc = _subproc(script, timeout=30,
-                    extra_env={"RUNLOOM_FAULT_SPAWN_G": "once:12"})
+                    extra_env={"STACKWEAVE_FAULT_SPAWN_G": "once:12"})
     _assert_clean_fault_outcome(proc, "spawn_g-fault-cascade")
 
 
@@ -1769,9 +1769,9 @@ def test_spawn_stack_fault_at_timer_scale_does_not_crash():
     # still be drivable without a crash.
     script = r"""
 import sys, os; sys.path.insert(0, "src")
-os.environ["RUNLOOM_GOROUTINE_PANIC"] = "silent"
-import runloom, runloom_c as rc
-import runloom.time as rt
+os.environ["STACKWEAVE_GOROUTINE_PANIC"] = "silent"
+import stackweave, stackweave_c as rc
+import stackweave.time as rt
 def main():
     try:
         timers = [rt.Timer(0.01) for _ in range(8)]
@@ -1794,7 +1794,7 @@ except Exception as e:
 print("DONE")
 """
     proc = _subproc(script, timeout=30,
-                    extra_env={"RUNLOOM_FAULT_SPAWN_STACK": "once:12"})
+                    extra_env={"STACKWEAVE_FAULT_SPAWN_STACK": "once:12"})
     _assert_clean_fault_outcome(proc, "spawn_stack-fault-timer-scale")
 
 
@@ -1829,8 +1829,8 @@ def test_timer_zero_duration_fires_once_immediately():
 def test_sleep_zero_and_negative_inside_fiber_return_promptly():
     def f():
         t0 = time.monotonic()
-        runloom.sleep(0.0)
-        runloom.sleep(-1.0)
+        stackweave.sleep(0.0)
+        stackweave.sleep(-1.0)
         rt.Sleep(0.0)
         rt.Sleep(-2.0)
         return time.monotonic() - t0

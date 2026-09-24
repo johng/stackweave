@@ -20,11 +20,11 @@ os.write(w, b"line-one\nline-two\n")
 os.dup2(r, 0)
 sys.stdin = os.fdopen(0, "r")     # fresh TextIOWrapper over fd 0
 
-import runloom.monkey as monkey
+import stackweave.monkey as monkey
 monkey.patch()
 
 import time
-import runloom_c as rc
+import stackweave_c as rc
 
 results = []
 

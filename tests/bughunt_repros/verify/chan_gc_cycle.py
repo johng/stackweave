@@ -1,4 +1,4 @@
-import gc, weakref, runloom_c as rc
+import gc, weakref, stackweave_c as rc
 class Req: pass
 ch = rc.Chan(1)
 r = Req(); r.reply = ch      # r -> ch

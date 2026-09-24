@@ -11,11 +11,11 @@ Stresses: cancellation (timed-out acquire) while blocked on a lock, wait-queue
 cleanup.
 """
 import harness
-import runloom
+import stackweave
 
 
 def setup(H):
-    H.state = {"lock": runloom.sync.Lock(), "counter": [0],
+    H.state = {"lock": stackweave.sync.Lock(), "counter": [0],
                "cancelled": [0] * 1024}
 
 
@@ -25,11 +25,11 @@ def hog(H, wid, rng, state):
         lock.acquire()
         try:
             state["counter"][0] += 1
-            runloom.sleep(rng.uniform(0.002, 0.02))     # long hold
+            stackweave.sleep(rng.uniform(0.002, 0.02))     # long hold
         finally:
             lock.release()
         H.op(wid)
-        runloom.sleep(rng.uniform(0.0, 0.001))
+        stackweave.sleep(rng.uniform(0.0, 0.001))
 
 
 def waiter(H, wid, rng, state):

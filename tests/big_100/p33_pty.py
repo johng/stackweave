@@ -12,7 +12,7 @@ import subprocess
 
 import harness
 import procutil
-import runloom
+import stackweave
 
 HAVE_PTY = hasattr(os, "openpty")
 if HAVE_PTY:

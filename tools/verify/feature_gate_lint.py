@@ -42,7 +42,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
-SRC = os.path.join(ROOT, "src", "runloom_c")
+SRC = os.path.join(ROOT, "src", "stackweave_c")
 
 # UAPI headers whose feature macros we police, and the macro-name prefixes that
 # identify a "feature gate" (vs an ordinary internal macro).  Add rows as new
@@ -73,7 +73,7 @@ def cc():
 
 
 def py_include_flags():
-    py = os.environ.get("RUNLOOM_PYTHON",
+    py = os.environ.get("STACKWEAVE_PYTHON",
                         os.path.expanduser("~/.pyenv/versions/3.14.4t/bin/python3"))
     try:
         out = subprocess.check_output(

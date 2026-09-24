@@ -1,12 +1,12 @@
 # cython: language_level=3, boundscheck=False, wraparound=False, cdivision=True, freethreading_compatible=True
-"""Zero-PyObject Cython echo handler for runloom_c.serve (benchmark tiers 4 & 5).
+"""Zero-PyObject Cython echo handler for stackweave_c.serve (benchmark tiers 4 & 5).
 
 The whole point of this tier: the per-request hot loop must create NO Python
 objects, so the cost of an echo round-trip is `recv()` + `send()` + a netpoll
 park and nothing else -- no method dispatch, no bytes box, no Py_buffer fill.
 
 We get there by calling the C functions runloom_tcpconn_c_recv_into /
-runloom_tcpconn_c_send_all *directly* (via the runloom_c.__tcp_capi__ capsule's
+runloom_tcpconn_c_send_all *directly* (via the stackweave_c.__tcp_capi__ capsule's
 function-pointer table), passing a raw stack buffer.  `disasm_check.sh` objdumps
 the compiled `handler` symbol and asserts there is NO call to any Py_/_Py_/
 PyObject_ symbol between the recv and send calls.
@@ -30,12 +30,12 @@ cdef const RunloomTCPCAPI *_capi = NULL
 
 cdef int _load_capi() except -1:
     global _capi
-    import runloom_c
-    cap = runloom_c.__tcp_capi__
+    import stackweave_c
+    cap = stackweave_c.__tcp_capi__
     _capi = <const RunloomTCPCAPI *>PyCapsule_GetPointer(
         cap, RUNLOOM_TCP_CAPI_CAPSULE_NAME)
     if _capi is NULL:
-        raise ImportError("runloom_c.__tcp_capi__ capsule pointer is NULL")
+        raise ImportError("stackweave_c.__tcp_capi__ capsule pointer is NULL")
     return 0
 
 _load_capi()
@@ -48,7 +48,7 @@ DEF CHUNK = 65536
 # Work knob for the work curve: the SAME FNV-1a byte hash, run INLINE in this
 # zero-PyObject Cython handler. So the FULL request path is native -- capi recv,
 # native FNV, fold, capi send -- no interpreted recv_into/send_all/fold wrapper
-# and no per-call boxing. This is the state-of-the-art optimized runloom handler
+# and no per-call boxing. This is the state-of-the-art optimized stackweave handler
 # (the line that competes with Go), not a Python def calling a compiled function.
 # _work is set once via set_work() before serve() spawns any fiber. work=0 = echo.
 cdef int _work = 0
@@ -70,7 +70,7 @@ cdef unsigned int _fnv(const unsigned char *buf, Py_ssize_t n, int passes) noexc
 
 
 def handler(conn):
-    """serve() hands us a runloom_c.TCPConn.  recv -> (optional inline FNV) ->
+    """serve() hands us a stackweave_c.TCPConn.  recv -> (optional inline FNV) ->
     send, until EOF. Zero PyObjects in the loop body either way."""
     cdef PyObject *c = <PyObject *>conn
     cdef char buf[CHUNK]

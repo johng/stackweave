@@ -92,18 +92,18 @@ def listen_tcp(host=None, port=0, backlog=4096, family=socket.AF_INET):
 def accept_timeout(srv, timeout_ms=200):
     """Cooperative accept that returns None on timeout.
 
-    runloom's close() does NOT wake a goroutine parked in the monkey-patched
+    stackweave's close() does NOT wake a goroutine parked in the monkey-patched
     socket.accept() (FINDINGS BUG #5), so a server that relies on closing the
     listener to break its accept loop hangs at teardown.  We instead wait_fd
     with a timeout ourselves and do the RAW non-blocking _accept (unpatched),
     so the loop can re-check running() every timeout_ms and never parks
     without a deadline."""
-    import runloom_c
+    import stackweave_c
     try:
         fd = srv.fileno()
     except (OSError, ValueError):
         return None
-    if fd < 0 or not (runloom_c.wait_fd(fd, 1, timeout_ms) & 1):
+    if fd < 0 or not (stackweave_c.wait_fd(fd, 1, timeout_ms) & 1):
         return None
     try:
         cfd, addr = srv._accept()
@@ -131,7 +131,7 @@ def serve_forever(H, srv, on_conn):
     teardown.  Draining the backlog each wakeup lifts accept to the
     accept()-syscall rate (tens of thousands/s) and keeps the pipeline flowing.
     """
-    import runloom_c
+    import stackweave_c
     try:
         fd = srv.fileno()
     except (OSError, ValueError):
@@ -157,7 +157,7 @@ def serve_forever(H, srv, on_conn):
                 # does not wake a parked accept -- FINDINGS BUG #5).
                 if fd < 0:
                     break
-                runloom_c.wait_fd(fd, 1, 200)
+                stackweave_c.wait_fd(fd, 1, 200)
     finally:
         close_quiet(srv)
 
@@ -232,9 +232,9 @@ def recv_line_timeout(sock, timeout_ms, buf):
     netutil.TIMEOUT if none arrived in time, or raises OSError on EOF.  Lets a
     single-goroutine client drain a server without a second goroutine parked on
     the fd."""
-    import runloom_c
+    import stackweave_c
     while b"\n" not in buf:
-        if not (runloom_c.wait_fd(sock.fileno(), 1, timeout_ms) & 1):
+        if not (stackweave_c.wait_fd(sock.fileno(), 1, timeout_ms) & 1):
             return TIMEOUT
         chunk = sock.recv(4096)
         if not chunk:
@@ -254,9 +254,9 @@ def udp_recvfrom_timeout(sock, n, timeout_ms):
     otherwise the socket is readable and recvfrom returns immediately.  Each
     UDP socket is owned by one goroutine, so no one else drains it between the
     wait and the read."""
-    import runloom_c
+    import stackweave_c
     fd = sock.fileno()
-    ready = runloom_c.wait_fd(fd, 1, timeout_ms)
+    ready = stackweave_c.wait_fd(fd, 1, timeout_ms)
     if not (ready & 1):
         return (None, None)
     try:

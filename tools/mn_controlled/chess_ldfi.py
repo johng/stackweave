@@ -15,7 +15,7 @@ v1 = depth-1 (single-wake drops): "does this workload tolerate ANY dropped wake?
 Follow-on (true LDFI): depth>1 minimal CUT SETS via backward provenance -- reason
 from the success's lineage to the smallest fault combination that prevents it.
 
-Run under RUNLOOM_MN_SEED so the wake order is serialized + reproducible.
+Run under STACKWEAVE_MN_SEED so the wake order is serialized + reproducible.
 House style: .format(), no f-strings.
 """
 import argparse
@@ -36,12 +36,12 @@ DEFAULT_WORKLOAD = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 def run(workload, drop, timeout, env, count_file=None):
     e = dict(os.environ)
     e.update(PYTHON_GIL="0", PYTHONPATH=os.path.join(ROOT, "src"),
-             RUNLOOM_MN_SEED="1")
+             STACKWEAVE_MN_SEED="1")
     e.update(env)
     if drop is not None:
-        e["RUNLOOM_LDFI_DROP"] = str(drop)
+        e["STACKWEAVE_LDFI_DROP"] = str(drop)
     if count_file:
-        e["RUNLOOM_LDFI_COUNT"] = count_file
+        e["STACKWEAVE_LDFI_COUNT"] = count_file
     try:
         r = subprocess.run([PY, workload], env=e, cwd=ROOT, timeout=timeout,
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)

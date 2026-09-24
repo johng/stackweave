@@ -25,8 +25,8 @@ pytestmark = pytest.mark.skipif(
 
 def run_seed(program, seed):
     env = mn_digest.hermetic_env({
-        "RUNLOOM_SIM": "1", "RUNLOOM_SIM_MN": "1",
-        "RUNLOOM_MN_SEED": str(seed),
+        "STACKWEAVE_SIM": "1", "STACKWEAVE_SIM_MN": "1",
+        "STACKWEAVE_MN_SEED": str(seed),
     })
     code = (
         "import sys; sys.path.insert(0, 'tools/dst')\n"

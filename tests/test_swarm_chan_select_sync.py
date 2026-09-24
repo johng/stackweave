@@ -1,10 +1,10 @@
 """Adversarial QA swarm: channels + select() + sync primitives.
 
 Subsystem `chan_select_sync`:
-  C   : runloom_c.Chan / runloom_c.Mutex / runloom_c.select
+  C   : stackweave_c.Chan / stackweave_c.Mutex / stackweave_c.select
         (chan.c, chan_ops.c.inc, chan_waiters.c.inc, chan_select_*.c.inc,
          module_chan.c.inc, module_select.c.inc)
-  Py  : runloom.sync -- WaitGroup, Future, gather, Semaphore, RWMutex, Once,
+  Py  : stackweave.sync -- WaitGroup, Future, gather, Semaphore, RWMutex, Once,
         once_value/once_func, Group/singleflight, Watch, JoinSet.
 
 This file deliberately goes DEEPER than tests/test_adv_chan.py and
@@ -30,8 +30,8 @@ manufactures, per the adversarial mandate:
               double-close, double-unlock, unlock-not-held, double-resolve;
               fault injection (SPAWN_G / SPAWN_STACK) mid-workload.
 
-Drive: single-thread via runloom.run(1, ...) / rc.fiber+rc.run; M:N via
-runloom.run(N>=2, main) where children are spawned with rc.mn_fiber / runloom.fiber.
+Drive: single-thread via stackweave.run(1, ...) / rc.fiber+rc.run; M:N via
+stackweave.run(N>=2, main) where children are spawned with rc.mn_fiber / stackweave.fiber.
 """
 import gc
 import os
@@ -42,9 +42,9 @@ import weakref
 
 import pytest
 
-import runloom
-import runloom_c as rc
-from runloom.sync import (
+import stackweave
+import stackweave_c as rc
+from stackweave.sync import (
     WaitGroup, Future, gather, Semaphore, RWMutex, Once,
     once_value, once_func, Group, Watch, JoinSet,
 )
@@ -765,7 +765,7 @@ def test_mutex_try_lock_and_unlock_from_foreign_thread_safe():
     # try_lock never parks -> documented foreign-OS-thread safe path. Run in a
     # subprocess so a hypothetical SIGSEGV is contained as a negative rc.
     script = r"""
-import runloom_c as rc, threading, sys
+import stackweave_c as rc, threading, sys
 m = rc.Mutex()
 res = {}
 def foreign():
@@ -883,8 +883,8 @@ def test_waitgroup_done_from_foreign_thread_rejected_cleanly():
     # The WAKE side (done()/add(negative)) must reject a foreign caller with a
     # clean RuntimeError BEFORE taking the guard -- never a SIGSEGV.
     script = r"""
-import runloom_c as rc, threading, sys
-from runloom.sync import WaitGroup
+import stackweave_c as rc, threading, sys
+from stackweave.sync import WaitGroup
 wg = WaitGroup(); wg.add(1)
 res = {}
 def foreign():
@@ -975,8 +975,8 @@ def test_future_result_timeout_raises_timeouterror():
 
 def test_future_resolve_from_foreign_thread_rejected():
     script = r"""
-import runloom_c as rc, threading, sys
-from runloom.sync import Future
+import stackweave_c as rc, threading, sys
+from stackweave.sync import Future
 fut = Future()
 res = {}
 def foreign():
@@ -1002,8 +1002,8 @@ def test_future_foreign_waiter_can_poll():
     # A foreign thread WAITING (polling) on a Future resolved by a fiber is
     # legal; cover that path in a subprocess.
     script = r"""
-import runloom_c as rc, threading, time, sys
-from runloom.sync import Future
+import stackweave_c as rc, threading, time, sys
+from stackweave.sync import Future
 fut = Future()
 out = {}
 def foreign_waiter():
@@ -1205,7 +1205,7 @@ def test_semaphore_bounds_concurrency_under_mn():
         wg.wait()
 
     with hang_guard(40, "sem bounds MN"):
-        runloom.run(3, main)
+        stackweave.run(3, main)
     assert not overflow, "semaphore exceeded limit %d: peaks %r" % (LIMIT, overflow)
 
 
@@ -1425,11 +1425,11 @@ def test_once_func_runs_once():
     assert _run_single(main) == "ok"
 
 
-# TODO(runloom): FOREIGN-THREAD LOST WAKEUP -- a genuine runloom bug, NOT a
+# TODO(stackweave): FOREIGN-THREAD LOST WAKEUP -- a genuine stackweave bug, NOT a
 # 3.13t/CPython issue.  Once.do() from a foreign OS thread intermittently strands
 # (TIMEOUT).  Reproduced on a Linux 2-core box on BOTH 3.13t AND 3.14t; the same
 # foreign-thread load under stock asyncio is clean (0/40) and gc.disable() does
-# not help -- so gh-116738/gh-137433 are falsified.  The fault is runloom's
+# not help -- so gh-116738/gh-137433 are falsified.  The fault is stackweave's
 def test_once_do_from_foreign_thread_as_first_executor_rejected():
     # A foreign thread may not be the FIRST executor (it would wake parked
     # fibers); must reject cleanly.
@@ -1681,7 +1681,7 @@ def test_mn_buffered_fan_in_set_equality_no_dup_no_loss():
         ch.close()
 
     with hang_guard(60, "mn buffered fan-in"):
-        runloom.run(4, main)
+        stackweave.run(4, main)
 
     got = [v for slot in collected for v in slot]
     expected = set(range(P * PER))
@@ -1739,14 +1739,14 @@ def test_mn_select_send_and_recv_mixed_no_loss():
         wg.wait()
 
     with hang_guard(60, "mn select mixed"):
-        runloom.run(3, main)
+        stackweave.run(3, main)
     assert len(sink) == total, "lost/dup under select: got %d want %d" % (len(sink), total)
     assert set(sink) == set(range(total)), "select dropped or duplicated a value"
 
 
 @pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_mn_mutex_serializes_under_work_stealing():
-    # A runloom_c.Mutex under M:N must give true mutual exclusion: a non-atomic
+    # A stackweave_c.Mutex under M:N must give true mutual exclusion: a non-atomic
     # read-modify-write inside the critical section loses NO increments.
     N, ITERS = 16, 200
     box = {"n": 0}
@@ -1771,7 +1771,7 @@ def test_mn_mutex_serializes_under_work_stealing():
         wg.wait()
 
     with hang_guard(60, "mn mutex exclusion"):
-        runloom.run(4, main)
+        stackweave.run(4, main)
     assert box["n"] == N * ITERS, \
         "mutex lost increments under M:N: %d != %d" % (box["n"], N * ITERS)
 
@@ -1781,19 +1781,19 @@ def test_mn_mutex_serializes_under_work_stealing():
 #               never a crash, when a spawn fails mid-workload.
 # ==========================================================================
 def test_spawn_g_fault_injection_is_clean_error_not_crash():
-    # RUNLOOM_FAULT_SPAWN_G="once:12" -> the next fiber() fails with ENOMEM-style
+    # STACKWEAVE_FAULT_SPAWN_G="once:12" -> the next fiber() fails with ENOMEM-style
     # error. gather()/JoinSet spawn fibers; the failure must be a Python
     # exception, not a SIGSEGV. Contained in a subprocess.
     script = r"""
 import os, sys
-import runloom_c as rc
-# RUNLOOM_FAULT_SPAWN_G="once:12" makes the NEXT fiber()/mn_fiber() fail with a clean
+import stackweave_c as rc
+# STACKWEAVE_FAULT_SPAWN_G="once:12" makes the NEXT fiber()/mn_fiber() fail with a clean
 # MemoryError-class error. Whether it lands on the driver spawn or a workload
 # spawn, the contract is the same: a clean Python exception, NO signal/crash.
 crashed = {}
 def main():
     try:
-        from runloom.sync import gather
+        from stackweave.sync import gather
         gather(lambda: 1, lambda: 2, lambda: 3)
         crashed['r'] = 'gather-ok'
     except BaseException as e:
@@ -1808,8 +1808,8 @@ except BaseException as e:
 print('RESULT', crashed)
 sys.exit(0)
 """
-    p = _subprocess(script, env_extra={"RUNLOOM_FAULT_SPAWN_G": "once:12",
-                                       "RUNLOOM_GOROUTINE_PANIC": "silent"},
+    p = _subprocess(script, env_extra={"STACKWEAVE_FAULT_SPAWN_G": "once:12",
+                                       "STACKWEAVE_GOROUTINE_PANIC": "silent"},
                     timeout=30)
     assert p.returncode is None or p.returncode >= 0, \
         "SPAWN_G fault crashed with a signal: rc=%r\n%s" % (
@@ -1820,13 +1820,13 @@ sys.exit(0)
 def test_spawn_stack_fault_injection_is_clean_error_not_crash():
     script = r"""
 import os, sys
-import runloom_c as rc
+import stackweave_c as rc
 out = {}
 def child():
     return 1
 def main():
     try:
-        from runloom.sync import JoinSet
+        from stackweave.sync import JoinSet
         js = JoinSet()
         for _ in range(4):
             js.spawn(child)
@@ -1842,8 +1842,8 @@ except BaseException as e:
 print('RESULT', out)
 sys.exit(0)
 """
-    p = _subprocess(script, env_extra={"RUNLOOM_FAULT_SPAWN_STACK": "once:12",
-                                       "RUNLOOM_GOROUTINE_PANIC": "silent"},
+    p = _subprocess(script, env_extra={"STACKWEAVE_FAULT_SPAWN_STACK": "once:12",
+                                       "STACKWEAVE_GOROUTINE_PANIC": "silent"},
                     timeout=30)
     assert p.returncode is None or p.returncode >= 0, \
         "SPAWN_STACK fault crashed with a signal: rc=%r\n%s" % (
@@ -2158,7 +2158,7 @@ def test_semaphore_single_release_wakes_multiple_small_waiters():
     def main():
         s = Semaphore(4)
         s.acquire(4)                            # everyone parks
-        from runloom.sync import WaitGroup
+        from stackweave.sync import WaitGroup
         wg = WaitGroup(); wg.add(4)
 
         def small(i):
@@ -2195,8 +2195,8 @@ def test_waitgroup_foreign_thread_wait_side_polls_to_completion():
     # A foreign OS thread WAITING on a WaitGroup that a fiber drains is legal
     # (the wait() poll fallback). Contained in a subprocess.
     script = r"""
-import runloom_c as rc, threading, sys
-from runloom.sync import WaitGroup
+import stackweave_c as rc, threading, sys
+from stackweave.sync import WaitGroup
 wg = WaitGroup(); wg.add(1)
 out = {}
 def foreign_wait():
@@ -2222,8 +2222,8 @@ sys.exit(0)
 
 def test_watch_foreign_thread_wait_changed_polls():
     script = r"""
-import runloom_c as rc, threading, sys
-from runloom.sync import Watch
+import stackweave_c as rc, threading, sys
+from stackweave.sync import Watch
 w = Watch("init")
 out = {}
 def foreign_wait():
@@ -2255,8 +2255,8 @@ def test_once_foreign_thread_waiter_polls_while_fiber_executes():
     # thread is guaranteed to enter once.do() while _running is True and take the
     # foreign-waiter POLL branch -- not become a second executor.
     script = r"""
-import runloom_c as rc, threading, time, sys
-from runloom.sync import Once
+import stackweave_c as rc, threading, time, sys
+from stackweave.sync import Once
 once = Once()
 ran = []
 out = {}
@@ -2297,7 +2297,7 @@ def test_rwmutex_writer_release_wakes_all_queued_readers_at_once():
     peak = {"cur": 0, "max": 0}
 
     def main():
-        from runloom.sync import WaitGroup
+        from stackweave.sync import WaitGroup
         rw = RWMutex()
         wg = WaitGroup(); wg.add(4)
 
@@ -2344,7 +2344,7 @@ def test_rwmutex_rlocked_context_manager():
     peak = {"cur": 0, "max": 0}
 
     def main():
-        from runloom.sync import WaitGroup
+        from stackweave.sync import WaitGroup
         rw = RWMutex()
         wg = WaitGroup(); wg.add(3)
 
@@ -2392,7 +2392,7 @@ def test_singleflight_forget_while_inflight_starts_fresh_call():
     owners = []
 
     def main():
-        from runloom.sync import WaitGroup
+        from stackweave.sync import WaitGroup
         g = Group()
         wg = WaitGroup(); wg.add(2)
 
@@ -2456,8 +2456,8 @@ def test_singleflight_foreign_thread_joins_inflight_key():
     # deletes the key + resolves the Future) after that window, so the foreign
     # join is guaranteed to have grabbed the in-flight Future, not a fresh key.
     script = r"""
-import runloom_c as rc, threading, time, sys
-from runloom.sync import Group
+import stackweave_c as rc, threading, time, sys
+from stackweave.sync import Group
 g = Group()
 out = {}
 key_ready = threading.Event()
@@ -2541,7 +2541,7 @@ def test_mutex_parked_lockers_handed_off_fifo():
     def main():
         m = rc.Mutex()
         m.lock()                            # held by main fiber's child below
-        from runloom.sync import WaitGroup
+        from stackweave.sync import WaitGroup
         wg = WaitGroup(); wg.add(3)
 
         def locker(i):
@@ -2633,7 +2633,7 @@ def test_mn_unbuffered_rendezvous_fan_in_out_set_equality():
         ch.close()
 
     with hang_guard(60, "mn unbuffered rendezvous"):
-        runloom.run(4, main)
+        stackweave.run(4, main)
     got = [v for slot in collected for v in slot]
     expected = set(range(P * PER))
     assert len(got) == len(expected), "lost/dup: got %d want %d" % (len(got), len(expected))
@@ -2706,7 +2706,7 @@ def test_mn_select_competes_with_direct_recv_no_double_consume():
             rc.sched_yield()
 
     with hang_guard(60, "mn select vs direct recv"):
-        runloom.run(4, main)
+        stackweave.run(4, main)
     assert len(sink) == total, "lost/dup: got %d want %d" % (len(sink), total)
     assert set(sink) == set(range(total)), "select/direct race dropped or duped a value"
 
@@ -2731,7 +2731,7 @@ def test_gather_and_joinset_route_to_mn_under_run_n():
         out["joinset"] = js.join_all()
 
     with hang_guard(40, "gather/joinset MN"):
-        runloom.run(3, main)
+        stackweave.run(3, main)
     assert out["gather"] == [v * v for v in range(8)], out["gather"]
     assert out["joinset"] == [v * v + 1000 for v in range(8)], out["joinset"]
 
@@ -2752,7 +2752,7 @@ def test_joinset_first_exception_by_spawn_order_under_mn():
             out["r"] = str(e)
 
     with hang_guard(30, "joinset first-exc MN"):
-        runloom.run(3, main)
+        stackweave.run(3, main)
     assert out["r"] == "first", out
 
 
@@ -2846,7 +2846,7 @@ def test_once_executor_fn_yields_while_waiters_queue_then_all_wake():
     ran = []
 
     def main():
-        from runloom.sync import WaitGroup
+        from stackweave.sync import WaitGroup
         once = Once()
         wg = WaitGroup(); wg.add(6)
 
@@ -2887,7 +2887,7 @@ def test_many_concurrent_selects_deep_eviction_no_leak():
 
     def main():
         chans = [rc.Chan(0) for _ in range(NCH)]
-        from runloom.sync import WaitGroup
+        from stackweave.sync import WaitGroup
         wg = WaitGroup(); wg.add(NSEL)
 
         def chooser(cid):
@@ -2962,8 +2962,8 @@ def test_chan_iterator_partial_then_close_midstream():
 def test_fault_spawn_g_during_mn_channel_workload_no_crash():
     script = r"""
 import os, sys
-import runloom_c as rc, runloom
-from runloom.sync import WaitGroup
+import stackweave_c as rc, stackweave
+from stackweave.sync import WaitGroup
 out = {}
 def main():
     ch = rc.Chan(8)
@@ -2993,14 +2993,14 @@ def main():
     except BaseException as e:
         out['r'] = type(e).__name__
 try:
-    runloom.run(3, main)
+    stackweave.run(3, main)
 except BaseException as e:
     out['top'] = type(e).__name__
 print('RESULT', out)
 sys.exit(0)
 """
-    p = _subprocess(script, env_extra={"RUNLOOM_FAULT_SPAWN_G": "once:12",
-                                       "RUNLOOM_GOROUTINE_PANIC": "silent"},
+    p = _subprocess(script, env_extra={"STACKWEAVE_FAULT_SPAWN_G": "once:12",
+                                       "STACKWEAVE_GOROUTINE_PANIC": "silent"},
                     timeout=60)
     assert p.returncode is None or p.returncode >= 0, \
         "SPAWN_G fault during MN channel workload crashed: rc=%r\n%s" % (
@@ -3011,11 +3011,11 @@ sys.exit(0)
 def test_fault_spawn_tstate_clean_error_not_crash():
     script = r"""
 import sys
-import runloom_c as rc
+import stackweave_c as rc
 out = {}
 def main():
     try:
-        from runloom.sync import gather
+        from stackweave.sync import gather
         gather(lambda: 1, lambda: 2, lambda: 3)
         out['r'] = 'ok'
     except BaseException as e:
@@ -3027,8 +3027,8 @@ except BaseException as e:
 print('RESULT', out)
 sys.exit(0)
 """
-    p = _subprocess(script, env_extra={"RUNLOOM_FAULT_SPAWN_TSTATE": "once:12",
-                                       "RUNLOOM_GOROUTINE_PANIC": "silent"},
+    p = _subprocess(script, env_extra={"STACKWEAVE_FAULT_SPAWN_TSTATE": "once:12",
+                                       "STACKWEAVE_GOROUTINE_PANIC": "silent"},
                     timeout=30)
     assert p.returncode is None or p.returncode >= 0, \
         "SPAWN_TSTATE fault crashed: rc=%r\n%s" % (

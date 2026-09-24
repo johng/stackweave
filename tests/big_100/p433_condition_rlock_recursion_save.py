@@ -8,7 +8,7 @@ alongside ``self._lock._owner``).  The racing op pair is the wait()-time
 save/force/restore of that exact field versus a sibling fiber's
 acquire()/release() mutation of the SAME field on the shared lock.
 
-CoCondition.wait() (src/runloom/monkey/events.py:145-183) literally does, for an
+CoCondition.wait() (src/stackweave/monkey/events.py:145-183) literally does, for an
 RLock-backed Condition:
 
     owned_recursion = self._lock._count        # SAVE the recursion depth
@@ -98,7 +98,7 @@ RNG is per-fiber (rng / rng.getrandbits-seeded children) so a failure replays.
 import threading
 
 import harness
-import runloom
+import stackweave
 
 # Finite UNIVERSE of legal recursion depths.  A waiter enters at depth D in this
 # set and MUST wake at exactly D; an observed-on-wake depth outside this set (or
@@ -162,7 +162,7 @@ def shared_round(H, wid, rng, slot, state):
         with cond:
             box["ready"] = False
 
-        wg = runloom.WaitGroup()
+        wg = stackweave.WaitGroup()
         wg.add(WAITERS + 1)
 
         def run_waiter(k):
@@ -253,7 +253,7 @@ def shared_round(H, wid, rng, slot, state):
                 # wake them all.  notify_all under the lock is the legal protocol;
                 # the waiters reacquire one-by-one and each runs its restore.
                 for _ in range(WAITERS):
-                    runloom.yield_now()
+                    stackweave.yield_now()
                 spins = 0
                 while not H.failed:
                     with cond:
@@ -264,7 +264,7 @@ def shared_round(H, wid, rng, slot, state):
                     # predicate, which is now true, so it won't re-park -- but a
                     # belt-and-braces re-notify keeps the round from depending on
                     # exact park timing).
-                    runloom.yield_now()
+                    stackweave.yield_now()
                     spins += 1
                     if spins >= 4:
                         break
@@ -293,7 +293,7 @@ def control_round(H, wid, rng, slot, state):
     ctrl_rel = state["ctrl_rel"]
     tally_lock = state["tally_lock"]     # guards slot-aliased += across workers
 
-    wg = runloom.WaitGroup()
+    wg = stackweave.WaitGroup()
     wg.add(2)
 
     result = {"depth": None, "owned": None, "underflow": False}
@@ -337,7 +337,7 @@ def control_round(H, wid, rng, slot, state):
     def run_notifier():
         try:
             for _ in range(2):
-                runloom.yield_now()
+                stackweave.yield_now()
             with cond:
                 box["ready"] = True
                 cond.notify_all()
@@ -405,7 +405,7 @@ def setup(H):
     # RLock) so only one shared_round drives a given cond at a time.  It never
     # touches the _count field under test -- it just keeps two rounds from
     # clobbering each other's `ready` predicate (a test artifact, not the hazard).
-    guards = [runloom.sync.Lock() for _ in range(NCOND)]
+    guards = [stackweave.sync.Lock() for _ in range(NCOND)]
     H.state = {
         "conds": conds,
         "boxes": boxes,
@@ -418,7 +418,7 @@ def setup(H):
         # TEAR across hubs under GIL-off.  Serializing the write makes the
         # conservation oracle exact; it does NOT touch the CoRLock _count field
         # under test (that race is entirely within wait()'s save/restore).
-        "tally_lock": runloom.sync.Lock(),
+        "tally_lock": stackweave.sync.Lock(),
         "acq_levels": [0] * SLOTS,   # shared-arm recursion levels acquired
         "rel_levels": [0] * SLOTS,   # shared-arm recursion levels released
         "ok_depth": [0] * SLOTS,     # shared-arm waiters that woke at the right depth

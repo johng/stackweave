@@ -32,7 +32,7 @@ buffer_callback=cb)`` drives the carrier's buffer OUT-OF-BAND: the pickler calls
 ``cb(PickleBuffer(src))`` and writes only a placeholder, so the collected
 PickleBuffer holds ``src``'s export OPEN across the ENTIRE transfer.  That
 transfer step is COOPERATIVE -- the fiber that collected the PickleBuffer(s)
-PARKS (``runloom.yield_now()``) on its grown-down C stack with the export still
+PARKS (``stackweave.yield_now()``) on its grown-down C stack with the export still
 held, exactly as a real out-of-band transport would await an ack.  A sibling
 fiber on ANOTHER hub, released into that park window, hammers ``src.append()`` /
 ``src += ...`` on the SAME bytearray.  Every one of those resizes MUST be refused
@@ -98,7 +98,7 @@ import array
 import pickle
 
 import harness
-import runloom
+import stackweave
 
 # Length of each fresh source bytearray.  Big enough that a slipped realloc moves
 # a lot of payload (so a dangling reconstruct is very likely to land out-of-
@@ -275,9 +275,9 @@ def do_cross(H, wid, rng, state, slot, iadd):
     # gate: the worker trips it the instant before it parks; the mutator waits on
     # it, so the sibling's resize attempts provably land INSIDE the park window
     # while the PickleBuffer(s) hold src's export open.
-    gate = runloom.WaitGroup()
+    gate = stackweave.WaitGroup()
     gate.add(1)
-    wg = runloom.WaitGroup()
+    wg = stackweave.WaitGroup()
     wg.add(1)
     mseed = rng.getrandbits(48)
     refusals_box = [0]
@@ -304,8 +304,8 @@ def do_cross(H, wid, rng, state, slot, iadd):
 
     # Trip the gate, then PARK with the PickleBuffer(s) live and the export held.
     gate.done()
-    runloom.yield_now()                     # the sibling's resizes land here
-    runloom.yield_now()
+    stackweave.yield_now()                     # the sibling's resizes land here
+    stackweave.yield_now()
     wg.wait()                               # mutator finished its attempts
 
     if H.failed:
@@ -399,7 +399,7 @@ def do_control(H, wid, rng, state, slot, use_array):
 
     # Park anyway (a control fiber still cooperatively yields) -- proves a park with
     # the export held is fine WITHOUT a racing sibling.
-    runloom.yield_now()
+    stackweave.yield_now()
 
     out = pickle.loads(data, buffers=pbufs)
     got = bytes(out.obj)

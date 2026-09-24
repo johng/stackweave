@@ -1,11 +1,11 @@
 """big_100 / 303 -- functools.lru_cache C list+dict under cross-hub eviction churn.
 
 SKIPPED FOR NOW -- the currsize<=maxsize bound this program asserts is violated by a
-KNOWN UPSTREAM CPython free-threading bug, NOT a runloom defect:
+KNOWN UPSTREAM CPython free-threading bug, NOT a stackweave defect:
     https://github.com/python/cpython/issues/148180
     "functools.lru_cache critical section locks self but _LockHeld dict APIs assert
      self->cache is locked"  (open, type-crash, topic-free-threading)
-Reproduced with PLAIN threading.Thread (no runloom) on arm64 3.13t: the cache dict
+Reproduced with PLAIN threading.Thread (no stackweave) on arm64 3.13t: the cache dict
 exceeds maxsize (currsize=129 for maxsize=128); GIL-on and x86-64 stay clean, so it
 is an arm64 weak-memory window on the wrapper's wrong-object critical section.  The
 program skips via setup()'s note_scale_limit until CPython fixes it; re-enable then.
@@ -69,7 +69,7 @@ import functools
 import random
 
 import harness
-import runloom
+import stackweave
 
 SALT = 0x5BD1E995            # the closed-form fold constant; f is pure on this
 MAXSIZE = 128                # small -> KEYSPACE >> maxsize forces eviction churn
@@ -117,7 +117,7 @@ def hammer(H, wid, rng, f, calls):
             return
         H.op(wid)
         if (i & 15) == 0:
-            runloom.yield_now()     # invite a cross-hub resume mid-splice
+            stackweave.yield_now()     # invite a cross-hub resume mid-splice
 
 
 def worker(H, wid, rng, state):
@@ -147,7 +147,7 @@ def worker(H, wid, rng, state):
                 if (i % CLEAR_EVERY) == 0:
                     f_bounded.cache_clear()
                     f_unbounded.cache_clear()
-                    runloom.yield_now()
+                    stackweave.yield_now()
         else:
             hammer(H, wid, rng, f_bounded, CALLS_PER_ROUND)
             if H.running():
@@ -160,7 +160,7 @@ SKIP_REASON = (
     "(https://github.com/python/cpython/issues/148180 -- functools.lru_cache "
     "critical section locks self, not self->cache); reproduced with PLAIN threads "
     "on arm64 3.13t (currsize=129 > maxsize=128; GIL-on + x86 clean) -- NOT a "
-    "runloom bug. Skipped for now; re-enable when CPython fixes it.")
+    "stackweave bug. Skipped for now; re-enable when CPython fixes it.")
 
 
 def setup(H):

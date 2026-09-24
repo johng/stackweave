@@ -10,7 +10,7 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
-PY="${RUNLOOM_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
+PY="${STACKWEAVE_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
 LIBASAN="$(gcc -print-file-name=libasan.so 2>/dev/null)"
 [ -f "$LIBASAN" ] || { echo "libasan.so not found -- SKIP"; exit 0; }
 command -v setarch >/dev/null 2>&1 && SA="setarch $(uname -m) -R" || SA=""

@@ -17,7 +17,7 @@ import time as _time
 import _thread as _real_thread       # captured before monkey.patch()
 
 import harness
-import runloom
+import stackweave
 
 REAL_SLEEP = _time.sleep
 
@@ -73,7 +73,7 @@ def goroutine_sampler(H, wid, rng, state):
             state["go_max_frames"][wid & 255] = n
         del frames
         H.op(wid)
-        runloom.sleep(0.001)
+        stackweave.sleep(0.001)
 
 
 def churn_worker(H, wid, rng, state):
@@ -82,11 +82,11 @@ def churn_worker(H, wid, rng, state):
     for _ in H.round_range():
         # A little nested call depth so there are real frames to sample.
         def lvl3():
-            runloom.yield_now()
+            stackweave.yield_now()
             return [bytearray(64) for _ in range(8)]
 
         def lvl2():
-            runloom.sleep(0.0005)
+            stackweave.sleep(0.0005)
             return lvl3()
 
         junk = lvl2()
@@ -96,7 +96,7 @@ def churn_worker(H, wid, rng, state):
         H.op(wid)
         H.task_done(wid)
         if rng.random() < 0.3:
-            runloom.yield_now()
+            stackweave.yield_now()
 
 
 def setup(H):

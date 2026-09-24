@@ -8,11 +8,11 @@
 # leaving the kernel registered for READ only while the arm cache says RW.
 # The WRITE parker never gets its event -> spurious timeout / infinite hang.
 #
-# Run with RUNLOOM_PERHUB_EPOLL=0 to isolate from the (separate) cross-pool
+# Run with STACKWEAVE_PERHUB_EPOLL=0 to isolate from the (separate) cross-pool
 # migration bug.
 import os, socket, sys, time, threading
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 
 READ, WRITE = 1, 2
 N_ROUNDS = int(os.environ.get("ROUNDS", "400"))
@@ -48,9 +48,9 @@ def worker(role):
 
 def main():
   try:
-    runloom.fiber(worker, "r")
-    runloom.fiber(worker, "w")
-    runloom.sleep(0.2)
+    stackweave.fiber(worker, "r")
+    stackweave.fiber(worker, "w")
+    stackweave.sleep(0.2)
     bad = []
     cross = 0
     for rnd in range(1, N_ROUNDS + 1):
@@ -69,9 +69,9 @@ def main():
         # wait for both to arrive at the barrier (they then race into wait_fd)
         t0 = time.monotonic()
         while (state["arr_r"] != rnd or state["arr_w"] != rnd):
-            runloom.sleep(0.001)
+            stackweave.sleep(0.001)
             if time.monotonic() - t0 > 5: raise RuntimeError("barrier wedge")
-        runloom.sleep(0.005)               # let both link+register+park
+        stackweave.sleep(0.005)               # let both link+register+park
         if state["tid_r"] != state["tid_w"]:
             cross += 1
         b.send(b"!")                       # a readable
@@ -82,7 +82,7 @@ def main():
             pass
         t0 = time.monotonic()
         while state["res_r"] is None or state["res_w"] is None:
-            runloom.sleep(0.001)
+            stackweave.sleep(0.001)
             if time.monotonic() - t0 > 3: break
         rr, rw = state["res_r"], state["res_w"]
         if rr != READ or rw != WRITE:
@@ -98,7 +98,7 @@ def main():
   finally:
     state["stop"] = True
 
-runloom.run(3, main)
+stackweave.run(3, main)
 nbad, cross = state["summary"]
 print("rounds=%d cross_hub=%d lost_wakeups=%d" % (N_ROUNDS, cross, nbad))
 sys.exit(1 if nbad else 0)

@@ -17,7 +17,7 @@ destructor under M:N.
 import gc
 
 import harness
-import runloom
+import stackweave
 
 import _thread as _real_thread
 import time as _time
@@ -68,7 +68,7 @@ def rng_count():
 
 def setup(H):
     H.state = {
-        "lock": runloom.sync.Lock(),
+        "lock": stackweave.sync.Lock(),
         "finalized": [0],
         "thread_collects": [0],
         "stop": [False],
@@ -92,7 +92,7 @@ def worker(H, wid, rng, state):
         H.op(wid)
         H.task_done(wid)
         if rng.random() < 0.1:
-            runloom.yield_now()
+            stackweave.yield_now()
 
 
 def body(H):

@@ -13,7 +13,7 @@ Stresses: traceback/frame cycle reclamation by the cyclic GC under M:N.
 import gc
 
 import harness
-import runloom
+import stackweave
 
 # Real-thread entry points captured before monkey.patch() turns them
 # cooperative.  The auditor runs on a genuine OS thread so a stop-the-world
@@ -83,7 +83,7 @@ def worker(H, wid, rng, state):
         H.op(wid)
         H.task_done(wid)
         if rng.random() < 0.1:
-            runloom.yield_now()
+            stackweave.yield_now()
 
 
 def auditor_thread(H, state):
@@ -121,7 +121,7 @@ def auditor_thread(H, state):
     # of legitimate churn while still tripping on a catastrophic (orders-of-
     # magnitude larger, monotonically climbing) real leak.
     obj_bound = base_obj + 300000 + H.funcs * 20000
-    # RSS is NOT a reliable leak signal under runloom: the goroutine stack arena
+    # RSS is NOT a reliable leak signal under stackweave: the goroutine stack arena
     # + the Python allocator RETAIN freed pages, so RSS climbs with DURATION even
     # with the object count flat (1.4 GB at 5s -> 3.3 GB at 12s, no leak; see the
     # campaign's own 1M-drain munmap/mmap finding).  Keep only a generous OOM-

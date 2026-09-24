@@ -12,8 +12,8 @@ import socket
 
 import harness
 import netutil
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
 
 def connect_timeout(addr, timeout_ms):
@@ -24,7 +24,7 @@ def connect_timeout(addr, timeout_ms):
         err = s.connect_ex(addr)        # EINPROGRESS on a nonblocking socket
         if err in (0,):
             return "connected"
-        ready = runloom_c.wait_fd(s.fileno(), 2, timeout_ms)
+        ready = stackweave_c.wait_fd(s.fileno(), 2, timeout_ms)
         if not (ready & 2):
             return "cancelled"          # timed out / cancelled mid-connect
         soerr = s.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)

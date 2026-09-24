@@ -86,7 +86,7 @@ import math
 import operator
 
 import harness
-import runloom
+import stackweave
 
 # Input bands.  n is kept in a range where factorial(n)/comb(n,k)/perm(n,k) are
 # genuinely multi-limb big integers (factorial(64) already exceeds 2**296) so the
@@ -203,9 +203,9 @@ def math_check(H, wid, idx, state):
 
     # YIELD: park this fiber so a sibling on this or another hub runs its own
     # factorial/comb/prod churn while our snapshot ints sit in this frame.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0003)
+        stackweave.sleep(0.0003)
 
     # Post-yield: re-compute the SAME pure expressions from the SAME inputs.
     post = compute_all(n, k, a, b, m, xs)

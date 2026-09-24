@@ -1,21 +1,21 @@
-# Sync API (`runloom.sync`)
+# Sync API (`stackweave.sync`)
 
-`runloom.sync` is the *no-`async`/`await`* facade.  User code is plain
+`stackweave.sync` is the *no-`async`/`await`* facade.  User code is plain
 straight-line Python -- no coroutines, no event loop ceremony.
 
 This exists because many libraries (and many users) don't want their
-public API to be `async def`-coloured.  With `runloom.sync` you get
+public API to be `async def`-coloured.  With `stackweave.sync` you get
 cooperative concurrency that *looks* like threaded code.
 
-**Performance:** Call `runloom.run(n, main)` to drive the sync API:
-  - `runloom.run(1, main)` -- single-threaded, one OS thread (good for pure I/O)
-  - `runloom.run(8, main)` -- M:N scheduler on 8 hub threads, real multi-core
+**Performance:** Call `stackweave.run(n, main)` to drive the sync API:
+  - `stackweave.run(1, main)` -- single-threaded, one OS thread (good for pure I/O)
+  - `stackweave.run(8, main)` -- M:N scheduler on 8 hub threads, real multi-core
     parallelism on free-threaded 3.14t+GIL-off (default n = CPU count)
 
 ## Hello world
 
 ```python
-import runloom
+import stackweave
 
 def main():
     print("hello from a fiber")
@@ -31,7 +31,7 @@ until everything's done, and returns.
 ## Spawning fibers
 
 ```python
-import runloom
+import stackweave
 
 def worker(i):
     ps.sleep(0.01)
@@ -62,7 +62,7 @@ Outside any fiber (e.g. at module top-level before `run()`),
 Channels are re-exported as `ps.Chan` and `ps.select`:
 
 ```python
-import runloom
+import stackweave
 
 def producer(ch):
     for i in range(10):
@@ -90,23 +90,23 @@ See [Channels](channels.md) for the full API.
 `Future` is a single-use slot for passing a value between fibers:
 
 ```python
-import runloom
+import stackweave
 
 def main():
-    fut = runloom.sync.Future()
+    fut = stackweave.sync.Future()
     
     def sender():
-        runloom.sleep(0.1)
+        stackweave.sleep(0.1)
         fut.set_result("hello")          # fiber-only
     
     def receiver():
         result = fut.result(timeout=1.0)  # blocks until result arrives or timeout
         print("got:", result)
     
-    runloom.fiber(sender)
-    runloom.fiber(receiver)
+    stackweave.fiber(sender)
+    stackweave.fiber(receiver)
 
-runloom.run(main)
+stackweave.run(main)
 ```
 
 Receivers can optionally specify a timeout; `result()` raises `TimeoutError` if
@@ -119,7 +119,7 @@ proceeding (like Go's `sync.WaitGroup` but with built-in result collection):
 
 ```python
 def main():
-    js = runloom.sync.JoinSet()
+    js = stackweave.sync.JoinSet()
     
     for i in range(5):
         js.spawn(lambda i=i: i * 10)
@@ -127,19 +127,19 @@ def main():
     results = js.join_all()  # wait for all, return results in spawn order
     print(results)           # [0, 10, 20, 30, 40]
 
-runloom.run(main)
+stackweave.run(main)
 ```
 
 Also works as a context manager (auto-joins on exit):
 
 ```python
 def main():
-    with runloom.sync.JoinSet() as js:
+    with stackweave.sync.JoinSet() as js:
         for i in range(5):
             js.spawn(lambda i=i: i * 10)
         # auto-joins on __exit__
 
-runloom.run(main)
+stackweave.run(main)
 ```
 
 If any spawned fiber raises an exception, `join_all()` raises the *first*
@@ -152,16 +152,16 @@ their results in order (like `asyncio.gather`):
 
 ```python
 def main():
-    f1 = runloom.sync.Future()
-    f2 = runloom.sync.Future()
+    f1 = stackweave.sync.Future()
+    f2 = stackweave.sync.Future()
     
-    runloom.fiber(lambda: f1.set_result(10))
-    runloom.fiber(lambda: f2.set_result(20))
+    stackweave.fiber(lambda: f1.set_result(10))
+    stackweave.fiber(lambda: f2.set_result(20))
     
-    results = runloom.sync.gather(f1, f2)
+    results = stackweave.sync.gather(f1, f2)
     print(results)  # [10, 20]
 
-runloom.run(main)
+stackweave.run(main)
 ```
 
 Non-future values are passed through as-is.
@@ -172,20 +172,20 @@ Non-future values are passed through as-is.
 
 ```python
 def main():
-    wg = runloom.sync.WaitGroup()
+    wg = stackweave.sync.WaitGroup()
     
     def worker(i):
-        runloom.sleep(0.01 * i)
+        stackweave.sleep(0.01 * i)
         print("worker", i, "done")
     
     for i in range(5):
         wg.add(1)
-        runloom.fiber(lambda i=i: (worker(i), wg.done()))
+        stackweave.fiber(lambda i=i: (worker(i), wg.done()))
     
     wg.wait()  # blocks until all Done() calls
     print("all done")
 
-runloom.run(main)
+stackweave.run(main)
 ```
 
 Call `wg.add(N)` to increment the count, `wg.done()` to decrement, and
@@ -197,27 +197,27 @@ Call `wg.add(N)` to increment the count, `wg.done()` to decrement, and
 
 ```python
 def main():
-    mu = runloom.sync.RWMutex()
+    mu = stackweave.sync.RWMutex()
     data = [0]
     
     def reader(i):
         with mu.rlock():  # shared lock
             print("reader", i, "sees", data[0])
-            runloom.sleep(0.01)
+            stackweave.sleep(0.01)
     
     def writer(i):
         with mu.lock():   # exclusive lock
             data[0] += 1
             print("writer", i, "set to", data[0])
-            runloom.sleep(0.01)
+            stackweave.sleep(0.01)
     
     for i in range(3):
-        runloom.fiber(reader, i)
-        runloom.fiber(writer, i)
+        stackweave.fiber(reader, i)
+        stackweave.fiber(writer, i)
     
-    runloom.sleep(0.2)
+    stackweave.sleep(0.2)
 
-runloom.run(main)
+stackweave.run(main)
 ```
 
 - `mu.rlock()` / `runlock()` — acquire/release a read lock (shared, multiple allowed)
@@ -230,28 +230,28 @@ runloom.run(main)
 
 ```python
 def main():
-    sem = runloom.sync.Semaphore(2)  # max 2 concurrent
+    sem = stackweave.sync.Semaphore(2)  # max 2 concurrent
     
     def worker(i):
         sem.acquire()
         try:
             print("worker", i, "running")
-            runloom.sleep(0.1)
+            stackweave.sleep(0.1)
         finally:
             sem.release()
     
     for i in range(6):
-        runloom.fiber(worker, i)
+        stackweave.fiber(worker, i)
     
-    runloom.sleep(0.4)
+    stackweave.sleep(0.4)
 
-runloom.run(main)
+stackweave.run(main)
 ```
 
 Semaphores support weighted permits (default 1):
 
 ```python
-sem = runloom.sync.Semaphore(10)
+sem = stackweave.sync.Semaphore(10)
 sem.acquire(3)   # acquire 3 permits
 sem.release(3)
 ```
@@ -269,38 +269,38 @@ try_ok = sem.try_acquire()     # returns True/False without blocking
 
 ```python
 def main():
-    once = runloom.sync.Once()
+    once = stackweave.sync.Once()
     init_called = [0]
     
     def init():
         init_called[0] += 1
         print("initializing...")
-        runloom.sleep(0.05)
+        stackweave.sleep(0.05)
     
     def worker():
         once.do(init)  # only one fiber runs init, others wait
         print("using initialized state")
     
     for i in range(5):
-        runloom.fiber(worker)
+        stackweave.fiber(worker)
     
-    runloom.sleep(0.2)
+    stackweave.sleep(0.2)
     print("init was called", init_called[0], "times")  # 1
 
-runloom.run(main)
+stackweave.run(main)
 ```
 
 Use `once_value(fn)` to get a result that's computed once and cached:
 
 ```python
-expensive_result = runloom.sync.once_value(lambda: compute_something())
+expensive_result = stackweave.sync.once_value(lambda: compute_something())
 # First call computes; subsequent calls return the cached result
 ```
 
 Use `once_func(fn)` to decorate a function for one-time execution:
 
 ```python
-@runloom.sync.once_func
+@stackweave.sync.once_func
 def setup():
     print("setup")
 
@@ -316,12 +316,12 @@ call runs and all callers share the result:
 
 ```python
 def main():
-    group = runloom.sync.Group()
+    group = stackweave.sync.Group()
     call_count = [0]
     
     def expensive(key):
         call_count[0] += 1
-        runloom.sleep(0.05)
+        stackweave.sleep(0.05)
         return "result for " + key
     
     def caller(key):
@@ -330,12 +330,12 @@ def main():
     
     # All 5 calls with the same key share one execution
     for i in range(5):
-        runloom.fiber(caller, "x")
+        stackweave.fiber(caller, "x")
     
-    runloom.sleep(0.2)
+    stackweave.sleep(0.2)
     print("expensive was called", call_count[0], "times")  # 1
 
-runloom.run(main)
+stackweave.run(main)
 ```
 
 `group.do(key, fn, *args, **kwargs)` runs `fn(*args, **kwargs)` if it's the
@@ -349,10 +349,10 @@ next call to `key` to re-execute.
 
 ```python
 def main():
-    watch = runloom.sync.Watch()
+    watch = stackweave.sync.Watch()
     
     def setter(i):
-        runloom.sleep(0.01 * (i + 1))
+        stackweave.sleep(0.01 * (i + 1))
         watch.notify(i)
         print("notified with", i)
     
@@ -361,15 +361,15 @@ def main():
             value = watch.wait_changed(timeout=1.0)  # blocks until value changes
             print(name, "got", value)
     
-    runloom.fiber(setter, 0)
-    runloom.fiber(setter, 1)
-    runloom.fiber(setter, 2)
+    stackweave.fiber(setter, 0)
+    stackweave.fiber(setter, 1)
+    stackweave.fiber(setter, 2)
     for name in ["w1", "w2"]:
-        runloom.fiber(waiter, name)
+        stackweave.fiber(waiter, name)
     
-    runloom.sleep(0.2)
+    stackweave.sleep(0.2)
 
-runloom.run(main)
+stackweave.run(main)
 ```
 
 - `watch.notify(value)` — broadcast a new value to all waiters
@@ -377,19 +377,19 @@ runloom.run(main)
 
 ### Thread safety
 
-All primitives in `runloom.sync` are **fiber-only** (meant for
+All primitives in `stackweave.sync` are **fiber-only** (meant for
 fiber-to-fiber synchronization). For synchronizing real OS threads
-with fibers, use the `runloom.monkey` patched versions (`threading.Lock`,
+with fibers, use the `stackweave.monkey` patched versions (`threading.Lock`,
 `threading.Event`, etc.) which detect whether they're called from a fiber
 or a foreign thread and adapt accordingly.
 
 ## TCP server (straight-line style)
 
-`runloom.sync` ships helper wrappers `tcp_connect` and `tcp_listen` that
+`stackweave.sync` ships helper wrappers `tcp_connect` and `tcp_listen` that
 return cooperative sockets:
 
 ```python
-import runloom
+import stackweave
 
 def handle(conn):
     try:
@@ -442,16 +442,16 @@ ps.run(main)
 
 ## Park / wake primitive
 
-For library authors building custom synchronisation, `runloom.sync.wake`
-+ `runloom.park_self()` form a lightweight per-task wake:
+For library authors building custom synchronisation, `stackweave.sync.wake`
++ `stackweave.park_self()` form a lightweight per-task wake:
 
 ```python
-import runloom
+import stackweave
 
 def waiter():
-    g = runloom.current_g()
+    g = stackweave.current_g()
     # ... arrange for someone else to call g.wake() ...
-    runloom.park_self()       # blocks until wake arrives
+    stackweave.park_self()       # blocks until wake arrives
     print("woken")
 
 def main():
@@ -459,20 +459,20 @@ def main():
     # Later, from another fiber: ps.wake(g)  -- or g.wake()
 ```
 
-This is what `runloom.aio` uses internally as the per-task wake mechanism
+This is what `stackweave.aio` uses internally as the per-task wake mechanism
 in place of a `Chan(1)` per task.  Same idea is available to user code.
 
-## When to use `runloom.sync` vs. `runloom.aio`
+## When to use `stackweave.sync` vs. `stackweave.aio`
 
-**Choose `runloom.sync` when:**
+**Choose `stackweave.sync` when:**
 
 - You're writing new code and want it to *look* synchronous -- easier
   to read, easier to debug, no callback colour.
-- You're porting Go code (each `fiber` in Go is a `runloom.sync.go` here).
+- You're porting Go code (each `fiber` in Go is a `stackweave.sync.go` here).
 - You want a library API that doesn't require its callers to be in an
   `async def`.
 
-**Choose `runloom.aio` when:**
+**Choose `stackweave.aio` when:**
 
 - You already have `async def` code and don't want to rewrite it.
 - You need a specific asyncio primitive (`asyncio.Queue`, `gather`,
@@ -486,7 +486,7 @@ each adds a bit of overhead in its own layer.
 ## A complete example: parallel HTTP fetcher
 
 ```python
-import runloom
+import stackweave
 
 def fetch_one(host, port, ch):
     try:

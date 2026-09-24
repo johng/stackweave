@@ -3,9 +3,9 @@
 
 A --with-pydebug CPython exposes sys.gettotalrefcount() and getallocatedblocks().
 CPython's own `python -m test -R 3:3` uses them to catch a steady +1/iteration
-leak that a release build hides. runloom uses them today ONLY to assert the build
+leak that a release build hides. stackweave uses them today ONLY to assert the build
 IS pydebug (run_pydebug.sh) -- never to measure per-iteration drift. This does
-that for runloom's hot ops, and -- because runloom's stated focus is the
+that for stackweave's hot ops, and -- because stackweave's stated focus is the
 free-threaded BIASED-REFCOUNT cross-thread merge -- it treats a NEGATIVE drift as
 a hard fail too (an over-release / merge-accounting bug), not just a positive leak.
 
@@ -20,7 +20,7 @@ incref/decref a SHARED object, merged at the thread boundary -- the exact path
 where a brc accounting bug would net a nonzero per-cycle delta.
 
 Run:  tools/run_refleak.sh        (builds the pydebug-ABI ext, then this)
-      RUNLOOM_PYDEBUG_PYTHON=/path/python tools/refleak_hunt.py
+      STACKWEAVE_PYDEBUG_PYTHON=/path/python tools/refleak_hunt.py
 Exit: 0 = no steady drift; 1 = a leak (or over-release) in some op; 2 = not pydebug.
 """
 import gc
@@ -35,9 +35,9 @@ if not hasattr(sys, "gettotalrefcount"):
 sys.path.insert(0, os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 try:
-    import runloom_c
+    import stackweave_c
 except ImportError as e:
-    sys.stderr.write("refleak_hunt: runloom_c not built for this (pydebug) ABI: "
+    sys.stderr.write("refleak_hunt: stackweave_c not built for this (pydebug) ABI: "
                      "{0}\n  build: PYTHON_GIL=0 <pydebug-python> setup.py build_ext "
                      "--inplace\n".format(e))
     sys.exit(2)
@@ -48,26 +48,26 @@ ITERS = 6
 
 # ---- hot ops: each does ONE self-contained unit that must net zero ----------
 def op_chan_construct():
-    c = runloom_c.Chan(8)
+    c = stackweave_c.Chan(8)
     del c
 
 
 def op_coro_construct():
-    c = runloom_c.Coro(lambda: None, 0)
+    c = stackweave_c.Coro(lambda: None, 0)
     del c
 
 
 def op_backend_read():
-    runloom_c.backend()
-    runloom_c.netpoll_backend()
+    stackweave_c.backend()
+    stackweave_c.netpoll_backend()
 
 
 def op_mn_cycle():
     # biased-refcount stressor: 2 goroutines hammer incref/decref on a SHARED
     # object across hubs; the cross-thread merge happens at mn_fini.
-    runloom_c.mn_init(2)
+    stackweave_c.mn_init(2)
     shared = ["payload"] * 4
-    done = runloom_c.Chan(2)
+    done = stackweave_c.Chan(2)
 
     def worker():
         acc = 0
@@ -76,12 +76,12 @@ def op_mn_cycle():
             acc += len(ref)
         done.send(acc)
 
-    runloom_c.mn_fiber(worker)
-    runloom_c.mn_fiber(worker)
-    runloom_c.mn_run()
+    stackweave_c.mn_fiber(worker)
+    stackweave_c.mn_fiber(worker)
+    stackweave_c.mn_run()
     done.recv()
     done.recv()
-    runloom_c.mn_fini()
+    stackweave_c.mn_fini()
 
 
 def op_mn_xhub_dealloc():
@@ -92,8 +92,8 @@ def op_mn_xhub_dealloc():
     # never drops the last ref cross-hub, so it misses the dealloc-side merge
     # accounting -- exactly where a brc over-release nets a NEGATIVE per-cycle
     # drift.  Must net zero: every object produced is deallocated.
-    runloom_c.mn_init(2)
-    ring = runloom_c.Chan(64)
+    stackweave_c.mn_init(2)
+    ring = stackweave_c.Chan(64)
 
     def producer():
         for i in range(500):
@@ -107,10 +107,10 @@ def op_mn_xhub_dealloc():
                 break
             del v                        # last decref on the CONSUMER hub
 
-    runloom_c.mn_fiber(producer)         # -> hub 0
-    runloom_c.mn_fiber(consumer)         # -> hub 1 (round-robin): cross-hub drop
-    runloom_c.mn_run()
-    runloom_c.mn_fini()
+    stackweave_c.mn_fiber(producer)         # -> hub 0
+    stackweave_c.mn_fiber(consumer)         # -> hub 1 (round-robin): cross-hub drop
+    stackweave_c.mn_run()
+    stackweave_c.mn_fini()
 
 
 OPS = [

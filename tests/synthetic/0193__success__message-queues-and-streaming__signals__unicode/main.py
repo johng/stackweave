@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 """Message queues and streaming -- a message queues and streaming toy using the signals primitive with a unicode payload, expecting success.
 
-Synthetic runloom toy program (auto-generated).
+Synthetic stackweave toy program (auto-generated).
   test type : success
   category  : message queues and streaming
   primitive : signals
   format    : unicode (utf-8)
-  scheduler : M:N via runloom.run(8, root), free-threaded 3.13t, GIL off
+  scheduler : M:N via stackweave.run(8, root), free-threaded 3.13t, GIL off
 
-Exercises runloom's main API -- the root goroutine spawns workers with
-runloom.fiber(...) onto 8 hub threads, using the monkey-patched cooperative
+Exercises stackweave's main API -- the root goroutine spawns workers with
+stackweave.fiber(...) onto 8 hub threads, using the monkey-patched cooperative
 signals primitive to carry a unicode payload.  Prints PASS and exits 0 when
 healthy; FAIL / hang / crash signals a bug.
 """
@@ -37,8 +37,8 @@ import multiprocessing as mp
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "..", "src"))
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
 THEME = "message queues and streaming"
 CATSLUG = "message-queues-and-streaming"
@@ -93,8 +93,8 @@ def decode(buf):
 
 # ---- body ----
 def main():
-    runloom.monkey.patch()
-    GO = runloom.fiber
+    stackweave.monkey.patch()
+    GO = stackweave.fiber
     payload = mk_payload()
     enc = encode(payload)
     fmt_ok = decode(enc) == payload
@@ -110,16 +110,16 @@ def main():
         for _ in range(400):
             if state["hit"]:
                 return
-            runloom.sleep(0.005)
+            stackweave.sleep(0.005)
 
     def raiser():
-        runloom.sleep(0.02)
+        stackweave.sleep(0.02)
         os.kill(os.getpid(), sig)
 
     def __root():
         GO(waiter)
         GO(raiser)
-    runloom.run(NHUB, __root)
+    stackweave.run(NHUB, __root)
     signal.signal(sig, previous)
     finish(fmt_ok and state["hit"], state)
 

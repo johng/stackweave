@@ -1,6 +1,6 @@
-"""Ports of Go's canonical runtime/sync test invariants to real runloom programs.
+"""Ports of Go's canonical runtime/sync test invariants to real stackweave programs.
 
-Unlike tests/test_go_channel_oracle.py (which diffs runloom against a COMPILED Go
+Unlike tests/test_go_channel_oracle.py (which diffs stackweave against a COMPILED Go
 binary), each test here encodes the behavioral invariant of a specific Go test
 DIRECTLY, so it runs with no Go toolchain.  The Go source mirrored by each case is
 named in that case's docstring; sources live at:
@@ -16,8 +16,8 @@ tests/test_go_channel_oracle.py -- e.g. close-wakes-receivers, singleflight,
 JoinSet, Watch, and the differential-vs-Go scenarios are NOT re-ported here.
 
 Style: %-formatting, no f-strings, no leading-underscore names introduced here.
-Deterministic ordering checks run single-thread under runloom.run(1, ...); every
-contention / no-overlap / no-loss check runs REAL M:N under runloom.run(H>=2, ...)
+Deterministic ordering checks run single-thread under stackweave.run(1, ...); every
+contention / no-overlap / no-loss check runs REAL M:N under stackweave.run(H>=2, ...)
 (GIL-disabled build only) with a hang_guard backstop and race-free per-goroutine
 or guarded counters.
 """
@@ -25,9 +25,9 @@ import sys
 
 import pytest
 
-import runloom
-import runloom_c as rc
-from runloom.sync import (Lock, RWMutex, Semaphore, WaitGroup, Condition,
+import stackweave
+import stackweave_c as rc
+from stackweave.sync import (Lock, RWMutex, Semaphore, WaitGroup, Condition,
                           Once, once_func)
 from adv_util import hang_guard, needs_free_threading
 
@@ -48,7 +48,7 @@ def run_body(body, hubs=1):
         except BaseException as exc:      # noqa: BLE001  (re-raised below)
             box["e"] = exc
 
-    runloom.run(hubs, main)
+    stackweave.run(hubs, main)
     if "e" in box:
         raise box["e"]
     return box.get("r")
@@ -56,7 +56,7 @@ def run_body(body, hubs=1):
 
 def yield_times(k):
     for _ in range(k):
-        runloom.yield_now()
+        stackweave.yield_now()
 
 
 def spin_until(pred, limit=500000):
@@ -65,7 +65,7 @@ def spin_until(pred, limit=500000):
     while n < limit:
         if pred():
             return True
-        runloom.yield_now()
+        stackweave.yield_now()
         n += 1
     return pred()
 
@@ -81,7 +81,7 @@ def test_chan_recv_empty_blocks_and_nonblocking_recv():
             ch = rc.Chan(cap)
             got = []
             for _ in range(2):
-                runloom.fiber(lambda c=ch: got.append(c.recv()))
+                stackweave.fiber(lambda c=ch: got.append(c.recv()))
             yield_times(50)                      # let both receivers park
             assert got == [], (cap, got)         # still blocked (no sender)
             assert ch.try_recv() is None                       # nonblocking recv
@@ -108,7 +108,7 @@ def test_chan_send_full_blocks_and_nonblocking_send():
             def sender(c=ch):
                 c.send(999)
                 sent[0] = True
-            runloom.fiber(sender)
+            stackweave.fiber(sender)
             yield_times(50)                      # let the sender park
             assert sent[0] is False, cap         # send blocked (chan full)
             assert ch.try_send(-1) is False                    # nonblocking send
@@ -149,7 +149,7 @@ def test_chan_hundred_ints_fifo():
                 for i in range(100):
                     c.send(i)
             for batch in range(2):
-                runloom.fiber(producer)
+                stackweave.fiber(producer)
                 for i in range(100):
                     v, ok = ch.recv()
                     assert ok and v == i, (cap, i, v, ok)
@@ -189,9 +189,9 @@ def test_chan_p_producers_no_loss_no_dup():
                 wgc.done()
 
         for cid in range(C):
-            runloom.fiber(lambda cid=cid: consumer(cid))
+            stackweave.fiber(lambda cid=cid: consumer(cid))
         for _ in range(P):
-            runloom.fiber(producer)
+            stackweave.fiber(producer)
         wgp.wait()
         ch.close()
         wgc.wait()
@@ -242,7 +242,7 @@ def test_self_select_no_self_receive_no_deadlock():
                     wg.done()
 
             for p in range(2):
-                runloom.fiber(lambda p=p: worker(p))
+                stackweave.fiber(lambda p=p: worker(p))
             wg.wait()
             assert self_recv[0] is False, "cap=%d: goroutine self-received" % cap
         return "ok"
@@ -255,7 +255,7 @@ def test_self_select_no_self_receive_no_deadlock():
 def test_select_stress_terminates_with_nil_disable():
     """TestSelectStress: 4 chans (mixed cap) with a sender+receiver goroutine
     each, plus one goroutine sending 4*N via a single select and one receiving
-    4*N via a single select -- exercising the 'disable a case' idiom (runloom:
+    4*N via a single select -- exercising the 'disable a case' idiom (stackweave:
     omit the case) as each per-chan count saturates.  Must not deadlock."""
     N = 400
     caps = (0, 0, 2, 3)
@@ -309,10 +309,10 @@ def test_select_stress_terminates_with_nil_disable():
                 wg.done()
 
         for k in range(4):
-            runloom.fiber(lambda k=k: plain_sender(k))
-            runloom.fiber(lambda k=k: plain_receiver(k))
-        runloom.fiber(select_sender)
-        runloom.fiber(select_receiver)
+            stackweave.fiber(lambda k=k: plain_sender(k))
+            stackweave.fiber(lambda k=k: plain_receiver(k))
+        stackweave.fiber(select_sender)
+        stackweave.fiber(select_receiver)
         wg.wait()
         return "ok"
 
@@ -361,7 +361,7 @@ def test_multi_consumer_preserves_count_and_checksum():
             try:
                 for v in q:                      # ranges until q closed+drained
                     if pn[w % len(pn)] == v:
-                        runloom.yield_now()      # perturb the fifo-ish order
+                        stackweave.yield_now()      # perturb the fifo-ish order
                     r.send(v)
             finally:
                 wgw.done()
@@ -378,8 +378,8 @@ def test_multi_consumer_preserves_count_and_checksum():
             r.close()                            # ... so no more results
 
         for w in range(nwork):
-            runloom.fiber(lambda w=w: worker(w))
-        runloom.fiber(feeder)
+            stackweave.fiber(lambda w=w: worker(w))
+        stackweave.fiber(feeder)
 
         n = 0
         s = 0
@@ -395,7 +395,7 @@ def test_multi_consumer_preserves_count_and_checksum():
 
 
 # ==========================================================================
-# Mutex  (sync/mutex_test.go)  -- runloom.sync.Lock
+# Mutex  (sync/mutex_test.go)  -- stackweave.sync.Lock
 # ==========================================================================
 @mn
 def test_mutex_hammer_mutual_exclusion():
@@ -424,7 +424,7 @@ def test_mutex_hammer_mutual_exclusion():
                     if cur[0] > peak[0]:
                         peak[0] = cur[0]
                     guard.unlock()
-                    runloom.yield_now()
+                    stackweave.yield_now()
                     guard.lock()
                     cur[0] -= 1
                     guard.unlock()
@@ -432,7 +432,7 @@ def test_mutex_hammer_mutual_exclusion():
             finally:
                 wg.done()
         for _ in range(G):
-            runloom.fiber(worker)
+            stackweave.fiber(worker)
         wg.wait()
         return "ok"
 
@@ -474,7 +474,7 @@ def test_mutex_misuse_release_unheld_raises():
 
 
 # ==========================================================================
-# RWMutex  (sync/rwmutex_test.go)  -- runloom.sync.RWMutex
+# RWMutex  (sync/rwmutex_test.go)  -- stackweave.sync.RWMutex
 # ==========================================================================
 @mn
 def test_parallel_readers_all_hold_simultaneously():
@@ -504,7 +504,7 @@ def test_parallel_readers_all_hold_simultaneously():
             finally:
                 wg.done()
         for _ in range(N):
-            runloom.fiber(reader)
+            stackweave.fiber(reader)
         assert spin_until(lambda: peak[0] == N), "only %d readers concurrent" % peak[0]
         for _ in range(N):                       # release the barrier
             release_gate.send(None)
@@ -556,9 +556,9 @@ def test_rwmutex_activity_invariant_no_overlap():
                 wg.done()
 
         for _ in range(READERS):
-            runloom.fiber(reader)
+            stackweave.fiber(reader)
         for _ in range(WRITERS):
-            runloom.fiber(writer)
+            stackweave.fiber(writer)
         wg.wait()
         return "ok"
 
@@ -581,7 +581,7 @@ def test_rlocker_blocks_writer_and_write_lock_blocks_reader():
             rw.lock()
             w_got[0] = True
             rw.unlock()
-        runloom.fiber(writer)
+        stackweave.fiber(writer)
         assert spin_until(lambda: len(rw._wwait) == 1)   # writer parked
         assert w_got[0] is False                 # blocked by the reader
         rw.runlock()                             # drop the read lock
@@ -596,7 +596,7 @@ def test_rlocker_blocks_writer_and_write_lock_blocks_reader():
             rw2.rlock()
             r_got[0] = True
             rw2.runlock()
-        runloom.fiber(reader)
+        stackweave.fiber(reader)
         assert spin_until(lambda: len(rw2._rwait) == 1)  # reader parked
         assert r_got[0] is False                 # blocked by the writer
         rw2.unlock()                             # drop the write lock
@@ -608,7 +608,7 @@ def test_rlocker_blocks_writer_and_write_lock_blocks_reader():
 
 
 # ==========================================================================
-# WaitGroup  (sync/waitgroup_test.go)  -- runloom.sync.WaitGroup
+# WaitGroup  (sync/waitgroup_test.go)  -- stackweave.sync.WaitGroup
 # ==========================================================================
 @mn
 def test_waitgroup_two_group_barrier_reusable():
@@ -633,7 +633,7 @@ def test_waitgroup_two_group_barrier_reusable():
                 wg2.wait()
                 exited.try_send(True)
             for _ in range(N):
-                runloom.fiber(worker)
+                stackweave.fiber(worker)
             wg1.wait()                           # all workers reached Done(wg1)
             for _ in range(N):
                 reached.recv()                   # all workers are now AT the wg2 barrier
@@ -669,8 +669,8 @@ def test_waitgroup_race_no_spurious_wakeup():
             def bump():
                 guard.lock(); n[0] += 1; guard.unlock()
                 wg.done()
-            wg.add(1); runloom.fiber(bump)
-            wg.add(1); runloom.fiber(bump)
+            wg.add(1); stackweave.fiber(bump)
+            wg.add(1); stackweave.fiber(bump)
             wg.wait()
             assert n[0] == 2, "spurious wakeup from Wait: n=%d" % n[0]
         return "ok"
@@ -680,7 +680,7 @@ def test_waitgroup_race_no_spurious_wakeup():
 
 
 # ==========================================================================
-# Once  (sync/once_test.go)  -- runloom.sync.Once / once_func
+# Once  (sync/once_test.go)  -- stackweave.sync.Once / once_func
 # ==========================================================================
 @mn
 def test_once_runs_once_and_value_visible_to_all():
@@ -706,7 +706,7 @@ def test_once_runs_once_and_value_visible_to_all():
             finally:
                 wg.done()
         for _ in range(N):
-            runloom.fiber(caller)
+            stackweave.fiber(caller)
         wg.wait()
         return value[0]
 
@@ -770,7 +770,7 @@ def test_once_func_caches_success_and_reraises_panic():
 
 
 # ==========================================================================
-# Semaphore  (x/sync semaphore_test.go)  -- runloom.sync.Semaphore (weighted)
+# Semaphore  (x/sync semaphore_test.go)  -- stackweave.sync.Semaphore (weighted)
 # ==========================================================================
 @mn
 def test_semaphore_value1_as_mutex_hammer():
@@ -795,13 +795,13 @@ def test_semaphore_value1_as_mutex_hammer():
                     if cur[0] > peak[0]:
                         peak[0] = cur[0]
                     guard.unlock()
-                    runloom.yield_now()
+                    stackweave.yield_now()
                     guard.lock(); cur[0] -= 1; guard.unlock()
                     sem.release(1)
             finally:
                 wg.done()
         for _ in range(G):
-            runloom.fiber(hammer)
+            stackweave.fiber(hammer)
         wg.wait()
         return "ok"
 
@@ -832,13 +832,13 @@ def test_weighted_held_never_exceeds_cap():
                     if held[0] > CAP:
                         over[0] = 1
                     guard.unlock()
-                    runloom.yield_now()
+                    stackweave.yield_now()
                     guard.lock(); held[0] -= w; guard.unlock()
                     sem.release(w)
             finally:
                 wg.done()
         for i in range(G):
-            runloom.fiber(lambda i=i: worker((i % CAP) + 1))   # weights 1..CAP
+            stackweave.fiber(lambda i=i: worker((i % CAP) + 1))   # weights 1..CAP
         wg.wait()
         return "ok"
 
@@ -892,14 +892,14 @@ def test_large_acquire_does_not_starve():
         def churn():
             try:
                 while running[0]:
-                    runloom.sleep(0.001)
+                    stackweave.sleep(0.001)
                     sem.release(1)
                     sem.acquire(1)
             finally:
                 sem.release(1)
                 wg.done()
         for _ in range(CAP):
-            runloom.fiber(churn)
+            stackweave.fiber(churn)
 
         sem.acquire(CAP)                          # the large acquire: must not starve
         running[0] = False
@@ -912,7 +912,7 @@ def test_large_acquire_does_not_starve():
 
 
 # ==========================================================================
-# Condition  (sync/cond_test.go)  -- runloom.sync.Condition
+# Condition  (sync/cond_test.go)  -- stackweave.sync.Condition
 # ==========================================================================
 def test_cond_signal_wakes_exactly_one():
     """TestCondSignal: with N waiters parked, no waiter wakes without a Signal,
@@ -930,7 +930,7 @@ def test_cond_signal_wakes_exactly_one():
             awake[0] += 1
             cond.release()
         for _ in range(N):
-            runloom.fiber(waiter)
+            stackweave.fiber(waiter)
         assert spin_until(lambda: len(cond._waiters) == N)   # all parked
         for k in range(N):
             assert awake[0] == k, "woke without a signal"
@@ -961,7 +961,7 @@ def test_cond_broadcast_wakes_all_current_waiters():
             woke[idx] = 1
             cond.release()
         for idx in range(N):
-            runloom.fiber(lambda idx=idx: waiter(idx))
+            stackweave.fiber(lambda idx=idx: waiter(idx))
         assert spin_until(lambda: len(cond._waiters) == N)
         assert sum(woke) == 0, "a waiter woke without a broadcast"
         cond.acquire(); cond.notify_all(); cond.release()
@@ -991,7 +991,7 @@ def test_cond_signal_generations_wake_in_fifo_order():
         # Spawn in order; under run(1) each runs to its wait() and appends to the
         # FIFO deque in spawn order before the next starts.
         for i in range(N):
-            runloom.fiber(lambda i=i: waiter(i))
+            stackweave.fiber(lambda i=i: waiter(i))
             assert spin_until(lambda i=i: len(cond._waiters) == i + 1)
         for i in range(N):
             cond.acquire(); cond.notify(1); cond.release()
@@ -1038,7 +1038,7 @@ def test_cond_three_goroutine_ordered_handoff():
                         cond.notify(1)
                         break
                     cond.release()
-                    runloom.yield_now()
+                    stackweave.yield_now()
                     cond.acquire()
                 cond.release()
             finally:
@@ -1056,15 +1056,15 @@ def test_cond_three_goroutine_ordered_handoff():
                     if state[0] == 3:
                         break
                     cond.release()
-                    runloom.yield_now()
+                    stackweave.yield_now()
                     cond.acquire()
                 cond.release()
             finally:
                 wg.done()
 
-        runloom.fiber(g1)
-        runloom.fiber(g2)
-        runloom.fiber(g3)
+        stackweave.fiber(g1)
+        stackweave.fiber(g2)
+        stackweave.fiber(g3)
         wg.wait()
         return "ok"
 

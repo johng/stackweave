@@ -10,7 +10,7 @@ Stresses: the timer subsystem, clock handling, wake-up accuracy across scales.
 import time
 
 import harness
-import runloom
+import stackweave
 
 EPSILON = 0.01          # allowed early-wake slack (clock granularity)
 
@@ -30,7 +30,7 @@ def sleeper(H, wid, rng, state):
     while H.running():
         target = pick_duration(rng)
         t0 = time.perf_counter()
-        runloom.sleep(target)
+        stackweave.sleep(target)
         actual = time.perf_counter() - t0
         jitter = actual - target
         if jitter > maxjit[wid & 1023]:

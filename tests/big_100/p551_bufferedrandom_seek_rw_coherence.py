@@ -85,7 +85,7 @@ import io
 import os
 
 import harness
-import runloom
+import stackweave
 
 # Keep each fiber's file small so ONE read() fills the read-ahead window over
 # most of the file -- that is the state a stale-buffer bug reuses after an
@@ -122,7 +122,7 @@ def verify_read(H, wid, f, model, off, n, state):
     equal the single-owner model at that offset.  Returns the number of bytes read
     (0 at/after EOF).  A mismatch is a hard buffer-coherence fault."""
     f.seek(off)
-    runloom.yield_now()                       # park+migrate holding (buf,pos,raw-off)
+    stackweave.yield_now()                       # park+migrate holding (buf,pos,raw-off)
     got = f.read(n)
     exp = bytes(model[off:off + len(got)])
     if got != exp:
@@ -154,11 +154,11 @@ def op_hazard(H, wid, rng, f, model, state):
     newdata = bytes(rng.randrange(256) for _ in range(span))
     # A write MUST invalidate any read-ahead buffer overlapping [b, b+span).
     apply_write(f, model, b, newdata)
-    runloom.yield_now()                       # park+migrate carrying invalidation state
+    stackweave.yield_now()                       # park+migrate carrying invalidation state
     # 3) Read the written span back -- must be the NEW bytes.  If a stale read-ahead
     #    buffer survived the write+park, this returns the pre-write contents.
     f.seek(b)
-    runloom.yield_now()
+    stackweave.yield_now()
     got = f.read(span)
     if got != newdata:
         H.fail("BufferedRandom STALE-BUFFER read: wid {0} wrote {1!r} at off {2} "
@@ -194,7 +194,7 @@ def worker(H, wid, rng, state):
             span = min(MAX_FILE - len(model), rng.randint(1, MAX_CHUNK))
             newdata = bytes(rng.randrange(256) for _ in range(span))
             apply_write(f, model, len(model), newdata)
-            runloom.yield_now()
+            stackweave.yield_now()
             # Verify the just-appended tail reads back correctly.
             if verify_read(H, wid, f, model, len(model) - span, span, state) < 0:
                 return
@@ -203,7 +203,7 @@ def worker(H, wid, rng, state):
             span = min(len(model) - off, rng.randint(1, MAX_CHUNK))
             newdata = bytes(rng.randrange(256) for _ in range(span))
             apply_write(f, model, off, newdata)
-            runloom.yield_now()
+            stackweave.yield_now()
             if verify_read(H, wid, f, model, off, span, state) < 0:
                 return
         elif case == CASE_SEEK_READ and model:

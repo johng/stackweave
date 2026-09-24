@@ -29,13 +29,13 @@ import sys
 
 import pytest
 
-import runloom_c
+import stackweave_c
 
 pytestmark = [
     pytest.mark.skipif(
         not sys.platform.startswith(("darwin", "freebsd", "openbsd", "netbsd")),
         reason="compiled-in TCP fault injection targets the kqueue backends"),
-    pytest.mark.skipif(runloom_c.netpoll_backend() != "kqueue",
+    pytest.mark.skipif(stackweave_c.netpoll_backend() != "kqueue",
                        reason="needs the kqueue backend"),
 ]
 
@@ -57,7 +57,7 @@ def _run(site, spec, mode, timeout=30):
     env["PYTHONPATH"] = os.path.join(REPO, "src")
     env["PYTHON_GIL"] = "0"                       # focus: free-threaded only
     env["FAULT_SITE"] = site
-    env["RUNLOOM_FAULT_" + site] = spec
+    env["STACKWEAVE_FAULT_" + site] = spec
     return subprocess.run(
         [sys.executable, WORKLOAD, mode], cwd=REPO, env=env, timeout=timeout,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)

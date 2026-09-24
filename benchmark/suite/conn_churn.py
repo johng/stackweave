@@ -13,7 +13,7 @@ lands -- the "spawn a handler per request" case every reader assumes.
 
 Same servers, same load machinery as the performance benchmark, on purpose:
 
-  * Servers: run_perf.build_specs() -- the identical 11 specs (7 runloom tiers +
+  * Servers: run_perf.build_specs() -- the identical 11 specs (7 stackweave tiers +
     asyncio + uvloop + gevent + go), launched the identical way via
     run_perf.server_factory() (pinned cores, fd-raised, debug off, same HUBS).
 

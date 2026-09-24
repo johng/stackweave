@@ -40,8 +40,8 @@ pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="io_uring is Lin
 def _iouring_available():
     try:
         out = subprocess.run(
-            [PY, "-c", "import sys;sys.path.insert(0,'src');import runloom_c;"
-                       "print(runloom_c.iouring_available())"],
+            [PY, "-c", "import sys;sys.path.insert(0,'src');import stackweave_c;"
+                       "print(stackweave_c.iouring_available())"],
             cwd=REPO, env=dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src"),
             capture_output=True, text=True, timeout=30)
         return "True" in out.stdout
@@ -61,7 +61,7 @@ requires_iouring = pytest.mark.skipif(
 _BODY = r"""
 import socket, sys, errno, faulthandler
 sys.path.insert(0, "src")
-import runloom_c
+import stackweave_c
 
 WD = {wd}
 faulthandler.dump_traceback_later(WD, exit=True)   # a real re-hang -> die nonzero
@@ -73,21 +73,21 @@ def bound_port(l):
     p = sk.getsockname()[1]; sk.close(); return p
 
 def server():
-    l = runloom_c.TCPConn.listen("127.0.0.1", 0)
+    l = stackweave_c.TCPConn.listen("127.0.0.1", 0)
     st["port"] = bound_port(l)
     c = l.accept()                       # hold OPEN, send NOTHING (reader parks)
     for _ in range(500):                 # close once the reader is cancelled
         if st["reader_result"] is not None:
             break
-        runloom_c.sched_sleep(0.02)
+        stackweave_c.sched_sleep(0.02)
     try: c.close()
     except Exception: pass
     l.close()
 
 def reader():
     while st["port"] is None:
-        runloom_c.sched_yield()
-    c = runloom_c.TCPConn.connect("127.0.0.1", st["port"])
+        stackweave_c.sched_yield()
+    c = stackweave_c.TCPConn.connect("127.0.0.1", st["port"])
     st["reader_conn"] = c
     st["parked"] = True
     try:
@@ -100,8 +100,8 @@ def reader():
 
 def closer():
     while not st["parked"] or st["reader_conn"] is None:
-        runloom_c.sched_yield()
-    runloom_c.sched_sleep(0.3)            # let the recv SQE get in flight
+        stackweave_c.sched_yield()
+    stackweave_c.sched_sleep(0.3)            # let the recv SQE get in flight
     st["reader_conn"].close()            # cross-fiber close -> cancel-by-fd
 
 {drive}
@@ -119,9 +119,9 @@ print("CANCEL_OK" if ok else "FAIL")
 sys.exit(0 if ok else 2)
 """
 
-_DRIVE_MN = ("runloom_c.mn_init(2); runloom_c.mn_fiber(server); "
-             "runloom_c.mn_fiber(reader); runloom_c.mn_fiber(closer); "
-             "runloom_c.mn_run(); runloom_c.mn_fini()")
+_DRIVE_MN = ("stackweave_c.mn_init(2); stackweave_c.mn_fiber(server); "
+             "stackweave_c.mn_fiber(reader); stackweave_c.mn_fiber(closer); "
+             "stackweave_c.mn_run(); stackweave_c.mn_fini()")
 
 # Two entry points into the single-shot hub-ring recv, both of which must hold the
 # conn critical section across submit+park (blocker #1) and be cancellable by
@@ -136,7 +136,7 @@ def _run(drive, recv_call, wd=12):
         p = subprocess.run(
             [PY, "-c", body], cwd=REPO,
             env=dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src",
-                     RUNLOOM_TCPCONN_IOURING="1"),
+                     STACKWEAVE_TCPCONN_IOURING="1"),
             capture_output=True, text=True, timeout=wd + 25)
     except subprocess.TimeoutExpired:
         pytest.fail("close() did NOT cancel the parked io_uring recv (deadlock "

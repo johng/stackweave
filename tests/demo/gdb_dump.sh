@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# gdb_dump.sh -- extract C + Python backtraces from a runloom process.
+# gdb_dump.sh -- extract C + Python backtraces from a stackweave process.
 #
 #   gdb_dump.sh core <corefile>   analyse a core dump
 #   gdb_dump.sh pid  <pid>        attach to a live (e.g. wedged) process

@@ -23,8 +23,8 @@ import struct
 
 import harness
 import netutil
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
 NLISTENERS = 4          # a few listener fds (SO_REUSEPORT)
 ACCEPTORS_PER = 64      # many accept goroutines parked per listener fd
@@ -55,7 +55,7 @@ def acceptor(H, lsock, slot, served):
             break
         if fd < 0:
             break
-        ready = runloom_c.wait_fd(fd, 1, 200)
+        ready = stackweave_c.wait_fd(fd, 1, 200)
         if not (ready & 1):
             if not H.running():
                 empty_after_stop += 1
@@ -103,7 +103,7 @@ def client(H, wid, rng, state):
             tok = struct.pack("<II", wid, seq)       # unique per (wid, seq)
             s.sendall(tok)
             # bounded wait for the echo so a straggler never wedges teardown.
-            if runloom_c.wait_fd(s.fileno(), 1, RECV_CEILING_MS) & 1:
+            if stackweave_c.wait_fd(s.fileno(), 1, RECV_CEILING_MS) & 1:
                 got = netutil.recv_exact(s, TOKLEN)
                 if not H.check(got == tok,
                                "accept CROSS-TALK wid={0} seq={1}: sent {2!r} "

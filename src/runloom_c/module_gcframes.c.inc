@@ -143,12 +143,12 @@ static PyObject *runloom_gcframes_gc_callback(PyObject *self, PyObject *args)
 
 static PyMethodDef runloom_gcframes_gc_callback_def = {
     "runloom_gc_frames_start", runloom_gcframes_gc_callback, METH_VARARGS,
-    "Internal: keep the runloom GC frames anchor un-frozen across gc.freeze()."
+    "Internal: keep the stackweave GC frames anchor un-frozen across gc.freeze()."
 };
 
 static PyTypeObject RunloomGCFramesAnchorType = {
     PyVarObject_HEAD_INIT(NULL, 0)
-    .tp_name      = "runloom_c.gc_frames_anchor",
+    .tp_name      = "stackweave_c.gc_frames_anchor",
     .tp_basicsize = sizeof(PyObject),
     .tp_itemsize  = 0,
     .tp_dealloc   = runloom_gcframes_anchor_dealloc,
@@ -165,7 +165,7 @@ static PyTypeObject RunloomGCFramesAnchorType = {
 
 #endif  /* RUNLOOM_GCFRAMES_ANCHOR */
 
-/* Initialise the anchor.  Called from PyInit_runloom_c after the Coro/G types are
+/* Initialise the anchor.  Called from PyInit_stackweave_c after the Coro/G types are
  * ready and the introspect registry is inited.  Returns 0 on success (including
  * the no-op non-FT / disabled cases), -1 on a hard CPython error. */
 static int runloom_gcframes_init(PyObject *m)
@@ -173,7 +173,7 @@ static int runloom_gcframes_init(PyObject *m)
 #if defined(RUNLOOM_GCFRAMES_ANCHOR)
     const char *e;
     PyObject *anchor;
-    e = getenv("RUNLOOM_GC_FRAMES");
+    e = getenv("STACKWEAVE_GC_FRAMES");
     if (e != NULL && e[0] == '0' && e[1] == '\0') {
         /* Explicitly disabled (A/B + emergency escape hatch).  The anchor stays
          * absent; runtime.py's TLBC interlock then keeps the PYTHON_TLBC=0
@@ -186,9 +186,9 @@ static int runloom_gcframes_init(PyObject *m)
      * to activate -- the interlock then keeps TLBC off (safe, slow).  A proper
      * "GREG_OFF loses to the anchor" override is a follow-up. */
     if (!runloom_greg_is_linked()) {
-        PySys_WriteStderr("[runloom] RUNLOOM_GREG_OFF blinds the GC frames anchor; "
+        PySys_WriteStderr("[stackweave] STACKWEAVE_GREG_OFF blinds the GC frames anchor; "
                           "not activating it (TLBC stays gated off). "
-                          "Unset RUNLOOM_GREG_OFF to enable TLBC.\n");
+                          "Unset STACKWEAVE_GREG_OFF to enable TLBC.\n");
         runloom_gcframes_on = 0;
         return 0;
     }

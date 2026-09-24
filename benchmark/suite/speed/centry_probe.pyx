@@ -1,15 +1,15 @@
 # cython: language_level=3, boundscheck=False, wraparound=False, freethreading_compatible=True
 """C-entry scheduler probe: spawn / yield fibers with NO Python eval, NO tstate,
-NO shared closure cells -- the capstone that isolates runloom's pure scheduler
+NO shared closure cells -- the capstone that isolates stackweave's pure scheduler
 cost from the free-threaded-CPython interpreter contention the Python-fiber
 microbenchmarks measure.
 
-It externs runloom_c's two public scheduler entry points (both exported `T` in
-runloom_c.so; resolved at runtime via RTLD_GLOBAL promotion in the driver):
+It externs stackweave_c's two public scheduler entry points (both exported `T` in
+stackweave_c.so; resolved at runtime via RTLD_GLOBAL promotion in the driver):
   runloom_mn_fiber_c   -- spawn a g via the g->c_entry fast path (no Python frame)
   runloom_mn_yield_current -- the C-level cooperative yield
 
-Must be called from inside a running runloom.run() (a fiber spawns more fibers).
+Must be called from inside a running stackweave.run() (a fiber spawns more fibers).
 """
 
 ctypedef void (*c_entry_fn)(void *) noexcept nogil
@@ -33,7 +33,7 @@ cdef void _yielder(void *arg) noexcept nogil:
 
 def spawn_c(int n):
     """Spawn n tstate-free c_entry no-op fibers (compiled loop -- no per-spawn
-    Python frame on either side). Drained by the enclosing runloom.run()."""
+    Python frame on either side). Drained by the enclosing stackweave.run()."""
     cdef int i
     for i in range(n):
         runloom_mn_fiber_c(_noop, NULL)

@@ -1,7 +1,7 @@
 """MN_SIM_DST_PLAN.md I3 -- the nondeterminism fence lattice.
 
 Every FORBIDDEN wake-contract entry gets an enforcement point; the tripwire
-(runloom_sim_foreign_wake_total + RUNLOOM_SIM_STRICT) converts any
+(runloom_sim_foreign_wake_total + STACKWEAVE_SIM_STRICT) converts any
 unenumerated foreign wake into a loud failure.  All fences are scoped to the
 armed mn-sim census (hub-context where relevant) -- the frozen H=1 plane and
 all non-sim users are untouched (proved by the non-sim companions here and
@@ -24,7 +24,7 @@ pytestmark = pytest.mark.skipif(
     not needs_free_threading(),
     reason="the M:N scheduler is only real on free-threaded builds")
 
-SIM_ENV = {"RUNLOOM_SIM": "1", "RUNLOOM_SIM_MN": "1", "RUNLOOM_MN_SEED": "1"}
+SIM_ENV = {"STACKWEAVE_SIM": "1", "STACKWEAVE_SIM_MN": "1", "STACKWEAVE_MN_SEED": "1"}
 
 
 def run_snip(code, extra=None, timeout=60):
@@ -45,7 +45,7 @@ class TestFencesRaise:
         the tripwire counts 0.  (The earlier binding-level raise missed the
         internal getaddrinfo offload; the C-level inline routing covers both.)"""
         p = run_snip(
-            "import runloom_c as rc\n"
+            "import stackweave_c as rc\n"
             "out = {}\n"
             "def w():\n"
             "    out['r'] = rc.blocking(lambda: 41) + 1\n"
@@ -58,7 +58,7 @@ class TestFencesRaise:
     def test_park_foreign_wakeable_raises(self):
         """contract #25: holds the census clock for an unorderable waker."""
         p = run_snip(
-            "import runloom_c as rc\n"
+            "import stackweave_c as rc\n"
             "out = {}\n"
             "def w():\n"
             "    try: rc.park(foreign_wakeable=True)\n"
@@ -71,7 +71,7 @@ class TestFencesRaise:
     def test_sched_sleep_real_raises(self):
         """gate [9]: deliberately wall-clock -- unorderable inside a run."""
         p = run_snip(
-            "import runloom_c as rc\n"
+            "import stackweave_c as rc\n"
             "out = {}\n"
             "def w():\n"
             "    try: rc.sched_sleep_real(0.001)\n"
@@ -84,13 +84,13 @@ class TestFencesRaise:
     def test_per_g_tstate_mode_raises(self):
         """contract #22: the per-g-tstate wake path is unaudited under sim."""
         p = run_snip(
-            "import runloom_c as rc\n"
+            "import stackweave_c as rc\n"
             "try:\n"
             "    rc.mn_init(2)\n"
             "    print('FENCE_MISSING')\n"
             "except RuntimeError as e:\n"
             "    print('PERG_FENCED' if 'UNSAFE_MIGRATION' in str(e) else 'WRONG')\n",
-            extra={"RUNLOOM_ALLOW_UNSAFE_MIGRATION": "1"})
+            extra={"STACKWEAVE_ALLOW_UNSAFE_MIGRATION": "1"})
         assert "PERG_FENCED" in p.stdout, (p.stdout, p.stderr[-800:])
         assert p.returncode == 0, (p.stdout, p.stderr[-800:])
 
@@ -98,7 +98,7 @@ class TestFencesRaise:
         """gate [8]: the wall-clock time-slicer refuses under mn-sim (the
         deterministic frame-count preempt is the only preemption)."""
         p = run_snip(
-            "import runloom_c as rc\n"
+            "import stackweave_c as rc\n"
             "rc.preempt_init(1000)\n"          # must be a logged no-op
             "progress = []\n"
             "def w(): progress.append(1)\n"
@@ -112,7 +112,7 @@ class TestFencesRaise:
         """I2-review ordering hole: a slicer started BEFORE mn_init keeps
         posting wall-clock yields into the seeded run -- mn_init refuses."""
         p = run_snip(
-            "import runloom_c as rc\n"
+            "import stackweave_c as rc\n"
             "rc.preempt_init(1000)\n"          # started pre-fence... but the
             "try:\n"                            # SIM_MN gate no-ops it, so use
             "    rc.mn_init(2)\n"               # the env-less start below
@@ -132,11 +132,11 @@ class TestFencesRaise:
         env = mn_digest.hermetic_env({})       # NO sim env at process start
         p = subprocess.run(
             [sys.executable, "-c",
-             "import os, runloom_c as rc\n"
+             "import os, stackweave_c as rc\n"
              "rc.preempt_init(1000)\n"          # slicer live, sim off
-             "os.environ['RUNLOOM_SIM'] = '1'\n"
-             "os.environ['RUNLOOM_SIM_MN'] = '1'\n"
-             "os.environ['RUNLOOM_MN_SEED'] = '1'\n"
+             "os.environ['STACKWEAVE_SIM'] = '1'\n"
+             "os.environ['STACKWEAVE_SIM_MN'] = '1'\n"
+             "os.environ['STACKWEAVE_MN_SEED'] = '1'\n"
              "try:\n"
              "    rc.mn_init(2)\n"
              "    print('FENCE_MISSING')\n"
@@ -157,9 +157,9 @@ class TestFencesRaise:
 class TestForeignWakeTripwire:
     def test_foreign_gwake_strict_aborts(self):
         """contract #13: a raw OS thread calling G.wake() during a seeded run
-        -- under RUNLOOM_SIM_STRICT (default) the run aborts loudly."""
+        -- under STACKWEAVE_SIM_STRICT (default) the run aborts loudly."""
         p = run_snip(
-            "import _thread, time, runloom_c as rc\n"
+            "import _thread, time, stackweave_c as rc\n"
             "handle = {}\n"
             "def victim():\n"
             "    handle['g'] = rc.current_g()\n"
@@ -176,10 +176,10 @@ class TestForeignWakeTripwire:
         assert "FOREIGN-THREAD WAKE" in p.stderr, p.stderr[-800:]
 
     def test_foreign_gwake_nonstrict_counts(self):
-        """RUNLOOM_SIM_STRICT=0: same scenario downgrades to counter-only --
+        """STACKWEAVE_SIM_STRICT=0: same scenario downgrades to counter-only --
         the run completes and sim_foreign_wake_count() == 1."""
         p = run_snip(
-            "import _thread, time, runloom_c as rc\n"
+            "import _thread, time, stackweave_c as rc\n"
             "handle = {}\n"
             "def victim():\n"
             "    handle['g'] = rc.current_g()\n"
@@ -193,14 +193,14 @@ class TestForeignWakeTripwire:
             "rc.mn_run()\n"
             "print('COUNTED', rc.sim_foreign_wake_count())\n"
             "rc.mn_fini()\n",
-            extra={"RUNLOOM_SIM_STRICT": "0"}, timeout=60)
+            extra={"STACKWEAVE_SIM_STRICT": "0"}, timeout=60)
         assert "COUNTED 1" in p.stdout, (p.stdout, p.stderr[-800:])
         assert p.returncode == 0, (p.stdout, p.stderr[-800:])
 
     def test_clean_run_counts_zero(self):
         """The green-run oracle: a clean seeded byte run reports 0."""
         p = run_snip(
-            "import socket, runloom_c as rc\n"
+            "import socket, stackweave_c as rc\n"
             "a, b = socket.socketpair()\n"
             "a.setblocking(False); b.setblocking(False)\n"
             "cid = rc.sim_conn_register(a.fileno(), b.fileno())\n"
@@ -218,10 +218,10 @@ class TestForeignWakeTripwire:
 
 class TestIoUringGate:
     def test_rings_off_and_digest_stable_under_loop_env(self):
-        """gate [2] + I3 acceptance: RUNLOOM_IOURING_LOOP=1 under sim must
+        """gate [2] + I3 acceptance: STACKWEAVE_IOURING_LOOP=1 under sim must
         neither create hub rings (no blocking loop_wait -- bounded wall time)
         nor perturb the digest -- proving the GATE, not the default."""
-        extra = {"RUNLOOM_IOURING_LOOP": "1"}
+        extra = {"STACKWEAVE_IOURING_LOOP": "1"}
         base = [mn_digest.run_digest("cpu_yield", 2, 12345,
                                      extra_env=dict(SIM_ENV))
                 for i in range(2)]
@@ -230,17 +230,17 @@ class TestIoUringGate:
                     for i in range(2)]
         assert len(set(base)) == 1 and len(set(withloop)) == 1
         assert base[0] == withloop[0], \
-            "RUNLOOM_IOURING_LOOP=1 changed the seeded schedule under sim"
+            "STACKWEAVE_IOURING_LOOP=1 changed the seeded schedule under sim"
 
 
 class TestFinalizerTorture:
     def test_finalizer_chan_ops_complete(self):
-        """contract #24 torture: __del__ doing runloom ops runs ON a hub
+        """contract #24 torture: __del__ doing stackweave ops runs ON a hub
         thread (hub TLS present -- the tripwire is structurally blind to it,
         by design).  The workload must complete without crash/abort; workloads
         are DOCUMENTED not to do this, but it must fail soft, not corrupt."""
         p = run_snip(
-            "import gc, runloom_c as rc\n"
+            "import gc, stackweave_c as rc\n"
             "ch = rc.Chan(64)\n"
             "class Noisy:\n"
             "    def __del__(self):\n"

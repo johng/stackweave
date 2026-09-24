@@ -3,12 +3,12 @@ and abandons them, so a fiber mid-wait_fd (link->commit window) at signal time
 gets a spurious instant timeout (wait_fd returns 0).
 
 Setup:
-  - MAIN thread: runloom loop with one fiber parked forever on recv();
+  - MAIN thread: stackweave loop with one fiber parked forever on recv();
     a repeating SIGALRM (every 4 ms) whose handler raises _Sig.  The parked
     fiber catches _Sig and re-parks.  This drives the scheduler-grab
     signal_wake path over and over while the shared default parker pool
     contains other threads' parkers.
-  - BACKGROUND thread: its own runloom loop with 24 fibers, each looping:
+  - BACKGROUND thread: its own stackweave loop with 24 fibers, each looping:
     recv(timeout=10s) on a socketpair whose peer gets a byte within ~15 ms
     from a feeder thread.  Every iteration passes through wait_fd's
     ARMED window (link -> epoll_ctl -> commit CAS).  If signal_wake ever
@@ -24,9 +24,9 @@ import threading
 import signal
 import socket
 
-import runloom.monkey as monkey
+import stackweave.monkey as monkey
 monkey.patch()
-import runloom_c
+import stackweave_c
 
 DURATION = 6.0
 NFIBERS = 24
@@ -84,8 +84,8 @@ def bg_thread():
         return body
 
     for i in range(NFIBERS):
-        runloom_c.fiber(make_fiber(i))
-    runloom_c.run()
+        stackweave_c.fiber(make_fiber(i))
+    stackweave_c.run()
     for rd, wr in pairs:
         rd.close()
         wr.close()
@@ -121,9 +121,9 @@ def main():
     old = signal.signal(signal.SIGALRM, handler)
     signal.setitimer(signal.ITIMER_REAL, 0.05, 0.004)
     try:
-        runloom_c.fiber(victim)
+        stackweave_c.fiber(victim)
         try:
-            runloom_c.run()
+            stackweave_c.run()
         except _Sig:
             # idle-loop fallback delivery (no parker eligible at that instant)
             pass

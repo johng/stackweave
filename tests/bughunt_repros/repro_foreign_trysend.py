@@ -4,8 +4,8 @@ thread.  Check delivery in (a) single-thread run(), (b) M:N run(N)."""
 import sys
 import threading
 import time
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 
 mode = sys.argv[1] if len(sys.argv) > 1 else "mn"
 
@@ -23,7 +23,7 @@ def scenario():
     def keepalive():
         # keep run() alive with sleep-work so the chan-parked fiber isn't abandoned
         while alive[0]:
-            runloom.sleep(0.01)
+            stackweave.sleep(0.01)
 
     def foreign():
         time.sleep(0.3)
@@ -38,7 +38,7 @@ def scenario():
         def main():
             rc.mn_fiber(receiver)
             rc.mn_fiber(keepalive)
-        runloom.run(4, main)
+        stackweave.run(4, main)
     else:
         rc.fiber(receiver)
         rc.fiber(keepalive)

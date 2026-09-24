@@ -1,6 +1,6 @@
 """big_100 / 222 -- io_uring file read/write funnel.
 
-The file-I/O primitives runloom_c.file_read / runloom_c.file_write route through
+The file-I/O primitives stackweave_c.file_read / stackweave_c.file_write route through
 io_uring on Linux>=5.1 (pread/pwrite fallback otherwise).  Every existing file
 program (p16-p23, p92) drives only the blocking-offload pool via the monkey
 layer -- the io_uring file submission/completion path and its documented global
@@ -22,7 +22,7 @@ Reads can be short (file_read returns < n at EOF), so the oracle compares
 buf[:got] against the expected prefix and re-issues for the remainder.  Run with
 many --hubs to load the R7 sub_lock with concurrent submissions.
 
-Stresses: Stresses: runloom_c.file_read/file_write io_uring submission +
+Stresses: Stresses: stackweave_c.file_read/file_write io_uring submission +
 completion routing and the global-ring sub_lock (R7) funnel at high hub count;
 offset correctness, short-read/short-write handling, and per-g data integrity
 under concurrent file I/O.
@@ -32,7 +32,7 @@ import struct
 import sys
 
 import harness
-import runloom_c
+import stackweave_c
 
 
 # Per-file deterministic pattern.  Each 16-byte block at block index b in file
@@ -74,7 +74,7 @@ def setup(H):
     fdir = os.path.join(base, _FILES)
     os.makedirs(fdir, exist_ok=True)
 
-    avail = bool(runloom_c.iouring_available())
+    avail = bool(stackweave_c.iouring_available())
     H.log("io_uring file path: {0}".format(
         "io_uring (Linux>=5.1)" if avail else "pread/pwrite fallback"))
 
@@ -107,7 +107,7 @@ def read_full(fd, buf, n, offset):
     got = 0
     mv = memoryview(buf)
     while got < n:
-        r = runloom_c.file_read(fd, mv[got:n], n - got, offset + got)
+        r = stackweave_c.file_read(fd, mv[got:n], n - got, offset + got)
         if r == 0:                 # genuine EOF / no progress
             break
         got += r
@@ -120,7 +120,7 @@ def write_full(fd, payload, offset):
     mv = memoryview(payload)
     total = len(payload)
     while done < total:
-        w = runloom_c.file_write(fd, bytes(mv[done:]), offset + done)
+        w = stackweave_c.file_write(fd, bytes(mv[done:]), offset + done)
         if w <= 0:
             break
         done += w
@@ -207,13 +207,13 @@ def body(H):
 
 
 if __name__ == "__main__":
-    # Guard: the file_read/file_write symbols only exist on a runloom build that
+    # Guard: the file_read/file_write symbols only exist on a stackweave build that
     # has the fd-I/O module; on non-Linux the io_uring path is absent but the
     # pread/pwrite fallback is still the correctness oracle, so we run anywhere
     # the symbols exist.  Only SKIP when the API itself is missing.
-    if not hasattr(runloom_c, "file_read") or \
-            not hasattr(runloom_c, "file_write"):
-        print("SKIP: runloom_c.file_read/file_write unavailable in this build")
+    if not hasattr(stackweave_c, "file_read") or \
+            not hasattr(stackweave_c, "file_write"):
+        print("SKIP: stackweave_c.file_read/file_write unavailable in this build")
         sys.exit(0)
     harness.main("p222_iouring_file_rw_funnel", body, setup=setup,
                  default_funcs=4000,

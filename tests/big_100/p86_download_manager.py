@@ -14,7 +14,7 @@ import socket
 import harness
 import httputil
 import netutil
-import runloom
+import stackweave
 
 NFILES = 12
 
@@ -106,7 +106,7 @@ def client(H, wid, rng, state):
             end = min(size - 1, start + step - 1)
             if start <= end:
                 ranges.append((start, end))
-        out = runloom.Chan(len(ranges))
+        out = stackweave.Chan(len(ranges))
         for ri, (s, e) in enumerate(ranges):
             host, port = netutil.pick_server(servers, rng)
             H.fiber(fetch_range, H, host, port, idx, s, e, ri, out)

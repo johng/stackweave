@@ -1,6 +1,6 @@
-"""aio bridge + runloom.time torture."""
+"""aio bridge + stackweave.time torture."""
 import sys, time
-import runloom
+import stackweave
 
 mode = sys.argv[1]
 
@@ -34,7 +34,7 @@ if mode == "aio":
         except ValueError:
             pass
         print("aio torture OK")
-    runloom.aio.run(main())
+    stackweave.aio.run(main())
 
 elif mode == "aio_loop":
     import asyncio
@@ -48,10 +48,10 @@ elif mode == "aio_loop":
         await asyncio.sleep(0)
         return 42
     for _ in range(20):
-        assert runloom.aio.run(m()) == 42
+        assert stackweave.aio.run(m()) == 42
     gc.collect(); r0 = rss()
     for _ in range(200):
-        assert runloom.aio.run(m()) == 42
+        assert stackweave.aio.run(m()) == 42
     gc.collect(); r1 = rss()
     print("aio.run cycles: rss %d->%d (%.2f kB/iter)" % (r0, r1, (r1 - r0) / 200.0))
 
@@ -59,12 +59,12 @@ elif mode == "time":
     def main():
         t0 = time.monotonic()
         # After
-        ch = runloom.time.After(0.05)
+        ch = stackweave.time.After(0.05)
         v, ok = ch.recv()
         dt = time.monotonic() - t0
         assert 0.04 < dt < 0.5, dt
         # Ticker
-        tk = runloom.time.Ticker(0.02)
+        tk = stackweave.time.Ticker(0.02)
         n = 0
         t1 = time.monotonic()
         for _ in range(5):
@@ -72,17 +72,17 @@ elif mode == "time":
             n += 1
         tk.stop() if hasattr(tk, "stop") else None
         print("time OK After=%.3fs ticker5=%.3fs" % (dt, time.monotonic() - t1))
-    runloom.run(4, main)
+    stackweave.run(4, main)
 
 elif mode == "timer_storm":
     def main():
-        done = runloom.Chan(512)
+        done = stackweave.Chan(512)
         N = 2000
         def w(i):
-            runloom.sleep(0.001 * (i % 20))
+            stackweave.sleep(0.001 * (i % 20))
             done.send(i)
         for i in range(N):
-            runloom.fiber(w, i)
+            stackweave.fiber(w, i)
         def collect():
             seen = set()
             for _ in range(N):
@@ -90,5 +90,5 @@ elif mode == "timer_storm":
                 seen.add(v)
             assert len(seen) == N
             print("timer storm OK")
-        runloom.fiber(collect)
-    runloom.run(8, main)
+        stackweave.fiber(collect)
+    stackweave.run(8, main)

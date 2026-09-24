@@ -28,14 +28,14 @@ static PyMethodDef module_methods[] = {
      "faster spawn for a 200k long-lived-fiber burst).  background=True "
      "runs it on a detached OS thread and returns 0 immediately (prefetch "
      "ahead of demand); background=False runs synchronously and returns the "
-     "count retained.  Bounded by the depot cap -- set RUNLOOM_STACK_DEPOT_CAP "
+     "count retained.  Bounded by the depot cap -- set STACKWEAVE_STACK_DEPOT_CAP "
      "near the target for a large prewarm."},
     {"prewarm_keep", (PyCFunction)m_prewarm_keep, METH_VARARGS | METH_KEYWORDS,
      "prewarm_keep(target, stack_size=524288) -> int: start (or re-target) a "
      "background daemon that CONTINUOUSLY keeps the global stack depot topped to "
      "`target` ready stacks, refilling as spawns drain it and idling when full -- "
      "so a burst always finds a backlog.  One daemon per process; target<=0 stops "
-     "it.  Bounded by RUNLOOM_STACK_DEPOT_CAP.  Returns 0 ok / -1 if it couldn't "
+     "it.  Bounded by STACKWEAVE_STACK_DEPOT_CAP.  Returns 0 ok / -1 if it couldn't "
      "start.  Call prewarm_stop() to halt it."},
     {"prewarm_stop", m_prewarm_stop, METH_NOARGS,
      "prewarm_stop(): stop and join the continuous prewarm daemon (no-op if none)."},
@@ -80,7 +80,7 @@ static PyMethodDef module_methods[] = {
      "that consumes large amounts of C stack."},
     {"fiber_fast",     (PyCFunction)m_fiber_fast, METH_FASTCALL | METH_KEYWORDS,
      "fiber_fast(callable): experimental C fast-spawn entry, exposed as\n"
-     "runloom.fiber_fast (runloom.fiber is the full Python default).  A bare\n"
+     "stackweave.fiber_fast (stackweave.fiber is the full Python default).  A bare\n"
      "Go-style fiber_fast(callable) under M:N spawns straight through the C core\n"
      "(no Python wrapper frame, and NO grow-down auto-sizer -- fixed default\n"
      "stack); rich calls (extra args, stack_size=, single-thread, auto mode)\n"
@@ -92,7 +92,7 @@ static PyMethodDef module_methods[] = {
      "internal: force fiber_fast to always delegate to the Python wrapper (set\n"
      "when auto per-core mode is on, so the per-core resolve is not skipped)."},
     {"fiber_grow",     (PyCFunction)m_fiber_grow, METH_FASTCALL | METH_KEYWORDS,
-     "fiber_grow(callable): the default runloom.fiber entry.  Does the grow-down\n"
+     "fiber_grow(callable): the default stackweave.fiber entry.  Does the grow-down\n"
      "auto-sizer, but handles the FROZEN case (learned size) in C with no Python\n"
      "frame; sampling / rich / single-thread calls delegate to _fiber_register's\n"
      "wrapper."},
@@ -102,7 +102,7 @@ static PyMethodDef module_methods[] = {
     {"_fiber_set_grow_down", m_fiber_set_grow_down, METH_O,
      "internal: mirror runtime.grow_down_active into fiber_grow's C fast path."},
     {"_fiber_set_speed", m_fiber_set_speed, METH_O,
-     "internal: optimize('throughput') -> runloom.fiber spawns like fiber_fast;\n"
+     "internal: optimize('throughput') -> stackweave.fiber spawns like fiber_fast;\n"
      "optimize('memory')/default -> the grow-down auto-sizer."},
     {"blocking",    (PyCFunction)m_blocking, METH_VARARGS | METH_KEYWORDS,
      "blocking(fn, *args, **kwargs): run fn(*args, **kwargs) on the\n"
@@ -110,7 +110,7 @@ static PyMethodDef module_methods[] = {
      "returns.  Use for non-preemptible blocking calls (DNS, blocking\n"
      "sockets/files, GIL-releasing C extensions) that would otherwise wedge\n"
      "the fiber's hub and strand everything queued behind it.  fn runs\n"
-     "off any fiber and must not call runloom scheduler ops."},
+     "off any fiber and must not call stackweave scheduler ops."},
     {"fiber_noyield",  m_fiber_noyield,  METH_O,
      "Spawn a fiber that the caller promises will run to "
      "completion without yielding.  Skips the per-g datastack/snap/"
@@ -125,7 +125,7 @@ static PyMethodDef module_methods[] = {
      "Sleep the current fiber for N seconds (C scheduler aware)."},
     {"sched_sleep_real", m_sched_sleep_real, METH_O,
      "Like sched_sleep but a REAL wall-clock sleep even under "
-     "RUNLOOM_LOGICAL_CLOCK (for the aio keepalive heartbeat)."},
+     "STACKWEAVE_LOGICAL_CLOCK (for the aio keepalive heartbeat)."},
     {"sched_sleep_io", m_sched_sleep_io, METH_O,
      "sched_sleep_io(seconds) -- sleep as the reprobe of a cooperative blocking\n"
      "call that has no pollable fd (select.poll's wrapper).  Unlike sched_sleep,\n"
@@ -134,8 +134,8 @@ static PyMethodDef module_methods[] = {
      "whichever unrelated fiber happens to run next."},
     {"loop_clock",  m_loop_clock,  METH_NOARGS,
      "loop_clock() -> float: the aio event-loop clock -- the logical clock when "
-     "RUNLOOM_LOGICAL_CLOCK is set (deterministic call_at/sleep replay), else "
-     "monotonic.  Used by runloom.aio loop.time()."},
+     "STACKWEAVE_LOGICAL_CLOCK is set (deterministic call_at/sleep replay), else "
+     "monotonic.  Used by stackweave.aio loop.time()."},
     {"sched_stop",  m_sched_stop,  METH_NOARGS,
      "Signal the C scheduler to exit its drain loop at the next safe "
      "point.  Background fibers parked on netpoll/sleep/wake will "
@@ -144,7 +144,7 @@ static PyMethodDef module_methods[] = {
     {"sched_reset", m_sched_reset, METH_NOARGS,
      "Drop everything from the scheduler (ready + sleep heap).  Used "
      "by paio.run's cleanup so leftover background fibers don't "
-     "block the next runloom_c.run() with a sleep heap that won't "
+     "block the next stackweave_c.run() with a sleep heap that won't "
      "drain for minutes.  Returns (n_ready_dropped, n_sleep_dropped)."},
     {"park_self",   m_park_self,   METH_NOARGS,
      "Park the current fiber until G.wake() is called on its "
@@ -188,20 +188,20 @@ static PyMethodDef module_methods[] = {
     {"netpoll_backend", m_netpoll_backend, METH_NOARGS,
      "Return active netpoll backend name (\"epoll\", \"kqueue\", \"select\")."},
     {"_logical_ns", m_logical_ns, METH_NOARGS,
-     "Read the single-thread LOGICAL clock in ns (RUNLOOM_LOGICAL_CLOCK/RUNLOOM_SIM); "
+     "Read the single-thread LOGICAL clock in ns (STACKWEAVE_LOGICAL_CLOCK/STACKWEAVE_SIM); "
      "0 off the logical clock.  Diagnostic (sim determinism witness)."},
     {"sim_conn_register", m_sim_conn_register, METH_VARARGS,
      "sim_conn_register(fd_a, fd_b) -> conn_id.  Register a socketpair-backed sim "
-     "connection (RUNLOOM_SIM, Slice 3); conn_id is the ready-ledger ordering key."},
+     "connection (STACKWEAVE_SIM, Slice 3); conn_id is the ready-ledger ordering key."},
     {"sim_deliver_ready", m_sim_deliver_ready, METH_VARARGS,
      "sim_deliver_ready(conn_id, fd, dir).  Wake a fiber parked on fd for dir "
-     "(READ=1/WRITE=2) at the current logical instant (RUNLOOM_SIM); no-op off."},
+     "(READ=1/WRITE=2) at the current logical instant (STACKWEAVE_SIM); no-op off."},
     {"sim_reset", m_sim_reset, METH_NOARGS,
      "sim_reset().  Reset the sim readiness plane (ledger + conn registry + "
      "logical clock + reap tally) between run()s for bit-exact replay."},
     {"sim_reap_count", m_sim_reap_count, METH_NOARGS,
      "sim_reap_count() -> int.  Parkers reaped at settled deadlocks by the sim "
-     "pump this run (RUNLOOM_SIM); a workload flags excess as a stranded fiber."},
+     "pump this run (STACKWEAVE_SIM); a workload flags excess as a stranded fiber."},
     {"sim_foreign_wake_count", m_sim_foreign_wake_count, METH_NOARGS,
      "sim_foreign_wake_count() -> int.  Foreign-thread wakes observed during "
      "seeded mn-sim runs (the I3 tripwire); a green run asserts 0."},
@@ -212,19 +212,19 @@ static PyMethodDef module_methods[] = {
      "_fault_reset(): test-only.  Clear all Windows fault-injection counters."},
     {"_cover_report", m_cover_report, METH_NOARGS,
      "_cover_report(): dict {named-interesting-state: hits} for the Sometimes() "
-     "reachability oracle.  All zero unless built -DRUNLOOM_COVER (RUNLOOM_COVER=1)."},
+     "reachability oracle.  All zero unless built -DRUNLOOM_COVER (STACKWEAVE_COVER=1)."},
     {"_cover_reset", m_cover_reset, METH_NOARGS,
      "_cover_reset(): zero the reachability counters (call at session start)."},
     {"_cover_enabled", m_cover_enabled, METH_NOARGS,
      "_cover_enabled(): True iff built with -DRUNLOOM_COVER."},
     {"_delay_freeze", m_delay_freeze, METH_NOARGS,
-     "_delay_freeze(): stop RUNLOOM_DELAY chaos injection (liveness/drain oracle's "
+     "_delay_freeze(): stop STACKWEAVE_DELAY chaos injection (liveness/drain oracle's "
      "'stop faulting, now prove forward progress' transition)."},
     {"_delay_active", m_delay_active, METH_NOARGS,
-     "_delay_active(): True iff RUNLOOM_DELAY chaos is still injecting."},
+     "_delay_active(): True iff STACKWEAVE_DELAY chaos is still injecting."},
     {"netpoll_poll", m_netpoll_poll, METH_NOARGS,
      "netpoll_poll(): non-blocking netpoll drain -- deliver any ready fd "
-     "readiness by waking parked fibers, then return.  Used by runloom.aio "
+     "readiness by waking parked fibers, then return.  Used by stackweave.aio "
      "so asyncio.sleep(0) advances pending I/O like a stock loop iteration."},
     {"netpoll_unregister", m_netpoll_unregister, METH_O,
      "netpoll_unregister(fd): clear the netpoll registration cache "
@@ -260,14 +260,14 @@ static PyMethodDef module_methods[] = {
      "set_stack_scrub(bool): when True, zero each fiber's stack as it is\n"
      "recycled so the next fiber to reuse it can't read the previous\n"
      "one's leftovers (TLS keys, request bodies).  Off by default (costs a\n"
-     "stack-sized memset per fiber completion).  Also via RUNLOOM_STACK_SCRUB=1."},
+     "stack-sized memset per fiber completion).  Also via STACKWEAVE_STACK_SCRUB=1."},
     {"get_stack_scrub", m_get_stack_scrub, METH_NOARGS,
      "Return whether recycled-stack scrubbing is enabled."},
     {"mn_init",     (PyCFunction)m_mn_init, METH_VARARGS | METH_KEYWORDS,
      "mn_init(n=cpus, offload_hubs=-1): start N hub threads.  Returns the "
      "total hub count.  offload_hubs reserves that many EXTRA hubs (added to "
      "N, never carved out of it) on which a blocking call may run as an "
-     "ordinary fiber -- see offload_fiber.  -1 consults RUNLOOM_OFFLOAD_HUBS; "
+     "ordinary fiber -- see offload_fiber.  -1 consults STACKWEAVE_OFFLOAD_HUBS; "
      "an explicit value overrides it, so a library can ask for what its own "
      "code needs without requiring its host to set an environment variable."},
     {"mn_fiber",       (PyCFunction)m_mn_fiber, METH_VARARGS | METH_KEYWORDS,
@@ -289,7 +289,7 @@ static PyMethodDef module_methods[] = {
      "mn_fini(): tear down the hub pool."},
     {"mn_hub_count", m_mn_hub_count, METH_NOARGS,
      "mn_hub_count(): number of M:N hubs currently running (0 if mn_init "
-     "was never called or after mn_fini).  Lets the runloom.fiber() wrapper "
+     "was never called or after mn_fini).  Lets the stackweave.fiber() wrapper "
      "dispatch to mn_fiber inside an M:N run."},
     {"offload_fiber",  (PyCFunction)m_mn_offload_fiber, METH_VARARGS | METH_KEYWORDS,
      "offload_fiber(fn, stack_size=0): spawn fn on a RESERVED OFFLOAD hub -- a "
@@ -297,7 +297,7 @@ static PyMethodDef module_methods[] = {
      "blocking call without stranding fibers woken on a general hub.  The "
      "result comes back the ordinary way (channel/WaitGroup), so no bespoke "
      "completion protocol is involved.  Raises RuntimeError if no offload hubs "
-     "are reserved -- set RUNLOOM_OFFLOAD_HUBS before mn_init."},
+     "are reserved -- set STACKWEAVE_OFFLOAD_HUBS before mn_init."},
     {"offload_hub_count", m_mn_offload_hub_count, METH_NOARGS,
      "offload_hub_count(): how many hubs are reserved for blocking offload "
      "(0 = feature off).  Also the bound on concurrent blocking calls: a "
@@ -308,7 +308,7 @@ static PyMethodDef module_methods[] = {
      "None), dwell_ms (how long that resume has run), pending (gs on the hub), "
      "preempt_requested, instrumented, and blocked_at (the Python call site of "
      "a DETACHED-wedged hub's blocking call, best-effort).  Lock-free atomic "
-     "reads; see runloom.inspect.hubs() for the friendly view + a py-spy command."},
+     "reads; see stackweave.inspect.hubs() for the friendly view + a py-spy command."},
     {"preempt_init", m_preempt_init, METH_VARARGS,
      "preempt_init(quantum_us=10000): start the time-sliced preemption "
      "timer.  3.13t only.  Goroutines without explicit sched_yield "
@@ -331,7 +331,7 @@ static PyMethodDef module_methods[] = {
      "fibers() -> list[dict].  A snapshot of every live fiber: "
      "id, state ('io-wait'/'sleep'/'chan-wait'/'running'/...), blocked_on "
      "class, fd + events (when io-wait), wake_in (when sleeping), age (when "
-     "RUNLOOM_INTROSPECT_TIME tracking is on), refcount, noyield, owner.  "
+     "STACKWEAVE_INTROSPECT_TIME tracking is on), refcount, noyield, owner.  "
      "Cheap; safe to poll from a watchdog fiber."},
     {"fiber_count", m_fiber_count, METH_NOARGS,
      "fiber_count() -> int.  Number of live fibers."},
@@ -345,21 +345,21 @@ static PyMethodDef module_methods[] = {
      "fiber_stack(id) -> (callable_repr, [(file, line, func), ...]).  "
      "Best-effort reconstructed Python stack of one fiber (deepest "
      "first).  Full stack under per-g-tstate; top frame under the single-"
-     "thread (runloom.aio) loop; empty under default M:N (no safe claim).  "
+     "thread (stackweave.aio) loop; empty under default M:N (no safe claim).  "
      "Safe: the fiber is pinned + claimed so it can't resume/free "
      "mid-walk."},
     {"set_introspect_timestamps", m_introspect_timestamps, METH_O,
      "set_introspect_timestamps(bool): when True, stamp each fiber's "
      "park time so fibers()/dump report 'age' (how long it has been "
      "wedged).  Off by default (one vDSO clock read per park); also via "
-     "RUNLOOM_INTROSPECT_TIME=1."},
+     "STACKWEAVE_INTROSPECT_TIME=1."},
     {"reset_after_fork", m_reset_after_fork, METH_NOARGS,
-     "reset_after_fork() -> None.  Reset every runloom subsystem to a clean "
+     "reset_after_fork() -> None.  Reset every stackweave subsystem to a clean "
      "single-process state after os.fork() -- abandons the (now-dead) M:N "
      "hub + offload threads, re-inits inherited locks, and gives the child "
      "its own netpoll fd.  Registered automatically as an "
      "os.register_at_fork(after_in_child=...) handler; call directly only if "
-     "you fork without importing the runloom package.  CHILD process only."},
+     "you fork without importing the stackweave package.  CHILD process only."},
     {"_test_g_balance_hold_ns", m_test_g_balance_hold_ns, METH_O,
      "test-only: hold the g-slab balance lock for N ns (run in a helper thread "
      "to simulate a hub holding it across fork).  Regression test only."},
@@ -372,7 +372,7 @@ static PyMethodDef module_methods[] = {
      "set_deadlock_mode(0|1|2): 0=off, 1=warn (print the fiber dump), "
      "2=raise RuntimeError when the scheduler quiesces with fibers still "
      "blocked on channels/parks (Go's 'all fibers are asleep - deadlock!'). "
-     "Default 1; also via RUNLOOM_DEADLOCK=off|warn|raise.  Single-thread "
+     "Default 1; also via STACKWEAVE_DEADLOCK=off|warn|raise.  Single-thread "
      "scheduler only; aio's clean stop is excluded."},
     {"get_deadlock_mode", m_get_deadlock_mode, METH_NOARGS,
      "get_deadlock_mode() -> int.  Current deadlock-detection mode."},
@@ -385,13 +385,13 @@ static PyMethodDef module_methods[] = {
      "synctest / Tokio pause quiescence predicate; call from an observer thread."},
     {"set_wait_reason", m_set_wait_reason, METH_O,
      "set_wait_reason(n): tag the current fiber's next park with a wait "
-     "reason (a runloom wait-reason code) so the deadlock/wedge dump can say "
+     "reason (a stackweave wait-reason code) so the deadlock/wedge dump can say "
      "WHY it is blocked.  No-op off a fiber.  Diagnostic only."},
     {"set_max_fibers", m_set_max_fibers, METH_O,
      "set_max_fibers(n): cap the number of live fibers (0 = unlimited, "
      "the default).  Over the cap, go()/spawn raises RuntimeError -- an "
      "admission gate so an unbounded spawn loop can't OOM the process.  Zero "
-     "hot-path cost when unset.  Also via RUNLOOM_MAX_GOROUTINES."},
+     "hot-path cost when unset.  Also via STACKWEAVE_MAX_GOROUTINES."},
     {"get_max_fibers", m_get_max_fibers, METH_NOARGS,
      "get_max_fibers() -> int.  Current cap (0 = unlimited)."},
     {"live_fibers", m_live_fibers, METH_NOARGS,
@@ -403,13 +403,13 @@ static PyMethodDef module_methods[] = {
      "On POSIX it's `kill -QUIT` (a signal handler that works even when the "
      "interpreter is wedged, unlike a Python signal handler).  On Windows it's "
      "Ctrl+Break / CTRL_BREAK_EVENT via a console control handler (signum is "
-     "ignored).  Also via RUNLOOM_TRACEBACK=1."},
+     "ignored).  Also via STACKWEAVE_TRACEBACK=1."},
     {"_diag_flags", m_diag_flags, METH_NOARGS,
-     "_diag_flags() -> int.  Current RUNLOOM_DEBUG flag mask."},
+     "_diag_flags() -> int.  Current STACKWEAVE_DEBUG flag mask."},
     {"_datastack_sweep_stats", m_datastack_sweep_stats, METH_NOARGS,
      "_datastack_sweep_stats() -> (tail_bytes, resident_bytes, chunks).  "
      "Datastack-tail sweep decompose counters; nonzero only under "
-     "RUNLOOM_DATASTACK_DEBUG."},
+     "STACKWEAVE_DATASTACK_DEBUG."},
     {"install_crash_handler", (PyCFunction)m_install_crash_handler,
      METH_VARARGS | METH_KEYWORDS,
      "install_crash_handler(level=None, file=None) -> int.  Install a "
@@ -418,7 +418,7 @@ static PyMethodDef module_methods[] = {
      "(fiber stack overflow vs wild pointer), dumps the live-fiber "
      "registry, and chains to the default handler so a core / Python traceback "
      "still follows.  level: 'on'|'all'|'backtrace'|'pystack'|'wait'|'gdb' "
-     "(comma-separated; default from RUNLOOM_CRASH env, else fiber dump).  "
+     "(comma-separated; default from STACKWEAVE_CRASH env, else fiber dump).  "
      "file: also append the report there.  Returns the flag bitmask installed."},
     {"uninstall_crash_handler", m_uninstall_crash_handler, METH_NOARGS,
      "uninstall_crash_handler() -> None.  Restore the previous signal "
@@ -428,7 +428,7 @@ static PyMethodDef module_methods[] = {
     {"crash_thread_arm", m_crash_thread_arm, METH_NOARGS,
      "crash_thread_arm() -> None.  Arm the calling OS thread's sigaltstack so "
      "the crash handler survives a stack overflow on this thread (done "
-     "automatically for runloom's own threads)."},
+     "automatically for stackweave's own threads)."},
     {"_crash_selftest_overflow", m_crash_selftest_overflow, METH_NOARGS,
      "_crash_selftest_overflow() -> None.  TEST ONLY: overflow the current C "
      "stack via real-C recursion (does not return).  Run inside a fiber to "
@@ -469,7 +469,7 @@ static PyMethodDef module_methods[] = {
 
 static struct PyModuleDef runloom_c_module = {
     PyModuleDef_HEAD_INIT,
-    "runloom_c",
+    "stackweave_c",
     "Portable stackful coroutines + scheduler primitives.",
     -1,
     module_methods,
@@ -571,7 +571,7 @@ static void runloom_install_module_getattro(void)
     }
 }
 
-PyMODINIT_FUNC PyInit_runloom_c(void)
+PyMODINIT_FUNC PyInit_stackweave_c(void)
 {
     PyObject *m;
     const char *scrub_env;
@@ -581,14 +581,14 @@ PyMODINIT_FUNC PyInit_runloom_c(void)
 #if PY_VERSION_HEX >= 0x030E0000
     runloom_coro_pre_swap = runloom_coro_rearm_stackprot;  /* 3.14: re-arm fiber C-stack limit on every resume */
 #endif
-    scrub_env = getenv("RUNLOOM_STACK_SCRUB");   /* opt-in recycled-stack wipe */
+    scrub_env = getenv("STACKWEAVE_STACK_SCRUB");   /* opt-in recycled-stack wipe */
     if (scrub_env && scrub_env[0] && scrub_env[0] != '0') {
         runloom_coro_scrub_set(1);
     }
     {
         /* GOTRACEBACK-style fiber dump: SIGQUIT on POSIX, Ctrl+Break
          * (CTRL_BREAK_EVENT) on Windows. */
-        const char *tb_env = getenv("RUNLOOM_TRACEBACK");
+        const char *tb_env = getenv("STACKWEAVE_TRACEBACK");
         if (tb_env && tb_env[0] && tb_env[0] != '0') {
 #if !defined(_WIN32)
             struct sigaction sa;

@@ -11,13 +11,13 @@ PYTHON for EVERY JSON object the scanner closes -- and it runs WHILE the C scann
 is partway through the enclosing document, its parse index and key-memo live on
 the scanner struct.
 
-In a runloom M:N runtime an object_hook that yields (runloom.yield_now /
-runloom.sleep) is a SCHEDULING POINT: the fiber can be preempted MID-PARSE and the
+In a stackweave M:N runtime an object_hook that yields (stackweave.yield_now /
+stackweave.sleep) is a SCHEDULING POINT: the fiber can be preempted MID-PARSE and the
 hub can switch to a SIBLING fiber that is ALSO inside its own JSONDecoder.decode()
 on the same hub / same OS thread.  json decoding is almost universally ASSUMED
 reentrant-safe, so this is a LOAD-BEARING probe of the DECODER side (p459 covers
 the C ENCODER; the hazard is disjoint -- encoder buffer/accumulator there, scanner
-parse-index + key-memo here).  If runloom's preempt-mid-C-scan bleeds one fiber's
+parse-index + key-memo here).  If stackweave's preempt-mid-C-scan bleeds one fiber's
 scanner index or interned-key memo into a sibling's decode, the recovered object
 will differ from what this fiber serialized -- a real runtime bug.
 
@@ -31,7 +31,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (single-owner round-trip identity):
         \\uXXXX escapes through the scanner's unescape path);
       - json.dumps()es it to text (its OWN local text);
       - decodes that text with its OWN JSONDecoder whose object_hook calls
-        runloom.yield_now() on EVERY object -- forcing a sibling scanner onto the
+        stackweave.yield_now() on EVERY object -- forcing a sibling scanner onto the
         hub mid-parse -- and, from inside the hook, asserts the object it just
         closed carries THIS fiber's wid ("w" == wid), never a sibling's;
       - asserts loads(dumps(x)) == x EXACTLY (no lost/spliced bytes, no torn
@@ -41,8 +41,8 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (single-owner round-trip identity):
     fibers except the interpreter's json machinery itself.  Under plain OS threads
     with the GIL on this ALWAYS holds (each decode uses its own scanner + fresh
     memo, and even though object_hook can run other Python, the scanner state lives
-    on the per-fiber decoder), so a correct runloom MUST match it.  A cross-fiber
-    wid in a recovered object, or a round-trip inequality, is the real runloom
+    on the per-fiber decoder), so a correct stackweave MUST match it.  A cross-fiber
+    wid in a recovered object, or a round-trip inequality, is the real stackweave
     decoder-scanner isolation bug this program uniquely catches.  Exits 0 when
     there is no bug.
 
@@ -74,7 +74,7 @@ even closes.
 import json
 
 import harness
-import runloom
+import stackweave
 
 # Non-ASCII payload embedded in string values.  With json.dumps default
 # ensure_ascii=True these become \\uXXXX (and surrogate-pair) escapes in the text,
@@ -137,7 +137,7 @@ def make_hook(H, wid, state):
     fires = state["hook_fires"]
     def object_hook(obj):
         # Mid-parse scheduling point: hand the hub to a sibling scanner.
-        runloom.yield_now()
+        stackweave.yield_now()
         fires[wid] += 1                    # single-writer-per-slot (wid), race-free
         w = obj.get("w")
         if w != wid:
@@ -227,5 +227,5 @@ if __name__ == "__main__":
                  "escapes) and decodes it with its OWN JSONDecoder whose object_hook "
                  "yields on every object; loads(dumps(x))==x AND every recovered "
                  "object carries THIS fiber's wid.  A sibling's wid in a recovered "
-                 "object, or a round-trip inequality, is the runloom decoder-"
+                 "object, or a round-trip inequality, is the stackweave decoder-"
                  "scanner isolation bug (disjoint from p459's C encoder)")

@@ -9,7 +9,7 @@ output out -- every time, on every hub, before and after any yield.
 
 WHERE M:N COULD BREAK IT (the gap this program probes).  A pure string function
 recomputed on the SAME fiber-local input must return the SAME result across a
-yield.  If runloom torn a Python str object mid-flight, leaked a sibling fiber's
+yield.  If stackweave torn a Python str object mid-flight, leaked a sibling fiber's
 argument/return buffer across a hub migration, or corrupted an interned string
 under GIL-off concurrency, the recomputed result would differ from the baseline
 even though the input is single-owner and never shared.  posixpath is an ideal
@@ -41,7 +41,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY:
 
   Verified with a plain-threads control (8 OS threads, GIL on AND off, each
   recomputing these bundles on its own inputs): 100% identical, 0 divergence.
-  Under a correct runloom it must also hold, so this single-owner oracle PASSES
+  Under a correct stackweave it must also hold, so this single-owner oracle PASSES
   (exit 0) when there is no bug.
 
   Single-owner: every input string / component list is built from the fiber's own
@@ -73,7 +73,7 @@ identities under GIL-off concurrency.
 import posixpath
 
 import harness
-import runloom
+import stackweave
 
 # Path-segment vocabulary.  A mix that pushes normpath/split through their real
 # branches: current-dir '.', parent '..', empty '' (double-slash), dotfiles,
@@ -195,9 +195,9 @@ def purity_check(H, wid, idx, rng, state):
 
     # YIELD: park so siblings recompute their own bundles on other hubs, exercising
     # the torn-str / cross-fiber-buffer-leak window before this fiber resumes.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0003)
+        stackweave.sleep(0.0003)
 
     # Law A again post-yield (a corrupted input would break the closed form too).
     if not check_closed_form(H, path, wid):

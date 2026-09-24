@@ -68,7 +68,7 @@ static int chan_send_locked(runloom_chan_t *ch, PyObject *value, int blocking)
         RUNLOOM_RUNLOCK(&ch->lock, RUNLOOM_RANK_CHAN);
         PyErr_SetString(PyExc_RuntimeError,
                         "channel send would block, but no goroutine is running "
-                        "(blocking channel ops require a runloom goroutine context)");
+                        "(blocking channel ops require a stackweave goroutine context)");
         return -1;
     }
 
@@ -172,7 +172,7 @@ static PyObject *chan_recv_locked(runloom_chan_t *ch, int *ok, int blocking)
         RUNLOOM_RUNLOCK(&ch->lock, RUNLOOM_RANK_CHAN);
         PyErr_SetString(PyExc_RuntimeError,
                         "channel recv would block, but no goroutine is running "
-                        "(blocking channel ops require a runloom goroutine context)");
+                        "(blocking channel ops require a stackweave goroutine context)");
         *ok = -1;
         return NULL;
     }

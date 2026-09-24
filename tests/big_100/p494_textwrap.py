@@ -18,32 +18,32 @@ sets its OWN configuration (width, indentation, break options), wraps TEXT with
 a UNIQUE identifier per-fiber-per-iteration, YIELDS after calling wrap(), and
 asserts the wrapped output EXACTLY matches a precomputed canonical result for
 that configuration.  A corrupted wrap result (different line breaks, wrong
-indentation, missing text, mangled lines) is the runloom M:N isolation bug.
+indentation, missing text, mangled lines) is the stackweave M:N isolation bug.
 
 WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain threads):
 
   textwrap.wrap() / TextWrapper.wrap_text are DOCUMENTED to be re-entrant and
   NOT to modify the wrapper object in-place during wrap() -- only the
   state-agnostic wrap() result matters.  We verified with a standalone plain-
-  threads control (8 threads, same hazard, NO runloom) that if each thread
+  threads control (8 threads, same hazard, NO stackweave) that if each thread
   creates its OWN isolated TextWrapper, wraps distinct text with distinct
   configs, and checks the result against a canonical value, the check PASSES
   with PYTHON_GIL=1 AND PYTHON_GIL=0: 0 corrupted wraps in 32000 checks each.
   (If a global shared TextWrapper is used, OVERLAP-based races do appear even
   under the GIL, but the oracle here is fiber-LOCAL -- each fiber owns its
   wrapper -- so that documented-unsafe shared path is NOT what we test.)  Under
-  a CORRECT runloom, fiber-local isolation MUST hold (each fiber has its own
-  wrapper, isolated from siblings).  If runloom leaks a sibling's wrapper state
+  a CORRECT stackweave, fiber-local isolation MUST hold (each fiber has its own
+  wrapper, isolated from siblings).  If stackweave leaks a sibling's wrapper state
   or corrupts wrap() output mid-fiber -- the wrapped lines have the WRONG width,
   indentation, or content (dropped text, re-wrapped differently) -- that is the
-  runloom M:N isolation bug, and the oracle PASSES on a correct runtime
+  stackweave M:N isolation bug, and the oracle PASSES on a correct runtime
   (program exits 0 when there is no bug).
 
 ORACLE:
   * LOAD-BEARING -- fiber-local TextWrapper.wrap() isolation (worker, HARD,
     fail-fast).  Each fiber creates its own TextWrapper with a unique
     configuration (width drawn from a band, break_long_words/break_on_hyphens
-    toggled per-fiber), wraps a unique input text, YIELDS (runloom.yield_now +
+    toggled per-fiber), wraps a unique input text, YIELDS (stackweave.yield_now +
     optional sleep-park), then asserts:
       - the wrapped output has the right line count (the width dictates breaks)
       - each line respects the configured width (not too long, respects
@@ -53,7 +53,7 @@ ORACLE:
       - the wrapped text contains all the original text (no text loss)
       - indentation is preserved (initial/subsequent_indent are applied)
     Single-owner: nothing but THIS fiber wraps that (width, config, text)
-    triple.  A mismatch is a runloom per-fiber textwrap isolation desync.
+    triple.  A mismatch is a stackweave per-fiber textwrap isolation desync.
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber that vanished mid-
     wrap (stranded) never returns; the watchdog + require_no_lost catch it.
   * NON-VACUITY (post, HARD): the load-bearing arm actually ran (wrap_checks > 0).
@@ -71,7 +71,7 @@ show a data race on the list/dict.
 import textwrap
 
 import harness
-import runloom
+import stackweave
 
 # Per-fiber width values are drawn from this band.  Each width yields a wrap
 # with a DISTINCT line-break pattern; a leaked sibling width changes the
@@ -163,15 +163,15 @@ def wrap_check(H, wid, idx, state):
     result = wrapper.wrap(text)
 
     # YIELD + optional SLEEP-PARK: a sibling fiber on this hub runs (wrapping
-    # at a different width/config) while this fiber is PARKED.  If runloom
+    # at a different width/config) while this fiber is PARKED.  If stackweave
     # leaks that sibling's wrapper state or configuration, the recomputed wrap
     # would differ.  (Note: wrap() is supposed to be stateless, so re-calling
     # it on the SAME wrapper yields the same result; we do NOT re-call here,
     # but the yield exercises hub migration and sibling interleaving, the
     # context in which a real leak might manifest.)
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0001)
+        stackweave.sleep(0.0001)
 
     # Validate the result against the canonical.
     if result != expected:
@@ -277,7 +277,7 @@ if __name__ == "__main__":
     harness.main("p494_textwrap", body, setup=setup, post=post,
                  default_funcs=8000,
                  describe="textwrap.TextWrapper is a stateful MUTABLE object; "
-                          "runloom M:N fibers sharing an OS-thread hub must each "
+                          "stackweave M:N fibers sharing an OS-thread hub must each "
                           "have an isolated wrapper with their own "
                           "configuration.  LOAD-BEARING: each fiber creates its "
                           "own TextWrapper with unique (width, break_long_words, "
@@ -286,4 +286,4 @@ if __name__ == "__main__":
                           "EXACTLY matches the canonical race-free result for "
                           "that (width, config, text) triple (0 under plain "
                           "threads GIL on AND off; a sibling-config leak or "
-                          "wrap-output corruption is the runloom bug)")
+                          "wrap-output corruption is the stackweave bug)")

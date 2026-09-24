@@ -8,7 +8,7 @@
 # (runloom_sched_pystate.c.inc snap/load, mn_sched_hub_main.c.inc cross-hub
 # adopt, mn_sched_mn_api.c.inc g-resurrection window).
 #
-# NOTE on RUNLOOM_DELAY: it is a numeric SEED, not a site selector -- setting it
+# NOTE on STACKWEAVE_DELAY: it is a numeric SEED, not a site selector -- setting it
 # enables the delay injector at EVERY wired site (runloom_diag.c: strtoull(seed)
 # + a global on-flag), which is even more thorough than perturbing one window.
 # The migration/resurrection sites fire alongside WORLD_YIELD/CORO_*; a
@@ -25,14 +25,14 @@ TESTS="${MIGDLY_TESTS:-test_mn test_mn_park test_concurrency test_freethread_str
 TESTS="$(for t in $TESTS; do printf '%s.py ' "$t"; done)"
 
 echo "== migration-delay: mn/pystate stress with ALL delay sites armed (seed ${MIGDLY_SEED:-1}) =="
-RUNLOOM_DELAY="${MIGDLY_SEED:-1}" \
-RUNLOOM_DELAY_MAX_NS="${MIGDLY_MAX_NS:-2000}" \
+STACKWEAVE_DELAY="${MIGDLY_SEED:-1}" \
+STACKWEAVE_DELAY_MAX_NS="${MIGDLY_MAX_NS:-2000}" \
 PYTHON_GIL=0 PYTHONPATH=src "$PY" tests/run_isolated.py -j"${MIGDLY_JOBS:-4}" $TESTS
 rc=$?
 if [ "$rc" = 0 ]; then
     echo "== migration-delay OK: snap/load/adopt windows survive perturbation =="
 else
     echo "== migration-delay FAIL (rc=$rc): a snap-save/load or cross-hub adopt "
-    echo "   reorder surfaced under RUNLOOM_DELAY -- a migration-window race. =="
+    echo "   reorder surfaced under STACKWEAVE_DELAY -- a migration-window race. =="
 fi
 exit $rc

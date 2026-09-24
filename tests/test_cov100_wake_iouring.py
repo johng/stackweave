@@ -18,7 +18,7 @@ docstring of the central report, not contorted into tests here.
     used by cancel_g + unpark_many; reached on every cancel/unpark of an
     actually-parked g.  Single-thread tests stay in ONE pool (p->hub == NULL);
     only an M:N hub g lands in a per-hub pool, so these tests run under
-    runloom.run(N>=2).
+    stackweave.run(N>=2).
   * runloom_netpoll_cancel_g (L100)             -- the commit-CAS claim loop.
   * runloom_netpoll_unpark_many (L146, L156)    -- the cheap not-parked miss
     AND the per-g claim loop, batched, under M:N.
@@ -36,9 +36,9 @@ import time
 
 import pytest
 
-import runloom
-import runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave
+import stackweave_c as rc
+from stackweave.sync import WaitGroup
 from adv_util import hang_guard, needs_free_threading
 
 READ = 1
@@ -118,7 +118,7 @@ def test_mn_cancel_g_wakes_parked_fiber_cancelled():
         _wait_until(lambda: "rv" in res)      # woken g resumed + recorded
         _drop(a.fileno()); a.close(); b.close()
     with hang_guard(20, "mn cancel_g"):
-        runloom.run(4, main)
+        stackweave.run(4, main)
     assert res.get("woke") is True, "cancel_g did not claim the parked g"
     assert res.get("rv") == CANCELLED, (
         "wait_fd returned %r, expected CANCELLED -- cancel_g must set "
@@ -138,7 +138,7 @@ def test_mn_cancel_g_on_running_fiber_is_noop():
         res["woke"] = me.cancel_wait_fd()     # main is RUNNING, parker == NULL
         res["after"] = True                   # proves we kept running
     with hang_guard(15, "mn cancel_g noop"):
-        runloom.run(2, main)
+        stackweave.run(2, main)
     assert res.get("woke") is False
     assert res.get("after") is True
 
@@ -173,7 +173,7 @@ def test_mn_unpark_many_batch_wakes_all_and_reports_running_missed():
         res["woke_n"] = sum(1 for v in rvs if v is not None)
         _drop(a.fileno()); a.close(); b.close()
     with hang_guard(25, "mn unpark_many batch"):
-        runloom.run(4, main)
+        stackweave.run(4, main)
     assert res.get("missed") == [N], (
         "expected only the running main handle (index %d) missed, got %r"
         % (N, res.get("missed")))
@@ -210,7 +210,7 @@ def test_mn_cancel_fd_wakes_all_parkers_on_one_fd():
         res["n"] = sum(1 for v in rvs if v == CANCELLED)
         _drop(a.fileno()); a.close(); b.close()
     with hang_guard(25, "mn cancel_fd bucket"):
-        runloom.run(4, main)
+        stackweave.run(4, main)
     assert res.get("n") == N, (
         "cancel_fd left %r/%d parkers stranded on the closed fd"
         % (res.get("n"), N))
@@ -230,7 +230,7 @@ def test_mn_cancel_fd_negative_fd_is_noop():
         rc.netpoll_cancel_fd(-1)               # guarded early return
         res["ok"] = True
     with hang_guard(15, "mn cancel_fd neg"):
-        runloom.run(2, main)
+        stackweave.run(2, main)
     assert res.get("ok") is True
 
 
@@ -273,7 +273,7 @@ def test_iouring_ring_table_overflow_falls_back_gracefully():
         wg.wait()
         res["ok"] = sum(ok)
     with hang_guard(90, "iouring ring overflow"):
-        runloom.run(HUBS, main)
+        stackweave.run(HUBS, main)
     assert res.get("ok") == N, (
         "%d/%d file ops lost -- a ring-table-overflow hub failed to fall back "
         "to the epoll pump" % (N - (res.get("ok") or 0), N))
@@ -326,7 +326,7 @@ def test_mn_mixed_wakers_drain_cleanly_under_contention():
         for a, b in groups:
             _drop(a.fileno()); a.close(); b.close()
     with hang_guard(30, "mn mixed wakers"):
-        runloom.run(6, main)
+        stackweave.run(6, main)
     # Every fiber in every group woke via its intended path -- no lost wakes,
     # no cross-path mis-claim.
     assert res.get("A") == 8, "cancel_g group: %r/8 cancelled" % res.get("A")
@@ -366,7 +366,7 @@ def test_mn_many_parkers_one_fd_across_hubs_none_lost():
         res["woke"] = sum(1 for v in rvs if v == CANCELLED)
         _drop(a.fileno()); a.close(); b.close()
     with hang_guard(30, "mn many parkers one fd"):
-        runloom.run(4, main)
+        stackweave.run(4, main)
     assert res.get("all_parked") is True, (
         "lost park: only %r/%d fibers committed to a netpoll park (a parker was "
         "dropped from its bucket -- the per-hub-epoll same-fd-across-pools "

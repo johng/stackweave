@@ -62,7 +62,7 @@ permit conservation under M:N contention, ValueError enforcement (never
 lost / never spurious), cross-hub acquire/release interleave.
 """
 import harness
-import runloom
+import stackweave
 
 # K permits per shared semaphore.  Small enough that contention is real (most
 # fibers must park and be handed a permit by a releaser on another hub), large
@@ -121,7 +121,7 @@ def shared_acquire_release(H, wid, rng, state, slot):
     # for the remaining permits -- this is when a leaking release() would push the
     # holder count past K.
     for _ in range(HOLD_YIELDS):
-        runloom.yield_now()
+        stackweave.yield_now()
 
     with guard:
         holders[idx] -= 1

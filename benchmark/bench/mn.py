@@ -1,31 +1,31 @@
-"""M:N core-scaling benchmark -- runloom's headline value proposition.
+"""M:N core-scaling benchmark -- stackweave's headline value proposition.
 
 CPU-bound workload (chained SHA-256, no I/O, nothing to preempt) spread
 over a varying number of M:N hubs on free-threaded 3.13t.  With the GIL
-off, runloom's hub pool gets real cores, so wall time should fall ~linearly
+off, stackweave's hub pool gets real cores, so wall time should fall ~linearly
 with hub count until memory bandwidth / NUMA / desktop noise caps it.
 
 Reported per config: throughput (hashes/s), speedup vs 1 hub, and parallel
-efficiency (speedup / hubs).  Baselines: a raw sequential call (no runloom),
+efficiency (speedup / hubs).  Baselines: a raw sequential call (no stackweave),
 plain threading (also GIL-free parallel), and asyncio (single OS thread, so
-no parallel benefit -- the thing runloom beats).
+no parallel benefit -- the thing stackweave beats).
 
 Run:
     PYTHONPATH=src ~/.pyenv/versions/3.14.4t/bin/python -m bench.mn
 
-Tunables: RUNLOOM_BENCH_N (goroutines), RUNLOOM_BENCH_ITER (sha256 chain length).
+Tunables: STACKWEAVE_BENCH_N (goroutines), STACKWEAVE_BENCH_ITER (sha256 chain length).
 """
 import hashlib
 import os
 import threading
 
-import runloom_c
+import stackweave_c
 
 from bench.gil import ensure_nogil
 from bench.harness import Suite, default_pin_set
 
-N = int(os.environ.get("RUNLOOM_BENCH_N", "128"))
-ITER = int(os.environ.get("RUNLOOM_BENCH_ITER", "2000"))
+N = int(os.environ.get("STACKWEAVE_BENCH_N", "128"))
+ITER = int(os.environ.get("STACKWEAVE_BENCH_ITER", "2000"))
 HUB_COUNTS = [1, 2, 4, 8, 16]
 TOTAL = N * ITER  # total sha256 ops per sample -> ops_per_s == hashes/s
 
@@ -53,7 +53,7 @@ def make_mn(hubs):
     hub counts.  mn_run is reusable after a single mn_init.
     """
     mn_init, mn_fiber, mn_run, mn_fini = (
-        runloom_c.mn_init, runloom_c.mn_fiber, runloom_c.mn_run, runloom_c.mn_fini)
+        stackweave_c.mn_init, stackweave_c.mn_fiber, stackweave_c.mn_run, stackweave_c.mn_fini)
 
     def setup():
         mn_init(hubs)
@@ -120,7 +120,7 @@ def main():
     print("workload: %d goroutines x %d-deep SHA-256 chain = %d hashes/sample\n"
           % (N, ITER, TOTAL))
 
-    seq = s.bench("sequential (no runloom)", make_sequential(), inner=TOTAL,
+    seq = s.bench("sequential (no stackweave)", make_sequential(), inner=TOTAL,
                   note="single-thread reference")
     base1 = None
     mn_results = {}
@@ -137,7 +137,7 @@ def main():
             make_threading(min(16, len(cpus))), inner=TOTAL,
             note="GIL-free OS threads")
     s.bench("asyncio (1 thread)", make_asyncio(), inner=TOTAL,
-            note="no parallelism -- the baseline runloom beats")
+            note="no parallelism -- the baseline stackweave beats")
 
     # Scaling table (uses the robust min(best) sample per config).
     print("\n  scaling (best-sample throughput):")

@@ -4,7 +4,7 @@
      } while (!tstate_try_attach(tstate));
  }
  
-+/* runloom STW trace-conformance emit + SC logical clock (env RUNLOOM_STW_TRACE;
++/* stackweave STW trace-conformance emit + SC logical clock (env STACKWEAVE_STW_TRACE;
 + * defined after _PyThreadState_Detach).  tick() returns a seq-cst sequence number
 + * placed at the transition point so the conform tool can sort the cross-thread
 + * trace into a happens-before-consistent order (see STW_FINDINGS.md). */
@@ -48,7 +48,7 @@
      detach_thread(tstate, _Py_THREAD_DETACHED);
  }
  
-+/* ---- runloom STW trace-conformance instrumentation (env RUNLOOM_STW_TRACE) ----
++/* ---- stackweave STW trace-conformance instrumentation (env STACKWEAVE_STW_TRACE) ----
 + * Emits the stop-the-world handshake (M1 attach/detach + M2 stop_the_world) as one
 + * ndjson line per transition so tools/stw_trace_conform.py can replay the REAL
 + * CPython STW protocol through verify/tla/RunloomCPythonSTW.tla's OWN actions under
@@ -59,14 +59,14 @@
 + * (file) order is NOT such an order across threads.  No-op (one predictable branch)
 + * when the env is unset.  Self-contained leaf mutex for the append; the clock is a
 + * separate global SC counter ticked AT the transition point, NOT under the emit mutex
-+ * (that would merely reproduce the broken emit order).  Only runloom edit to the
++ * (that would merely reproduce the broken emit order).  Only stackweave edit to the
 + * CPython tree (snapshot at Python/pystate.c.runloom-orig). */
 +static int
 +runloom_stw_enabled(void)
 +{
 +    static int e = -1;
 +    if (e < 0) {
-+        const char *p = getenv("RUNLOOM_STW_TRACE");
++        const char *p = getenv("STACKWEAVE_STW_TRACE");
 +        e = (p != NULL && p[0] != '\0') ? 1 : 0;
 +    }
 +    return e;
@@ -96,7 +96,7 @@
 +    PyMutex_Lock(&mtx);
 +    if (!inited) {
 +        inited = 1;
-+        const char *path = getenv("RUNLOOM_STW_TRACE");
++        const char *path = getenv("STACKWEAVE_STW_TRACE");
 +        if (path != NULL && path[0] != '\0') {
 +            fp = fopen(path, "a");
 +        }

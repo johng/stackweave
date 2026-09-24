@@ -84,7 +84,7 @@ import pty
 import tty
 
 import harness
-import runloom
+import stackweave
 
 # Each concurrent worker holds master+slave (2 pty devices); the kernel caps
 # ptys at /proc/sys/kernel/pty/max (default 4096).  Cap so <=1024 devices are
@@ -149,7 +149,7 @@ def run_session(H, wid, rnd, rng, state):
 
         payload = make_payload(wid, rnd, rng)
 
-        wg = runloom.WaitGroup()
+        wg = stackweave.WaitGroup()
         wg.add(1)
 
         def writer():
@@ -158,7 +158,7 @@ def run_session(H, wid, rnd, rng, state):
             # deliver (do NOT gate on H.running): a parked reader must never be
             # left stranded by a writer that bailed out at the shutdown edge.
             try:
-                runloom.yield_now()
+                stackweave.yield_now()
                 write_all(master, payload)
             except OSError:
                 pass                       # shutdown edge: fd went bad; swallow

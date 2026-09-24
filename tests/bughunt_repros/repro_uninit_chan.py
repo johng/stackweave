@@ -1,6 +1,6 @@
 """Chan.__new__(Chan) (tp_new without tp_init) leaves self->ch == NULL;
 every method then dereferences NULL -> hard crash of the interpreter."""
-import runloom_c as rc
+import stackweave_c as rc
 
 ch = rc.Chan.__new__(rc.Chan)     # bypass __init__ (e.g. pickle / copy protocols)
 print("created", ch, flush=True)

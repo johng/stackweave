@@ -5,7 +5,7 @@ accelerator, in a slot the accelerator itself documents as THREAD-SPECIFIC
 (`_asyncio._set_running_loop` help: "This function is thread-specific").
 `asyncio.get_running_loop()`, `asyncio.current_task()` and the running-loop set
 by `loop.run_until_complete()` all read/write that per-OS-thread slot.  Under
-runloom M:N many fibers ("goroutines") share ONE hub OS-thread (and its
+stackweave M:N many fibers ("goroutines") share ONE hub OS-thread (and its
 PyThreadState), so the per-OS-thread running-loop / current-task slot is
 HUB-keyed, NOT fiber-keyed -- the same shape as threading.local (p67) and the
 contextvar leak (p66), but for the loop/task identity that the dominant async-
@@ -18,21 +18,21 @@ CRUCIAL EMPIRICAL FACTS (verified, not assumed):
       runs a tiny coro under its OWN `asyncio.new_event_loop().run_until_complete()`.
       run_until_complete sets the running-loop slot on entry, drives the coro to
       completion, and restores the slot on return.  An `await asyncio.sleep(0)` is
-      serviced by the loop's OWN _run_once -- the runloom fiber does NOT get
+      serviced by the loop's OWN _run_once -- the stackweave fiber does NOT get
       descheduled in a way that lets a sibling overwrite the slot mid-coro -- so
       `asyncio.current_task()` is non-None and STABLE across the await (its OWN
       coro's task), `asyncio.get_running_loop()` is THIS fiber's loop throughout,
       and the slot is restored to None after.  Verified at scale: 148865 sustained
-      checks under runloom M:N (8 hubs, 8000 fibers) -> 0 task-unstable, 0 loop-
+      checks under stackweave M:N (8 hubs, 8000 fibers) -> 0 task-unstable, 0 loop-
       unstable, 0 restored-to-a-sibling.  And under a standalone plain-threads
-      control (64 threads x 400 iters, NO runloom) it holds with PYTHON_GIL=1 AND
+      control (64 threads x 400 iters, NO stackweave) it holds with PYTHON_GIL=1 AND
       PYTHON_GIL=0: 25600/25600 ok, 0 task_bad / 0 loop_bad / 0 restored_bad / 0
       corrupt each.  This is the documented-SAFE, single-owner asyncio usage; an
       oracle on it does NOT fire on a correct runtime OR on plain threads.
 
   (2) THE RAW PER-OS-THREAD SLOT IS HUB-PHYSICAL AND HUB-SHARED.  When a fiber sets
       the slot DIRECTLY (`_asyncio._set_running_loop(loop)`) and then PARKS at the
-      runloom level (the realistic shape of a handler awaiting real I/O mid-request)
+      stackweave level (the realistic shape of a handler awaiting real I/O mid-request)
       before reading it back, a sibling on the hub overwrites the shared per-OS-
       thread slot and the read returns the SIBLING's loop (or None).  And two fibers
       that run UN-serialized event loops whose selector setup parks on a hub hit
@@ -50,10 +50,10 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain threads):
   MUST see its OWN task/loop identity, restored afterwards, with no torn value.
   This is documented-safe single-owner asyncio usage that holds on a correct
   runtime AND on plain threads (GIL on AND off -- verified), so the program exits 0
-  when there is no bug.  If runloom desyncs the per-fiber slot -- current_task()
+  when there is no bug.  If stackweave desyncs the per-fiber slot -- current_task()
   returning a SIBLING's task, get_running_loop() a sibling's loop, the slot left
   pointing at a sibling's loop after run_until_complete returns, or an identity that
-  was NEVER any fiber's (a torn / freed slot) -- THAT is the runloom isolation bug
+  was NEVER any fiber's (a torn / freed slot) -- THAT is the stackweave isolation bug
   this arm uniquely catches.  The measured arms (fact 2) are the documented hub-
   shared semantics, reported but never failed.
 
@@ -64,7 +64,7 @@ ORACLES:
     get_running_loop() == its OWN loop before AND after, the slot restored to None
     after run_until_complete returns, and every observed loop/task identity is in
     the closed-world registry (a value never any fiber's = a torn/freed slot).  A
-    failure is a runloom per-fiber asyncio loop/task isolation desync.
+    failure is a stackweave per-fiber asyncio loop/task isolation desync.
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber that vanished mid-coro
     (stranded inside run_until_complete on a desynced slot) never returns; the
     watchdog + require_no_lost catch it.
@@ -72,7 +72,7 @@ ORACLES:
 
   * MEASURED-A (report-ONLY, NEVER fails): the BARE-SLOT leak.  In an isolated,
     fully-drained pre-phase, a fiber `_asyncio._set_running_loop(loop)`, PARKS at the
-    runloom level, reads the slot back; a read != our loop is a cross-fiber LEAK
+    stackweave level, reads the slot back; a read != our loop is a cross-fiber LEAK
     (documented hub-local shared-slot behavior under M:N, like p67/p66/p460 -- 0
     under plain threads only because each OS thread owns its slot).  Reported as a
     rate, never asserted.  Fails ONLY on an impossible loop (never any fiber's).
@@ -105,7 +105,7 @@ oracle fires.
 import asyncio
 
 import harness
-import runloom
+import stackweave
 
 try:
     import _asyncio
@@ -177,7 +177,7 @@ def lb_check(H, wid, state):
     async def coro():
         # current_task() / get_running_loop() must be THIS coro's, before AND after
         # the await.  The await asyncio.sleep(0) is serviced by the loop's own
-        # _run_once -- the runloom fiber is not descheduled in a way a sibling can
+        # _run_once -- the stackweave fiber is not descheduled in a way a sibling can
         # overwrite the slot through, on a correct runtime.
         ta = asyncio.current_task()
         la = asyncio.get_running_loop()
@@ -315,7 +315,7 @@ def worker(H, wid, rng, state):
                     return
                 if ran:
                     break
-                runloom.yield_now()                 # let a sibling's loop finish
+                stackweave.yield_now()                 # let a sibling's loop finish
             H.op(wid)
             idx += 1
         H.task_done(wid)
@@ -323,7 +323,7 @@ def worker(H, wid, rng, state):
 
 # --------------------------------------------------------------------------
 # MEASURED-A: the BARE-SLOT leak.  Report-ONLY, NEVER fails.  Sets the slot directly
-# and PARKS at the runloom level before reading it back, so a sibling on the hub
+# and PARKS at the stackweave level before reading it back, so a sibling on the hub
 # overwrites the shared per-OS-thread slot.  Documented hub-local leak.  Fails ONLY
 # on an impossible loop (never any fiber's).
 # --------------------------------------------------------------------------
@@ -336,10 +336,10 @@ def bare_check(H, wid, state):
         state["known_loops"].add(id(loop))
     try:
         _asyncio._set_running_loop(loop)
-        # PARK at the runloom level while the slot is set -- a sibling on this hub
+        # PARK at the stackweave level while the slot is set -- a sibling on this hub
         # runs and overwrites the shared per-OS-thread slot.
-        runloom.yield_now()
-        runloom.sleep(0.0002)
+        stackweave.yield_now()
+        stackweave.sleep(0.0002)
         got = _asyncio._get_running_loop()
         state["bare_checks"][wid & 1023] += 1
         if got is not loop:
@@ -397,7 +397,7 @@ def run_measured_phase(H, state):
     pool starts -- so their pollution can never reach the load-bearing slot oracle.
     After the drain, hard-clear the slot so the load-bearing pool starts pristine."""
     n = min(MAX_MEASURED, max(2, H.funcs))
-    wg = runloom.WaitGroup()
+    wg = stackweave.WaitGroup()
     wg.add(n)
 
     def run_one(wid):
@@ -458,11 +458,11 @@ def post(H):
                   bchecks, bleaks, bpct, oruns, ocoll, H.state["have_asyncio_c"]))
     if bleaks:
         H.log("note: the bare-slot path observed {0} cross-fiber running-loop leaks "
-              "across {1} checks -- runloom hub fibers share one per-OS-thread "
+              "across {1} checks -- stackweave hub fibers share one per-OS-thread "
               "_asyncio running-loop slot, so a fiber that PARKS with the slot set "
               "reads a sibling's loop (0 under plain threads only because each OS "
               "thread owns its slot).  Documented M:N shared-slot behavior, NOT a "
-              "runloom bug; measured in the isolated pre-phase so it never reaches "
+              "stackweave bug; measured in the isolated pre-phase so it never reaches "
               "the load-bearing oracle".format(bleaks, bchecks))
     if ocoll:
         H.log("note: the un-serialized overlap arm observed {0} 'another loop is "
@@ -494,8 +494,8 @@ if __name__ == "__main__":
                  "new_event_loop().run_until_complete() -- current_task() / "
                  "get_running_loop() MUST be its own across an await and the slot "
                  "MUST NOT be left pointing at a sibling's loop after (0 under plain "
-                 "threads GIL on AND off and on a correct runloom; a sibling/torn "
-                 "identity is the runloom bug).  The bare-slot park-and-read leak + "
+                 "threads GIL on AND off and on a correct stackweave; a sibling/torn "
+                 "identity is the stackweave bug).  The bare-slot park-and-read leak + "
                  "un-serialized overlap collisions are the documented per-OS-thread "
                  "shared-slot M:N behavior -- measured in an isolated, fully-drained "
                  "pre-phase, report-only")

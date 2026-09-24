@@ -1,4 +1,4 @@
-// Linearizability checker for runloom channels, built on Porcupine.
+// Linearizability checker for stackweave channels, built on Porcupine.
 //
 // Reads a concurrent operation history (JSON from record_history.py) and asks
 // whether some linearization consistent with the real-time call/return

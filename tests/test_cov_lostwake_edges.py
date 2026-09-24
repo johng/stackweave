@@ -17,11 +17,11 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
-N = int(os.environ.get("RUNLOOM_LOSTWAKE_N", "3000"))
-HUBS = int(os.environ.get("RUNLOOM_LOSTWAKE_HUBS", "4"))
+N = int(os.environ.get("STACKWEAVE_LOSTWAKE_N", "3000"))
+HUBS = int(os.environ.get("STACKWEAVE_LOSTWAKE_HUBS", "4"))
 
 
 class TestLostWakeEdges(unittest.TestCase):
@@ -36,7 +36,7 @@ class TestLostWakeEdges(unittest.TestCase):
         # recv parks; send delivers directly (no buffer) -> the send<->recv
         # rendezvous wake.  A lost wake strands the receiver.
         done = bytearray(N)
-        chans = [runloom_c.Chan(0) for _ in range(N)]
+        chans = [stackweave_c.Chan(0) for _ in range(N)]
 
         def waiter(i):
             v, ok = chans[i].recv()
@@ -47,17 +47,17 @@ class TestLostWakeEdges(unittest.TestCase):
 
         def root():
             for i in range(N):
-                runloom.fiber(lambda i=i: waiter(i))
-                runloom.fiber(lambda i=i: signaler(i))
+                stackweave.fiber(lambda i=i: waiter(i))
+                stackweave.fiber(lambda i=i: signaler(i))
 
-        runloom.run(HUBS, main_fn=root)
+        stackweave.run(HUBS, main_fn=root)
         self._assert_all_delivered(done, "unbuffered chan rendezvous")
 
     def test_chan_buffered_full_slot_handoff(self):
         # cap-1 channel pre-filled: the second send parks on full; a recv frees
         # the slot and must wake the parked sender -> the freed-slot wake edge.
         done = bytearray(N)
-        chans = [runloom_c.Chan(1) for _ in range(N)]
+        chans = [stackweave_c.Chan(1) for _ in range(N)]
         for ch in chans:
             ch.send(-1)                # fill the single slot (buffered, no park)
 
@@ -73,17 +73,17 @@ class TestLostWakeEdges(unittest.TestCase):
 
         def root():
             for i in range(N):
-                runloom.fiber(lambda i=i: sender(i))
-                runloom.fiber(lambda i=i: freer(i))
+                stackweave.fiber(lambda i=i: sender(i))
+                stackweave.fiber(lambda i=i: freer(i))
 
-        runloom.run(HUBS, main_fn=root)
+        stackweave.run(HUBS, main_fn=root)
         self._assert_all_delivered(done, "buffered-full slot handoff")
 
     def test_future_set_vs_wait(self):
         # a fiber parks in Future.result(); another set_result()s -> the
         # future-completion wake edge.
         done = bytearray(N)
-        futs = [runloom.Future() for _ in range(N)]
+        futs = [stackweave.Future() for _ in range(N)]
 
         def waiter(i):
             v = futs[i].result()
@@ -94,17 +94,17 @@ class TestLostWakeEdges(unittest.TestCase):
 
         def root():
             for i in range(N):
-                runloom.fiber(lambda i=i: waiter(i))
-                runloom.fiber(lambda i=i: setter(i))
+                stackweave.fiber(lambda i=i: waiter(i))
+                stackweave.fiber(lambda i=i: setter(i))
 
-        runloom.run(HUBS, main_fn=root)
+        stackweave.run(HUBS, main_fn=root)
         self._assert_all_delivered(done, "Future set-vs-wait")
 
     def test_waitgroup_done_vs_wait(self):
         # a fiber parks in WaitGroup.wait(); another done()s the last count ->
         # the waitgroup-drain wake edge.
         done = bytearray(N)
-        wgs = [runloom.WaitGroup() for _ in range(N)]
+        wgs = [stackweave.WaitGroup() for _ in range(N)]
         for wg in wgs:
             wg.add(1)
 
@@ -117,10 +117,10 @@ class TestLostWakeEdges(unittest.TestCase):
 
         def root():
             for i in range(N):
-                runloom.fiber(lambda i=i: waiter(i))
-                runloom.fiber(lambda i=i: doer(i))
+                stackweave.fiber(lambda i=i: waiter(i))
+                stackweave.fiber(lambda i=i: doer(i))
 
-        runloom.run(HUBS, main_fn=root)
+        stackweave.run(HUBS, main_fn=root)
         self._assert_all_delivered(done, "WaitGroup done-vs-wait")
 
 

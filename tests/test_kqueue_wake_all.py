@@ -27,7 +27,7 @@ Covered branches (file:line):
                                       re-armed every park
 
 Asserted through real sockets/pipes + per-fiber flags summed at the end -- never
-an internal.  Runs both single-thread (runloom_c.run) and M:N (runloom.run(n)).
+an internal.  Runs both single-thread (stackweave_c.run) and M:N (stackweave.run(n)).
 """
 import os
 import socket
@@ -41,8 +41,8 @@ pytestmark = pytest.mark.skipif(
 
 sys.path.insert(0, "src")
 
-import runloom          # noqa: E402  high-level M:N entry (run / go / sleep)
-import runloom_c        # noqa: E402
+import stackweave          # noqa: E402  high-level M:N entry (run / go / sleep)
+import stackweave_c        # noqa: E402
 
 READ = 1
 WRITE = 2
@@ -55,14 +55,14 @@ def _reset_netpoll_registration():
     """Clear the per-fd 'registered' bit cache around each test.
 
     These tests raw-close their sockets/pipes, bypassing the netpoll_unregister
-    that all real runloom close paths run.  Under kqueue's EV_ONESHOT re-arm a
+    that all real stackweave close paths run.  Under kqueue's EV_ONESHOT re-arm a
     reused fd NUMBER whose stale fd-bit is set would have its registration
     rolled differently; clearing here mimics the real close hook so fds don't
     leak registration state into each other (the convention from
     test_netpoll_conformance)."""
     for fd in range(3, 1024):
         try:
-            runloom_c.netpoll_unregister(fd)
+            stackweave_c.netpoll_unregister(fd)
         except Exception:       # noqa: BLE001
             pass
 
@@ -95,14 +95,14 @@ def _drive(*fibers):
         return runner
 
     for g in fibers:
-        runloom_c.fiber(wrap(g))
-    runloom_c.run()
+        stackweave_c.fiber(wrap(g))
+    stackweave_c.run()
     if box:
         raise box[0]
 
 
 def _backend_is_kqueue():
-    return runloom_c.netpoll_backend() == "kqueue"
+    return stackweave_c.netpoll_backend() == "kqueue"
 
 
 # ==========================================================================
@@ -122,13 +122,13 @@ def test_wake_all_same_fd_single_thread(n):
             # All N share the SAME fd number, so all land in by_fd[fd].  The
             # one-shot READ knote stands in for all of them; the single peer
             # write must wake EVERY parker (not just first-match).
-            r = runloom_c.wait_fd(fd, READ, 3000)
+            r = stackweave_c.wait_fd(fd, READ, 3000)
             if r == READ:
                 woke[i] = 1
         return run
 
     def writer():
-        runloom_c.sched_yield()              # let all N readers park first
+        stackweave_c.sched_yield()              # let all N readers park first
         b.send(b"x")                         # ONE write -> all N must wake
 
     _drive(*[reader(i) for i in range(n)], writer)
@@ -154,13 +154,13 @@ def test_wake_all_pipe_readers_single_thread(n):
 
     def reader(i):
         def run():
-            r = runloom_c.wait_fd(rfd, READ, 3000)
+            r = stackweave_c.wait_fd(rfd, READ, 3000)
             if r == READ:
                 woke[i] = 1
         return run
 
     def writer():
-        runloom_c.sched_yield()
+        stackweave_c.sched_yield()
         os.write(wfd, b"\x01")               # one byte -> wake every reader
 
     _drive(*[reader(i) for i in range(n)], writer)
@@ -190,7 +190,7 @@ def test_wake_all_mixed_directions_same_fd(n_each):
 
     def waiter(i, events):
         def run():
-            got[i] = runloom_c.wait_fd(fd, events, 3000)
+            got[i] = stackweave_c.wait_fd(fd, events, 3000)
         return run
 
     fibers = []
@@ -201,7 +201,7 @@ def test_wake_all_mixed_directions_same_fd(n_each):
         fibers.append(waiter(i, ev))
 
     def feeder():
-        runloom_c.sched_yield()              # let everyone park
+        stackweave_c.sched_yield()              # let everyone park
         b.send(b"hello")                     # make a readable too
 
     _drive(*fibers, feeder)
@@ -232,7 +232,7 @@ def test_wake_all_does_not_cross_direction(n):
 
     def reader(i):
         def run():
-            out[i] = runloom_c.wait_fd(fd, READ, 250)    # short deadline
+            out[i] = stackweave_c.wait_fd(fd, READ, 250)    # short deadline
         return run
 
     _drive(*[reader(i) for i in range(n)])
@@ -261,20 +261,20 @@ def test_wake_all_same_fd_mn(hubs, n):
         woke = bytearray(n)              # per-fiber slot, single writer each
 
         def reader(i):
-            r = runloom_c.wait_fd(fd, READ, 4000)
+            r = stackweave_c.wait_fd(fd, READ, 4000)
             if r == READ:
                 woke[i] = 1
 
         for i in range(n):
-            runloom.fiber(reader, i)
-        runloom.sleep(0.2)              # let all N park (spread across hubs)
+            stackweave.fiber(reader, i)
+        stackweave.sleep(0.2)              # let all N park (spread across hubs)
         b.send(b"x")                    # ONE write -> all N must wake
-        runloom.sleep(0.4)             # give every hub time to drain + resume
+        stackweave.sleep(0.4)             # give every hub time to drain + resume
         box["woke"] = sum(woke)
         a.close()
         b.close()
 
-    runloom.run(hubs, main)
+    stackweave.run(hubs, main)
     assert box["woke"] == n, (
         "M:N hubs=%d: only %d/%d siblings woke on one fd (B2 strand)"
         % (hubs, box["woke"], n))
@@ -296,20 +296,20 @@ def test_wake_all_pipe_readers_mn(hubs):
         woke = bytearray(n)
 
         def reader(i):
-            r = runloom_c.wait_fd(rfd, READ, 4000)
+            r = stackweave_c.wait_fd(rfd, READ, 4000)
             if r == READ:
                 woke[i] = 1
 
         for i in range(n):
-            runloom.fiber(reader, i)
-        runloom.sleep(0.2)
+            stackweave.fiber(reader, i)
+        stackweave.sleep(0.2)
         os.write(wfd, b"\x01")
-        runloom.sleep(0.4)
+        stackweave.sleep(0.4)
         box["woke"] = sum(woke)
         os.close(rfd)
         os.close(wfd)
 
-    runloom.run(hubs, main)
+    stackweave.run(hubs, main)
     assert box["woke"] == n, (
         "M:N pipe hubs=%d: only %d/%d readers woke on one write" % (
             hubs, box["woke"], n))
@@ -333,14 +333,14 @@ def test_wake_all_mixed_directions_mn(hubs):
         got = [None] * n
 
         def waiter(i, events):
-            got[i] = runloom_c.wait_fd(fd, events, 4000)
+            got[i] = stackweave_c.wait_fd(fd, events, 4000)
 
         for i in range(n):
             ev = WRITE if (i % 2 == 0) else READ
-            runloom.fiber(waiter, i, ev)
-        runloom.sleep(0.2)
+            stackweave.fiber(waiter, i, ev)
+        stackweave.sleep(0.2)
         b.send(b"hello")               # make a readable too
-        runloom.sleep(0.5)
+        stackweave.sleep(0.5)
         box["writers_ok"] = sum(
             1 for i in range(n) if i % 2 == 0 and got[i] == WRITE)
         box["readers_ok"] = sum(
@@ -348,7 +348,7 @@ def test_wake_all_mixed_directions_mn(hubs):
         a.close()
         b.close()
 
-    runloom.run(hubs, main)
+    stackweave.run(hubs, main)
     assert box["writers_ok"] == n_each, (
         "M:N hubs=%d: %d/%d WRITE waiters woke WRITE" % (
             hubs, box["writers_ok"], n_each))
@@ -371,14 +371,14 @@ def test_wake_all_rearm_storm_single_thread(rounds):
     assert _backend_is_kqueue()
     a, b = _pair()
     fd = a.fileno()
-    ready = runloom_c.Chan()           # looper -> writer "re-parked" handshake
+    ready = stackweave_c.Chan()           # looper -> writer "re-parked" handshake
     sibling_n = 3
     sib_wakes = bytearray(sibling_n)   # times each sibling observed a wake
     looper_wakes = [0]
 
     def looper():
         for _ in range(rounds):
-            r = runloom_c.wait_fd(fd, READ, 3000)
+            r = stackweave_c.wait_fd(fd, READ, 3000)
             if r == READ:
                 looper_wakes[0] += 1
             try:
@@ -391,13 +391,13 @@ def test_wake_all_rearm_storm_single_thread(rounds):
         def run():
             # Park once on the shared fd.  The FIRST write that wakes the looper
             # must ALSO wake this sibling (wake_all walks the whole bucket).
-            r = runloom_c.wait_fd(fd, READ, 3000)
+            r = stackweave_c.wait_fd(fd, READ, 3000)
             if r == READ:
                 sib_wakes[i] = 1
         return run
 
     def writer():
-        runloom_c.sched_yield()        # let looper + siblings park
+        stackweave_c.sched_yield()        # let looper + siblings park
         for _ in range(rounds):
             b.send(b"x")               # wakes looper + (round 1) every sibling
             ready.recv()               # looper drained + re-parked; next edge
@@ -430,13 +430,13 @@ def test_wake_all_rearm_storm_mn(hubs):
     def main():
         a, b = _pair()
         fd = a.fileno()
-        ready = runloom_c.Chan()
+        ready = stackweave_c.Chan()
         sib_wakes = bytearray(sibling_n)
         looper_wakes = [0]
 
         def looper():
             for _ in range(rounds):
-                r = runloom_c.wait_fd(fd, READ, 4000)
+                r = stackweave_c.wait_fd(fd, READ, 4000)
                 if r == READ:
                     looper_wakes[0] += 1
                 try:
@@ -446,24 +446,24 @@ def test_wake_all_rearm_storm_mn(hubs):
                 ready.send(1)
 
         def sibling(i):
-            r = runloom_c.wait_fd(fd, READ, 4000)
+            r = stackweave_c.wait_fd(fd, READ, 4000)
             if r == READ:
                 sib_wakes[i] = 1
 
-        runloom.fiber(looper)
+        stackweave.fiber(looper)
         for i in range(sibling_n):
-            runloom.fiber(sibling, i)
-        runloom.sleep(0.2)             # everyone parked across hubs
+            stackweave.fiber(sibling, i)
+        stackweave.sleep(0.2)             # everyone parked across hubs
         for _ in range(rounds):
             b.send(b"x")
             ready.recv()
-        runloom.sleep(0.3)
+        stackweave.sleep(0.3)
         box["looper"] = looper_wakes[0]
         box["siblings"] = sum(sib_wakes)
         a.close()
         b.close()
 
-    runloom.run(hubs, main)
+    stackweave.run(hubs, main)
     assert box["looper"] == rounds, (
         "M:N hubs=%d: looper lost a wake: %d/%d" % (
             hubs, box["looper"], rounds))
@@ -492,7 +492,7 @@ def test_wake_all_losers_recheck_and_repark(n):
     def reader(i):
         def run():
             while True:
-                r = runloom_c.wait_fd(fd, READ, 3000)
+                r = stackweave_c.wait_fd(fd, READ, 3000)
                 if r != READ:
                     return                   # timeout: give up (failure shows up)
                 wake_counts[i] = 1
@@ -506,12 +506,12 @@ def test_wake_all_losers_recheck_and_repark(n):
         return run
 
     def writer():
-        runloom_c.sched_yield()
+        stackweave_c.sched_yield()
         for _ in range(n):
             b.send(b"x")                     # one byte per round
             # let the woken readers run: one consumes, losers re-park, next write
             for _ in range(4):
-                runloom_c.sched_yield()
+                stackweave_c.sched_yield()
 
     _drive(*[reader(i) for i in range(n)], writer)
 
@@ -525,5 +525,5 @@ def test_wake_all_losers_recheck_and_repark(n):
 
 
 if __name__ == "__main__":
-    print("netpoll backend under test:", runloom_c.netpoll_backend())
+    print("netpoll backend under test:", stackweave_c.netpoll_backend())
     raise SystemExit(pytest.main([__file__, "-v"]))

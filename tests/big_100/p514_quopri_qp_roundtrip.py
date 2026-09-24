@@ -11,7 +11,7 @@ swallowing soft breaks, and re-materialising the original octets.  Both paths
 keep transient state (the current column, a half-parsed "=X" escape, a pending
 trailing-space run) that lives only for the duration of one call.
 
-WHERE M:N COULD BREAK IT (the gap this program probes).  runloom multiplexes
+WHERE M:N COULD BREAK IT (the gap this program probes).  stackweave multiplexes
 tens of thousands of goroutines onto a handful of OS hubs with the GIL OFF.  A
 fiber that calls encodestring(), PARKS at a cooperative yield, and later RESUMES
 -- possibly on a DIFFERENT hub -- must find its encode result byte-for-byte
@@ -58,7 +58,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY.
   that the encoded output never contains a byte outside {9,10,13,32} u [33,126].
   So on a CORRECT runtime this program EXITS 0 (PASS): every fail-fast check is
   a tautology unless the runtime corrupted the per-call quopri state across the
-  park.  A FAIL here means a real runloom bug: a cross-fiber leak of single-owner
+  park.  A FAIL here means a real stackweave bug: a cross-fiber leak of single-owner
   encode/decode buffer state, a torn bytes object, or a lost/duplicated escape.
 
 ORACLES:
@@ -81,7 +81,7 @@ migration inserted between encode and decode under GIL-off M:N churn.
 import quopri
 
 import harness
-import runloom
+import stackweave
 
 # Legal bytes in a Quoted-Printable ENCODED stream: literal TAB/LF/CR/SPACE plus
 # the printable ASCII range 33..126 (which includes '=' used for escapes and the
@@ -171,9 +171,9 @@ def roundtrip_once(H, wid, idx, rng, state):
         # --- PARK at the hazard boundary: a sibling on this hub (or another,
         # after migration) runs its OWN encode/decode here.  Its per-call state
         # must not touch ours.
-        runloom.yield_now()
+        stackweave.yield_now()
         if idx & 1:
-            runloom.sleep(0.0003)
+            stackweave.sleep(0.0003)
 
         # --- RE-ENCODE (post-yield): encodestring is deterministic, so the bytes
         # MUST be identical.  A difference means the park corrupted the encoder's

@@ -1,7 +1,7 @@
-"""Sub-interpreter (PEP 684) isolation contract for runloom_c.
+"""Sub-interpreter (PEP 684) isolation contract for stackweave_c.
 
 CONTRACT (verified 2026-06-27 on free-threaded 3.13t):
-runloom_c is a SINGLE-PHASE C extension with PROCESS-GLOBAL state (the M:N
+stackweave_c is a SINGLE-PHASE C extension with PROCESS-GLOBAL state (the M:N
 scheduler, the shared netpoll, hub OS threads, init-once globals in mn_sched.c).
 It must NOT be loaded into more than one interpreter -- two interpreters driving
 the same global hub state would corrupt it (the one-owner-per-process assumption
@@ -11,7 +11,7 @@ CPython enforces exactly this for single-phase modules: importing one into a
 sub-interpreter raises `ImportError: module <name> does not support loading in
 subinterpreters`.  This test pins that the protection HOLDS -- in BOTH the
 `isolated` (own-state) and `legacy` (shared) sub-interpreter configs, on the
-free-threaded build.  It is a REGRESSION GUARD: if runloom is ever converted to
+free-threaded build.  It is a REGRESSION GUARD: if stackweave is ever converted to
 multi-phase init (PEP 489) without declaring
 `Py_mod_multiple_interpreters = Py_MOD_MULTIPLE_INTERPRETERS_NOT_SUPPORTED`, the
 import would start *succeeding* and this test would fail, flagging that the
@@ -39,7 +39,7 @@ SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 
 
 
 def _import_runloom_in_subinterp(config):
-    """Create a sub-interpreter of `config`, attempt `import runloom_c`, and
+    """Create a sub-interpreter of `config`, attempt `import stackweave_c`, and
     return the outcome string the sub-interpreter wrote to a temp file.
     (A file is the reliable cross-interpreter channel: run_string swallows
     SystemExit and redirects std streams.)"""
@@ -50,7 +50,7 @@ def _import_runloom_in_subinterp(config):
         "sys.path.insert(0, %r)\n" % SRC +
         "r = open(%r, 'w')\n" % res +
         "try:\n"
-        "    import runloom_c\n"
+        "    import stackweave_c\n"
         "    r.write('IMPORT_OK')\n"
         "except ImportError as e:\n"
         "    r.write('IMPORT_REFUSED:' + str(e)[:120])\n"
@@ -75,15 +75,15 @@ def _import_runloom_in_subinterp(config):
 class SubinterpIsolation(unittest.TestCase):
 
     def test_import_refused_in_subinterpreters(self):
-        """runloom_c (single-phase, process-global) MUST be refused in any
+        """stackweave_c (single-phase, process-global) MUST be refused in any
         sub-interpreter -- this is the protection against cross-interpreter
         corruption of the global M:N scheduler."""
         for config in ("isolated", "legacy"):
             outcome = _import_runloom_in_subinterp(config)
             self.assertTrue(
                 outcome.startswith("IMPORT_REFUSED"),
-                "{0} sub-interpreter: expected runloom_c import to be REFUSED "
-                "(single-phase protection), got {1!r}. If runloom was made "
+                "{0} sub-interpreter: expected stackweave_c import to be REFUSED "
+                "(single-phase protection), got {1!r}. If stackweave was made "
                 "multi-phase, declare Py_mod_multiple_interpreters=NOT_SUPPORTED."
                 .format(config, outcome))
             self.assertIn("subinterpreters", outcome,
@@ -91,10 +91,10 @@ class SubinterpIsolation(unittest.TestCase):
                           .format(config, outcome))
 
     def test_main_interpreter_unaffected(self):
-        """Sanity: runloom_c imports + initializes fine in the main interpreter."""
-        import runloom_c
-        runloom_c.mn_init(2)
-        runloom_c.mn_fini()
+        """Sanity: stackweave_c imports + initializes fine in the main interpreter."""
+        import stackweave_c
+        stackweave_c.mn_init(2)
+        stackweave_c.mn_fini()
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 """recv(n, MSG_WAITALL) on a blocking socket must return exactly n bytes
-(waiting for stragglers).  Patched runloom forces O_NONBLOCK, under which the
+(waiting for stragglers).  Patched stackweave forces O_NONBLOCK, under which the
 kernel ignores MSG_WAITALL -> short read -> framed protocols desync."""
 import socket, sys, threading, time
 
@@ -18,8 +18,8 @@ def scenario(tag):
 if sys.argv[1] == "stock":
     scenario("stock:")
 else:
-    import runloom
+    import stackweave
     def main():
-        runloom.fiber(lambda: scenario("patched-fiber:"))
-    runloom.monkey.patch()
-    runloom.run(2, main)
+        stackweave.fiber(lambda: scenario("patched-fiber:"))
+    stackweave.monkey.patch()
+    stackweave.run(2, main)

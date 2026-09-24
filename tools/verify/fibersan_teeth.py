@@ -23,7 +23,7 @@ that only passes when the tool it validates is actually working.
 import ctypes
 import sys
 
-import runloom_c
+import stackweave_c
 
 libc = ctypes.CDLL(None, use_errno=True)
 libc.malloc.restype = ctypes.c_void_p
@@ -37,7 +37,7 @@ BUF = 64
 
 
 def run(mode):
-    ch = runloom_c.Chan(1)
+    ch = stackweave_c.Chan(1)
 
     def producer():
         p = libc.malloc(BUF)
@@ -52,9 +52,9 @@ def run(mode):
         if mode == "clean":
             libc.free(p)
 
-    runloom_c.fiber(producer)
-    runloom_c.fiber(consumer)
-    runloom_c.run()
+    stackweave_c.fiber(producer)
+    stackweave_c.fiber(consumer)
+    stackweave_c.run()
 
 
 if __name__ == "__main__":

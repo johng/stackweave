@@ -1,8 +1,8 @@
 """Edge coverage for the monkey-patched ssl.SSLSocket cooperative paths.
 
-runloom.monkey makes SSLSocket.recv/recv_into/send/sendall/do_handshake/unwrap
+stackweave.monkey makes SSLSocket.recv/recv_into/send/sendall/do_handshake/unwrap
 and SSLContext.wrap_socket cooperative: a WANT_READ/WANT_WRITE from OpenSSL parks
-the fiber on wait_fd instead of spinning or wedging the hub (src/runloom/monkey/
+the fiber on wait_fd instead of spinning or wedging the hub (src/stackweave/monkey/
 tls.py).  test_swarm_monkey.py covers the headline handshake; this file drills
 three under-covered edges:
 
@@ -120,7 +120,7 @@ def _run_child(body, label, timeout, guard):
     env["RL_SRC"] = _SRC
     env["RL_CERT"] = _CERT[0]
     env["RL_KEY"] = _CERT[1]
-    env["RUNLOOM_GOROUTINE_PANIC"] = "silent"
+    env["STACKWEAVE_GOROUTINE_PANIC"] = "silent"
     try:
         with hang_guard(guard, label):
             try:
@@ -161,10 +161,10 @@ def _run_child(body, label, timeout, guard):
 _PREAMBLE = r'''
 import os, sys
 sys.path.insert(0, os.environ["RL_SRC"])
-import runloom.monkey as monkey
+import stackweave.monkey as monkey
 monkey.patch()
 import time
-import runloom, runloom_c as rc, socket, ssl
+import stackweave, stackweave_c as rc, socket, ssl
 
 CERT = os.environ["RL_CERT"]; KEY = os.environ["RL_KEY"]
 out = {}

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# check_ctxcheck.sh -- build with RUNLOOM_CTXCHECK=1 and run a fast slice under
+# check_ctxcheck.sh -- build with STACKWEAVE_CTXCHECK=1 and run a fast slice under
 # it, so the lock-order rank checker AND the park/yield-safety assert (item 10)
 # actually run in CI.  Before this, the rank checker in runloom_lockrank.h was
 # never compiled by any lane (setup.py had no flag; coverage showed the lines
@@ -44,9 +44,9 @@ TESTS="$(for t in $TESTS; do printf '%s.py ' "$t"; done)"
 force_clean() { rm -f src/runloom_c/*.so 2>/dev/null;
                 find build -name '*.o' -delete 2>/dev/null; }
 
-echo "== ctxcheck: rebuild with RUNLOOM_CTXCHECK=1 =="
+echo "== ctxcheck: rebuild with STACKWEAVE_CTXCHECK=1 =="
 force_clean
-if ! RUNLOOM_CTXCHECK=1 PYTHON_GIL=0 "$PY" setup.py build_ext --inplace \
+if ! STACKWEAVE_CTXCHECK=1 PYTHON_GIL=0 "$PY" setup.py build_ext --inplace \
         >/tmp/runloom_ctxcheck_build.log 2>&1; then
     echo "ctxcheck BUILD FAILED (see /tmp/runloom_ctxcheck_build.log)"
     tail -20 /tmp/runloom_ctxcheck_build.log
@@ -75,7 +75,7 @@ fi
 
 echo "== ctxcheck: rebuild WITHOUT the flag (restore normal .so) =="
 force_clean
-RUNLOOM_CTXCHECK=0 PYTHON_GIL=0 "$PY" setup.py build_ext --inplace \
+STACKWEAVE_CTXCHECK=0 PYTHON_GIL=0 "$PY" setup.py build_ext --inplace \
     >/tmp/runloom_ctxcheck_restore.log 2>&1 || {
         echo "WARN: restore build failed -- the in-place .so is still a CTXCHECK build"
         echo "      (see /tmp/runloom_ctxcheck_restore.log); rebuild before benching."; }

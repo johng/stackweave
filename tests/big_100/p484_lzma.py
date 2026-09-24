@@ -8,7 +8,7 @@ the compressed output so far.  The state is PER-COMPRESSOR-INSTANCE, not
 global, so each fiber that creates its own compressor should have an
 isolated, private state machine.
 
-WHERE M:N BREAKS IT (the gap this program probes).  Under runloom's M:N
+WHERE M:N BREAKS IT (the gap this program probes).  Under stackweave's M:N
 scheduler many fibers ("goroutines") share ONE hub OS-thread, and thus the
 same GIL-protected (or GIL-free) interpreter state.  If the lzma C extension
 stores any thread-local or interpreter-local state (e.g., a scratch buffer, a
@@ -26,16 +26,16 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified empirically):
   lzma.compress() and LZMACompressor.compress() are DOCUMENTED to be
   thread-safe: each call is independent (compress()) or each instance holds
   its own state (LZMACompressor).  We verified with a standalone plain-threads
-  control (64 threads, PYTHON_GIL=1 and PYTHON_GIL=0, same hazard, NO runloom)
+  control (64 threads, PYTHON_GIL=1 and PYTHON_GIL=0, same hazard, NO stackweave)
   that a fiber decompress()ing the output of another fiber's compress() always
   returns the EXACT original data -- zero mismatches in 2560 checks each (40
   threads * 32 compress/decompress pairs * 2 GIL modes).  Stock CPython's lzma
   extension is written to be thread-safe per instance.  An oracle that fired
   there would be a false-positive detector; it does NOT fire there.  Under a
-  CORRECT runloom it must ALSO hold (each fiber a private compressor).  If
-  runloom leaks a sibling's compress state across the yield -- a decompressed
+  CORRECT stackweave it must ALSO hold (each fiber a private compressor).  If
+  stackweave leaks a sibling's compress state across the yield -- a decompressed
   output mismatches the original data, or is truncated/torn/garbage, or
-  decompression itself hangs/crashes -- that is the runloom isolation bug, and
+  decompression itself hangs/crashes -- that is the stackweave isolation bug, and
   the per-fiber isolated-compressor arm PASSES on a correct runtime (program
   exits 0 when there is no bug).
 
@@ -43,7 +43,7 @@ ORACLES:
   * LOAD-BEARING -- PER-FIBER COMPRESSOR ISOLATION (worker, HARD, fail-fast).
     Each fiber creates its OWN LZMACompressor instance and its OWN unique
     plaintext payload (generated from wid/idx so it differs per fiber/iteration).
-    It compresses the plaintext via compress(payload), yields (runloom.sleep /
+    It compresses the plaintext via compress(payload), yields (stackweave.sleep /
     yield_now) to deschedule and let a sibling run mid-state, then re-compresses
     more data, yields again, decompresses the full output, and asserts:
       - decompressed == original plaintext (byte-for-byte);
@@ -51,7 +51,7 @@ ORACLES:
       - decompression succeeds (no crash/exception).
     Single-owner: nothing but THIS fiber should touch its compressor instance.
     A failure (decompressed != plaintext, or a length mismatch, or a crash) is a
-    runloom per-fiber lzma-compression isolation desync (the C extension leaked
+    stackweave per-fiber lzma-compression isolation desync (the C extension leaked
     sibling state or corrupted the compressor's internal codec state).
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber that vanished
     mid-decompression (stranded inside decompress, never returned a result)
@@ -84,7 +84,7 @@ import lzma
 import os
 
 import harness
-import runloom
+import stackweave
 
 # Each fiber's plaintext payload is drawn from this size band.  Kept modest
 # (1-10 KiB) so yields happen frequently (compression interleaves with yields)
@@ -134,7 +134,7 @@ def setup(H):
 # Each fiber creates its OWN LZMACompressor, compresses its OWN unique
 # plaintext, yields between compress calls (so a sibling runs mid-state),
 # decompresses, and asserts the output matches the original.  Isolation break
-# => decompressed != plaintext (the runloom bug).
+# => decompressed != plaintext (the stackweave bug).
 # --------------------------------------------------------------------------
 def compression_check(H, wid, idx, state):
     """One isolated-compressor check: compress unique plaintext, yield, decompress."""
@@ -158,9 +158,9 @@ def compression_check(H, wid, idx, state):
             # (a scratch buffer, a context pointer, a resume-point), a sibling's
             # compress() call could corrupt it, and when we decompress the
             # output it will be wrong.
-            runloom.yield_now()
+            stackweave.yield_now()
             if idx & 1:
-                runloom.sleep(0.0001)
+                stackweave.sleep(0.0001)
 
         # Flush the compressor to finalize compression.
         compressed_parts.append(compressor.flush())
@@ -185,7 +185,7 @@ def compression_check(H, wid, idx, state):
             state["length_mismatch"][wid & 1023] += 1
             H.fail("lzma COMPRESSION LENGTH MISMATCH: decompressed {0} bytes != "
                    "plaintext {1} bytes (wid {2} idx {3}) -- compression state "
-                   "corruption truncated or expanded the output (runloom shared "
+                   "corruption truncated or expanded the output (stackweave shared "
                    "hub-thread state leak)".format(
                        len(decompressed), len(plaintext), wid, idx))
             return
@@ -200,7 +200,7 @@ def compression_check(H, wid, idx, state):
         state["exception"][wid & 1023] += 1
         H.fail("lzma COMPRESSION EXCEPTION: wid {0} idx {1}: {2}: {3} -- the "
                "lzma C extension crashed or threw on corrupted compressor state "
-               "(runloom shared hub-thread state leak)".format(
+               "(stackweave shared hub-thread state leak)".format(
                    wid, idx, type(e).__name__, e))
 
 
@@ -243,12 +243,12 @@ def post(H):
     if failed or len_err or exc:
         H.log("note: the load-bearing isolated-compressor arm observed "
               "decompression corruption -- lzma.LZMACompressor state is NOT "
-              "isolated per fiber under M:N (runloom hub fibers share one "
+              "isolated per fiber under M:N (stackweave hub fibers share one "
               "thread-affine encoder state, likely a C-extension scratch "
               "buffer or context pointer keyed by OS thread, not fiber).  "
-              "This is a runloom M:N gap (0 under plain threads GIL on AND "
+              "This is a stackweave M:N gap (0 under plain threads GIL on AND "
               "off); the fix is per-fiber state isolation in lzma, or a "
-              "fiber-aware wrapper in runloom.  Same class as p460/p468.")
+              "fiber-aware wrapper in stackweave.  Same class as p460/p468.")
 
     # NON-VACUITY: the load-bearing compressor isolation hazard was actually
     # exercised.
@@ -274,4 +274,4 @@ if __name__ == "__main__":
                           "and verifies the output byte-for-byte matches the "
                           "original (0 under plain threads GIL on AND off; a "
                           "sibling's compress() corrupting the shared encoder state "
-                          "is the runloom bug).  Same class as p460/p468.")
+                          "is the stackweave bug).  Same class as p460/p468.")

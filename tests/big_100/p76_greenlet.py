@@ -1,8 +1,8 @@
 """big_100 / 76 -- greenlet-style stack switch comparison.
 
 If greenlet is installed, each goroutine runs a greenlet ping-pong -- a SECOND
-stack-switching mechanism nested inside runloom's goroutine stack swap.  The
-greenlet sequence runs to completion ATOMICALLY (no runloom scheduling point
+stack-switching mechanism nested inside stackweave's goroutine stack swap.  The
+greenlet sequence runs to completion ATOMICALLY (no stackweave scheduling point
 between two greenlet switches), then the goroutine yields.  This is the only
 safe ordering: interleaving the two stack switchers crashes (FINDINGS BUG #8).
 
@@ -14,10 +14,10 @@ middle of a greenlet switch and crash (FINDINGS BUG #8), so greenlet coexistence
 requires preemption off AND no cooperative yield mid-greenlet-sequence.
 """
 import os
-os.environ.setdefault("RUNLOOM_PREEMPT", "0")   # must be set before mn_init
+os.environ.setdefault("STACKWEAVE_PREEMPT", "0")   # must be set before mn_init
 
 import harness          # noqa: E402
-import runloom          # noqa: E402
+import stackweave          # noqa: E402
 
 try:
     import greenlet
@@ -39,7 +39,7 @@ def worker(H, wid, rng, state):
 
         main = greenlet.getcurrent()
         g = greenlet.greenlet(gbody)
-        # Drive the greenlet to completion WITHOUT any runloom switch in
+        # Drive the greenlet to completion WITHOUT any stackweave switch in
         # between -- the two stack switchers must not interleave (BUG #8).
         r = g.switch()
         while not g.dead:
@@ -63,4 +63,4 @@ def body(H):
 
 if __name__ == "__main__":
     harness.main("p76_greenlet", body, default_funcs=1500,
-                 describe="greenlet switches nested inside runloom goroutines")
+                 describe="greenlet switches nested inside stackweave goroutines")

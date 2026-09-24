@@ -4,7 +4,7 @@ chokepoint (item 7, first increment).
 
 The stale-cache-vs-kernel bug class (10 in the appendix) is fed by the
 registration-mutating syscall being scattered: a path mutates the kernel epoll
-without updating runloom's fd_armed cache (or vice versa), and a parker hangs or
+without updating stackweave's fd_armed cache (or vice versa), and a parker hangs or
 a reused fd wakes on a stale arm.  The structural fix is ONE writer -- a single
 TU allowed to call epoll_ctl -- so cache+kernel are mutated under one lock in one
 place.
@@ -24,7 +24,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
-SRC = os.path.join(ROOT, "src", "runloom_c")
+SRC = os.path.join(ROOT, "src", "stackweave_c")
 
 # The ONLY files permitted to issue the registration-mutating syscall.  The end
 # state is a single entry (netpoll_register); shrink this list as call sites are

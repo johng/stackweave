@@ -15,12 +15,12 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "..", "src"))
 os.environ.setdefault("PYTHON_GIL", "0")
-import runloom_c
+import stackweave_c
 
 N = int(os.environ.get("CHESS_N", "2"))
 SENT = [10 + i for i in range(N)]
-runloom_c.mn_init(3)
-ch = runloom_c.Chan()
+stackweave_c.mn_init(3)
+ch = stackweave_c.Chan()
 recvd = []
 
 
@@ -35,7 +35,7 @@ def producer():
 def consumer():
     for _ in range(N):
         try:
-            idx, (val, ok) = runloom_c.select([("recv", ch)])
+            idx, (val, ok) = stackweave_c.select([("recv", ch)])
         except Exception:
             break
         if ok:
@@ -48,11 +48,11 @@ def closer():
     ch.close()                      # races the sends + the select recv
 
 
-runloom_c.mn_fiber(producer)
-runloom_c.mn_fiber(consumer)
-runloom_c.mn_fiber(closer)
-runloom_c.mn_run()
-runloom_c.mn_fini()
+stackweave_c.mn_fiber(producer)
+stackweave_c.mn_fiber(consumer)
+stackweave_c.mn_fiber(closer)
+stackweave_c.mn_run()
+stackweave_c.mn_fini()
 
 # conservation: received values are distinct + all real sent tokens
 seen = set()

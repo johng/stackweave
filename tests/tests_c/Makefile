@@ -1,15 +1,15 @@
-# tests_c/Makefile -- pure-C bench harness for runloom_c
+# tests_c/Makefile -- pure-C bench harness for stackweave_c
 #
-# Builds against the runloom_c .so already produced by `python3 setup.py
+# Builds against the stackweave_c .so already produced by `python3 setup.py
 # build_ext --inplace`.  We link against the .so so the test harness
 # exercises exactly the code path that Python sees.
 #
 # Targets:
-#   bench_mn             release build (pthread echo server + runloom clients)
+#   bench_mn             release build (pthread echo server + stackweave clients)
 #   bench_mn-asan        AddressSanitizer (catches use-after-free, OOB)
 #   bench_mn-tsan        ThreadSanitizer  (catches data races)
 #   bench_mn-ubsan       UndefinedBehaviorSanitizer
-#   bench_server_runloom    canonical scaling bench (server AND client in runloom)
+#   bench_server_runloom    canonical scaling bench (server AND client in stackweave)
 #   bench_server_runloom-{asan,tsan,ubsan}
 #   clean
 #
@@ -24,8 +24,8 @@ PY_INC      := $(shell $(PYTHON) -c 'import sysconfig; print(sysconfig.get_path(
 PY_LIBDIR   := $(shell $(PYTHON) -c 'import sysconfig; print(sysconfig.get_config_var("LIBDIR"))')
 PY_LIBNAME  := python$(PY_VERSION)$(PY_ABIFLAGS)
 
-# runloom_c .so suffix matches the Python build.
-RUNLOOM_SO_NAME := runloom_c.cpython-$(subst .,,$(PY_VERSION))$(PY_ABIFLAGS)-x86_64-linux-gnu.so
+# stackweave_c .so suffix matches the Python build.
+RUNLOOM_SO_NAME := stackweave_c.cpython-$(subst .,,$(PY_VERSION))$(PY_ABIFLAGS)-x86_64-linux-gnu.so
 RUNLOOM_SO      := $(abspath ../../src/$(RUNLOOM_SO_NAME))
 RUNLOOM_SO_DIR  := $(abspath ../../src)
 
@@ -59,7 +59,7 @@ bench_mn-ubsan: bench_mn.c $(RUNLOOM_SO)
 	$(CC) $(CFLAGS_BASE) -fsanitize=undefined bench_mn.c -o bench_mn-ubsan \
 	    $(LDFLAGS_BASE) -fsanitize=undefined
 
-# bench_server_runloom: both the echo server AND the client live in runloom
+# bench_server_runloom: both the echo server AND the client live in stackweave
 # goroutines (no pthread-per-conn ceiling).  This is the canonical
 # scaling benchmark -- use it as the primary measurement going forward.
 bench_server_runloom: bench_server_runloom.c $(RUNLOOM_SO)

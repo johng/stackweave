@@ -28,24 +28,24 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified empirically):
   codec (a search_function that recognizes a unique encoding name) and uses it
   inside a localcontext()-style isolation MUST get consistent encode/decode
   behavior across a yield.  We verified with a standalone plain-threads control
-  (64 threads, same hazard, NO runloom) that this holds with PYTHON_GIL=1 AND
+  (64 threads, same hazard, NO stackweave) that this holds with PYTHON_GIL=1 AND
   PYTHON_GIL=0: 0 mismatches in 2560 checks each.  Each OS thread has its own
   thread-local codec registry / cache (or effectively shares a cache that never
   conflicts because each thread uses its own unique encoding names), so the
-  round-trip is always correct.  Under a CORRECT runloom it must ALSO hold
+  round-trip is always correct.  Under a CORRECT stackweave it must ALSO hold
   (each fiber's registered codec and its cache entries persist across yields).
-  If runloom leaks a sibling's codec registration across the yield -- the decode
+  If stackweave leaks a sibling's codec registration across the yield -- the decode
   gets a wrong codec, or the cache has been polluted -- the plaintext !=
-  round-tripped data, and the runloom codec-registry isolation bug fires.
+  round-tripped data, and the stackweave codec-registry isolation bug fires.
 
 ORACLES:
   * LOAD-BEARING -- CODEC ENCODE/DECODE ROUND-TRIP INTEGRITY (worker, HARD,
     fail-fast).  Each fiber registers a UNIQUE codec (search_function keyed by
-    wid), encodes random plaintext data via that codec, YIELDS (runloom.sleep /
+    wid), encodes random plaintext data via that codec, YIELDS (stackweave.sleep /
     yield_now), then decodes the encoded bytes and asserts they equal the
     original plaintext.  If a sibling's codec polluted the _cache, or the
     registry was cleared, the decode uses a wrong codec and data != plaintext.
-    That is the runloom codec-isolation bug.  (On a CORRECT runtime -- and
+    That is the stackweave codec-isolation bug.  (On a CORRECT runtime -- and
     plain threads, GIL on AND off -- this NEVER fires, so the program exits 0
     when there is no bug.)
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber that vanished mid-
@@ -79,7 +79,7 @@ import codecs
 import io
 
 import harness
-import runloom
+import stackweave
 
 
 # Per-fiber plaintext data size and structure: each fiber encodes/decodes a
@@ -195,9 +195,9 @@ def roundtrip_check(H, wid, idx, state):
 
     # YIELD: deschedule this fiber so siblings on the hub run and possibly
     # pollute the codecs registry / _cache.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0003)
+        stackweave.sleep(0.0003)
 
     # DECODE: recover plaintext from ciphertext via the SAME codec.  If the
     # _cache was polluted or the registry changed, we might get the wrong codec
@@ -219,7 +219,7 @@ def roundtrip_check(H, wid, idx, state):
         H.fail("codec round-trip CORRUPTED: wid {0} encode->decode plaintext "
                "mismatch: {1!r} -> encoded -> {2!r} (length {3} vs {4}) -- a "
                "sibling's codec registration or _cache pollution changed the "
-               "decode path (runloom codec-registry isolation bug).".format(
+               "decode path (stackweave codec-registry isolation bug).".format(
                    wid, plaintext[:32], decoded[:32],
                    len(plaintext), len(decoded)))
         return
@@ -271,10 +271,10 @@ def post(H):
         H.log("note: the LOAD-BEARING round-trip arm observed encode/decode "
               "mismatches or exceptions -- plaintext data corrupted or the codec "
               "registry was polluted across fibers.  The codecs module maintains "
-              "a global _cache dict + search_function registry; runloom M:N fibers "
+              "a global _cache dict + search_function registry; stackweave M:N fibers "
               "on the same hub share these globals, so a sibling's codec "
               "registration or concurrent cache operations can pollute this "
-              "fiber's encode/decode path (runloom codec-registry isolation bug).")
+              "fiber's encode/decode path (stackweave codec-registry isolation bug).")
 
     # NON-VACUITY: the load-bearing round-trip hazard was actually exercised.
     H.check(rtchecks > 0,
@@ -291,7 +291,7 @@ if __name__ == "__main__":
         "p478_codecs", body, setup=setup, post=post,
         default_funcs=8000,
         describe="codecs module maintains a process-global _cache dict and "
-                 "search_function registry for codec lookup; runloom M:N fibers "
+                 "search_function registry for codec lookup; stackweave M:N fibers "
                  "on the same hub share these globals.  LOAD-BEARING: each fiber "
                  "registers its own unique custom codec, encodes random plaintext "
                  "via that codec, YIELDS to let siblings run (and possibly "
@@ -299,6 +299,6 @@ if __name__ == "__main__":
                  "the encoded bytes and asserts they equal the original plaintext. "
                  "Plaintext->encoded->decoded must round-trip exactly; a mismatch "
                  "means the wrong codec handled decode (a sibling's codec polluted "
-                 "the _cache, or registry was cleared) -- the runloom codec-"
+                 "the _cache, or registry was cleared) -- the stackweave codec-"
                  "registry isolation bug (0 under plain threads GIL on/off; same "
                  "class as p321/p460/p468)")

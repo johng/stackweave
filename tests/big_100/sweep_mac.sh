@@ -28,7 +28,7 @@ FUNCS="${1:-20000}"; HUBS="${2:-8}"; DUR="${3:-10}"; TMO="${4:-80}"
 RES=/tmp/big100_results.txt
 LOGD=/tmp/big100_logs
 mkdir -p "$LOGD"; : > "$RES"
-export PYTHON_GIL=0 PYTHONPATH=src RUNLOOM_SYSMON_QUIET=1 BIG100_BACKLOG=200000
+export PYTHON_GIL=0 PYTHONPATH=src STACKWEAVE_SYSMON_QUIET=1 BIG100_BACKLOG=200000
 echo "big_100 @ funcs=$FUNCS hubs=$HUBS dur=${DUR}s (mac, fresh-IP windows)" | tee -a "$RES"
 pass=0; total=0; bad=""; k=0
 for prog in big_100/p[0-9]*.py; do

@@ -16,7 +16,7 @@ import sys
 import threading
 
 import harness
-import runloom
+import stackweave
 
 def setup(H):
     H.state = {"lock": threading.Lock(), "counter": [0]}
@@ -29,7 +29,7 @@ def worker(H, wid, rng, state):
         try:
             raise ValueError(wid)
         except ValueError:
-            runloom.sleep(0.0002)            # likely resume on another hub
+            stackweave.sleep(0.0002)            # likely resume on another hub
             cur = sys.exc_info()[1]
             if not H.check(isinstance(cur, ValueError) and cur.args[0] == wid,
                            "exc_info lost across migration wid={0}: {1!r}"
@@ -39,13 +39,13 @@ def worker(H, wid, rng, state):
         # 2) a lock held across a migration still serialises the counter
         with lock:
             x = state["counter"][0]
-            runloom.yield_now()
+            stackweave.yield_now()
             state["counter"][0] = x + 1
 
         # 3) a C-extension (hashlib) object's incremental state spans a switch
         h = hashlib.sha256()
         h.update(b"a" * 100)
-        runloom.yield_now()
+        stackweave.yield_now()
         h.update(b"b" * 100)
         expect = hashlib.sha256(b"a" * 100 + b"b" * 100).hexdigest()
         if not H.check(h.hexdigest() == expect,

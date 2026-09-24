@@ -11,10 +11,10 @@ Python state, so two calls with the same arguments MUST return the identical int
 
 WHERE M:N COULD BREAK IT (the gap this program probes).  Under free-threaded
 CPython 3.14t with the GIL off, `_opcode.stack_effect` runs in C while many hub
-fibers call it concurrently and while runloom migrates a fiber across hubs at the
+fibers call it concurrently and while stackweave migrates a fiber across hubs at the
 cooperative yield in the middle of a check.  If the C routine kept ANY hidden
 mutable/per-thread scratch that were not fiber/thread isolated (a static buffer, a
-cached last-oparg, a shared table pointer transiently swapped), or if runloom
+cached last-oparg, a shared table pointer transiently swapped), or if stackweave
 corrupted the C call's arguments/return across a hub migration, a fiber could read
 back a stack effect that (a) differs from the SAME call it made microseconds
 earlier across a yield, or (b) differs from the closed-form ground truth computed
@@ -29,7 +29,7 @@ frozen and thereafter only READ.  Each fiber owns a fiber-local ordering of the
 triples; for each triple it:
     * computes se_before = opcode.stack_effect(op, oparg, jump=...)
     * asserts se_before == the frozen ground truth (closed-form match)
-    * YIELDS (runloom.yield_now / sleep) so a sibling interleaves on the shared
+    * YIELDS (stackweave.yield_now / sleep) so a sibling interleaves on the shared
       C routine and the shared read-only tables, and the scheduler may migrate
       this fiber to another hub
     * recomputes se_after = opcode.stack_effect(op, oparg, jump=...)
@@ -47,7 +47,7 @@ runtime fault: a torn C return, a cross-fiber leak of the C routine's scratch, a
 argument/return corruption across hub migration, or a torn read of the module
 tables.  We verified the law holds under a plain-threads control (the C stack_effect
 is pure; 8 OS threads GIL on/off return identical values for identical args), so a
-correct runloom must keep it clean and the program exits 0 when there is no bug.
+correct stackweave must keep it clean and the program exits 0 when there is no bug.
 
 ORACLES:
   * LOAD-BEARING -- STACK-EFFECT PURITY (worker, HARD, fail-fast).  Fiber-local
@@ -74,7 +74,7 @@ closed-form comparison even fires.
 import opcode
 
 import harness
-import runloom
+import stackweave
 
 # A fixed oparg grid.  stack_effect depends on oparg for many opcodes (BUILD_LIST,
 # CALL, UNPACK_SEQUENCE, ...), so a spread of opargs makes the ground-truth table
@@ -165,9 +165,9 @@ def purity_check(H, wid, order, state):
 
     # YIELD: hand the hub to siblings hammering the same pure C routine + tables,
     # and give the scheduler a chance to migrate this fiber to another hub.
-    runloom.yield_now()
+    stackweave.yield_now()
     if wid & 1:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
 
     for pos in range(ncases):
         i = order[pos]

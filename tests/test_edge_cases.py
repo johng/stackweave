@@ -1,5 +1,5 @@
 """Edge-case coverage: boundary conditions and error paths across the
-runloom public surface.
+stackweave public surface.
 
 Where the happy-path tests assert correct values on correct inputs,
 these tests assert correct *errors* (or no errors) on adversarial
@@ -15,8 +15,8 @@ inputs:
 import asyncio
 import unittest
 
-import runloom_c
-import runloom.aio as paio
+import stackweave_c
+import stackweave.aio as paio
 
 
 # ====================================================================
@@ -108,7 +108,7 @@ class TestFutureEdges(unittest.TestCase):
 # ====================================================================
 class TestChannelEdges(unittest.TestCase):
     def test_send_on_closed_raises(self):
-        ch = runloom_c.Chan(1)
+        ch = stackweave_c.Chan(1)
         ch.close()
         out = []
         def w():
@@ -117,59 +117,59 @@ class TestChannelEdges(unittest.TestCase):
                 out.append("no-raise")
             except ValueError:
                 out.append("closed")
-        runloom_c.fiber(w)
-        runloom_c.run()
+        stackweave_c.fiber(w)
+        stackweave_c.run()
         self.assertEqual(out, ["closed"])
 
     def test_double_close_raises(self):
-        ch = runloom_c.Chan(1)
+        ch = stackweave_c.Chan(1)
         ch.close()
         with self.assertRaises(Exception):
             ch.close()
 
     def test_recv_on_empty_closed_returns_default(self):
-        ch = runloom_c.Chan(1)
+        ch = stackweave_c.Chan(1)
         ch.close()
         out = []
         def w():
             out.append(ch.recv())
-        runloom_c.fiber(w)
-        runloom_c.run()
+        stackweave_c.fiber(w)
+        stackweave_c.run()
         self.assertEqual(out, [(None, False)])
 
     def test_try_recv_empty_returns_none(self):
         """try_recv on empty chan returns None (would-block sentinel)."""
-        ch = runloom_c.Chan(1)
+        ch = stackweave_c.Chan(1)
         out = []
         def w():
             out.append(ch.try_recv())
-        runloom_c.fiber(w)
-        runloom_c.run()
+        stackweave_c.fiber(w)
+        stackweave_c.run()
         self.assertEqual(out, [None])
 
     def test_try_recv_with_value(self):
-        ch = runloom_c.Chan(1)
+        ch = stackweave_c.Chan(1)
         ch.try_send("v")
         out = []
         def w():
             out.append(ch.try_recv())
-        runloom_c.fiber(w)
-        runloom_c.run()
+        stackweave_c.fiber(w)
+        stackweave_c.run()
         self.assertEqual(out, [("v", True)])
 
     def test_try_send_full_returns_false(self):
-        ch = runloom_c.Chan(1)
+        ch = stackweave_c.Chan(1)
         out = []
         def w():
             out.append(ch.try_send("a"))
             out.append(ch.try_send("b"))   # full
-        runloom_c.fiber(w)
-        runloom_c.run()
+        stackweave_c.fiber(w)
+        stackweave_c.run()
         self.assertEqual(out, [True, False])
 
     def test_zero_capacity_chan(self):
         """Chan(0) is unbuffered -- send blocks until recv."""
-        ch = runloom_c.Chan(0)
+        ch = stackweave_c.Chan(0)
         out = []
         def producer():
             ch.send("hi")
@@ -177,29 +177,29 @@ class TestChannelEdges(unittest.TestCase):
         def consumer():
             v, _ = ch.recv()
             out.append(("got", v))
-        runloom_c.fiber(producer)
-        runloom_c.fiber(consumer)
-        runloom_c.run()
+        stackweave_c.fiber(producer)
+        stackweave_c.fiber(consumer)
+        stackweave_c.run()
         self.assertIn(("got", "hi"), out)
         self.assertIn("sent", out)
 
     def test_close_unblocks_pending_recv(self):
-        ch = runloom_c.Chan(0)
+        ch = stackweave_c.Chan(0)
         out = []
         def waiter():
             v, ok = ch.recv()
             out.append((v, ok))
         def closer():
-            runloom_c.sched_sleep(0.005)
+            stackweave_c.sched_sleep(0.005)
             ch.close()
-        runloom_c.fiber(waiter)
-        runloom_c.fiber(closer)
-        runloom_c.run()
+        stackweave_c.fiber(waiter)
+        stackweave_c.fiber(closer)
+        stackweave_c.run()
         self.assertEqual(out, [(None, False)])
 
     def test_negative_capacity_raises(self):
         with self.assertRaises(Exception):
-            runloom_c.Chan(-1)
+            stackweave_c.Chan(-1)
 
 
 # ====================================================================

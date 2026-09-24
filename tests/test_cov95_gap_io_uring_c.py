@@ -9,7 +9,7 @@ What this drives (source line refs are into io_uring.c's #included fragments):
   io_uring_l_ring.c.inc  runloom_iouring_ring_create() -- called UNCONDITIONALLY
       once per M:N hub in mn_sched_hub_main (whenever io_uring is available),
       with NO sockets involved, so its syscall-failure cleanup is drivable by a
-      bare ``runloom.run(N)`` under strace / LD_PRELOAD fault injection.  The hub
+      bare ``stackweave.run(N)`` under strace / LD_PRELOAD fault injection.  The hub
       tolerates a NULL ring (falls back to the epoll pump), so every failure is a
       clean-exit degrade -- NOT the io_uring recv-backpressure deadlock.
         - io_uring_setup ENOMEM (non-EINVAL, no downgrade)  -> L93-95 free+NULL
@@ -64,8 +64,8 @@ pytestmark = pytest.mark.skipif(
 
 def _iou_available():
     try:
-        import runloom_c
-        return bool(runloom_c.iouring_available())
+        import stackweave_c
+        return bool(stackweave_c.iouring_available())
     except Exception:
         return False
 
@@ -125,7 +125,7 @@ def _run_strace(script, inject, env_extra=None, timeout=120):
 # ===========================================================================
 _BARE_RUN = r'''
 import sys; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
+import stackweave, stackweave_c as rc
 done = [0]
 def main():
     # a little real work so every hub actually spins up its hub_main (and thus
@@ -136,7 +136,7 @@ def main():
     for i in range(64):
         rc.mn_fiber(lambda i=i: w(i))
     rc.sched_sleep(0.1)
-runloom.run(3, main)
+stackweave.run(3, main)
 sys.stdout.write("DONE\n")
 '''
 
@@ -202,8 +202,8 @@ def test_ring_create_register_eventfd_failure_cleanup():
 # ===========================================================================
 _MS_DEARM_CLOSE = r'''
 import sys, struct; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave, stackweave_c as rc
+from stackweave.sync import WaitGroup
 N = 16
 ok = bytearray(N)
 def main():
@@ -232,14 +232,14 @@ def main():
         rc.mn_fiber(lambda i=i: client(i))
     wg.wait()
     for ln in lst: ln.close()
-runloom.run(4, main)
+stackweave.run(4, main)
 sys.stdout.write("DEARM_OK %d\n" % sum(ok))
 '''
 
 
 @needs_iouring
 def test_global_ms_close_immediate_free_reclaim():
-    p = _run(_MS_DEARM_CLOSE, {"RUNLOOM_TCPCONN_IOURING": "1"})
+    p = _run(_MS_DEARM_CLOSE, {"STACKWEAVE_TCPCONN_IOURING": "1"})
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1500:])
     assert "DEARM_OK 16" in p.stdout, (p.stdout[-400:], p.stderr[-1500:])
 
@@ -255,8 +255,8 @@ def test_global_ms_close_immediate_free_reclaim():
 # ===========================================================================
 _MS_DEARM_CLOSE_INFLIGHT = r'''
 import sys, struct; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave, stackweave_c as rc
+from stackweave.sync import WaitGroup
 N = 16
 ok = bytearray(N)
 def main():
@@ -285,14 +285,14 @@ def main():
         rc.mn_fiber(lambda i=i: client(i))
     wg.wait()
     for ln in lst: ln.close()
-runloom.run(4, main)
+stackweave.run(4, main)
 sys.stdout.write("DEARMINFL_OK %d\n" % sum(ok))
 '''
 
 
 @needs_iouring
 def test_global_ms_close_immediate_free_reclaim_with_inflight():
-    p = _run(_MS_DEARM_CLOSE_INFLIGHT, {"RUNLOOM_TCPCONN_IOURING": "1"})
+    p = _run(_MS_DEARM_CLOSE_INFLIGHT, {"STACKWEAVE_TCPCONN_IOURING": "1"})
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1500:])
     assert "DEARMINFL_OK 16" in p.stdout, (p.stdout[-400:], p.stderr[-1500:])
 
@@ -309,8 +309,8 @@ def test_global_ms_close_immediate_free_reclaim_with_inflight():
 # ===========================================================================
 _MS_ARMED_CLOSE = r'''
 import sys, struct; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave, stackweave_c as rc
+from stackweave.sync import WaitGroup
 N = 16
 ok = bytearray(N)
 def main():
@@ -341,14 +341,14 @@ def main():
     wg.wait()
     rc.sched_sleep(0.2)
     for ln in lst: ln.close()
-runloom.run(4, main)
+stackweave.run(4, main)
 sys.stdout.write("ARMEDCLOSE_OK %d\n" % sum(ok))
 '''
 
 
 @needs_iouring
 def test_global_ms_on_cqe_closing_reclaim():
-    p = _run(_MS_ARMED_CLOSE, {"RUNLOOM_TCPCONN_IOURING": "1"})
+    p = _run(_MS_ARMED_CLOSE, {"STACKWEAVE_TCPCONN_IOURING": "1"})
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1500:])
     assert "ARMEDCLOSE_OK 16" in p.stdout, (p.stdout[-400:], p.stderr[-1500:])
 
@@ -362,8 +362,8 @@ def test_global_ms_on_cqe_closing_reclaim():
 # ===========================================================================
 _MS_ARMED_CLOSE_INFLIGHT = r'''
 import sys, struct; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave, stackweave_c as rc
+from stackweave.sync import WaitGroup
 N = 16
 ok = bytearray(N)
 def main():
@@ -394,14 +394,14 @@ def main():
     wg.wait()
     rc.sched_sleep(0.2)
     for ln in lst: ln.close()
-runloom.run(4, main)
+stackweave.run(4, main)
 sys.stdout.write("ARMEDINFL_OK %d\n" % sum(ok))
 '''
 
 
 @needs_iouring
 def test_global_ms_on_cqe_closing_reclaim_with_inflight():
-    p = _run(_MS_ARMED_CLOSE_INFLIGHT, {"RUNLOOM_TCPCONN_IOURING": "1"})
+    p = _run(_MS_ARMED_CLOSE_INFLIGHT, {"STACKWEAVE_TCPCONN_IOURING": "1"})
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1500:])
     assert "ARMEDINFL_OK 16" in p.stdout, (p.stdout[-400:], p.stderr[-1500:])
 
@@ -420,7 +420,7 @@ def test_global_ms_on_cqe_closing_reclaim_with_inflight():
 # ===========================================================================
 _LOOP_RECLAIM = r'''
 import sys, struct, socket, threading; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
+import stackweave, stackweave_c as rc
 RealThread = threading.Thread          # captured pre-import; never patched
 N = 12
 got_first = [0] * N
@@ -453,7 +453,7 @@ def main():
     ready.set()
     rc.sched_sleep(0.8)                            # let servers run ms_close(q_count>0)
     for ln in lst: ln.close()
-runloom.run(2, main)
+stackweave.run(2, main)
 for t in threads: t.join(timeout=3)
 sys.stdout.write("LOOPRECLAIM_FIRST %d\n" % sum(got_first))
 '''
@@ -461,7 +461,7 @@ sys.stdout.write("LOOPRECLAIM_FIRST %d\n" % sum(got_first))
 
 @needs_iouring
 def test_loop_ms_close_queued_buffer_reclaim():
-    p = _run(_LOOP_RECLAIM, {"RUNLOOM_IOURING_LOOP": "1", "RUNLOOM_IOURING_MS": "1"})
+    p = _run(_LOOP_RECLAIM, {"STACKWEAVE_IOURING_LOOP": "1", "STACKWEAVE_IOURING_MS": "1"})
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-2000:])
     assert "LOOPRECLAIM_FIRST 12" in p.stdout, (p.stdout[-400:], p.stderr[-1500:])
 

@@ -1,4 +1,4 @@
-# Runloom Benchmark Suite — Original Specification (archived verbatim)
+# Stackweave Benchmark Suite — Original Specification (archived verbatim)
 
 > Archived from the user's original prompt for reproducibility. This is the
 > source-of-truth spec the benchmark suite implements. Decisions and deviations
@@ -6,7 +6,7 @@
 
 ---
 
-You are building a benchmark suite for Runloom. The project will be saved in a directory in the Runloom repo called benchmark. There will be different benchmark tests for aspects of the run time.
+You are building a benchmark suite for Stackweave. The project will be saved in a directory in the Stackweave repo called benchmark. There will be different benchmark tests for aspects of the run time.
 
 Requirements:
 	- pin all programs to CPU cores
@@ -18,7 +18,7 @@ sysctl -w net.ipv4/tcp_rmem="4096 87380 2097152"
 	- ensure fd limit can handle millions of connections
 	- programs launched from vs code shell inherit limits -- ensure you take this into consideration
 
-Performance benchmark: testing the requests / second of [runloom in various configurations, go]
+Performance benchmark: testing the requests / second of [stackweave in various configurations, go]
 
 Client:
 	- Language = go
@@ -35,24 +35,24 @@ Client:
 		- return the max req/s as the result for the server
 
 Servers:
-	1. runloom default epoll/kqueue/wsa (zero optimized / bad):
+	1. stackweave default epoll/kqueue/wsa (zero optimized / bad):
 		- uses wrapped python calls, no direct C calls, and python objects
 		- hubs = int(os.cpu_count() * 0.7)
 		- method:
-			listener = runloom.sync.tcp_listen("127.0.0.1", 9000)
+			listener = stackweave.sync.tcp_listen("127.0.0.1", 9000)
 			while True:
 				conn, _ = listener.accept()
-				runloom.go(handle, conn)
+				stackweave.go(handle, conn)
 
-	2. Runloom default epoll/kqueue/wsa (C optimized):
-		- pros: uses C calls so should be faster than the sync / runloom api wrappers
+	2. Stackweave default epoll/kqueue/wsa (C optimized):
+		- pros: uses C calls so should be faster than the sync / stackweave api wrappers
 		- cons: still a regular python func handler (no CPython.)
 		- hubs = int(os.cpu_count() * 0.7)
 		- method:
 			def main():
 				# C server scaffold: listen, accept, spawn all in C
 				# Returns (bound_port, [listener_objects])
-				port, listeners = runloom_c.serve(
+				port, listeners = stackweave_c.serve(
 					host="127.0.0.1",
 					port=9000,
 					handler=handle,
@@ -63,31 +63,31 @@ Servers:
 				print(f"Server listening on {port}")
 				# Server runs indefinitely; close listeners to stop
 				try:
-					runloom.sleep(float('inf'))
+					stackweave.sleep(float('inf'))
 				except KeyboardInterrupt:
 					for ln in listeners:
 						ln.close()
 
-			runloom.run(hubs, main)
+			stackweave.run(hubs, main)
 
-	3. Runloom using io_uring (very optimized)
+	3. Stackweave using io_uring (very optimized)
 		- less security than default backends
 		- python handlers still used here
 		- hubs = int(os.cpu_count() * 0.7)
-		- same code as 1. "runloom default zero optimized" but RUNLOOM_IOURING_LOOP=1
+		- same code as 1. "stackweave default zero optimized" but STACKWEAVE_IOURING_LOOP=1
 
-	4. Runloom using io_uring and Cython handlers
+	4. Stackweave using io_uring and Cython handlers
 		- insecure but fast, handlers completely portable to C
 		- hubs = int(os.cpu_count() * 0.7)
-		- same code as 2 but handlers use Cython and RUNLOOM_IOURING_LOOP=1 backend.
+		- same code as 2 but handlers use Cython and STACKWEAVE_IOURING_LOOP=1 backend.
 		- this is VERY important:
 			- the actual handler function for the call needs to be written in such a way that it doesnt output any Python objects otherwise you lose all the speed improvements. this needs to be confirmed by looking at the assembly directly. i will provide sample code.
 
 			import os
 			import socket as _sk
 			import cython
-			import runloom
-			import runloom_c
+			import stackweave
+			import stackweave_c
 
 			PORT   = 8080
 			hubs   = int(os.cpu_count() * 0.7)
@@ -111,14 +111,14 @@ Servers:
 					conn.send_all(mv[:n])
 
 			def root():
-				port, listeners = runloom_c.serve("0.0.0.0", PORT, handler,
+				port, listeners = stackweave_c.serve("0.0.0.0", PORT, handler,
 												  acceptors=hubs, backlog=4096)
 				while True:
-					runloom.sleep(3600)
+					stackweave.sleep(3600)
 
-			runloom.run(hubs, root)
+			stackweave.run(hubs, root)
 
-	5. Runloom using io_uring and Cython handlers
+	5. Stackweave using io_uring and Cython handlers
 		do the same as 4 but run optimize(throughput)
 
 	asyncio
@@ -133,14 +133,14 @@ Servers:
 		- cap go's cores to int(os.cpu_count() * 0.7)
 
 Speed benchmark
-	- heading row: [runloom, go, asyncio, greenlet, uvloop]
+	- heading row: [stackweave, go, asyncio, greenlet, uvloop]
 		- time to spawn 1 mil empty fibers / coroutines
 		- context switching time
 		- http reqs / second (against a go server with int(os.cpu_count() * 0.7) cores
 		- network TCP overhead (round trip to loopback) to a go server.
 
 memory benchmark
-	- heading: state: [go, runloom python handler, runloom python handler with optimize(memory), runloom c handler]
+	- heading: state: [go, stackweave python handler, stackweave python handler with optimize(memory), stackweave c handler]
 		- empty just spawned
 		- spawned with a socket
 		- 1 million
@@ -161,12 +161,12 @@ If you have any ideas for improvements to the benchmark that might improve accur
 ## Scoping decisions (agreed during setup, 2026-06-19)
 
 1. **req/s payload (Q1 → a):** the headline **req/s** metric uses a **small payload (64 B–1 KB)** so it measures scheduling/syscall overhead, not loopback memcpy bandwidth. The **1.5 MB** buffer is kept as a **separate "bandwidth (GB/s)"** metric. Both are reported, clearly labelled.
-2. **Zero-PyObject Cython tier (Q2 → b):** servers 4 & 5 use a **real Cython handler** that `cdef extern`s Runloom's cooperative recv/send as **plain C functions** and calls them **directly** (compiled-in C, no `PyObject_CallMethod`), pulling the connection's C handle once at entry. This requires a small addition to `runloom_c` exposing a C-level recv/send API. The `handler=None` all-C echo is *not* used for tiers 4/5 because it does not demonstrate a Cython-handler optimization. Zero-PyObject in the hot loop is proven via `objdump` of the compiled `.so`.
-3. **Topology (Q3 → a):** client and server run in **separate network namespaces joined by a veth pair**, pinned to **disjoint NUMA nodes**. This isolates client/server contention and avoids the loopback fast-path that hides Runloom's io_uring win. Spec sysctls are applied **inside** the server netns (they are namespaced).
-4. **Single-threaded baselines (Q4 → a):** asyncio / uvloop / gevent run on **GIL-enabled CPython 3.13** (their best case — no free-threaded atomic-refcount tax); Runloom and Go run on **free-threaded 3.13t**. gevent is installed on the GIL build. The interpreter/build is labelled per row. (Raw `greenlet` for the speed microbenchmark is already present and runs as-is.)
-5. **Per-core normalization:** per-core figures are the **saturated M:N throughput divided by hub count** (and Go divided by GOMAXPROCS); single-threaded runtimes are already 1 core. We do **not** measure `run(1)` as "Runloom per core" — that is the M:1 cooperative scheduler, a different runtime than the M:N work-stealer. Raw saturated numbers are shown next to the divided ones so scaling efficiency is visible.
+2. **Zero-PyObject Cython tier (Q2 → b):** servers 4 & 5 use a **real Cython handler** that `cdef extern`s Stackweave's cooperative recv/send as **plain C functions** and calls them **directly** (compiled-in C, no `PyObject_CallMethod`), pulling the connection's C handle once at entry. This requires a small addition to `stackweave_c` exposing a C-level recv/send API. The `handler=None` all-C echo is *not* used for tiers 4/5 because it does not demonstrate a Cython-handler optimization. Zero-PyObject in the hot loop is proven via `objdump` of the compiled `.so`.
+3. **Topology (Q3 → a):** client and server run in **separate network namespaces joined by a veth pair**, pinned to **disjoint NUMA nodes**. This isolates client/server contention and avoids the loopback fast-path that hides Stackweave's io_uring win. Spec sysctls are applied **inside** the server netns (they are namespaced).
+4. **Single-threaded baselines (Q4 → a):** asyncio / uvloop / gevent run on **GIL-enabled CPython 3.13** (their best case — no free-threaded atomic-refcount tax); Stackweave and Go run on **free-threaded 3.13t**. gevent is installed on the GIL build. The interpreter/build is labelled per row. (Raw `greenlet` for the speed microbenchmark is already present and runs as-is.)
+5. **Per-core normalization:** per-core figures are the **saturated M:N throughput divided by hub count** (and Go divided by GOMAXPROCS); single-threaded runtimes are already 1 core. We do **not** measure `run(1)` as "Stackweave per core" — that is the M:1 cooperative scheduler, a different runtime than the M:N work-stealer. Raw saturated numbers are shown next to the divided ones so scaling efficiency is visible.
 6. **TCP_NODELAY:** set once on listener + client socket templates (uniformly across every backend, outside the per-request hot loop), not via per-connection `setsockopt` in handler code — so it cannot creep in as per-call overhead. (Linux has no kernel-global nodelay sysctl.)
-7. **Build:** as-shipped **release** build (`-O2`, fortify on), `RUNLOOM_DEBUG` unset and verified, no sanitizers. Built and run on `~/.pyenv/versions/3.14.4t` (free-threaded, Cython 3.2.5 present).
+7. **Build:** as-shipped **release** build (`-O2`, fortify on), `STACKWEAVE_DEBUG` unset and verified, no sanitizers. Built and run on `~/.pyenv/versions/3.14.4t` (free-threaded, Cython 3.2.5 present).
 8. **Validity guards baked in:** geometric connection ladder with a rigorous
    stop rule (a rung "improves" only if its median req/s beats the incumbent
    peak's bootstrap-CI **upper** bound; `PLATEAU_PATIENCE` consecutive misses end
@@ -180,18 +180,18 @@ If you have any ideas for improvements to the benchmark that might improve accur
 These refine the decisions above based on what the real runtime/box required:
 
 9. **The spec's API names were idealised; the real ones are used:**
-   `runloom.go` -> `runloom.fiber`; `conn.send_all` is the C `TCPConn` method
-   (the `runloom.sync.Socket` facade uses `sendall`); `runloom.run(n, main_fn)`.
-   `runloom_c.serve`, `runloom.optimize("throughput")`, and
-   `RUNLOOM_IOURING_LOOP=1` are all real and used as written. Debug is the
-   `RUNLOOM_DEBUG` env var (default build is `-O2 -DNDEBUG` release), not a build
+   `stackweave.go` -> `stackweave.fiber`; `conn.send_all` is the C `TCPConn` method
+   (the `stackweave.sync.Socket` facade uses `sendall`); `stackweave.run(n, main_fn)`.
+   `stackweave_c.serve`, `stackweave.optimize("throughput")`, and
+   `STACKWEAVE_IOURING_LOOP=1` are all real and used as written. Debug is the
+   `STACKWEAVE_DEBUG` env var (default build is `-O2 -DNDEBUG` release), not a build
    flag -- the suite clears it and `env.py` records the proof.
 
 10. **Zero-PyObject Cython handler is delivered via a new C-API (decision #2b):**
     `src/runloom_c/runloom_tcp_capi.{h,c.inc}` exposes
     `runloom_tcpconn_c_recv_into` / `_send_all` (the same epoll/io_uring
     cooperative core as the `TCPConn` methods, no Py_buffer/PyArg/PyLong), handed
-    to the Cython module through the `runloom_c.__tcp_capi__` PyCapsule. The
+    to the Cython module through the `stackweave_c.__tcp_capi__` PyCapsule. The
     handler is built `freethreading_compatible=True` (or importing it would
     silently re-enable the GIL and kill M:N). `disasm_check.sh` objdumps the
     handler's implementation function and asserts the per-request loop is exactly
@@ -231,7 +231,7 @@ These refine the decisions above based on what the real runtime/box required:
     439k, server-bound) because the capi fell through to the *readiness* path
     (`recv()` + `wait_fd_coop` + the epoll→ring bridge): io_uring's bookkeeping
     with none of its win. The fix routes the capi through
-    `runloom_iouring_loop_recv/send` (the proactor) when `RUNLOOM_IOURING_LOOP`
+    `runloom_iouring_loop_recv/send` (the proactor) when `STACKWEAVE_IOURING_LOOP`
     is on. Result: runloom_cython 1 KiB went **439k → 639k (client-bound), server
     ceiling 533k → 1.16M** = +40% peak / **+2.17× ceiling**, at ~half the server
     CPU. So "io_uring loses on loopback" was an artifact of mis-driving it; the
@@ -245,7 +245,7 @@ These refine the decisions above based on what the real runtime/box required:
     conns). Magnitude is setup-dependent: **+6%** ceiling for the 8-byte all-C
     echo (epoll already near-optimal), **+117%** ceiling for the 1 KiB Cython
     handler. Measured head-to-head in `suite/iouring_compare.py` (8B `handler=None`
-    + 1 KiB Cython, each epoll vs `RUNLOOM_IOURING_LOOP=1`).
+    + 1 KiB Cython, each epoll vs `STACKWEAVE_IOURING_LOOP=1`).
 
 16. **The tstate "omit-if-absent" optimization (`g->c_entry`) and its cost.**
     `runloom_g_entry` skips ALL Python-frame/tstate setup for a fiber spawned via
@@ -269,7 +269,7 @@ These refine the decisions above based on what the real runtime/box required:
 ## Follow-up built + investigated (2026-06-19, branch feat/cdef-handler → main)
 
 18. **`cdef`/`c_entry` handler tier BUILT — honest negative on throughput.**
-    `serve()` now accepts a `runloom_c.c_handler` PyCapsule (a `cdef` C function)
+    `serve()` now accepts a `stackweave_c.c_handler` PyCapsule (a `cdef` C function)
     and spawns it via `runloom_mn_fiber_c` → the tstate-free `g->c_entry` path
     (raw-fd capi `fd_recv`/`fd_send_all`/`fd_close` + `module_io.c.inc` dispatch +
     `handler_cdef.pyx` + tier `runloom_iouring_cdef_tcpcon.py`). Measured: the tstate-bypass
@@ -298,7 +298,7 @@ These refine the decisions above based on what the real runtime/box required:
     server (`servers/srv_runloom_work.py`), ONE knob (`--work N` = an FNV-1a byte
     hash over the payload, repeated N times, folded into the reply so it can't be
     elided), swept into a curve. The work is **pure inline arithmetic** — no
-    stdlib/`hashlib`/`json` and nothing runloom routes to the blockpool — so it
+    stdlib/`hashlib`/`json` and nothing stackweave routes to the blockpool — so it
     runs on the fiber's hub (a valid per-hub measurement); a thread-offloaded call
     would wreck the per-core accounting. **`--work 0` IS the echo** (lowest point),
     so the one program consolidates the echo load and reproduces it as a built-in
@@ -313,14 +313,14 @@ These refine the decisions above based on what the real runtime/box required:
     Cython handler** (`handler_cy`, work knob via `set_work()`), and a third
     `--handler cdef` runs it in the tstate-free `c_entry` handler (`handler_cdef`).
     `disasm_check.sh` re-confirms the per-request loop stays PyObject-free.
-    **Result:** a fully-native runloom handler **matches-to-beats Go across the
+    **Result:** a fully-native stackweave handler **matches-to-beats Go across the
     curve** — runloom-cython/cdef are *ahead* of Go through ~work 4 (faster I/O) and
     within ~8% at heaviest compute. The 2× gap was 100% the Python `def` wrapper.
     `cython ≈ cdef` (re-confirms the tstate bypass is worth ~nothing on throughput).
     The handler **language** is the only thing that ever separates the field;
     interpreted Python (runloom-py/asyncio/uvloop/gevent) collapses ~100–200× under
-    work. Takeaway: runloom's runtime (I/O + scheduler) is the solved, Go-beating
-    part; the residual is interpreter cost, orthogonal to runloom (future work:
+    work. Takeaway: stackweave's runtime (I/O + scheduler) is the solved, Go-beating
+    part; the residual is interpreter cost, orthogonal to stackweave (future work:
     auto-compile handlers — seed in `bench/poc_compile_handler.py`).
 
 22. **Cross-runtime work curve, per core (`work_xrt_sweep.py` → `results/work_xrt.json`).**
@@ -337,13 +337,13 @@ These refine the decisions above based on what the real runtime/box required:
 23. **Scheduler micro-benchmark scaling — spawn/ctxswitch (`../SCHEDULER_SCALING_FINDINGS.md`).**
     No timer-boundary artifact: `run_speed.py` already subtracts an **n=0 lifecycle
     baseline** for both spawn and ctxswitch, so the published gaps vs Go are genuine.
-    Hub-scaling curve: runloom ctxswitch is **~350 ns/switch (beats greenlet 465 &
+    Hub-scaling curve: stackweave ctxswitch is **~350 ns/switch (beats greenlet 465 &
     Go 676) and flat to ~16 hubs**, then a cliff (3,452 ns @32, 12,130 @44).
     `perf` localised the wall: it is **free-threaded CPython `_PyCriticalSection`/
     `_PyMutex` contention** (a futex → cross-NUMA IPI storm; 24% `native_write_msr`)
-    from 704 identical-worker fibers sharing interpreter state — **runloom's yield is
+    from 704 identical-worker fibers sharing interpreter state — **stackweave's yield is
     ~2% of the profile.** So the "25 µs" headline is a CPython object-lock artifact,
-    not runloom. spawn is a separate, milder story (genuinely ~16 µs/task heavy path,
+    not stackweave. spawn is a separate, milder story (genuinely ~16 µs/task heavy path,
     mild anti-scaling) — own profile TODO.
 
 24. **`bench/` consolidation (commit bf896e7).** Audited before deleting: `bench/`
@@ -360,6 +360,6 @@ These refine the decisions above based on what the real runtime/box required:
     the work + cross-runtime curves, log-y by default with a **focused linear
     "compiled handlers vs Go" chart** where the log scale would hide the small
     ratios; **clickable legends** (`tglSeries`) to toggle any series (isolate one
-    runloom config vs Go). Fixed HTML double-escaping (authored entities in
+    stackweave config vs Go). Fixed HTML double-escaping (authored entities in
     `code_block` titles / table headers were run through `esc()`), and emphasised
     the winning row (trophy + accent border, marked on the capacity table).

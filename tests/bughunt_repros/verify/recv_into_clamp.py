@@ -1,11 +1,11 @@
 """Verify: recv_into(buf, n) with n > len(buf).
 1. stdlib socket.recv_into -> ValueError (baseline).
-2. runloom_c.TCPConn.recv_into -> ? (claim: silently clamps).
+2. stackweave_c.TCPConn.recv_into -> ? (claim: silently clamps).
 3. monkey-patched socket.socket.recv_into inside a fiber -> ? (tcp_recv fast path).
 Also negative n on TCPConn.
 """
 import socket
-import runloom_c
+import stackweave_c
 
 # --- 1. stdlib baseline (unpatched, plain thread) ---
 a, b = socket.socketpair()
@@ -31,8 +31,8 @@ def _drive(*fibers):
                 box.append(e)
         return runner
     for g in fibers:
-        runloom_c.fiber(wrap(g))
-    runloom_c.run()
+        stackweave_c.fiber(wrap(g))
+    stackweave_c.run()
     if box:
         raise box[0]
 
@@ -46,7 +46,7 @@ def _port(listener):
 port = [None]
 
 def server():
-    ln = runloom_c.TCPConn.listen("127.0.0.1", 0)
+    ln = stackweave_c.TCPConn.listen("127.0.0.1", 0)
     port[0] = _port(ln)
     conn = ln.accept()
     conn.send_all(b"abcdefghij")   # 10 bytes
@@ -54,8 +54,8 @@ def server():
 
 def client():
     while port[0] is None:
-        runloom_c.sched_yield()
-    c = runloom_c.TCPConn.connect("127.0.0.1", port[0])
+        stackweave_c.sched_yield()
+    c = stackweave_c.TCPConn.connect("127.0.0.1", port[0])
     buf = bytearray(4)
     try:
         n = c.recv_into(buf, 4096)   # n > len(buf): stdlib would raise
@@ -75,8 +75,8 @@ print("TCPConn recv_into(buf4, 4096):", results["tcpconn_big_n"])
 print("TCPConn recv_into(buf4, -5):  ", results["tcpconn_neg_n"])
 
 # --- 3. monkey-patched socket.socket.recv_into inside a fiber ---
-import runloom
-runloom.monkey.patch()
+import stackweave
+stackweave.monkey.patch()
 
 mres = {}
 
@@ -96,7 +96,7 @@ print("monkey-patched socket.recv_into(buf4, 4096) in fiber:", mres["patched"])
 
 # stdlib comparison for negative n
 a, b = socket.socketpair()
-runloom.monkey.unpatch() if hasattr(runloom.monkey, "unpatch") else None
+stackweave.monkey.unpatch() if hasattr(stackweave.monkey, "unpatch") else None
 buf = bytearray(4)
 try:
     a.recv_into(buf, -5)

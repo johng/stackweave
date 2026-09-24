@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # audit_wheels.sh -- post-build wheel/ABI conformance gate (local; NO hosted CI).
 #
-# runloom links a handful of CPython INTERNAL/private symbols (e.g.
+# stackweave links a handful of CPython INTERNAL/private symbols (e.g.
 # _Py_SetImmortalUntracked) by design, and ships a separate cp31Xt (free-threaded)
 # ABI.  A mistagged wheel, an accidental abi3 tag, or a NEW unreviewed internal-
 # symbol link would all pass the cibuildwheel import smoke today.  This audits the

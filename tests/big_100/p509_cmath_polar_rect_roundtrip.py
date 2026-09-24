@@ -7,13 +7,13 @@ PyComplexObject temporary per call and (b) touch the shared C `errno` /
 floating-point status word to decide whether to raise ValueError/OverflowError on
 a domain/range error.  Both of those are process-global surfaces:
 
-  * errno is thread-local on modern libc, but a runloom FIBER is NOT a thread --
+  * errno is thread-local on modern libc, but a stackweave FIBER is NOT a thread --
     tens of thousands of goroutines are multiplexed over a handful of hub OS
     threads.  If a park+resume were to migrate a fiber to a different hub in the
     middle of a cmath call's "compute, then read errno" window, the fiber could
     read a SIBLING'S errno set by that sibling's own libm call on the destination
     hub -- spuriously raising, or (worse) suppressing a real domain error.  A
-    correct runloom NEVER yields inside a single C cmath call (there is no Python
+    correct stackweave NEVER yields inside a single C cmath call (there is no Python
     bytecode boundary there), so errno stays coherent; this program probes the
     NEIGHBOURING window -- a yield BETWEEN two cmath calls -- and asserts that the
     second call is computed from clean, fiber-local numeric state.
@@ -49,7 +49,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (holds on any correct libm + runtime):
       pre-yield results.  A pure function of the same immutable z MUST reproduce
       exactly; a differing bit means the second call saw corrupted numeric state
       (a leaked sibling errno/FP-status flipping a rounding/exception path, or a
-      torn temporary) -- a runloom bug.  A plain-threads control (each OS thread
+      torn temporary) -- a stackweave bug.  A plain-threads control (each OS thread
       hammering cmath on its own z, GIL on and off) reproduces bit-for-bit with 0
       mismatches, so a mismatch here is a runtime desync, not libm nondeterminism.
 
@@ -92,7 +92,7 @@ import cmath
 import math
 
 import harness
-import runloom
+import stackweave
 
 # z magnitude band: kept moderate so polar/rect and log/exp roundtrips are
 # well-conditioned (no overflow in exp(log(z)), no catastrophic cancellation, no
@@ -156,9 +156,9 @@ def roundtrip_check(H, wid, rng, state):
         return
 
     # --- YIELD: let a sibling on another hub flood its own cmath calls ----------
-    runloom.yield_now()
+    stackweave.yield_now()
     if wid & 1:
-        runloom.sleep(0.0003)
+        stackweave.sleep(0.0003)
 
     # --- ORACLE A: stored intermediates are byte-identical across the yield -----
     # Floats/complex are immutable; a changed component is memory corruption.

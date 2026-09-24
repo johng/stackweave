@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 """Http clients and networking -- a HTTP clients and networking toy using the queues primitive with a unicode payload, expecting success.
 
-Synthetic runloom toy program (auto-generated).
+Synthetic stackweave toy program (auto-generated).
   test type : success
   category  : HTTP clients and networking
   primitive : queues
   format    : unicode (utf-8)
-  scheduler : M:N via runloom.run(8, root), free-threaded 3.13t, GIL off
+  scheduler : M:N via stackweave.run(8, root), free-threaded 3.13t, GIL off
 
-Exercises runloom's main API -- the root goroutine spawns workers with
-runloom.fiber(...) onto 8 hub threads, using the monkey-patched cooperative
+Exercises stackweave's main API -- the root goroutine spawns workers with
+stackweave.fiber(...) onto 8 hub threads, using the monkey-patched cooperative
 queues primitive to carry a unicode payload.  Prints PASS and exits 0 when
 healthy; FAIL / hang / crash signals a bug.
 """
@@ -37,8 +37,8 @@ import multiprocessing as mp
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "..", "src"))
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
 THEME = "HTTP clients and networking"
 CATSLUG = "http-clients-and-networking"
@@ -93,8 +93,8 @@ def decode(buf):
 
 # ---- body ----
 def main():
-    runloom.monkey.patch()
-    GO = runloom.fiber
+    stackweave.monkey.patch()
+    GO = stackweave.fiber
     payload = mk_payload()
     enc = encode(payload)
     assert decode(enc) == payload
@@ -119,7 +119,7 @@ def main():
         GO(consumer)
         for _ in range(NW):
             GO(producer)
-    runloom.run(NHUB, __root)
+    stackweave.run(NHUB, __root)
     finish(state.get("good") == NW * per, state)
 
 if __name__ == "__main__":

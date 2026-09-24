@@ -26,7 +26,7 @@ import (
 	"time"
 )
 
-var payload = []byte("hellopyg") // 8 bytes, same as the runloom bench
+var payload = []byte("hellopyg") // 8 bytes, same as the stackweave bench
 
 const numSrcIPs = 250
 

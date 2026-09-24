@@ -5,8 +5,8 @@
 
 No include_dirs / no link libs: the two runloom_mn_* symbols are declared
 `cdef extern from *` (no header) and left UNDEFINED in the .so -- they are
-resolved at runtime once the driver promotes runloom_c.so to RTLD_GLOBAL (both
-are exported `T` in runloom_c.so). A shared object with undefined symbols is
+resolved at runtime once the driver promotes stackweave_c.so to RTLD_GLOBAL (both
+are exported `T` in stackweave_c.so). A shared object with undefined symbols is
 valid; resolution is deferred to load time.
 """
 import os

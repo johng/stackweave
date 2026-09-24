@@ -1,5 +1,5 @@
-import runloom
-from runloom.sync import Semaphore
+import stackweave
+from stackweave.sync import Semaphore
 state = {"b": False, "b2": False}
 def main():
     sem = Semaphore(2)
@@ -10,12 +10,12 @@ def main():
     def b():
         sem.acquire(1)
         state["b"] = True
-    runloom.fiber(a)
-    runloom.sleep(0.05)
-    runloom.fiber(b)
-    runloom.sleep(3.0)
+    stackweave.fiber(a)
+    stackweave.sleep(0.05)
+    stackweave.fiber(b)
+    stackweave.sleep(3.0)
     print("after 3s, b_acquired =", state["b"])
     sem.release(1)          # a future release finally grants B
-    runloom.sleep(0.1)
+    stackweave.sleep(0.1)
     print("after release, b_acquired =", state["b"])
-runloom.run(1, main)
+stackweave.run(1, main)

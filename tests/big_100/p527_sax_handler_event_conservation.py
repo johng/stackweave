@@ -10,10 +10,10 @@ stores `h` on the ExpatParser, and the C expat callbacks trampoline through
 the ExpatParser to `h.startElement(...)` etc.
 
 WHERE M:N COULD BREAK IT (the gap this program probes).  We drive the feed in
-SEVERAL chunks with a runloom yield BETWEEN each feed() so a sibling fiber
+SEVERAL chunks with a stackweave yield BETWEEN each feed() so a sibling fiber
 reliably interleaves mid-parse.  Each fiber owns its OWN parser and its OWN
 handler (single-owner), but the C expat reader keeps a mutable dispatch cursor
-and a pointer back to "the current handler".  If runloom's M:N scheduling did
+and a pointer back to "the current handler".  If stackweave's M:N scheduling did
 not keep that per-reader handler binding fiber-isolated -- e.g. if a global or
 per-OS-thread "current SAX handler" pointer were shared, or if resuming this
 fiber on a DIFFERENT hub picked up a sibling's reader/handler binding -- then a
@@ -47,14 +47,14 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (a closed-world conservation law):
   values are all created inside the fiber and never shared.  On a CORRECT
   runtime this law holds for every parse (the oracle PASSES, exit 0).  A count
   mismatch, an unbalanced start/end, or a text that carries a foreign wid is a
-  runloom SAX-dispatch isolation bug (a cross-fiber event leak).
+  stackweave SAX-dispatch isolation bug (a cross-fiber event leak).
 
   WHY NOT A SHARED HANDLER (the discipline the contract demands).  A SINGLE
   ContentHandler (or a single ExpatParser) fed by many fibers at once would mix
   events EXACTLY as it would across OS threads -- that is documented
   shared-object behavior and, worse, feeding one C expat reader from two fibers
   concurrently is C-level undefined behavior (torn reader state / SIGSEGV), not a
-  runloom bug.  So the fail-fast oracle is strictly SINGLE-OWNER; there is no
+  stackweave bug.  So the fail-fast oracle is strictly SINGLE-OWNER; there is no
   shared-parser arm.  The interleave that would expose a real binding bug comes
   from the yield BETWEEN feeds while THOUSANDS of sibling fibers are mid-parse on
   their own readers, not from sharing one reader.
@@ -97,7 +97,7 @@ import xml.sax
 from xml.sax.handler import ContentHandler
 
 import harness
-import runloom
+import stackweave
 
 # Number of <i> child elements per document.  Total elements = N_ITEMS + 1
 # (the <d> root).  Big enough that the document spans several feed chunks (so
@@ -199,9 +199,9 @@ def parse_check(H, wid, state):
         # feeds, thousands of sibling fibers dispatch events on their own
         # readers.  If the handler binding is not fiber-isolated, a sibling's
         # event could land in `handler` or ours in a sibling's before we resume.
-        runloom.yield_now()
+        stackweave.yield_now()
         if ci & 1:
-            runloom.sleep(0.0002)
+            stackweave.sleep(0.0002)
     parser.close()
 
     # ---- closed-world conservation law for THIS fiber's handler -------------
@@ -305,4 +305,4 @@ if __name__ == "__main__":
                  "concatenated characters() equals the exact wid-embedded "
                  "string -- a foreign wid, a count mismatch, or a parse "
                  "exception on a well-formed single-owner document is a "
-                 "runloom SAX-dispatch isolation bug")
+                 "stackweave SAX-dispatch isolation bug")

@@ -6,7 +6,7 @@
 #
 # TSan is the tool for that class: it flags a racy access PATTERN statistically,
 # without needing the unlucky interleaving to actually fire.  ASan catches the
-# heap UAF/overflow class in runloom's own C under sustained churn.  The normal
+# heap UAF/overflow class in stackweave's own C under sustained churn.  The normal
 # build's slope oracle catches leaks/unbounded growth.
 #
 # Presets (arg 1):
@@ -15,8 +15,8 @@
 #   normal-72h   72h mixed, full workers
 #   asan-24h     24h mixed under ASan, N/4 (ASan ~2x)
 #   tsan-24h     24h mixed under TSan, N/8 (TSan ~5-10x; needs the TSan ext)
-#   iouring-24h  24h mixed, RUNLOOM_IOURING_LOOP=1
-#   perhub-24h   24h mixed, RUNLOOM_PERHUB_EPOLL=1
+#   iouring-24h  24h mixed, STACKWEAVE_IOURING_LOOP=1
+#   perhub-24h   24h mixed, STACKWEAVE_PERHUB_EPOLL=1
 #
 # Sanitizer reports are captured via ASAN_OPTIONS/TSAN_OPTIONS log_path=<dir>/<tag>
 # (one file per pid); tools/soak/triage_san.py scans + dedups them and the ledger
@@ -33,11 +33,11 @@ PRESET="${1:-smoke}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)/.."
 ROOT="$(cd "$ROOT" && pwd)"
 cd "$ROOT"
-PY="${RUNLOOM_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
+PY="${STACKWEAVE_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
 NORMAL_PY="$PY"                          # the normal (non-gold) interp for the EXIT restore
-GOLD_PY="${RUNLOOM_TSAN_PYTHON:-$HOME/cpython-tsan/bin/python3.13t}"   # TSan-instrumented CPython
-GOLD_SUPP="${RUNLOOM_TSAN_CPYTHON_SUPP:-$HOME/projects/cpython-tsan/Tools/tsan/suppressions_free_threading.txt}"
-OUT="${RUNLOOM_SOAK_DIR:-$HOME/runloom-soak}"
+GOLD_PY="${STACKWEAVE_TSAN_PYTHON:-$HOME/cpython-tsan/bin/python3.13t}"   # TSan-instrumented CPython
+GOLD_SUPP="${STACKWEAVE_TSAN_CPYTHON_SUPP:-$HOME/projects/cpython-tsan/Tools/tsan/suppressions_free_threading.txt}"
+OUT="${STACKWEAVE_SOAK_DIR:-$HOME/runloom-soak}"
 LEDGER="$OUT/LEDGER.md"
 command -v setarch >/dev/null 2>&1 && SA="setarch $(uname -m) -R" || SA=""
 
@@ -52,8 +52,8 @@ case "$PRESET" in
   tsan-24h)     DUR="--hours 24"    BUILD=tsan   WORKERS=1 ENVS=() ;;
   tsan-gold-smoke) DUR="--seconds 60" BUILD=tsan-gold WORKERS=1 ENVS=() ;;
   tsan-gold-24h)   DUR="--hours 24"   BUILD=tsan-gold WORKERS=1 ENVS=() ;;
-  iouring-24h)  DUR="--hours 24"    BUILD=normal WORKERS=4 ENVS=(--env RUNLOOM_IOURING_LOOP=1) ;;
-  perhub-24h)   DUR="--hours 24"    BUILD=normal WORKERS=4 ENVS=(--env RUNLOOM_PERHUB_EPOLL=1) ;;
+  iouring-24h)  DUR="--hours 24"    BUILD=normal WORKERS=4 ENVS=(--env STACKWEAVE_IOURING_LOOP=1) ;;
+  perhub-24h)   DUR="--hours 24"    BUILD=normal WORKERS=4 ENVS=(--env STACKWEAVE_PERHUB_EPOLL=1) ;;
   *) echo "unknown preset: $PRESET"; echo "presets: smoke asan-smoke tsan-smoke normal-72h asan-24h tsan-24h tsan-gold-smoke tsan-gold-24h iouring-24h perhub-24h"; exit 2 ;;
 esac
 # tsan-gold runs everything UNDER the TSan-instrumented interpreter, not stock $PY.
@@ -104,7 +104,7 @@ case "$BUILD" in
     ;;
   tsan-gold)
     # Fully-instrumented interpreter: the ext links -fsanitize=thread and runs
-    # UNDER the TSan CPython (~/cpython-tsan), so races crossing the runloom <->
+    # UNDER the TSan CPython (~/cpython-tsan), so races crossing the stackweave <->
     # interpreter seam are attributed -- unlike the `tsan` build (stock interp +
     # LD_PRELOAD) whose tsan_suppressions.txt has to blind exactly that seam.  We
     # therefore load ONLY CPython's own free-threading suppressions, NOT ours,
@@ -125,8 +125,8 @@ case "$BUILD" in
       echo "  WARN: no passwordless sudo to disable ASLR -- per-worker setarch wrap only; grandchildren may abort"
     fi
     echo "== matrix $PRESET: building TSan-GOLD ext under $PY (slow) =="
-    $SA env RUNLOOM_EXTRA_CFLAGS="-fsanitize=thread -O1 -g -fno-omit-frame-pointer" \
-      RUNLOOM_EXTRA_LDFLAGS="-fsanitize=thread" PYTHON_GIL=0 \
+    $SA env STACKWEAVE_EXTRA_CFLAGS="-fsanitize=thread -O1 -g -fno-omit-frame-pointer" \
+      STACKWEAVE_EXTRA_LDFLAGS="-fsanitize=thread" PYTHON_GIL=0 \
       "$PY" setup.py build_ext --inplace --force --build-temp build/temp.tsangold \
       >/tmp/runloom_matrix_tsangold.log 2>&1 \
       || { echo "  BUILD FAILED (/tmp/runloom_matrix_tsangold.log)"; tail -15 /tmp/runloom_matrix_tsangold.log; exit 2; }

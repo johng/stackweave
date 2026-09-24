@@ -1,8 +1,8 @@
-"""RunloomTask never runs asyncio.Task.__init__, so the C Task's _coro field
+"""StackweaveTask never runs asyncio.Task.__init__, so the C Task's _coro field
 stays NULL. Inherited C methods that read it (get_stack/print_stack) may
 crash or misbehave."""
 import sys, asyncio
-import runloom.aio as aio
+import stackweave.aio as aio
 
 async def main():
     async def sub():

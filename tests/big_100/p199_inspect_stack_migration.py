@@ -16,7 +16,7 @@ import inspect
 import sys
 
 import harness
-import runloom
+import stackweave
 
 
 def inner_named_frame(H, wid, depth):
@@ -28,7 +28,7 @@ def inner_named_frame(H, wid, depth):
                        wid, fr.f_code.co_name if fr else None)):
         return False
     # Migrate while holding live frames on the goroutine stack.
-    runloom.yield_now()
+    stackweave.yield_now()
     # inspect.stack() must return a non-empty list and include THIS function.
     stk = inspect.stack()
     try:
@@ -78,7 +78,7 @@ def worker(H, wid, rng, state):
         try:
             raise ValueError(wid)
         except ValueError:
-            runloom.sleep(0.0003)            # likely resume on another hub
+            stackweave.sleep(0.0003)            # likely resume on another hub
             cur = sys.exc_info()[1]
             if not H.check(isinstance(cur, ValueError) and cur.args[0] == wid,
                            "exc state lost across migration wid={0}".format(wid)):
@@ -95,7 +95,7 @@ def worker(H, wid, rng, state):
         H.op(wid)
         H.task_done(wid)
         if rng.random() < 0.3:
-            runloom.yield_now()
+            stackweave.yield_now()
 
 
 def setup(H):

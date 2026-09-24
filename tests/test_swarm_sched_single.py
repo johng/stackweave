@@ -1,7 +1,7 @@
 """Adversarial QA for the SINGLE-THREAD scheduler (sched_single).
 
 Subsystem under test: the M:1 cooperative scheduler that backs
-``runloom_c.run()`` -- spawn/admission, the park/wake Dekker handshake,
+``stackweave_c.run()`` -- spawn/admission, the park/wake Dekker handshake,
 ``unpark_many`` fan-in, ``run_ready`` quiescence, deadlock detection,
 ``sched_reset``/``sched_stop`` teardown, signal delivery into a parked
 cooperative call, and the slab/refcount/datastack churn surfaces.
@@ -36,8 +36,8 @@ import time
 
 import pytest
 
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 from adv_util import (hang_guard, assert_faster_than, raw_thread,
                       needs_free_threading)
 
@@ -376,7 +376,7 @@ def test_finding_foreign_thread_unpark_many_hangs():
     # subprocess with a hard timeout so the hang is OBSERVED, never propagated.
     script = r'''
 import sys; sys.path.insert(0, "src")
-import runloom_c as rc, os, threading
+import stackweave_c as rc, os, threading
 RealThread = threading.Thread
 done = {}
 def main():
@@ -663,7 +663,7 @@ def test_fiber_noyield_with_yielding_body_does_not_crash_subprocess():
     # the failure we are hunting.
     script = r'''
 import sys; sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 done = []
 def body():
     rc.sched_yield()          # promised not to; does
@@ -673,7 +673,7 @@ rc.fiber_noyield(body)
 n = rc.run()
 sys.stdout.write("OK n=%d done=%d check=%d\n" % (n, len(done), rc._self_check(0)))
 '''
-    p = _subproc(script, env_extra={"RUNLOOM_GOROUTINE_PANIC": "silent"}, timeout=20)
+    p = _subproc(script, env_extra={"STACKWEAVE_GOROUTINE_PANIC": "silent"}, timeout=20)
     assert p.returncode is not None and p.returncode >= 0, (
         "fiber_noyield yielding body crashed: rc=%r\n%s%s"
         % (p.returncode, p.stdout, p.stderr))
@@ -706,7 +706,7 @@ def test_spawn_storm_under_asan_subprocess():
     # rather than taking out the test runner.
     script = r'''
 import sys; sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 total = 0
 for _ in range(80):
     def f():
@@ -789,7 +789,7 @@ def test_yield_storm_returns_promptly():
 def test_signal_raises_into_parked_wait_fd_not_out_of_run():
     script = r'''
 import sys; sys.path.insert(0, "src")
-import runloom_c as rc, signal, os, socket
+import stackweave_c as rc, signal, os, socket
 class Boom(Exception): pass
 def h(s, f): raise Boom
 signal.signal(signal.SIGALRM, h)
@@ -828,7 +828,7 @@ def test_signal_on_idle_sleep_path_is_not_lost():
     # swallowed, never a hang.
     script = r'''
 import sys; sys.path.insert(0, "src")
-import runloom_c as rc, signal
+import stackweave_c as rc, signal
 class Boom(Exception): pass
 def h(s, f): raise Boom
 signal.signal(signal.SIGALRM, h)
@@ -863,15 +863,15 @@ sys.stdout.write("LOST\n" if not ok else "DELIVERED\n")
 def test_small_stack_overflow_under_run_is_classified():
     script = r'''
 import sys; sys.path.insert(0, "src")
-import runloom, runloom_c
-runloom.inspect.install_crash_handler("on")
+import stackweave, stackweave_c
+stackweave.inspect.install_crash_handler("on")
 def body():
-    runloom_c._crash_selftest_overflow()   # unbounded real-C recursion
+    stackweave_c._crash_selftest_overflow()   # unbounded real-C recursion
 # 256 KiB: honored exactly on both 3.13 (16 KiB floor) and FT-3.14 (256 KiB
 # floor, the p226 fix in 289ecb99); a smaller pin would be clamped up there
 # and the classifier would name the clamped size.
-runloom_c.fiber(body, 256 * 1024)
-runloom_c.run()
+stackweave_c.fiber(body, 256 * 1024)
+stackweave_c.run()
 '''
     p = _subproc(script, timeout=30)
     # A signalled negative returncode (SIGSEGV) chained from the classifier is
@@ -887,11 +887,11 @@ runloom_c.run()
 #      and no leaked admission slot / structural inconsistency afterwards.
 # ==========================================================================
 def test_spawn_g_fault_injection_clean_error():
-    # RUNLOOM_FAULT_SPAWN_G="once:..." forces one g-struct allocation to fail ->
+    # STACKWEAVE_FAULT_SPAWN_G="once:..." forces one g-struct allocation to fail ->
     # MemoryError on that spawn, the rest proceed, self_check clean.
     script = r'''
 import sys; sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 ok = err = 0
 for _ in range(20):
     try:
@@ -901,19 +901,19 @@ for _ in range(20):
 n = rc.run()
 sys.stdout.write("ok=%d err=%d check=%d\n" % (ok, err, rc._self_check(0)))
 '''
-    p = _subproc(script, env_extra={"RUNLOOM_FAULT_SPAWN_G": "once:12",
-                                    "RUNLOOM_GOROUTINE_PANIC": "silent"}, timeout=20)
+    p = _subproc(script, env_extra={"STACKWEAVE_FAULT_SPAWN_G": "once:12",
+                                    "STACKWEAVE_GOROUTINE_PANIC": "silent"}, timeout=20)
     assert p.returncode == 0, (p.returncode, p.stdout, p.stderr)
     assert "err=1" in p.stdout, p.stdout
     assert "check=0" in p.stdout, p.stdout
 
 
 def test_spawn_stack_fault_injection_clean_error():
-    # RUNLOOM_FAULT_SPAWN_STACK forces coro_new (the C stack mmap) to fail ->
+    # STACKWEAVE_FAULT_SPAWN_STACK forces coro_new (the C stack mmap) to fail ->
     # MemoryError, the admission slot is released, self_check clean.
     script = r'''
 import sys; sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 rc.set_max_fibers(8)
 ok = err = 0
 for _ in range(20):
@@ -927,8 +927,8 @@ rc.set_max_fibers(0)
 sys.stdout.write("ok=%d err=%d live=%d after=%d check=%d\n"
                  % (ok, err, live_before_run, rc.live_fibers(), rc._self_check(0)))
 '''
-    p = _subproc(script, env_extra={"RUNLOOM_FAULT_SPAWN_STACK": "always:12",
-                                    "RUNLOOM_GOROUTINE_PANIC": "silent"}, timeout=20)
+    p = _subproc(script, env_extra={"STACKWEAVE_FAULT_SPAWN_STACK": "always:12",
+                                    "STACKWEAVE_GOROUTINE_PANIC": "silent"}, timeout=20)
     assert p.returncode == 0, (p.returncode, p.stdout, p.stderr)
     # every spawn fails (always) -> 0 admitted, 20 errors, no leaked slot
     assert "ok=0 err=20" in p.stdout, p.stdout
@@ -968,7 +968,7 @@ def test_set_wait_reason_does_not_leak_into_later_park():
     # park:future and park:sync (not two park:future).
     script = r'''
 import sys; sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 rc.set_deadlock_mode(1)   # warn: dump
 holders = {}
 def tagged():
@@ -983,7 +983,7 @@ def main():
     rc.sched_yield(); rc.sched_yield(); rc.sched_yield()
 rc.fiber(main); rc.run()
 '''
-    p = _subproc(script, env_extra={"RUNLOOM_DEADLOCK": "warn",
+    p = _subproc(script, env_extra={"STACKWEAVE_DEADLOCK": "warn",
                                     "PYTHONUNBUFFERED": "1"}, timeout=20)
     out = p.stdout + p.stderr
     assert "park:future" in out, out
@@ -1306,12 +1306,12 @@ def test_sched_reset_from_inside_running_fiber_is_noop_no_uaf():
 
 # --- 15h.  FD_READ / FD_WRITE fault injection inside cooperative I/O ------
 def test_fd_read_fault_injection_clean_oserror_in_fiber():
-    # RUNLOOM_FAULT_FD_READ="once:5" forces one cooperative fd_read to fail with
+    # STACKWEAVE_FAULT_FD_READ="once:5" forces one cooperative fd_read to fail with
     # EIO.  It must surface as a clean OSError INSIDE the fiber (caught by its own
     # try/except), self_check clean, no crash, no leaked netpoll arm.
     script = r'''
 import sys; sys.path.insert(0, "src")
-import runloom_c as rc, os
+import stackweave_c as rc, os
 out = {}
 def main():
     r, w = os.pipe()
@@ -1329,8 +1329,8 @@ def main():
 rc.fiber(main); rc.run()
 sys.stdout.write("err=%r check=%d\n" % (out.get("err"), rc._self_check(0)))
 '''
-    p = _subproc(script, env_extra={"RUNLOOM_FAULT_FD_READ": "once:5",
-                                    "RUNLOOM_GOROUTINE_PANIC": "silent"}, timeout=20)
+    p = _subproc(script, env_extra={"STACKWEAVE_FAULT_FD_READ": "once:5",
+                                    "STACKWEAVE_GOROUTINE_PANIC": "silent"}, timeout=20)
     assert p.returncode == 0, (p.returncode, p.stdout, p.stderr)
     assert "err=5" in p.stdout, ("FD_READ fault did not raise a clean EIO\n"
                                  + p.stdout + p.stderr)
@@ -1340,7 +1340,7 @@ sys.stdout.write("err=%r check=%d\n" % (out.get("err"), rc._self_check(0)))
 def test_fd_write_fault_injection_clean_oserror_in_fiber():
     script = r'''
 import sys; sys.path.insert(0, "src")
-import runloom_c as rc, os
+import stackweave_c as rc, os
 out = {}
 def main():
     r, w = os.pipe()
@@ -1357,8 +1357,8 @@ rc.fiber(main); rc.run()
 sys.stdout.write("err=%r ok=%r check=%d\n"
                  % (out.get("err"), out.get("ok"), rc._self_check(0)))
 '''
-    p = _subproc(script, env_extra={"RUNLOOM_FAULT_FD_WRITE": "once:5",
-                                    "RUNLOOM_GOROUTINE_PANIC": "silent"}, timeout=20)
+    p = _subproc(script, env_extra={"STACKWEAVE_FAULT_FD_WRITE": "once:5",
+                                    "STACKWEAVE_GOROUTINE_PANIC": "silent"}, timeout=20)
     assert p.returncode == 0, (p.returncode, p.stdout, p.stderr)
     # either a clean EIO surfaced, or (if the site fired pre-park) a clean retry;
     # what we forbid is a crash.  Assert no signal + clean structure.

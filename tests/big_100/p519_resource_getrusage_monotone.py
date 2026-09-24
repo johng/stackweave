@@ -10,7 +10,7 @@ likewise assembles a fresh (soft, hard) 2-tuple from a `struct rlimit`.
 WHERE M:N COULD BREAK IT (the gap this program probes).  Each call returns a
 BRAND-NEW object owned by exactly the one fiber that called getrusage/getrlimit
 -- there is no shared container, so this is a pure SINGLE-OWNER oracle.  The
-danger under runloom is not shared-state contention but a TORN ASSEMBLY across
+danger under stackweave is not shared-state contention but a TORN ASSEMBLY across
 a hub migration: if a fiber is preempted / migrated to another hub while the C
 wrapper is still copying ru_utime then ru_stime into the fresh struct (or while
 the tuple for getrlimit is half-built), a resumed-on-a-different-hub read could
@@ -84,7 +84,7 @@ the suite (p98 is a refcount fuzzer, not a value/ordering oracle).
 import resource
 
 import harness
-import runloom
+import stackweave
 
 # Sustained reads per worker, bounded by H.running().  The tear hazard only
 # manifests under SUSTAINED churn -- many fibers simultaneously calling getrusage
@@ -129,9 +129,9 @@ def worker(H, wid, rng, state):
             rl_before = resource.getrlimit(RLIMIT_NOFILE)
 
             # ---- YIELD: siblings burn CPU on other hubs; may migrate us -----
-            runloom.yield_now()
+            stackweave.yield_now()
             if idx & 1:
-                runloom.sleep(0.0002)
+                stackweave.sleep(0.0002)
 
             # ---- read AFTER the yield --------------------------------------
             ru_after = resource.getrusage(RUSAGE_SELF)

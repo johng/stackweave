@@ -16,29 +16,29 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "..", "src"))
 os.environ.setdefault("PYTHON_GIL", "0")
-import runloom_c
+import stackweave_c
 
 N = int(os.environ.get("CHESS_N", "4"))
 TARGET = int(os.environ.get("CHESS_TARGET", "2"))
 
-runloom_c.mn_init(2)
+stackweave_c.mn_init(2)
 st = {"x": 0, "seen": None}
 
 
 def A():
     for _ in range(N):
         st["x"] += 1
-        runloom_c.sched_sleep(0)        # yield -> a baton grant point
+        stackweave_c.sched_sleep(0)        # yield -> a baton grant point
 
 
 def B():
     st["seen"] = st["x"]                # one read = one segment the baton places
 
 
-runloom_c.mn_fiber(A)
-runloom_c.mn_fiber(B)
-runloom_c.mn_run()
-runloom_c.mn_fini()
+stackweave_c.mn_fiber(A)
+stackweave_c.mn_fiber(B)
+stackweave_c.mn_run()
+stackweave_c.mn_fini()
 
 seen = st["seen"]
 if seen == TARGET:

@@ -1,5 +1,5 @@
 """CPython's OWN Lib/test/test_selectors.py, run verbatim under
-``runloom.monkey.patch()``.
+``stackweave.monkey.patch()``.
 
 The ``selectors`` category of the monkey layer makes select.poll/epoll/kqueue
 (and thus the high-level ``selectors`` module) cooperative.  This runs

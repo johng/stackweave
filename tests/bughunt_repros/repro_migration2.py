@@ -1,7 +1,7 @@
 # Instrumented: record OS thread idents to confirm reader/writers cross hubs.
 import socket, sys, time, threading
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 
 READ, WRITE = 1, 2
 res = {}
@@ -15,21 +15,21 @@ def main():
         r = rc.wait_fd(a.fileno(), READ, 8000)
         res["r"] = r
         res["rt"] = time.monotonic() - t0
-    runloom.fiber(reader)
-    runloom.sleep(0.3)
+    stackweave.fiber(reader)
+    stackweave.sleep(0.3)
     def writer(i):
         res["w%d_tid" % i] = threading.get_ident()
         res["w%d" % i] = rc.wait_fd(a.fileno(), WRITE, 2000)
     for i in range(8):
-        runloom.fiber(writer, i)
-    runloom.sleep(0.5)
+        stackweave.fiber(writer, i)
+    stackweave.sleep(0.5)
     res["send_t"] = time.monotonic()
     b.send(b"x")
-    runloom.sleep(1.5)
+    stackweave.sleep(1.5)
     res["socks"] = (a, b)
 
 t_start = time.monotonic()
-runloom.run(4, main)
+stackweave.run(4, main)
 r_tid = res.get("r_tid")
 w_tids = set(res.get("w%d_tid" % i) for i in range(8))
 print("reader tid:", r_tid)

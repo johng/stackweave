@@ -14,11 +14,11 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "..", "src"))
 os.environ.setdefault("PYTHON_GIL", "0")
-import runloom_c
+import stackweave_c
 
-runloom_c.mn_init(5)
-ch1 = runloom_c.Chan()
-ch2 = runloom_c.Chan()
+stackweave_c.mn_init(5)
+ch1 = stackweave_c.Chan()
+ch2 = stackweave_c.Chan()
 SENT = {10, 20}
 got = []                 # (consumer_id, value) pairs
 
@@ -32,7 +32,7 @@ def prod(ch, tok):
 
 def consumer(cid):
     try:
-        idx, (val, ok) = runloom_c.select([("recv", ch1), ("recv", ch2)])
+        idx, (val, ok) = stackweave_c.select([("recv", ch1), ("recv", ch2)])
     except Exception:
         return
     if ok:
@@ -44,13 +44,13 @@ def closer():
     ch2.close()
 
 
-runloom_c.mn_fiber(lambda: prod(ch1, 10))
-runloom_c.mn_fiber(lambda: prod(ch2, 20))
-runloom_c.mn_fiber(lambda: consumer(0))
-runloom_c.mn_fiber(lambda: consumer(1))
-runloom_c.mn_fiber(closer)
-runloom_c.mn_run()
-runloom_c.mn_fini()
+stackweave_c.mn_fiber(lambda: prod(ch1, 10))
+stackweave_c.mn_fiber(lambda: prod(ch2, 20))
+stackweave_c.mn_fiber(lambda: consumer(0))
+stackweave_c.mn_fiber(lambda: consumer(1))
+stackweave_c.mn_fiber(closer)
+stackweave_c.mn_run()
+stackweave_c.mn_fini()
 
 # conservation: no token to two consumers; every value real
 bug = None

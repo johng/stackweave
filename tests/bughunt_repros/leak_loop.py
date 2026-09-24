@@ -1,6 +1,6 @@
 """Resource-leak probe: run a workload in a loop, watch RSS + fd count."""
 import os, sys, gc
-import runloom
+import stackweave
 
 HUBS = int(sys.argv[1]) if len(sys.argv) > 1 else 4
 ITERS = int(sys.argv[2]) if len(sys.argv) > 2 else 50
@@ -15,8 +15,8 @@ def nfds():
     return len(os.listdir("/proc/self/fd"))
 
 def workload():
-    ch = runloom.Chan(16)
-    done = runloom.Chan(0)
+    ch = stackweave.Chan(16)
+    done = stackweave.Chan(0)
     def prod():
         for i in range(2000):
             ch.send(("payload", i, b"z" * 512))
@@ -27,7 +27,7 @@ def workload():
             n += 1
         done.send(n)
     for _ in range(4):
-        runloom.fiber(prod)
+        stackweave.fiber(prod)
     def consumer_group():
         pass
     total = [0]
@@ -40,18 +40,18 @@ def workload():
             n += 1
         done.send(n)
     for _ in range(4):
-        runloom.fiber(cons_all)
+        stackweave.fiber(cons_all)
     def wait():
         t = 0
         for _ in range(4):
             v, ok = done.recv()
             t += v
         assert t == 8000, t
-    runloom.fiber(wait)
+    stackweave.fiber(wait)
 
 samples = []
 for it in range(ITERS):
-    runloom.run(HUBS, workload)
+    stackweave.run(HUBS, workload)
     if it % 5 == 0 or it == ITERS - 1:
         gc.collect()
         samples.append((it, rss_kb(), nfds()))

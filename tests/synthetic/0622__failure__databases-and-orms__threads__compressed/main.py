@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 """Databases and orms -- a databases and ORMs toy using the threads primitive with a compressed payload, expecting failure.
 
-Synthetic runloom toy program (auto-generated).
+Synthetic stackweave toy program (auto-generated).
   test type : failure
   category  : databases and ORMs
   primitive : threads
   format    : compressed (zlib)
-  scheduler : M:N via runloom.run(8, root), free-threaded 3.13t, GIL off
+  scheduler : M:N via stackweave.run(8, root), free-threaded 3.13t, GIL off
 
-Exercises runloom's main API -- the root goroutine spawns workers with
-runloom.fiber(...) onto 8 hub threads, using the monkey-patched cooperative
+Exercises stackweave's main API -- the root goroutine spawns workers with
+stackweave.fiber(...) onto 8 hub threads, using the monkey-patched cooperative
 threads primitive to carry a compressed payload.  Prints PASS and exits 0 when
 healthy; FAIL / hang / crash signals a bug.
 """
@@ -37,8 +37,8 @@ import multiprocessing as mp
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "..", "src"))
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
 THEME = "databases and ORMs"
 CATSLUG = "databases-and-orms"
@@ -94,8 +94,8 @@ def decode(buf):
 
 # ---- body ----
 def main():
-    runloom.monkey.patch()
-    GO = runloom.fiber
+    stackweave.monkey.patch()
+    GO = stackweave.fiber
     payload = mk_payload()
     enc = encode(payload)
     assert decode(enc) == payload
@@ -110,7 +110,7 @@ def main():
 
     def __root():
         GO(worker)
-    runloom.run(NHUB, __root)
+    stackweave.run(NHUB, __root)
     finish(state.get("err") == "RuntimeError", state)
 
 if __name__ == "__main__":

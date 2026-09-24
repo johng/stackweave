@@ -27,9 +27,9 @@ import sys
 import time
 import unittest
 
-import runloom
-import runloom.monkey
-import runloom_c
+import stackweave
+import stackweave.monkey
+import stackweave_c
 
 _IS_WINDOWS = platform.system() == "Windows"
 
@@ -43,19 +43,19 @@ def _drive(fn):
         except BaseException as e:   # noqa: BLE001
             box[1] = e
 
-    runloom_c.fiber(runner)
-    runloom_c.run()
+    stackweave_c.fiber(runner)
+    stackweave_c.run()
     if box[1] is not None:
         raise box[1]
     return box[0]
 
 
 def setUpModule():
-    runloom.monkey.patch()
+    stackweave.monkey.patch()
 
 
 def tearDownModule():
-    runloom.monkey.unpatch()
+    stackweave.monkey.unpatch()
 
 
 def _sibling_counter(store, n=4, step=0.005):
@@ -65,7 +65,7 @@ def _sibling_counter(store, n=4, step=0.005):
         for _ in range(n):
             time.sleep(step)
             store.append(1)
-    runloom_c.fiber(sib)
+    stackweave_c.fiber(sib)
 
 
 class TestSubprocessRun(unittest.TestCase):
@@ -264,7 +264,7 @@ class TestPidfdReaping(unittest.TestCase):
     a pidfd only signals *termination*, so WUNTRACED must keep the poll loop.
     """
 
-    @unittest.skipUnless(runloom.monkey._HAVE_PIDFD, "no os.pidfd_open")
+    @unittest.skipUnless(stackweave.monkey._HAVE_PIDFD, "no os.pidfd_open")
     def test_pidfd_open_basics(self):
         def body():
             pid = os.fork()
@@ -272,13 +272,13 @@ class TestPidfdReaping(unittest.TestCase):
                 time.sleep(10)
                 os._exit(0)
             # a live child -> a real, pollable fd
-            pfd = runloom.monkey._pidfd_open(pid)
+            pfd = stackweave.monkey._pidfd_open(pid)
             ok = pfd is not None and pfd >= 0
             if pfd is not None:
                 os.close(pfd)
             # -1 ("any child") and 0 are not single positive pids -> None
-            none_for_any = runloom.monkey._pidfd_open(-1)
-            none_for_zero = runloom.monkey._pidfd_open(0)
+            none_for_any = stackweave.monkey._pidfd_open(-1)
+            none_for_zero = stackweave.monkey._pidfd_open(0)
             os.kill(pid, signal.SIGKILL)
             os.waitpid(pid, 0)
             return ok, none_for_any, none_for_zero

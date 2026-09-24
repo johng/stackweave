@@ -46,7 +46,7 @@ def meaningful_lines(text):
     out = []
     for ln in text.splitlines():
         s = ln.strip()
-        if not s or s.startswith("[RUNLOOM_SYSMON]") or s.startswith("# ---"):
+        if not s or s.startswith("[STACKWEAVE_SYSMON]") or s.startswith("# ---"):
             continue
         out.append(s)
     return out

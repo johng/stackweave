@@ -247,7 +247,7 @@ static void crash_wait_for_debugger(void)
     long pid = (long)getpid();
     long waited_ms = 0;
     crash_emitf(
-        "\n[runloom] paused for a debugger. Attach to live state with:\n"
+        "\n[stackweave] paused for a debugger. Attach to live state with:\n"
         "    gdb -p %ld        (or)        lldb -p %ld\n"
         "  then `continue`, or run `kill -CONT %ld` from another shell to resume.\n",
         pid, pid, pid);
@@ -260,7 +260,7 @@ static void crash_wait_for_debugger(void)
         waited_ms += 200;
         if (runloom_crash_wait_secs > 0 &&
             waited_ms >= runloom_crash_wait_secs * 1000) {
-            crash_emit("[runloom] debugger wait timed out; continuing.\n");
+            crash_emit("[stackweave] debugger wait timed out; continuing.\n");
             break;
         }
     }
@@ -271,7 +271,7 @@ static void crash_spawn_gdb(void)
     char pidbuf[24];
     pid_t child;
     snprintf(pidbuf, sizeof pidbuf, "%ld", (long)getpid());
-    crash_emit("\n[runloom] launching gdb (thread apply all bt full) ...\n");
+    crash_emit("\n[stackweave] launching gdb (thread apply all bt full) ...\n");
     child = fork();
     if (child == 0) {
         char *const argv[] = {
@@ -302,23 +302,23 @@ static void crash_spawn_gdb(void)
  * handler and the self-hang watchdog. */
 static void crash_emit_snapshot(void)
 {
-    crash_emit("[runloom] --- build + runtime snapshot ---\n");
-    crash_emitf("[runloom]   version %s  built %s %s\n",
+    crash_emit("[stackweave] --- build + runtime snapshot ---\n");
+    crash_emitf("[stackweave]   version %s  built %s %s\n",
                 RUNLOOM_CRASH_VERSION, __DATE__, __TIME__);
-    crash_emitf("[runloom]   backends: coro=%s netpoll=%s%s\n",
+    crash_emitf("[stackweave]   backends: coro=%s netpoll=%s%s\n",
                 runloom_coro_backend(), runloom_netpoll_backend(),
                 RUNLOOM_CRASH_BUILDFLAGS);
-    crash_emitf("[runloom]   gs: total=%ld pending=%ld completed=%lld hubs=%d\n",
+    crash_emitf("[stackweave]   gs: total=%ld pending=%ld completed=%lld hubs=%d\n",
                 runloom_greg_total_count(), runloom_mn_pending_total(),
                 runloom_mn_completed_total(), runloom_mn_hub_count());
-    crash_emitf("[runloom]   stacks: live=%ld depot=%ld\n",
+    crash_emitf("[stackweave]   stacks: live=%ld depot=%ld\n",
                 runloom_coro_stack_live(), runloom_coro_depot_pooled());
-    crash_emitf("[runloom]   netpoll: parked=%d heap=%d fd_armed=%d heals=%llu\n",
+    crash_emitf("[stackweave]   netpoll: parked=%d heap=%d fd_armed=%d heals=%llu\n",
                 runloom_netpoll_parked_count(),
                 runloom_netpoll_deadline_heap_total(),
                 runloom_netpoll_fd_armed_count(),
                 runloom_netpoll_stale_arm_heals());
-    crash_emitf("[runloom]   inflight: blockpool=%ld iouring=%d\n",
+    crash_emitf("[stackweave]   inflight: blockpool=%ld iouring=%d\n",
                 runloom_blockpool_inflight(), runloom_iouring_inflight());
 }
 
@@ -390,9 +390,9 @@ static void *runloom_watchdog_main(void *arg)
                  * crash mid-report does not interleave. */
                 if (__atomic_exchange_n(&runloom_crash_in_progress, 1,
                                         __ATOMIC_ACQ_REL) == 0) {
-                    crash_emit("\n===================== runloom HANG (watchdog) "
+                    crash_emit("\n===================== stackweave HANG (watchdog) "
                                "=====================\n");
-                    crash_emitf("[runloom] no fiber has completed in %ds while "
+                    crash_emitf("[stackweave] no fiber has completed in %ds while "
                                 "work is outstanding (pid %ld) -- likely a "
                                 "deadlock / lost wake / frozen hub.\n",
                                 secs, (long)getpid());
@@ -405,7 +405,7 @@ static void *runloom_watchdog_main(void *arg)
                     runloom_evt_crash_dump(2, 24);
                     if (runloom_crash_report_fd >= 0)
                         runloom_evt_crash_dump(runloom_crash_report_fd, 24);
-                    crash_emit("[runloom] (watchdog observed only; not aborting) "
+                    crash_emit("[stackweave] (watchdog observed only; not aborting) "
                                "==================\n");
                     __atomic_store_n(&runloom_crash_in_progress, 0,
                                      __ATOMIC_RELEASE);
@@ -453,11 +453,11 @@ static void crash_handler(int sig, siginfo_t *si, void *uctx)
      * hub instead of dying cleanly). */
     runloom_sched_freeze_for_crash();
 
-    crash_emit("\n======================== runloom crash ========================\n");
+    crash_emit("\n======================== stackweave crash ========================\n");
     if (sig == SIGSEGV || sig == SIGBUS)
-        crash_emitf("[runloom] fatal %s at address %p", crash_sig_name(sig), addr);
+        crash_emitf("[stackweave] fatal %s at address %p", crash_sig_name(sig), addr);
     else
-        crash_emitf("[runloom] fatal %s", crash_sig_name(sig));
+        crash_emitf("[stackweave] fatal %s", crash_sig_name(sig));
     crash_emitf("  (pid %ld, thread 0x%lx)\n",
                 (long)getpid(), (unsigned long)pthread_self());
 
@@ -475,30 +475,30 @@ static void crash_handler(int sig, siginfo_t *si, void *uctx)
         if (kind == 1) {
             /* The long lines go through crash_emit (strlen + write, no fixed
              * buffer); only the goid line needs the formatting buffer. */
-            crash_emit("[runloom] >>> GOROUTINE STACK OVERFLOW <<<\n");
+            crash_emit("[stackweave] >>> GOROUTINE STACK OVERFLOW <<<\n");
             crash_emitf(
-                "[runloom]     fiber g%lld ran off the low end of its %u KiB C stack\n",
+                "[stackweave]     fiber g%lld ran off the low end of its %u KiB C stack\n",
                 gid, skib);
             crash_emit(
-                "[runloom]     -- the fault hit the guard page just below it: a CLEAN trap,\n"
-                "[runloom]     not memory corruption.\n"
-                "[runloom]     Fix: pin a bigger stack with runloom.fiber(fn, stack_size=N)\n"
-                "[runloom]     (an explicit size ALWAYS wins over the auto-sizer), or flatten\n"
-                "[runloom]     the deep native recursion to a heap stack / offload it.  If this\n"
-                "[runloom]     fiber's depth varies with INPUT, pin it -- the auto-sizer\n"
-                "[runloom]     sizes from the runs it has seen and can under-size a deeper path\n"
-                "[runloom]     a later input reaches.  See docs/stack-sizing.md.\n");
+                "[stackweave]     -- the fault hit the guard page just below it: a CLEAN trap,\n"
+                "[stackweave]     not memory corruption.\n"
+                "[stackweave]     Fix: pin a bigger stack with stackweave.fiber(fn, stack_size=N)\n"
+                "[stackweave]     (an explicit size ALWAYS wins over the auto-sizer), or flatten\n"
+                "[stackweave]     the deep native recursion to a heap stack / offload it.  If this\n"
+                "[stackweave]     fiber's depth varies with INPUT, pin it -- the auto-sizer\n"
+                "[stackweave]     sizes from the runs it has seen and can under-size a deeper path\n"
+                "[stackweave]     a later input reaches.  See docs/stack-sizing.md.\n");
         } else if (kind == 2) {
             crash_emitf(
-                "[runloom] fault is INSIDE fiber g%lld's %u KiB stack (not the guard\n",
+                "[stackweave] fault is INSIDE fiber g%lld's %u KiB stack (not the guard\n",
                 gid, skib);
             crash_emit(
-                "[runloom]     page) -- likely a wild pointer / use-after-free in code\n"
-                "[runloom]     running on that fiber.\n");
+                "[stackweave]     page) -- likely a wild pointer / use-after-free in code\n"
+                "[stackweave]     running on that fiber.\n");
         } else {
             crash_emit(
-                "[runloom] fault is not in any fiber stack (main/hub stack, the heap,\n"
-                "[runloom]     or a wild pointer).\n");
+                "[stackweave] fault is not in any fiber stack (main/hub stack, the heap,\n"
+                "[stackweave]     or a wild pointer).\n");
         }
     }
 
@@ -507,7 +507,7 @@ static void crash_handler(int sig, siginfo_t *si, void *uctx)
     {
         runloom_g_t *cur = runloom_mn_tls_current_g();
         if (cur != NULL)
-            crash_emitf("[runloom] this thread was executing fiber g%lld.\n",
+            crash_emitf("[stackweave] this thread was executing fiber g%lld.\n",
                         (long long)runloom_g_id(cur));
     }
 
@@ -522,7 +522,7 @@ static void crash_handler(int sig, siginfo_t *si, void *uctx)
     if (runloom_crash_flags_v & RUNLOOM_CRASH_BACKTRACE) {
         void *bt[64];
         int n = backtrace(bt, 64);
-        crash_emit("\n[runloom] native backtrace (faulting thread):\n");
+        crash_emit("\n[stackweave] native backtrace (faulting thread):\n");
         backtrace_symbols_fd(bt, n, 2);
         if (runloom_crash_report_fd >= 0)
             backtrace_symbols_fd(bt, n, runloom_crash_report_fd);
@@ -538,7 +538,7 @@ static void crash_handler(int sig, siginfo_t *si, void *uctx)
     if (runloom_crash_flags_v & RUNLOOM_CRASH_GDB)  crash_spawn_gdb();
     if (runloom_crash_flags_v & RUNLOOM_CRASH_WAIT) crash_wait_for_debugger();
 
-    crash_emit("[runloom] chaining to the default handler"
+    crash_emit("[stackweave] chaining to the default handler"
                " (a Python traceback may follow) ...\n");
     crash_emit("===============================================================\n");
 
@@ -592,7 +592,7 @@ int runloom_crash_install(int flags, const char *report_path)
     }
 
     {
-        const char *s = getenv("RUNLOOM_CRASH_WAIT_SECS");
+        const char *s = getenv("STACKWEAVE_CRASH_WAIT_SECS");
         runloom_crash_wait_secs = (s != NULL) ? atol(s) : 0;
     }
 
@@ -655,7 +655,7 @@ int runloom_crash_install(int flags, const char *report_path)
     /* R5: auto-start the self-hang watchdog if RUNLOOM_WATCHDOG=<secs> is set.
      * It reuses the crash report fd + goroutine-dump flag installed here. */
     {
-        const char *wd = getenv("RUNLOOM_WATCHDOG");
+        const char *wd = getenv("STACKWEAVE_WATCHDOG");
         if (wd != NULL && wd[0] != '\0') {
             int secs = atoi(wd);
             if (secs > 0) runloom_watchdog_start(secs);

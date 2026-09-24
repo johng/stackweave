@@ -5,7 +5,7 @@
 # TasksMax=20000) + timeout, so no run can OOM/fork-bomb/hang the box. Tries 1M
 # first; on failure brackets DOWN (100K, 10K, 1024) to find the max clean level
 # and capture the failure signature. Resumable: skips programs already in
-# logs/million_done.txt. Default backend only (no RUNLOOM_IOURING_LOOP).
+# logs/million_done.txt. Default backend only (no STACKWEAVE_IOURING_LOOP).
 set +e
 cd /home/x/projects/pygo-big100/big_100 || exit 2
 sudo -n prlimit --pid $$ --nofile=8388608:8388608 2>/dev/null   # bg shell reverts to 4096

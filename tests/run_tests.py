@@ -1,13 +1,13 @@
-"""runloom plain-script test driver.
+"""stackweave plain-script test driver.
 
 We don't use unittest here.  CPython tracks frame chain + recursion
-counters in thread-state; the legacy `runloom.runtime` Python scheduler
-only swaps recursion counters (the C scheduler in `runloom_c.fiber`
+counters in thread-state; the legacy `stackweave.runtime` Python scheduler
+only swaps recursion counters (the C scheduler in `stackweave_c.fiber`
 does the full Phase B snap).  Multi-fiber tests therefore go
-through `runloom_c.*` directly so the production path is exercised.
+through `stackweave_c.*` directly so the production path is exercised.
 
-The two single-coro Coro tests still use `runloom_c.Coro` + the raw
-`runloom_c.yield_` since those primitives are the building blocks
+The two single-coro Coro tests still use `stackweave_c.Coro` + the raw
+`stackweave_c.yield_` since those primitives are the building blocks
 under both schedulers.
 """
 import sys
@@ -16,7 +16,7 @@ import traceback
 
 sys.path.insert(0, "src")
 
-import runloom_c
+import stackweave_c
 
 
 def eq(actual, expected, name):
@@ -27,7 +27,7 @@ def eq(actual, expected, name):
 
 # ── Test 1: backend identifies itself ──────────────────────────────
 def test_backend_name():
-    b = runloom_c.backend()
+    b = stackweave_c.backend()
     assert b in ("ucontext", "fibers", "fcontext-asm"), "unexpected backend: " + b
 
 
@@ -36,12 +36,12 @@ def test_yield_resume_chain():
     log = []
     def child():
         log.append("a")
-        runloom_c.yield_()
+        stackweave_c.yield_()
         log.append("b")
-        runloom_c.yield_()
+        stackweave_c.yield_()
         log.append("c")
         return "done"
-    c = runloom_c.Coro(child)
+    c = stackweave_c.Coro(child)
     c.resume(); eq(log, ["a"], "after resume 1")
     c.resume(); eq(log, ["a", "b"], "after resume 2")
     c.resume(); eq(log, ["a", "b", "c"], "after resume 3")
@@ -53,7 +53,7 @@ def test_yield_resume_chain():
 def test_exception_propagates():
     def child():
         raise ValueError("boom")
-    c = runloom_c.Coro(child)
+    c = stackweave_c.Coro(child)
     try:
         c.resume()
     except ValueError as e:
@@ -70,12 +70,12 @@ def test_three_fibers_interleave():
         def w():
             for i in range(n):
                 log.append((name, i))
-                runloom_c.sched_yield()
+                stackweave_c.sched_yield()
         return w
-    runloom_c.fiber(make_worker("A", 3))
-    runloom_c.fiber(make_worker("B", 3))
-    runloom_c.fiber(make_worker("C", 3))
-    runloom_c.run()
+    stackweave_c.fiber(make_worker("A", 3))
+    stackweave_c.fiber(make_worker("B", 3))
+    stackweave_c.fiber(make_worker("C", 3))
+    stackweave_c.run()
     expected = [("A", 0), ("B", 0), ("C", 0),
                 ("A", 1), ("B", 1), ("C", 1),
                 ("A", 2), ("B", 2), ("C", 2)]
@@ -87,16 +87,16 @@ def test_sleep_lets_others_run():
     log = []
     def sleeper():
         log.append("s1-start")
-        runloom_c.sched_sleep(0.05)
+        stackweave_c.sched_sleep(0.05)
         log.append("s1-end")
     def burner():
         for i in range(3):
             log.append(("b", i))
-            runloom_c.sched_yield()
-    runloom_c.fiber(sleeper)
-    runloom_c.fiber(burner)
+            stackweave_c.sched_yield()
+    stackweave_c.fiber(sleeper)
+    stackweave_c.fiber(burner)
     t0 = time.monotonic()
-    runloom_c.run()
+    stackweave_c.run()
     elapsed = time.monotonic() - t0
     eq(log[:4], ["s1-start", ("b", 0), ("b", 1), ("b", 2)], "early order")
     eq(log[-1], "s1-end", "sleeper finished last")

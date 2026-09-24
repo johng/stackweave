@@ -10,17 +10,17 @@ Stresses: semaphore correctness under heavy contention.
 import threading
 
 import harness
-import runloom
+import stackweave
 
 LIMIT = 32
 
 
 def setup(H):
-    sem = runloom.sync.Semaphore(LIMIT)
+    sem = stackweave.sync.Semaphore(LIMIT)
 
     def _cancel_watcher(r=H.running, s=sem):
         while r():
-            runloom.sleep(0.05)
+            stackweave.sleep(0.05)
         s.cancel_all()
 
     H.fiber(_cancel_watcher)
@@ -52,7 +52,7 @@ def worker(H, wid, rng, state):
                 with lock:
                     active[0] -= 1
                 return
-            runloom.sleep(rng.uniform(0.0, 0.002))
+            stackweave.sleep(rng.uniform(0.0, 0.002))
             with lock:
                 active[0] -= 1
         finally:

@@ -1,20 +1,20 @@
 """big_100 / 223 -- io_uring per-hub loop backend + multishot recv echo.
 
 Drives the OPT-IN per-hub io_uring event-loop backend (single-issuer /
-single-reaper per hub, RUNLOOM_IOURING_LOOP=1) together with the Stage-3
+single-reaper per hub, STACKWEAVE_IOURING_LOOP=1) together with the Stage-3
 MULTISHOT | BUFFER_SELECT recv that delivers each chunk into a per-hub
-provided buffer ring (RUNLOOM_IOURING_MS=1).  This is an ENTIRELY alternative
+provided buffer ring (STACKWEAVE_IOURING_MS=1).  This is an ENTIRELY alternative
 event loop, created only when opted in (commit 298da80); no other big_100
 program selects it, and fc443e2 just fixed a multishot single-op spurious-wake
 re-park, so the regression surface is live and otherwise untested here.
 
-The server is the built-in all-C echo (runloom_c.serve(host, port, None)) --
+The server is the built-in all-C echo (stackweave_c.serve(host, port, None)) --
 that handler runs runloom_io_c_echo, the only path that actually arms the
 multishot persistent SQE + provided-buffer-ring recv on the owning hub's ring.
 Connections are long-lived and hub-pinned: a woken echo fiber routes to its
 hub-local FIFO, so its multishot stays armed on the hub it was opened on.
 
-We force buffer-ring recycle/exhaustion by setting RUNLOOM_IOURING_MS_BUFS
+We force buffer-ring recycle/exhaustion by setting STACKWEAVE_IOURING_MS_BUFS
 small (default 16) so the ring of provided buffers must be returned and reused
 many times over a connection's lifetime, exercising the recycle path and the
 spurious-wake re-park.
@@ -41,16 +41,16 @@ import sys
 
 # The loop backend + multishot + buffer-ring count are read ONCE from the
 # environment and cached in C (io_uring_l_loop.c.inc) at first use / hub init,
-# so they MUST be set before runloom is imported and the hubs come up.  We
+# so they MUST be set before stackweave is imported and the hubs come up.  We
 # default them ON here; the --ms arg (handled in add_args/setup) can turn the
-# multishot path off for a control run, and RUNLOOM_IOURING_MS_BUFS sizes the
+# multishot path off for a control run, and STACKWEAVE_IOURING_MS_BUFS sizes the
 # provided buffer ring small to force recycle/exhaustion.
-os.environ.setdefault("RUNLOOM_IOURING_LOOP", "1")
-os.environ.setdefault("RUNLOOM_IOURING_MS", "1")
-os.environ.setdefault("RUNLOOM_IOURING_MS_BUFS", "16")
+os.environ.setdefault("STACKWEAVE_IOURING_LOOP", "1")
+os.environ.setdefault("STACKWEAVE_IOURING_MS", "1")
+os.environ.setdefault("STACKWEAVE_IOURING_MS_BUFS", "16")
 
-import harness          # noqa: E402  (sets up sys.path + imports runloom_c)
-import runloom_c        # noqa: E402
+import harness          # noqa: E402  (sets up sys.path + imports stackweave_c)
+import stackweave_c        # noqa: E402
 import netutil          # noqa: E402
 
 recv_exact = netutil.recv_exact
@@ -58,12 +58,12 @@ recv_exact = netutil.recv_exact
 
 def add_args(ap):
     ap.add_argument("--ms", type=int, default=1,
-                    help="1 = multishot recv ON (RUNLOOM_IOURING_MS=1, the "
+                    help="1 = multishot recv ON (STACKWEAVE_IOURING_MS=1, the "
                          "Stage-3 MULTISHOT|BUFFER_SELECT path); 0 = loop "
                          "backend only, single-shot proactor recv (control "
                          "run).  Must be set before the hubs start.")
     ap.add_argument("--ms-bufs", type=int, default=16,
-                    help="provided-buffer-ring count (RUNLOOM_IOURING_MS_BUFS). "
+                    help="provided-buffer-ring count (STACKWEAVE_IOURING_MS_BUFS). "
                          "Small (16) forces buffer-ring recycle/exhaustion.")
     ap.add_argument("--chunks", type=int, default=64,
                     help="back-to-back chunks streamed per connection per round")
@@ -94,19 +94,19 @@ def setup(H):
     # the same guard-before-harness.main.)
 
     # Re-assert the env toggles from the parsed args.  These were already
-    # defaulted at module import (before runloom_c loaded), but --ms / --ms-bufs
+    # defaulted at module import (before stackweave_c loaded), but --ms / --ms-bufs
     # let an explicit control run override; the C side reads them lazily at
     # hub-ring init, which has not happened yet inside setup().
-    os.environ["RUNLOOM_IOURING_LOOP"] = "1"
-    os.environ["RUNLOOM_IOURING_MS"] = "1" if H.args.ms else "0"
-    os.environ["RUNLOOM_IOURING_MS_BUFS"] = str(max(1, H.args.ms_bufs))
+    os.environ["STACKWEAVE_IOURING_LOOP"] = "1"
+    os.environ["STACKWEAVE_IOURING_MS"] = "1" if H.args.ms else "0"
+    os.environ["STACKWEAVE_IOURING_MS_BUFS"] = str(max(1, H.args.ms_bufs))
 
     # Built-in all-C echo server (handler=None): this is the ONLY serve() path
     # that runs runloom_io_c_echo and thus arms the multishot persistent SQE +
     # provided-buffer-ring recv on the owning hub's ring.  SO_REUSEPORT
     # acceptors (one per hub) spread accept load and keep conns hub-pinned.
     acceptors = min(H.hubs, 8)
-    port, listeners = runloom_c.serve(H.net_ip(0), 0, None, acceptors, 1024)
+    port, listeners = stackweave_c.serve(H.net_ip(0), 0, None, acceptors, 1024)
     for L in listeners:
         H.register_close(L)
     H.state = {"host": H.net_ip(0), "port": port,
@@ -115,7 +115,7 @@ def setup(H):
                "chunk_max": max(1, H.args.chunk_max)}
     H.log("io_uring loop backend ON, multishot={0}, ms_bufs={1}, port={2}, "
           "acceptors={3}".format("on" if H.args.ms else "off",
-                                 os.environ["RUNLOOM_IOURING_MS_BUFS"],
+                                 os.environ["STACKWEAVE_IOURING_MS_BUFS"],
                                  port, acceptors))
 
 
@@ -194,7 +194,7 @@ if __name__ == "__main__":
     # >= 5.1 with the needed ops; non-Linux returns 0).  Skipping HERE is a clean
     # exit 0; the same sys.exit() inside setup() is swallowed by the harness root
     # fiber and mis-reported as SETUP_ERROR (the macOS false REAL_FAULT this fixes).
-    if not runloom_c.iouring_available():
+    if not stackweave_c.iouring_available():
         print("SKIP: io_uring not available "
               "(non-Linux, kernel < 5.1, or liburing not built) -- "
               "loop/multishot backend cannot be exercised")

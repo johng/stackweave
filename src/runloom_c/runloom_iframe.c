@@ -90,7 +90,7 @@ int runloom_alloc_home_active(void)
     /* RUNLOOM_NO_ALLOC_HOME=1 disables the borrow (A/B baseline: reproduces the
      * pre-patch per-g-tstate _mi_page_retire crash).  Default = borrow ON. */
     static int off = -1;
-    if (off < 0) { const char *e = getenv("RUNLOOM_NO_ALLOC_HOME"); off = (e && e[0] == '1'); }
+    if (off < 0) { const char *e = getenv("STACKWEAVE_NO_ALLOC_HOME"); off = (e && e[0] == '1'); }
     return !off;
 #else
     return 0;

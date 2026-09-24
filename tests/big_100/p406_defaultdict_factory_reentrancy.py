@@ -3,7 +3,7 @@
 `collections.defaultdict.__missing__` is the one stdlib hook that calls a Python
 callable -- `default_factory()` -- and then INSERTS its result back into the dict.
 We emulate it with a `__missing__` that runs a Python factory which PARKS before
-it commits: `value = make_value(key)` (which calls `runloom.yield_now()` mid-
+it commits: `value = make_value(key)` (which calls `stackweave.yield_now()` mid-
 flight, suspending the fiber WHILE the key is still missing) and only then
 `self[key] = value`.  Many fibers on different hubs concurrently hammer a SINGLE
 shared dict over a finite sentinel UNIVERSE of keys -- `d[k]` (which may trip the
@@ -58,7 +58,7 @@ insert/delete under M:N.
 import random
 
 import harness
-import runloom
+import stackweave
 
 # Finite sentinel UNIVERSE.  Small enough that many of the thousands of fibers
 # collide on the SAME key (which is what drives a concurrent miss on a key a
@@ -99,14 +99,14 @@ DELETES = tuple([0] for _ in range(UNIVERSE_SIZE))
 def make_value(key):
     """The defaultdict factory, called by __missing__ with the dict's critical
     section held.  Records the creation for this key, then PARKS mid-insert via
-    runloom.yield_now() so a sibling fiber on another hub can race the same
+    stackweave.yield_now() so a sibling fiber on another hub can race the same
     missing key while this insert is only half-committed."""
     idx = KEY_INDEX[key]
     CREATES[idx][0] += 1
     # Park WHILE __missing__ is mid-insert: the entry is being installed into the
     # dict right now, and we hand the scheduler to another hub before returning
     # the value the dict will store.  This is the hostile window.
-    runloom.yield_now()
+    stackweave.yield_now()
     return product(key)
 
 
@@ -185,7 +185,7 @@ def op_contended_get(H, d, rng):
     except KeyError:
         pass
 
-    wg = runloom.WaitGroup()
+    wg = stackweave.WaitGroup()
     wg.add(2)
     ok = [True, True]
 

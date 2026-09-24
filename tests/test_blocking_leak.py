@@ -13,9 +13,9 @@ import os
 import time
 import unittest
 
-import runloom
-import runloom.monkey
-import runloom_c
+import stackweave
+import stackweave.monkey
+import stackweave_c
 
 _HAVE_FORK = hasattr(os, "fork")
 
@@ -39,19 +39,19 @@ def _drive(fn):
         except BaseException as e:   # noqa: BLE001
             box[1] = e
 
-    runloom_c.fiber(runner)
-    runloom_c.run()
+    stackweave_c.fiber(runner)
+    stackweave_c.run()
     if box[1] is not None:
         raise box[1]
     return box[0]
 
 
 def setUpModule():
-    runloom.monkey.patch()
+    stackweave.monkey.patch()
 
 
 def tearDownModule():
-    runloom.monkey.unpatch()
+    stackweave.monkey.unpatch()
 
 
 @unittest.skipUnless(_HAVE_PROCFD, "needs /proc/self/fd")
@@ -61,11 +61,11 @@ class TestOffloadBalance(unittest.TestCase):
             # Warm up: prime the backend pool + the parker free-list so the
             # measured window only sees steady-state churn.
             for _ in range(25):
-                runloom.monkey.offload(lambda: 1)
+                stackweave.monkey.offload(lambda: 1)
             base_fd = _fd_count()
             for _ in range(500):
-                runloom.monkey.offload(lambda: 1)
-            return base_fd, _fd_count(), len(runloom.monkey._Parker._pool)
+                stackweave.monkey.offload(lambda: 1)
+            return base_fd, _fd_count(), len(stackweave.monkey._Parker._pool)
         base_fd, after_fd, pool = _drive(body)
         self.assertLessEqual(after_fd - base_fd, 4)   # no per-iter fd growth
         self.assertLessEqual(pool, 64)                # parker free-list is capped

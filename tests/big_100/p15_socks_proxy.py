@@ -10,7 +10,7 @@ import socket
 
 import harness
 import netutil
-import runloom
+import stackweave
 
 
 def tunnel_half(src, dst, done):
@@ -43,7 +43,7 @@ def proxy_conn(H, client_sock):
         backend = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         backend.connect((host, int(port)))
         client_sock.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
-        done = runloom.Chan(2)
+        done = stackweave.Chan(2)
         H.fiber(tunnel_half, client_sock, backend, done)
         H.fiber(tunnel_half, backend, client_sock, done)
         done.recv()

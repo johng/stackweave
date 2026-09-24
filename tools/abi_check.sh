@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# abi_check.sh -- guard the runloom ext's ABI surface across CPython point releases.
+# abi_check.sh -- guard the stackweave ext's ABI surface across CPython point releases.
 #
-# runloom links a handful of CPython INTERNAL/private symbols (cpython_boundary.md)
+# stackweave links a handful of CPython INTERNAL/private symbols (cpython_boundary.md)
 # and embeds assumptions about FT-CPython struct layouts (_PyThreadState,
 # _PyInterpreterFrame). A 3.13.x point release that changes one of those layouts can
 # ship a SEGFAULTING wheel that every functional test still "passes" (the mismatch

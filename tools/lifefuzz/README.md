@@ -1,6 +1,6 @@
 # lifefuzz — generative, replayable life-cycle fuzzer
 
-`lifefuzz` mass-produces structurally-diverse runloom programs that exercise the
+`lifefuzz` mass-produces structurally-diverse stackweave programs that exercise the
 **object life-cycle** operations and runs each under the **life-cycle oracles** —
 the dynamic counterpart to the `tools/verify/` life-cycle models. Where those models
 *prove* "every object is allocated, owned by the right thread, and freed exactly
@@ -26,7 +26,7 @@ roughly fixed and varies one other axis:
 
 lifefuzz is the missing axis: it varies the **program structure itself** over the
 life-cycle operations, and it **composes** the others rather than duplicating
-them — each run is a point in *workload × schedule (`RUNLOOM_MN_SEED`) × config
+them — each run is a point in *workload × schedule (`STACKWEAVE_MN_SEED`) × config
 (the 4 knobs)* space, and it reuses the proven conservation kernel from
 `mn_stress.py` and the watchdog from `watchdog.py`.
 
@@ -49,9 +49,9 @@ back to a proven (or gated) invariant:
 
 Two kinds are generated (the seed picks; `kind` in `gen`):
 
-- **core** (default, ~75%) — `runloom_c` goroutines + channels + select + timers,
+- **core** (default, ~75%) — `stackweave_c` goroutines + channels + select + timers,
   the table above.
-- **aio** (~25%) — a small asyncio program under `runloom.aio` (`paio.run`): a
+- **aio** (~25%) — a small asyncio program under `stackweave.aio` (`paio.run`): a
   known token multiset over an `asyncio.Queue`, `create_task` + **task cancel**
   mid-flight, **`call_later` timers cancelled** before firing, and optional
   **`run_in_executor`**. Reaches the seams the core path can't:
@@ -69,8 +69,8 @@ Each run is checked against all of:
 1. **token conservation** — sent multiset == received multiset (every value once).
 2. **goroutine completion** — `mn_run()`'s completed count == goroutines spawned.
 3. **parked-leak** — `sleeping + netpoll_parked + running == 0` after the run.
-4. **scheduler self-check** — `runloom_c._self_check()` reports 0 violations.
-5. **runtime DBG oracles** — `RUNLOOM_DBG_GSTATE` (freed-state), `RUNLOOM_DBG_MIGRATE`
+4. **scheduler self-check** — `stackweave_c._self_check()` reports 0 violations.
+5. **runtime DBG oracles** — `RUNLOOM_DBG_GSTATE` (freed-state), `STACKWEAVE_DBG_MIGRATE`
    (per-g tstate cross-thread use); their stderr warnings are captured by the parent.
 6. **hang watchdog** — a lost wakeup becomes a `TimeoutError`, not a wedge
    (programs are always-terminating by construction, so a hang is a real bug).
@@ -79,7 +79,7 @@ Each run is checked against all of:
 ## Replayability
 
 A finding reduces to a one-liner. The program is a pure function of its seed and
-the schedule is pinned by `RUNLOOM_MN_SEED`, so:
+the schedule is pinned by `STACKWEAVE_MN_SEED`, so:
 
 ```sh
 tools/lifefuzz/lifefuzz.py repro <seed> --mn-seed <S>     # re-run the exact execution
@@ -104,12 +104,12 @@ tools/lifefuzz/lifefuzz.py repro 42 --mn-seed 1
 
 A fuzzer that has only ever found zero bugs is worthless until it is shown to
 catch a *planted* one. `--unsafe-migrate` flips on the gated per-g-tstate
-migration (`RUNLOOM_PER_G_TSTATE=1 RUNLOOM_ALLOW_UNSAFE_MIGRATION=1`) — the known
+migration (`STACKWEAVE_PER_G_TSTATE=1 STACKWEAVE_ALLOW_UNSAFE_MIGRATION=1`) — the known
 mimalloc abandon/adopt hazard — and the migration oracle must then fire:
 
 ```sh
 tools/lifefuzz/lifefuzz.py sweep 120 --unsafe-migrate --mn-seed 5000
-# -> findings: "[RUNLOOM_DBG_MIGRATE] ... _mi_page_retire corruption is imminent"
+# -> findings: "[STACKWEAVE_DBG_MIGRATE] ... _mi_page_retire corruption is imminent"
 ```
 
 If this stops producing findings, the oracle-capture pipeline has regressed —
@@ -118,7 +118,7 @@ stops failing.
 
 ## Composing with the rest of the suite
 
-- Build the ext under **ASan** first (`RUNLOOM_EXTRA_CFLAGS=-fsanitize=address …`,
+- Build the ext under **ASan** first (`STACKWEAVE_EXTRA_CFLAGS=-fsanitize=address …`,
   see `security/fuzz_bridge.py` header) and the sweep gains a memory-error oracle.
 - Run under the **gold-standard TSan** interpreter (`build_tsan_cpython.sh`) and
   it gains a data-race oracle on every generated interleaving.

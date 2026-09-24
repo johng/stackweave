@@ -9,7 +9,7 @@ in sync for unregister but NO LONGER gates the kevent -- a second waiter / a
 re-park on a still-set bit ORs the bit and falls through to kevent anyway.
 
 This module exercises each register/unregister branch through BEHAVIOUR on real
-socketpairs + runloom_c.wait_fd, on the single-thread scheduler (_drive), never a
+socketpairs + stackweave_c.wait_fd, on the single-thread scheduler (_drive), never a
 backend internal -- exactly the proven convention from test_netpoll_conformance.
 
 Branch map (file:line in netpoll_register.c.inc), with >=2-3 instances each:
@@ -39,7 +39,7 @@ pytestmark = pytest.mark.skipif(
 
 sys.path.insert(0, "src")
 
-import runloom_c  # noqa: E402
+import stackweave_c  # noqa: E402
 
 READ = 1
 WRITE = 2
@@ -60,8 +60,8 @@ def _drive(*fibers):
         return runner
 
     for g in fibers:
-        runloom_c.fiber(wrap(g))
-    runloom_c.run()
+        stackweave_c.fiber(wrap(g))
+    stackweave_c.run()
     if box:
         raise box[0]
 
@@ -77,14 +77,14 @@ def _reset_registration():
     """Clear the per-fd registered bit + arm mask around each test.
 
     These tests raw-``close()`` their socketpairs, bypassing the
-    ``netpoll_unregister`` that all real runloom close paths run.  A reused fd
+    ``netpoll_unregister`` that all real stackweave close paths run.  A reused fd
     number with a stale bit would (on the OLD scheme) skip its kevent and hang;
     mimic the close hook so tests don't leak registration into each other.
     Internal scheduler fds (kqueue fd, self-pipe) are not in the bit path, so
     this never touches them."""
     for fd in range(3, 1024):
         try:
-            runloom_c.netpoll_unregister(fd)
+            stackweave_c.netpoll_unregister(fd)
         except Exception:           # noqa: BLE001
             pass
 
@@ -99,7 +99,7 @@ def _registration_reset():
 def test_backend_is_kqueue():
     """Sanity: every assertion below is about the kqueue branch, so prove we are
     actually on it (the skipif guards the platform; this guards the build)."""
-    assert runloom_c.netpoll_backend() == "kqueue"
+    assert stackweave_c.netpoll_backend() == "kqueue"
 
 
 # =============================================================================
@@ -124,10 +124,10 @@ def test_ev_set_per_direction(events, make_ready, expect):
     out = []
 
     def reader():
-        out.append(runloom_c.wait_fd(a.fileno(), events, 2000))
+        out.append(stackweave_c.wait_fd(a.fileno(), events, 2000))
 
     def writer():
-        runloom_c.sched_yield()      # let the reader park + arm first
+        stackweave_c.sched_yield()      # let the reader park + arm first
         if make_ready == "peer_write":
             b.send(b"x")
         # "already" cases need no action (the socket is born writable)
@@ -151,7 +151,7 @@ def test_events_zero_arms_nothing_and_times_out(timeout_ms):
     not accidentally arm the always-ready WRITE filter."""
     a, b = _pair()                  # a is writable right now, never made readable
     out = []
-    _drive(lambda: out.append(runloom_c.wait_fd(a.fileno(), 0, timeout_ms)))
+    _drive(lambda: out.append(stackweave_c.wait_fd(a.fileno(), 0, timeout_ms)))
     assert out == [0], "events==0 should arm nothing and wake only on deadline"
     a.close()
     b.close()
@@ -173,7 +173,7 @@ def test_ready_at_ev_add_recheck_read(payload):
     a, b = _pair()
     b.send(payload)                 # readable before the single fiber parks
     out = []
-    _drive(lambda: out.append(runloom_c.wait_fd(a.fileno(), READ, 1000)))
+    _drive(lambda: out.append(stackweave_c.wait_fd(a.fileno(), READ, 1000)))
     assert out == [READ]
     assert a.recv(len(payload)) == payload
     a.close()
@@ -187,7 +187,7 @@ def test_ready_at_ev_add_recheck_write(events):
     EV_ADD readiness recheck (single fiber, no peer action)."""
     a, b = _pair()
     out = []
-    _drive(lambda: out.append(runloom_c.wait_fd(a.fileno(), events, 1000)))
+    _drive(lambda: out.append(stackweave_c.wait_fd(a.fileno(), events, 1000)))
     # Writable now -> a non-empty subset of the requested set containing WRITE.
     assert out[0] in (WRITE, READ | WRITE)
     a.close()
@@ -208,13 +208,13 @@ def test_oneshot_rearm_storm_same_fd(rounds):
     register that leaked / dropped the re-arm after the first delivery would
     hang from the 2nd round on."""
     a, b = _pair()
-    ready = runloom_c.Chan()
+    ready = stackweave_c.Chan()
     out = []
 
     def reader():
         n = 0
         for _ in range(rounds):
-            if runloom_c.wait_fd(a.fileno(), READ, 2000) == READ:
+            if stackweave_c.wait_fd(a.fileno(), READ, 2000) == READ:
                 a.recv(1)
                 n += 1
             ready.send(1)           # "consumed + about to re-park"
@@ -222,7 +222,7 @@ def test_oneshot_rearm_storm_same_fd(rounds):
 
     def writer():
         for _ in range(rounds):
-            runloom_c.sched_yield()
+            stackweave_c.sched_yield()
             b.send(b"x")
             ready.recv()            # one cycle done; reader re-armed
 
@@ -247,14 +247,14 @@ def test_oneshot_rearm_switches_direction(first, second):
         # Make the first direction ready, wait it, consume, then re-park on the
         # second direction.  WRITE is always ready; READ needs a peer write.
         if first == READ:
-            runloom_c.sched_yield()
-        r1 = runloom_c.wait_fd(a.fileno(), first, 2000)
+            stackweave_c.sched_yield()
+        r1 = stackweave_c.wait_fd(a.fileno(), first, 2000)
         if first == READ:
             a.recv(3)                # exact payload ("one"); don't over-consume
         # Re-park on the second direction.
         if second == READ:
-            runloom_c.sched_yield()
-        r2 = runloom_c.wait_fd(a.fileno(), second, 2000)
+            stackweave_c.sched_yield()
+        r2 = stackweave_c.wait_fd(a.fileno(), second, 2000)
         if second == READ:
             a.recv(3)                # exact payload ("two"); don't over-consume
         out.append((r1, r2))
@@ -262,13 +262,13 @@ def test_oneshot_rearm_switches_direction(first, second):
     def feeder():
         # Provide data whenever a READ direction is needed.
         if first == READ:
-            runloom_c.sched_yield()
-            runloom_c.sched_yield()
+            stackweave_c.sched_yield()
+            stackweave_c.sched_yield()
             b.send(b"one")
         if second == READ:
             # let the reader consume the first + re-park on READ
             for _ in range(6):
-                runloom_c.sched_yield()
+                stackweave_c.sched_yield()
             b.send(b"two")
 
     _drive(reader, feeder)
@@ -296,7 +296,7 @@ def test_two_parks_one_fd_both_arm(n_waiters):
 
     def make_waiter(i):
         def run():
-            r = runloom_c.wait_fd(a.fileno(), READ, 2500)
+            r = stackweave_c.wait_fd(a.fileno(), READ, 2500)
             if r == READ:
                 woke.append(i)
         return run
@@ -304,7 +304,7 @@ def test_two_parks_one_fd_both_arm(n_waiters):
     def writer():
         # Let all waiters park + arm on the one fd, then make it readable.
         for _ in range(n_waiters + 2):
-            runloom_c.sched_yield()
+            stackweave_c.sched_yield()
         b.send(b"!")
 
     waiters = [make_waiter(i) for i in range(n_waiters)]
@@ -321,19 +321,19 @@ def test_repark_after_partial_consume_rearms_on_set_bit():
     data.  Peer sends two bytes; the reader consumes one, re-parks (bit still
     set), and must be re-armed to see the remaining byte."""
     a, b = _pair()
-    ready = runloom_c.Chan()
+    ready = stackweave_c.Chan()
     out = []
 
     def reader():
-        r1 = runloom_c.wait_fd(a.fileno(), READ, 2000)
+        r1 = stackweave_c.wait_fd(a.fileno(), READ, 2000)
         a.recv(1)                   # consume ONE of two -- still buffered
         ready.send(1)               # consumed one + re-parking (bit still set)
-        r2 = runloom_c.wait_fd(a.fileno(), READ, 2000)
+        r2 = stackweave_c.wait_fd(a.fileno(), READ, 2000)
         a.recv(1)
         out.append((r1, r2))
 
     def writer():
-        runloom_c.sched_yield()
+        stackweave_c.sched_yield()
         b.send(b"AB")               # two bytes
         ready.recv()
 
@@ -368,19 +368,19 @@ def test_unregister_then_fd_reuse_rearms(attempt):
 
         def reader1(a=a, b=b, out1=out1):
             def feed():
-                runloom_c.sched_yield()
+                stackweave_c.sched_yield()
                 b.send(b"x")
-            runloom_c.fiber(feed)
-            out1.append(runloom_c.wait_fd(a.fileno(), READ, 2000))
+            stackweave_c.fiber(feed)
+            out1.append(stackweave_c.wait_fd(a.fileno(), READ, 2000))
 
         _drive(reader1)
         assert out1 == [READ]
         old_fd = a.fileno()
 
-        # Raw close (bypasses the runloom unregister hook) then mimic the hook.
+        # Raw close (bypasses the stackweave unregister hook) then mimic the hook.
         a.close()
         b.close()
-        runloom_c.netpoll_unregister(old_fd)    # clears bit + arm mask
+        stackweave_c.netpoll_unregister(old_fd)    # clears bit + arm mask
 
         # Reopen; likely reuses old_fd.  Must re-register + wake cleanly.
         c, d = _pair()
@@ -388,10 +388,10 @@ def test_unregister_then_fd_reuse_rearms(attempt):
 
         def reader2(c=c, d=d, out2=out2):
             def feed():
-                runloom_c.sched_yield()
+                stackweave_c.sched_yield()
                 d.send(b"y")
-            runloom_c.fiber(feed)
-            out2.append(runloom_c.wait_fd(c.fileno(), READ, 2000))
+            stackweave_c.fiber(feed)
+            out2.append(stackweave_c.wait_fd(c.fileno(), READ, 2000))
 
         _drive(reader2)
         assert out2 == [READ], (
@@ -399,7 +399,7 @@ def test_unregister_then_fd_reuse_rearms(attempt):
             % (c.fileno(), old_fd))
         c.close()
         d.close()
-        runloom_c.netpoll_unregister(c.fileno())
+        stackweave_c.netpoll_unregister(c.fileno())
 
 
 def test_unregister_clears_write_arm_for_reuse():
@@ -408,21 +408,21 @@ def test_unregister_clears_write_arm_for_reuse():
     wait on the reused number still fires immediately (born writable)."""
     a, b = _pair()
     out1 = []
-    _drive(lambda: out1.append(runloom_c.wait_fd(a.fileno(), WRITE, 1000)))
+    _drive(lambda: out1.append(stackweave_c.wait_fd(a.fileno(), WRITE, 1000)))
     assert out1[0] in (WRITE, READ | WRITE)
     old_fd = a.fileno()
     a.close()
     b.close()
-    runloom_c.netpoll_unregister(old_fd)
+    stackweave_c.netpoll_unregister(old_fd)
 
     c, d = _pair()
     out2 = []
-    _drive(lambda: out2.append(runloom_c.wait_fd(c.fileno(), WRITE, 1000)))
+    _drive(lambda: out2.append(stackweave_c.wait_fd(c.fileno(), WRITE, 1000)))
     assert out2[0] in (WRITE, READ | WRITE), (
         "reused fd did not re-arm WRITE after unregister")
     c.close()
     d.close()
-    runloom_c.netpoll_unregister(c.fileno())
+    stackweave_c.netpoll_unregister(c.fileno())
 
 
 if __name__ == "__main__":

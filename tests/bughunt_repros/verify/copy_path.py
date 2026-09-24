@@ -1,4 +1,4 @@
-import copy, runloom_c as rc
+import copy, stackweave_c as rc
 ch = rc.Chan(4)
 try:
     c2 = copy.copy(ch)

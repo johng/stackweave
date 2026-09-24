@@ -1,4 +1,4 @@
-"""Adversarial QA: channels (runloom_c.Chan) + select().
+"""Adversarial QA: channels (stackweave_c.Chan) + select().
 
 Targets the chan.c state machine and the select tombstone/CAS arbitration --
 the area covered by the chan_refflow / chan_refcount / chan PyObject-ref
@@ -20,8 +20,8 @@ import weakref
 
 import pytest
 
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 from adv_util import hang_guard, assert_faster_than, needs_free_threading
 
 
@@ -275,7 +275,7 @@ def test_mn_fan_in_fan_out_no_dup_no_loss():
     # per-consumer slots.  Set-equality proves NO value was lost and NONE
     # duplicated across the cross-hub handoff (a count alone would miss a
     # lost+duplicated pair that nets out).
-    from runloom.sync import WaitGroup
+    from stackweave.sync import WaitGroup
     P, C, PER = 8, 8, 500
     ch = rc.Chan(64)
     collected = [list() for _ in range(C)]
@@ -302,7 +302,7 @@ def test_mn_fan_in_fan_out_no_dup_no_loss():
         ch.close()
 
     with hang_guard(60, "mn fan-in/out"):
-        runloom.run(4, main)
+        stackweave.run(4, main)
 
     got = [v for slot in collected for v in slot]
     expected = set(range(P * PER))
@@ -312,7 +312,7 @@ def test_mn_fan_in_fan_out_no_dup_no_loss():
 
 @pytest.mark.skipif(not needs_free_threading(), reason="M:N needs GIL-disabled build")
 def test_mn_select_across_channels_integrity():
-    from runloom.sync import WaitGroup
+    from stackweave.sync import WaitGroup
     K, PER = 6, 400
     chans = [rc.Chan(8) for _ in range(K)]
     sink = []
@@ -344,7 +344,7 @@ def test_mn_select_across_channels_integrity():
         wg.wait()
 
     with hang_guard(60, "mn select integrity"):
-        runloom.run(3, main)
+        stackweave.run(3, main)
     assert set(sink) == set(range(K * PER))
     assert len(sink) == K * PER
 

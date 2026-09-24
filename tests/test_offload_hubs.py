@@ -1,15 +1,15 @@
-"""Dedicated offload hubs (mn_init(offload_hubs=K) / RUNLOOM_OFFLOAD_HUBS).
+"""Dedicated offload hubs (mn_init(offload_hubs=K) / STACKWEAVE_OFFLOAD_HUBS).
 
 The mechanism: reserve K hubs at the tail of runloom_hubs[], exclude them from
 general placement / stealing / sysmon preemption / the monopoly-yield scan, and
 run blocking calls there as ordinary fibers.  That lets `monkey.offload` reuse
 the scheduler (spawn, submit, channel, wake_g) instead of the bespoke thread
 pool + self-pipe + result-box protocol, and -- because nothing ever migrates
-between hubs -- it needs no CPython tstate patches.  See the RUNLOOM_OFFLOAD_HUBS
+between hubs -- it needs no CPython tstate patches.  See the STACKWEAVE_OFFLOAD_HUBS
 block in src/runloom_c/mn_sched.c.
 
 These run IN-PROCESS: `offload_hubs` is an mn_init argument, so K can vary per
-run().  (The RUNLOOM_OFFLOAD_HUBS env fallback is resolved once per process and
+run().  (The STACKWEAVE_OFFLOAD_HUBS env fallback is resolved once per process and
 could not be varied without re-execing a subprocess per case.)
 
 `time.sleep` is the stand-in for a blocking call: it releases the tstate, so a
@@ -19,9 +19,9 @@ import time
 
 import pytest
 
-import runloom
-import runloom_c as rc
-from runloom.monkey import offload
+import stackweave
+import stackweave_c as rc
+from stackweave.monkey import offload
 
 
 # --------------------------------------------------------------------------
@@ -39,7 +39,7 @@ def test_default_is_off():
         with pytest.raises(RuntimeError):
             rc.offload_fiber(lambda: None)
 
-    runloom.run(4, body, offload_hubs=0)
+    stackweave.run(4, body, offload_hubs=0)
     assert seen == {"hubs": 4, "offload": 0}
 
 
@@ -52,7 +52,7 @@ def test_hubs_are_added_not_carved_out():
         seen["hubs"] = rc.mn_hub_count()
         seen["offload"] = rc.offload_hub_count()
 
-    runloom.run(4, body, offload_hubs=3)
+    stackweave.run(4, body, offload_hubs=3)
     assert seen == {"hubs": 7, "offload": 3}
 
 
@@ -67,7 +67,7 @@ def test_k_varies_per_run_in_process():
         return body
 
     for k in (0, 2, 1, 4):
-        runloom.run(2, make(k), offload_hubs=k)
+        stackweave.run(2, make(k), offload_hubs=k)
     assert got == [(0, 0), (2, 2), (1, 1), (4, 4)]
 
 
@@ -87,20 +87,20 @@ def test_general_fibers_never_land_on_a_blocked_offload_hub():
     def body():
         for _ in range(K):
             rc.offload_fiber(lambda: time.sleep(BLOCK))
-        runloom.sleep(0.25)      # let every offload hub reach its sleep
+        stackweave.sleep(0.25)      # let every offload hub reach its sleep
 
         def worker(i):
             def f():
                 done[i] = 1
             return f
         for i in range(N):
-            runloom.fiber(worker(i))
+            stackweave.fiber(worker(i))
 
         deadline = started + BLOCK - 0.5
         while time.monotonic() < deadline and sum(done) < N:
-            runloom.sleep(0.02)
+            stackweave.sleep(0.02)
 
-    runloom.run(4, body, offload_hubs=K)
+    stackweave.run(4, body, offload_hubs=K)
     elapsed = time.monotonic() - started
     assert sum(done) == N, "%d/%d general fibers stalled behind a blocked offload hub" % (sum(done), N)
     assert elapsed < BLOCK + 1.0
@@ -114,7 +114,7 @@ def test_general_hubs_progress_while_every_offload_hub_blocks():
     def body():
         for _ in range(K):
             rc.offload_fiber(lambda: time.sleep(2.0))
-        runloom.sleep(0.25)
+        stackweave.sleep(0.25)
 
         stop = [False]
 
@@ -122,16 +122,16 @@ def test_general_hubs_progress_while_every_offload_hub_blocks():
             def f():
                 while not stop[0]:
                     ticks[i] = 1
-                    runloom.sleep(0.01)
+                    stackweave.sleep(0.01)
             return f
         for i in range(4):
-            runloom.fiber(ticker(i))
+            stackweave.fiber(ticker(i))
 
-        runloom.sleep(1.0)       # a full second WHILE the offload hubs block
+        stackweave.sleep(1.0)       # a full second WHILE the offload hubs block
         stop[0] = True
-        runloom.sleep(0.1)
+        stackweave.sleep(0.1)
 
-    runloom.run(4, body, offload_hubs=K)
+    stackweave.run(4, body, offload_hubs=K)
     assert sum(ticks) == 4, "only %d/4 general tickers ran while offload hubs blocked" % sum(ticks)
 
 
@@ -163,7 +163,7 @@ def test_offload_routes_and_behaves(k, route):
         seen["route"] = "hub" if rc.offload_hub_count() > 0 else "pool"
         seen.update(_probe())
 
-    runloom.run(3, body, offload_hubs=k)
+    stackweave.run(3, body, offload_hubs=k)
     assert seen["route"] == route
     assert seen["value"] == 499500
     assert seen["exc"] == "boom"
@@ -179,7 +179,7 @@ def test_both_backends_are_observationally_identical():
     def run_with(k, key):
         def body():
             results[key] = _probe()
-        runloom.run(3, body, offload_hubs=k)
+        stackweave.run(3, body, offload_hubs=k)
 
     run_with(2, "hub")
     run_with(0, "pool")

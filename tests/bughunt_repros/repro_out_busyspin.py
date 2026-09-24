@@ -3,8 +3,8 @@
 # epoll_wait return immediately -> the idle pump busy-spins at ~100% CPU
 # until the socket is closed.
 import os, socket, sys, time
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 
 READ, WRITE = 1, 2
 res = {}
@@ -21,13 +21,13 @@ def main():
     r = rc.wait_fd(a.fileno(), WRITE, 2000)
     res["w"] = r
     e0, c0 = cpu_seconds()
-    runloom.sleep(3.0)          # runtime should be idle: expect ~0 CPU
+    stackweave.sleep(3.0)          # runtime should be idle: expect ~0 CPU
     e1, c1 = cpu_seconds()
     res["idle_wall"] = e1 - e0
     res["idle_cpu"] = c1 - c0
     res["socks"] = (a, b)
 
-runloom.run(1, main)
+stackweave.run(1, main)
 print("write park result:", res["w"])
 print("idle wall=%.2fs cpu=%.2fs" % (res["idle_wall"], res["idle_cpu"]))
 if res["idle_cpu"] > 0.5 * res["idle_wall"]:

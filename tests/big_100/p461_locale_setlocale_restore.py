@@ -30,19 +30,19 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified empirically, not assumed):
   GIL fully ON* (PYTHON_GIL=1) on this very interpreter -- i.e. OVERLAPPING /
   unserialized setlocale is documented-unsafe usage for ANY concurrency model and
   ANY GIL setting, NOT a runloom-specific bug.  An oracle that hard-failed on that
-  would be a FALSE-POSITIVE detector (it fires identically without runloom).  So
+  would be a FALSE-POSITIVE detector (it fires identically without stackweave).  So
   the overlap drift is MEASURED and REPORTED, never failed -- like p67's TLS leak
   rate and p321's overlap drift.
 
-  What IS a genuine runloom M:N invariant -- and the LOAD-BEARING oracle here --
+  What IS a genuine stackweave M:N invariant -- and the LOAD-BEARING oracle here --
   is the SERIALIZED STRICT-LIFO arm: every setlocale block runs behind ONE shared
   cooperative Lock, so the blocks are globally strict-LIFO (never two open at once
   -- the documented-SAFE usage).  Workers still PARK / yield / migrate hubs
   OUTSIDE the lock between blocks, so a goroutine routinely opens its block on one
   hub and could be preempted / migrated during the set or the restore.  Under
   run(1)/GIL this serialized usage ALWAYS restores the global to baseline
-  (verified); under M:N it MUST too.  If runloom's save/restore desyncs across a
-  hub migration or a preempt-mid-restore -- a runloom regression, NOT a documented
+  (verified); under M:N it MUST too.  If stackweave's save/restore desyncs across a
+  hub migration or a preempt-mid-restore -- a stackweave regression, NOT a documented
   caveat -- the baseline does not restore.  THAT is the bug this program uniquely
   catches, and the serialized arm PASSES on a correct runtime (so the program
   exits 0 when there is no bug).
@@ -55,15 +55,15 @@ ORACLES:
         block (strict global LIFO) but parks/migrates between blocks; post()
         H.check(setlocale(LC_NUMERIC) == baseline).
     A LC_NUMERIC stuck off the baseline after the serialized arm quiesces is a
-    runloom save/restore desync (migration / preempt-mid-restore) -- it does NOT
-    reproduce under stock serialized LIFO use, so it is a true runloom signal.
+    stackweave save/restore desync (migration / preempt-mid-restore) -- it does NOT
+    reproduce under stock serialized LIFO use, so it is a true stackweave signal.
   * LOAD-BEARING -- per-block format agreement (in-block, HARD): inside the held
     lock, after setting the install locale, the number we format MUST match what
     that exact locale produces (grouping-or-not).  If a sibling on the same hub
     raced the global setlocale into our critical section -- mid-block -- our
     format would silently come out under the WRONG locale even though we hold the
     lock.  Under correct serialized M:N that can never happen; a mismatch is a
-    runloom desync.  (Self-checked against locale.format_string for the install
+    stackweave desync.  (Self-checked against locale.format_string for the install
     locale captured single-threaded at setup, so the expectation is itself
     race-free.)
   * COMPLETENESS (post, HARD): require_no_lost -- a worker stranded holding the
@@ -99,7 +99,7 @@ import socket
 import sys
 
 import harness
-import runloom
+import stackweave
 
 # Modest population.  Most workers run the LOAD-BEARING serialized strict-LIFO
 # arm; a SEPARATE small paired population runs the report-only OVERLAP pre-phase.
@@ -148,7 +148,7 @@ def _fmt_under(value):
 # shared cooperative Lock, so the blocks are globally strict-LIFO (never two open
 # at once = the documented-SAFE usage).  Workers PARK / yield / migrate hubs
 # OUTSIDE the lock between blocks.  The global LC_NUMERIC MUST restore to baseline
-# -- the run(1)/GIL behaviour a runloom save/restore desync across a hub migration
+# -- the run(1)/GIL behaviour a stackweave save/restore desync across a hub migration
 # / preempt-mid-restore would break.
 # --------------------------------------------------------------------------
 def serialized_block(H, wid, r, rng, state):
@@ -158,8 +158,8 @@ def serialized_block(H, wid, r, rng, state):
     # Park / migrate hub OUTSIDE the critical section so the goroutine can be on a
     # different hub each time it takes the lock (exercises migration around the
     # save/restore), without ever overlapping another block.
-    runloom.sleep(0.0003)
-    runloom.yield_now()
+    stackweave.sleep(0.0003)
+    stackweave.yield_now()
     with lock:
         # Save the live global (should be the baseline), install our locale,
         # format, then restore EXACTLY what we saved -- strict-LIFO, one block at a
@@ -168,18 +168,18 @@ def serialized_block(H, wid, r, rng, state):
         # be in its block -- the lock guarantees it).
         saved = locale.setlocale(CAT)
         locale.setlocale(CAT, install)
-        runloom.yield_now()                 # preempt/migrate mid-block (still safe)
+        stackweave.yield_now()                 # preempt/migrate mid-block (still safe)
         got = locale.format_string("%.1f", SAMPLE, grouping=True)
         # LOAD-BEARING in-block oracle: under the lock our format MUST be the
         # install locale's formatting.  A mismatch means the global setlocale was
-        # raced into our critical section across the scheduling point (a runloom
+        # raced into our critical section across the scheduling point (a stackweave
         # desync) -- impossible under correct serialized M:N.
         if got != expect:
             H.fail("IN-BLOCK LOCALE DESYNC: under the shared lock with "
                    "LC_NUMERIC set to {0!r}, format_string produced {1!r} but the "
                    "install locale formats {2!r} as {3!r} -- a sibling raced the "
                    "PROCESS-GLOBAL setlocale into this serialized (lock-held) "
-                   "critical section across a scheduling point (a runloom "
+                   "critical section across a scheduling point (a stackweave "
                    "save/restore desync; locale is a C-library global, NOT "
                    "contextvar/threadlocal-isolated)".format(
                        install, got, SAMPLE, expect))
@@ -260,7 +260,7 @@ def run_overlap_phase(H, state):
     noverlap = state["noverlap"]
     if noverlap <= 0:
         return
-    wg = runloom.WaitGroup()
+    wg = stackweave.WaitGroup()
     wg.add(noverlap)
 
     def run_one(wid):
@@ -336,7 +336,7 @@ def setup(H):
         "install": install,                 # the locale each block installs
         "install_fmt": install_fmt,         # race-free expected format under it
         "base_fmt": base_fmt,               # format under the baseline
-        "lock": runloom.sync.Lock(),        # serializes the load-bearing arm
+        "lock": stackweave.sync.Lock(),        # serializes the load-bearing arm
         "nworkers": nworkers,
         "noverlap": noverlap,               # report-only overlap pre-phase pop
         "pairs": pairs,
@@ -374,7 +374,7 @@ def post(H):
     # hard-reset after its drained pre-phase, so any drift left in the global after
     # the whole run is attributable to the LOAD-BEARING serialized strict-LIFO arm:
     # a serialized worker whose restore desynced across a hub migration / preempt
-    # and failed to restore the global LC_NUMERIC.  That is the runloom bug.
+    # and failed to restore the global LC_NUMERIC.  That is the stackweave bug.
     now = locale.setlocale(CAT)
     H.log("serialized-LIFO blocks={0} (LOAD-BEARING) | overlap blocks={1} "
           "drifted={2} ({3:.1f}%, documented-unsafe non-LIFO -- REPORT ONLY) | "
@@ -384,7 +384,7 @@ def post(H):
     # LOAD-BEARING: the GLOBAL LC_NUMERIC MUST be the exact baseline after the run.
     # The overlap arm self-restored + was hard-reset, so a residual off-baseline
     # locale is a SERIALIZED-arm save/restore desync under M:N (hub migration /
-    # preempt-mid-restore) -- a runloom bug, NOT a documented caveat (serialized
+    # preempt-mid-restore) -- a stackweave bug, NOT a documented caveat (serialized
     # strict-LIFO use always restores under run(1)/GIL -- verified).
     H.check(now == baseline,
             "GLOBAL LOCALE CORRUPTED: LC_NUMERIC={0!r} != baseline {1!r} after the "
@@ -406,7 +406,7 @@ def post(H):
         H.log("note: the overlap arm observed {0} per-block global-locale drifts "
               "across {1} overlapping blocks -- documented-unsafe non-LIFO "
               "setlocale usage (reproduces under plain GIL threads with "
-              "PYTHON_GIL=1), NOT a runloom bug; each overlap block self-restored "
+              "PYTHON_GIL=1), NOT a stackweave bug; each overlap block self-restored "
               "and the pre-phase was hard-reset so this never reaches the "
               "load-bearing check".format(drift, ovl))
 
@@ -425,7 +425,7 @@ if __name__ == "__main__":
                           "lock, park+migrate between/inside blocks) MUST restore "
                           "the global to its exact baseline under M:N -- a "
                           "save/restore desync across hub migration is the real "
-                          "runloom bug.  The non-LIFO OVERLAP drift is documented-"
+                          "stackweave bug.  The non-LIFO OVERLAP drift is documented-"
                           "unsafe (reproduces under plain GIL threads) -- "
                           "report-only.  SKIPs cleanly if no locale beyond 'C' is "
                           "available")

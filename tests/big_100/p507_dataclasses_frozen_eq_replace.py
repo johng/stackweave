@@ -19,7 +19,7 @@ THIS fiber's type, then this fiber's instances would carry the wrong constructor
 compare wrong, hash wrong, or replace() would splice a sibling's field slot.  The
 class object, its methods, and every instance built from it are FIBER-LOCAL
 (created in fiber-local variables, never shared), so on a CORRECT runtime every
-one of the closed-form laws below MUST hold; a violation is a runloom type-
+one of the closed-form laws below MUST hold; a violation is a stackweave type-
 assembly / method-binding isolation bug, never documented Python semantics.
 
 WHICH ORACLE IS LOAD-BEARING, AND WHY:
@@ -45,7 +45,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY:
 
   All fiber-local -> a correct runtime passes every check and the program exits 0.
   A field value that changed across the yield, a hash that drifted, a wrong
-  replace target, a broken eq, or a missing FrozenInstanceError is a runloom bug.
+  replace target, a broken eq, or a missing FrozenInstanceError is a stackweave bug.
 
 ORACLES:
   * LOAD-BEARING -- FROZEN DATACLASS ASSEMBLY + EQ/REPLACE (worker, HARD, fail-
@@ -79,7 +79,7 @@ desync before the eq/replace value oracle even fires.
 import dataclasses
 
 import harness
-import runloom
+import stackweave
 
 # Number of fields on each fiber-local frozen dataclass.  Enough that the
 # generated __init__/__eq__/__hash__ over the field tuple is non-trivial and the
@@ -119,7 +119,7 @@ def make_fiber_dc(wid, idx):
 def dc_check(H, wid, idx, state):
     """Single-owner frozen-dataclass assembly + eq/replace law check.
 
-    Every object here is fiber-local; a violation is a runloom type-assembly /
+    Every object here is fiber-local; a violation is a stackweave type-assembly /
     method-binding desync, never documented Python behavior."""
     cls, field_names, values = make_fiber_dc(wid, idx)
     inst = cls(**values)                     # frozen, fiber-local instance
@@ -132,9 +132,9 @@ def dc_check(H, wid, idx, state):
     # YIELD: let siblings run -- many are inside their own make_dataclass exec
     # assembly right now.  If method/namespace/descriptor binding is not fiber-
     # isolated, this fiber's type or instance could be corrupted while parked.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0003)
+        stackweave.sleep(0.0003)
 
     # --- 1. every field reads back its exact constructed value, unchanged -------
     for fn in field_names:
@@ -296,4 +296,4 @@ if __name__ == "__main__":
                  "matches, replace(one=new) changes exactly one field, a fresh "
                  "instance compares == inst, and frozen setattr raises "
                  "FrozenInstanceError.  All fiber-local, so any failure is a "
-                 "runloom type-assembly isolation bug")
+                 "stackweave type-assembly isolation bug")

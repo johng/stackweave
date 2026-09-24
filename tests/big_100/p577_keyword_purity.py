@@ -16,7 +16,7 @@ import), so every call is a PURE function of its argument -- for a fixed `s`
 the answer is a mathematical constant, identical on every hub, every fiber,
 every time.
 
-WHERE M:N COULD BREAK IT (the gap this program probes).  runloom drives tens
+WHERE M:N COULD BREAK IT (the gap this program probes).  stackweave drives tens
 of thousands of goroutines across hubs>1 with the GIL OFF.  Every fiber calls
 into the SAME module-global frozenset's `__contains__` concurrently.  A pure
 read of a shared immutable set MUST be race-free -- but that is exactly the
@@ -45,7 +45,7 @@ SINGLE-OWNER / CLOSED-FORM ORACLE (verified against the module semantics):
   each candidate the fiber:
     - computes r1_hard = keyword.iskeyword(s), r1_soft = keyword.issoftkeyword(s)
       BEFORE a yield;
-    - YIELDS (runloom.yield_now / a tiny sleep) so siblings on other hubs hammer
+    - YIELDS (stackweave.yield_now / a tiny sleep) so siblings on other hubs hammer
       the same shared frozensets in the meantime;
     - recomputes r2_hard / r2_soft AFTER the yield;
     - asserts r1 == r2 (stable across the yield -- a pure function does not
@@ -83,7 +83,7 @@ localizes any real read hazard before the closed-form law even closes.
 import keyword
 
 import harness
-import runloom
+import stackweave
 
 # Ground truth snapshotted ONCE at import into immutable frozensets.  These are
 # read-only for the whole run -- reading them from any fiber is race-free (an
@@ -142,9 +142,9 @@ def purity_check(H, wid, cands, state):
         before_soft.append(keyword.issoftkeyword(s))
 
     # YIELD: park so siblings on other hubs hammer the same shared frozensets.
-    runloom.yield_now()
+    stackweave.yield_now()
     if wid & 1:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
 
     # AFTER the yield: recompute and enforce the three laws.
     for i, s in enumerate(cands):

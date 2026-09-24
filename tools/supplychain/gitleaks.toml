@@ -1,14 +1,14 @@
-# gitleaks config for runloom's supply-chain gate.  Uses the full default
+# gitleaks config for stackweave's supply-chain gate.  Uses the full default
 # ruleset, plus an allowlist for known false positives.  A NEW secret added to
 # the working tree (a planted C2 credential / API key / private key) reds the
 # gate; the entries below are confirmed non-secrets.
-title = "runloom supply-chain gitleaks"
+title = "stackweave supply-chain gitleaks"
 
 [extend]
 useDefault = true
 
 [allowlist]
-description = "runloom confirmed false positives"
+description = "stackweave confirmed false positives"
 regexTarget = "match"
 regexes = [
   # A Python string literal listing cryptography class NAMES, not a key.

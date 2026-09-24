@@ -14,9 +14,9 @@
 #
 # Configure in an UNTRACKED file (never committed): scripts/release_hosts.env
 # (copy scripts/release_hosts.env.example):
-#   RUNLOOM_REPO_URL   git URL to build from   (PROMPTED if unset)
-#   RUNLOOM_REF        branch/tag/sha to build (default: main)
-#   RUNLOOM_WIN_PYENV  pyenv-win version that drives cibuildwheel (default 3.12.10)
+#   STACKWEAVE_REPO_URL   git URL to build from   (PROMPTED if unset)
+#   STACKWEAVE_REF        branch/tag/sha to build (default: main)
+#   STACKWEAVE_WIN_PYENV  pyenv-win version that drives cibuildwheel (default 3.12.10)
 #   RELEASE_SSH_HOSTS  space-separated "<target>|<base-dir>|<kind>" entries, one
 #                      per non-Linux platform.  kind = posix (mac, default) or
 #                      windows (cmd.exe shell + pyenv).  Each host needs git, a
@@ -46,9 +46,9 @@ ask() {   # ask VAR "prompt" "default"
     [ -z "$ans" ] && ans="$def"
     eval "$1=\$ans"
 }
-ask RUNLOOM_REPO_URL "Repo URL to build from" "https://github.com/robertsdotpm/runloom.git"
-ask RUNLOOM_REF      "Ref to build (branch/tag/sha)" "main"
-: "${RUNLOOM_WIN_PYENV:=3.12.10}"
+ask STACKWEAVE_REPO_URL "Repo URL to build from" "https://github.com/johng/stackweave.git"
+ask STACKWEAVE_REF      "Ref to build (branch/tag/sha)" "main"
+: "${STACKWEAVE_WIN_PYENV:=3.12.10}"
 [ -z "${RELEASE_SSH_HOSTS+set}" ] && ask RELEASE_SSH_HOSTS \
     "Remote build hosts 'target|dir|kind ...' (blank = this machine only)" ""
 : "${RELEASE_SSH_HOSTS:=}"
@@ -70,14 +70,14 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-echo ">> repo: $RUNLOOM_REPO_URL   ref: $RUNLOOM_REF"
+echo ">> repo: $STACKWEAVE_REPO_URL   ref: $STACKWEAVE_REF"
 rm -rf wheelhouse dist
 mkdir -p wheelhouse dist
 
 # ---- local platform (Linux: manylinux via docker; QEMU for aarch64) ------
 LOCAL_WORK="$(mktemp -d)"
 echo ">> [local: $(uname -s)] fresh clone + cibuildwheel ..."
-git clone --depth 1 --branch "$RUNLOOM_REF" "$RUNLOOM_REPO_URL" "$LOCAL_WORK/src"
+git clone --depth 1 --branch "$STACKWEAVE_REF" "$STACKWEAVE_REPO_URL" "$LOCAL_WORK/src"
 ( cd "$LOCAL_WORK/src" && "$PY" -m cibuildwheel --output-dir "$ROOT/wheelhouse" )
 
 # ---- remote platforms (Mac=posix, Windows=cmd.exe+pyenv) over SSH ---------
@@ -88,11 +88,11 @@ for entry in $RELEASE_SSH_HOSTS; do
     bdir="$base/runloom-build-$STAMP"
     REMOTE_CLEANUP="$REMOTE_CLEANUP
 $target|$bdir|$kind"
-    echo ">> [$target ($kind)] fresh clone $RUNLOOM_REF + cibuildwheel ..."
+    echo ">> [$target ($kind)] fresh clone $STACKWEAVE_REF + cibuildwheel ..."
     if [ "$kind" = windows ]; then
-        ssh "$target" "(if exist \"$bdir\" rmdir /s /q \"$bdir\") & git clone --depth 1 --branch $RUNLOOM_REF $RUNLOOM_REPO_URL \"$bdir\" && cd /d \"$bdir\" && set PYENV_VERSION=$RUNLOOM_WIN_PYENV&& pyenv exec python -m cibuildwheel --output-dir wheelhouse"
+        ssh "$target" "(if exist \"$bdir\" rmdir /s /q \"$bdir\") & git clone --depth 1 --branch $STACKWEAVE_REF $STACKWEAVE_REPO_URL \"$bdir\" && cd /d \"$bdir\" && set PYENV_VERSION=$STACKWEAVE_WIN_PYENV&& pyenv exec python -m cibuildwheel --output-dir wheelhouse"
     else
-        ssh "$target" "rm -rf '$bdir' && git clone --depth 1 --branch '$RUNLOOM_REF' '$RUNLOOM_REPO_URL' '$bdir' && cd '$bdir' && python3 -m cibuildwheel --output-dir wheelhouse"
+        ssh "$target" "rm -rf '$bdir' && git clone --depth 1 --branch '$STACKWEAVE_REF' '$STACKWEAVE_REPO_URL' '$bdir' && cd '$bdir' && python3 -m cibuildwheel --output-dir wheelhouse"
     fi
     echo ">> [$target] copying wheels back ..."
     tmp_pull="$(mktemp -d)"
@@ -102,7 +102,7 @@ $target|$bdir|$kind"
 done
 
 # ---- sdist (built from the same fresh checkout) + gather -----------------
-echo ">> building sdist from $RUNLOOM_REF ..."
+echo ">> building sdist from $STACKWEAVE_REF ..."
 ( cd "$LOCAL_WORK/src" && "$PY" -m build --sdist --outdir "$ROOT/dist" )
 cp wheelhouse/*.whl dist/
 
@@ -111,7 +111,7 @@ echo ">> twine check ..."
 
 n_whl=$(find dist -name '*.whl' | wc -l | tr -d ' ')
 echo
-echo ">> dist/ ready: ${n_whl} wheels + 1 sdist (from $RUNLOOM_REF). Throwaway clones cleaned."
+echo ">> dist/ ready: ${n_whl} wheels + 1 sdist (from $STACKWEAVE_REF). Throwaway clones cleaned."
 if [ "$UPLOAD" = yes ]; then
     "$PY" -m twine upload dist/*
 else

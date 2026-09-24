@@ -56,7 +56,7 @@ cross-fiber fd leak.
 import stat as statmod
 
 import harness
-import runloom
+import stackweave
 
 try:
     import posix
@@ -132,9 +132,9 @@ def roundtrip_check(H, wid, idx, payload, state):
         # YIELD: siblings on other hubs open/close their own memfds and REUSE fd
         # numbers.  If the runtime confused fd bookkeeping across fibers, this
         # fiber's pread below would read a sibling's data or a torn buffer.
-        runloom.yield_now()
+        stackweave.yield_now()
         if idx & 1:
-            runloom.sleep(0.0002)
+            stackweave.sleep(0.0002)
 
         got = posix.pread(fd, L, 0)
         if got != payload:

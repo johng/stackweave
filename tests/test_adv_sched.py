@@ -7,7 +7,7 @@ a lost wake or a teardown deadlock shows up as a `hang_guard` _exit with a
 pinpointed traceback, not a silently-green run.
 
 Includes one xfail-documented FINDING: an unhandled exception inside a bare
-`runloom_c.fiber` fiber is silently swallowed -- not raised out of run(),
+`stackweave_c.fiber` fiber is silently swallowed -- not raised out of run(),
 not retrievable via `G.result`, and not even written to stderr / the
 unraisable hook.  In a Go-parity runtime a fiber panic should at minimum
 be observable; today it vanishes.
@@ -18,8 +18,8 @@ import sys
 
 import pytest
 
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 from adv_util import hang_guard, assert_faster_than, needs_free_threading
 
 FT = needs_free_threading()
@@ -90,7 +90,7 @@ def test_current_g_none_outside_fiber():
 def test_fiber_exception_is_reported_and_retrievable():
     # Regression for the swallowed-exception FINDING (now fixed): an unhandled
     # fiber exception is reported via sys.unraisablehook (default
-    # RUNLOOM_GOROUTINE_PANIC=print) AND retrievable on G.exception.  run() still
+    # STACKWEAVE_GOROUTINE_PANIC=print) AND retrievable on G.exception.  run() still
     # does NOT raise it (report, not propagate) and G.result stays None.
     # NB: PyErr_WriteUnraisable calls sys.unraisablehook, so we capture there --
     # pytest installs its own hook (turning unraisables into warnings), so an
@@ -117,7 +117,7 @@ def test_fiber_exception_is_reported_and_retrievable():
 
 _SILENT_SCRIPT = r'''
 import sys, os; sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 def boom():
     raise ValueError("SILENT_MARKER_X")
 g = rc.fiber(boom)
@@ -131,11 +131,11 @@ sys.stdout.write("RETRIEVABLE\n" if isinstance(g.exception, ValueError) else "LO
 
 
 def test_fiber_exception_silent_mode_opt_out():
-    # RUNLOOM_GOROUTINE_PANIC=silent restores no-report (still retrievable).
+    # STACKWEAVE_GOROUTINE_PANIC=silent restores no-report (still retrievable).
     # Subprocess: the mode is cached process-wide.
     import subprocess
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    env = dict(os.environ, RUNLOOM_GOROUTINE_PANIC="silent",
+    env = dict(os.environ, STACKWEAVE_GOROUTINE_PANIC="silent",
                PYTHON_GIL="0", PYTHONPATH="src")
     p = subprocess.run([sys.executable, "-c", _SILENT_SCRIPT], cwd=repo, env=env,
                        capture_output=True, text=True, timeout=30)
@@ -288,7 +288,7 @@ def test_mn_spawn_storm_completion_count():
     counter = bytearray(1)         # single-writer slot avoids the GIL-off RMW race
     box = {"done": 0}
     def main():
-        from runloom.sync import WaitGroup
+        from stackweave.sync import WaitGroup
         wg = WaitGroup(); wg.add(N)
         def w():
             try:
@@ -299,7 +299,7 @@ def test_mn_spawn_storm_completion_count():
             rc.mn_fiber(w)
         wg.wait()
     with hang_guard(60, "mn spawn storm"):
-        runloom.run(4, main)
+        stackweave.run(4, main)
 
 
 @pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")

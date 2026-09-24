@@ -1,7 +1,7 @@
-"""S7 -- adversarial TLS fuzzing of the runloom.aio bridge transport.
+"""S7 -- adversarial TLS fuzzing of the stackweave.aio bridge transport.
 
 Extends S6 (plaintext transport fuzz) to the TLS path, the highest-value REMOTE
-attack surface: a real `runloom.aio` TLS echo server is hit with malformed TLS
+attack surface: a real `stackweave.aio` TLS echo server is hit with malformed TLS
 records (garbage, truncated/oversized handshakes, RST mid-handshake, valid
 handshake then post-handshake garbage, slow-drip, connect storms) while we watch
 for a crash, a hang (lost wakeup), an ASan error, or unresponsiveness.  This is
@@ -56,7 +56,7 @@ def gen_cert():
 
 
 def run_server(port_file, certfile, keyfile):
-    import runloom.aio as paio
+    import stackweave.aio as paio
 
     async def handle(reader, writer):
         try:

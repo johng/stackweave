@@ -1,7 +1,7 @@
-"""UDP echo — cooperative datagrams with the runloom.sync front-end.
+"""UDP echo — cooperative datagrams with the stackweave.sync front-end.
 
-runloom.sync gives you blocking-style sockets without monkey-patching the
-stdlib and without async/await: runloom.sync.udp_endpoint returns a
+stackweave.sync gives you blocking-style sockets without monkey-patching the
+stdlib and without async/await: stackweave.sync.udp_endpoint returns a
 cooperative Socket whose recvfrom/sendto/recv/send park the fiber
 on netpoll.  Here a server and a client run as two fibers in one
 process and exchange a few datagrams over loopback.
@@ -12,7 +12,7 @@ Run:
 
 import os
 
-import runloom
+import stackweave
 
 # Free-threaded build: fan fibers across all cores (M:N scheduler).
 HUBS = os.cpu_count() or 4
@@ -20,7 +20,7 @@ HUBS = os.cpu_count() or 4
 ROUNDS = 3
 
 def server(ready):
-    sock = runloom.sync.udp_endpoint(local_addr=("127.0.0.1", 0))
+    sock = stackweave.sync.udp_endpoint(local_addr=("127.0.0.1", 0))
     ready.send(sock.getsockname())        # hand the bound address to the client
     for _ in range(ROUNDS):
         data, addr = sock.recvfrom(1024)
@@ -29,7 +29,7 @@ def server(ready):
 
 def client(ready):
     addr = ready.recv()[0]
-    sock = runloom.sync.udp_endpoint(remote_addr=addr)   # connected UDP
+    sock = stackweave.sync.udp_endpoint(remote_addr=addr)   # connected UDP
     for i in range(ROUNDS):
         sock.send("msg{0}".format(i).encode())
         reply = sock.recv(1024)
@@ -37,9 +37,9 @@ def client(ready):
     sock.close()
 
 def main():
-    ready = runloom.Chan(1)
-    runloom.fiber(server, ready)
-    runloom.fiber(client, ready)
+    ready = stackweave.Chan(1)
+    stackweave.fiber(server, ready)
+    stackweave.fiber(client, ready)
 
 if __name__ == "__main__":
-    runloom.run(HUBS, main)
+    stackweave.run(HUBS, main)

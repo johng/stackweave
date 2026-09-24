@@ -4,9 +4,9 @@ Classic pattern: main thread builds loop + schedules initial work, then a
 worker thread runs run_forever().
 """
 import sys, threading, time, asyncio
-import runloom.aio as aio
+import stackweave.aio as aio
 
-loop = aio.RunloomEventLoop()
+loop = aio.StackweaveEventLoop()
 results = []
 
 async def initial_task():

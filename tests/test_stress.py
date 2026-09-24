@@ -1,6 +1,6 @@
-"""Stress tests for runloom.  High volume, long-running, memory soak.
+"""Stress tests for stackweave.  High volume, long-running, memory soak.
 
-Run a subset by default; the full suite (RUNLOOM_RUN_STRESS=1) exercises
+Run a subset by default; the full suite (STACKWEAVE_RUN_STRESS=1) exercises
 patterns that take seconds to minutes and are kept out of the normal
 unit run so CI stays fast.  These tests are how we catch:
 
@@ -17,12 +17,12 @@ import sys
 import time
 import unittest
 
-import runloom_c
-import runloom.aio as paio
-import runloom.sync as ps
+import stackweave_c
+import stackweave.aio as paio
+import stackweave.sync as ps
 
 
-_FULL = os.environ.get("RUNLOOM_RUN_STRESS", "").strip() not in ("", "0", "no", "false")
+_FULL = os.environ.get("STACKWEAVE_RUN_STRESS", "").strip() not in ("", "0", "no", "false")
 
 
 def _rss_mb():
@@ -43,10 +43,10 @@ class TestSchedulerStress(unittest.TestCase):
         fiber slab / stack pool leaks."""
         for batch in range(10):
             for _ in range(10_000):
-                runloom_c.fiber(lambda: None)
-            runloom_c.run()
+                stackweave_c.fiber(lambda: None)
+            stackweave_c.run()
         gc.collect()
-        stats = runloom_c.stats()
+        stats = stackweave_c.stats()
         self.assertEqual(stats["ready"], 0)
         self.assertEqual(stats["sleeping"], 0)
         # Use the PER-SCHED parked count (this thread's sched), not the global
@@ -65,9 +65,9 @@ class TestSchedulerStress(unittest.TestCase):
         def w():
             for _ in range(100_000):
                 counter[0] += 1
-                runloom_c.sched_yield_classic()
-        runloom_c.fiber(w)
-        runloom_c.run()
+                stackweave_c.sched_yield_classic()
+        stackweave_c.fiber(w)
+        stackweave_c.run()
         self.assertEqual(counter[0], 100_000)
 
     def test_n_yielding_workers(self):
@@ -78,10 +78,10 @@ class TestSchedulerStress(unittest.TestCase):
         def w(i):
             for _ in range(K):
                 counters[i] += 1
-                runloom_c.sched_yield_classic()
+                stackweave_c.sched_yield_classic()
         for i in range(N):
-            runloom_c.fiber(lambda i=i: w(i))
-        runloom_c.run()
+            stackweave_c.fiber(lambda i=i: w(i))
+        stackweave_c.run()
         self.assertEqual(sum(counters), N * K)
         self.assertTrue(all(c == K for c in counters))
 
@@ -92,11 +92,11 @@ class TestSchedulerStress(unittest.TestCase):
         wakes = [None] * N
         t0 = time.monotonic()
         def w(i):
-            runloom_c.sched_sleep(0.001 + i * 0.00001)
+            stackweave_c.sched_sleep(0.001 + i * 0.00001)
             wakes[i] = time.monotonic() - t0
         for i in range(N):
-            runloom_c.fiber(lambda i=i: w(i))
-        runloom_c.run()
+            stackweave_c.fiber(lambda i=i: w(i))
+        stackweave_c.run()
         # Every sleep completed.
         self.assertTrue(all(w is not None for w in wakes))
         # Wake times are roughly ascending (matches sleep deadlines).
@@ -113,8 +113,8 @@ class TestSchedulerStress(unittest.TestCase):
 class TestChannelStress(unittest.TestCase):
     def test_pingpong_1m(self):
         """1M ping-pong rounds through a buffered channel."""
-        ch_a = runloom_c.Chan(0)
-        ch_b = runloom_c.Chan(0)
+        ch_a = stackweave_c.Chan(0)
+        ch_b = stackweave_c.Chan(0)
         N = 1_000_000 if _FULL else 100_000
         def pinger():
             for _ in range(N):
@@ -124,10 +124,10 @@ class TestChannelStress(unittest.TestCase):
             for _ in range(N):
                 ch_a.recv()
                 ch_b.send(1)
-        runloom_c.fiber(pinger)
-        runloom_c.fiber(ponger)
+        stackweave_c.fiber(pinger)
+        stackweave_c.fiber(ponger)
         t0 = time.monotonic()
-        runloom_c.run()
+        stackweave_c.run()
         elapsed = time.monotonic() - t0
         print("\n  pingpong %d rounds in %.2fs (%.1f ns/round)"
               % (N, elapsed, elapsed * 1e9 / N))
@@ -137,7 +137,7 @@ class TestChannelStress(unittest.TestCase):
         sender queues."""
         N = 100
         K = 1000
-        ch = runloom_c.Chan(16)
+        ch = stackweave_c.Chan(16)
         results = []
 
         def producer(pid):
@@ -149,9 +149,9 @@ class TestChannelStress(unittest.TestCase):
                 results.append(ch.recv())
 
         for p in range(N):
-            runloom_c.fiber(lambda p=p: producer(p))
-        runloom_c.fiber(consumer)
-        runloom_c.run()
+            stackweave_c.fiber(lambda p=p: producer(p))
+        stackweave_c.fiber(consumer)
+        stackweave_c.run()
 
         self.assertEqual(len(results), N * K)
         # Each producer's K messages all arrive (order may interleave).
@@ -165,7 +165,7 @@ class TestChannelStress(unittest.TestCase):
         """1 producer, N consumers."""
         N = 50
         K = 2000
-        ch = runloom_c.Chan(8)
+        ch = stackweave_c.Chan(8)
         per_consumer = [0] * N
 
         def producer():
@@ -177,24 +177,24 @@ class TestChannelStress(unittest.TestCase):
             for _v in ch:
                 per_consumer[idx] += 1
 
-        runloom_c.fiber(producer)
+        stackweave_c.fiber(producer)
         for i in range(N):
-            runloom_c.fiber(lambda i=i: consumer(i))
-        runloom_c.run()
+            stackweave_c.fiber(lambda i=i: consumer(i))
+        stackweave_c.run()
 
         self.assertEqual(sum(per_consumer), N * K)
 
     def test_select_under_load(self):
         """Many select() calls choosing across hot channels."""
-        ch_a = runloom_c.Chan(0)
-        ch_b = runloom_c.Chan(0)
-        ch_done = runloom_c.Chan(1)
+        ch_a = stackweave_c.Chan(0)
+        ch_b = stackweave_c.Chan(0)
+        ch_done = stackweave_c.Chan(1)
         K = 5000
         counts = {"a": 0, "b": 0}
 
         def selector():
             for _ in range(K * 2):
-                idx, val = runloom_c.select([
+                idx, val = stackweave_c.select([
                     ("recv", ch_a),
                     ("recv", ch_b),
                 ])
@@ -208,11 +208,11 @@ class TestChannelStress(unittest.TestCase):
             for i in range(K):
                 ch.send((key, i))
 
-        runloom_c.fiber(selector)
-        runloom_c.fiber(lambda: feeder(ch_a, "a"))
-        runloom_c.fiber(lambda: feeder(ch_b, "b"))
-        runloom_c.fiber(lambda: ch_done.recv())
-        runloom_c.run()
+        stackweave_c.fiber(selector)
+        stackweave_c.fiber(lambda: feeder(ch_a, "a"))
+        stackweave_c.fiber(lambda: feeder(ch_b, "b"))
+        stackweave_c.fiber(lambda: ch_done.recv())
+        stackweave_c.run()
 
         self.assertEqual(counts["a"], K)
         self.assertEqual(counts["b"], K)
@@ -221,20 +221,20 @@ class TestChannelStress(unittest.TestCase):
 # ====================================================================
 # Section 3: memory soak (gated)
 # ====================================================================
-@unittest.skipUnless(_FULL, "set RUNLOOM_RUN_STRESS=1 to enable")
+@unittest.skipUnless(_FULL, "set STACKWEAVE_RUN_STRESS=1 to enable")
 class TestMemorySoak(unittest.TestCase):
     def test_no_leak_spawn_drain(self):
         """1M spawn/drain cycles, measure RSS growth post-warmup."""
         for _ in range(10_000):
-            runloom_c.fiber(lambda: None)
-        runloom_c.run()
+            stackweave_c.fiber(lambda: None)
+        stackweave_c.run()
         gc.collect()
         baseline = _rss_mb()
 
         for _ in range(99):
             for _ in range(10_000):
-                runloom_c.fiber(lambda: None)
-            runloom_c.run()
+                stackweave_c.fiber(lambda: None)
+            stackweave_c.run()
 
         gc.collect()
         growth = _rss_mb() - baseline
@@ -261,24 +261,24 @@ class TestMemorySoak(unittest.TestCase):
     def test_no_leak_channel_pingpong(self):
         """Long-running channel ping-pong with periodic memory checks."""
         # Warm
-        ch_a = runloom_c.Chan(0)
-        ch_b = runloom_c.Chan(0)
+        ch_a = stackweave_c.Chan(0)
+        ch_b = stackweave_c.Chan(0)
         def pinger(N):
             for _ in range(N): ch_a.send(1); ch_b.recv()
         def ponger(N):
             for _ in range(N): ch_a.recv(); ch_b.send(1)
-        runloom_c.fiber(lambda: pinger(10_000))
-        runloom_c.fiber(lambda: ponger(10_000))
-        runloom_c.run()
+        stackweave_c.fiber(lambda: pinger(10_000))
+        stackweave_c.fiber(lambda: ponger(10_000))
+        stackweave_c.run()
         gc.collect()
         baseline = _rss_mb()
         # Long run with fresh channels each batch
         for _ in range(50):
-            ch_a = runloom_c.Chan(0)
-            ch_b = runloom_c.Chan(0)
-            runloom_c.fiber(lambda: pinger(10_000))
-            runloom_c.fiber(lambda: ponger(10_000))
-            runloom_c.run()
+            ch_a = stackweave_c.Chan(0)
+            ch_b = stackweave_c.Chan(0)
+            stackweave_c.fiber(lambda: pinger(10_000))
+            stackweave_c.fiber(lambda: ponger(10_000))
+            stackweave_c.run()
         gc.collect()
         growth = _rss_mb() - baseline
         print("\n  channel pingpong leak: %.1f MiB after 500k extra ops" % growth)
@@ -300,7 +300,7 @@ class TestAioStress(unittest.TestCase):
 
     def test_deep_await_chain(self):
         """One task doing K=10000 awaits on already-done futures.
-        Catches RunloomTask driver loop bugs."""
+        Catches StackweaveTask driver loop bugs."""
         async def main():
             loop = asyncio.get_running_loop()
             for _ in range(10_000):

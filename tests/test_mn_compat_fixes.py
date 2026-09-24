@@ -3,7 +3,7 @@
 Covers the API changes that made the monkey layer + feature modules work under
 the M:N scheduler (mn_init/mn_fiber/mn_run, free-threaded 3.13t, GIL off):
 
-  * runloom_c.Mutex                 -- new C-level M:N-safe mutex
+  * stackweave_c.Mutex                 -- new C-level M:N-safe mutex
   * current_g() under M:N           -- returns the hub's running fiber
   * threading.Lock / RLock          -- mutual exclusion across hubs (CoLock on Mutex)
   * queue.Queue                     -- producer/consumer conservation across hubs
@@ -16,7 +16,7 @@ the M:N scheduler (mn_init/mn_fiber/mn_run, free-threaded 3.13t, GIL off):
 
 Each test drives a fiber tree under mn_init and asserts the result AFTER
 mn_run (fiber exceptions are swallowed, so results go through shared state
-/ a runloom.Chan and are checked on the main thread).  mn_run only returns when
+/ a stackweave.Chan and are checked on the main thread).  mn_run only returns when
 every fiber finishes, so a dropped/stranded fiber shows up as a hang
 (the isolated runner's timeout) -> a clean failure.
 """
@@ -30,9 +30,9 @@ import threading
 import time
 import unittest
 
-import runloom
-import runloom.monkey
-import runloom_c
+import stackweave
+import stackweave.monkey
+import stackweave_c
 
 from adv_util import wedge_capture
 
@@ -40,11 +40,11 @@ NHUBS = 4
 
 
 def setUpModule():
-    runloom.monkey.patch()
+    stackweave.monkey.patch()
 
 
 def tearDownModule():
-    runloom.monkey.unpatch()
+    stackweave.monkey.unpatch()
 
 
 def _drive_mn(main_fn, nhubs=NHUBS):
@@ -57,16 +57,16 @@ def _drive_mn(main_fn, nhubs=NHUBS):
         except BaseException as e:   # noqa: BLE001
             box[1] = e
 
-    runloom_c.mn_init(nhubs)
-    runloom_c.mn_fiber(runner)
+    stackweave_c.mn_init(nhubs)
+    stackweave_c.mn_fiber(runner)
     # A wedge here (e.g. test_subprocess_stdout_read_parks: a parked pipe read
     # whose netpoll wake is lost) is otherwise an opaque hang until run_isolated's
     # 300s kill.  Capture the cooperative state -- which fiber parked on which fd,
     # and the netpoll parker's readyParked (data-ready-but-not-woken == lost wake)
     # -- if mn_run hasn't returned in 30s (these tests normally finish in <1s).
     with wedge_capture(30, "_drive_mn/" + getattr(main_fn, "__name__", "?")):
-        runloom_c.mn_run()
-    runloom_c.mn_fini()
+        stackweave_c.mn_run()
+    stackweave_c.mn_fini()
     if box[1] is not None:
         raise box[1]
     return box[0]
@@ -74,7 +74,7 @@ def _drive_mn(main_fn, nhubs=NHUBS):
 
 def _fanin(spawn_workers, n):
     """Spawn n workers (each sends one bool to a Chan) + collect the tally."""
-    results = runloom.Chan(n)
+    results = stackweave.Chan(n)
     state = {"good": 0}
 
     def coordinator():
@@ -85,7 +85,7 @@ def _fanin(spawn_workers, n):
                 good += 1
         state["good"] = good
 
-    runloom_c.mn_fiber(coordinator)
+    stackweave_c.mn_fiber(coordinator)
     spawn_workers(results)
     return state
 
@@ -94,7 +94,7 @@ def _fanin(spawn_workers, n):
 class TestMutex(unittest.TestCase):
     def test_mutual_exclusion(self):
         def body():
-            mu = runloom_c.Mutex()
+            mu = stackweave_c.Mutex()
             ctr = {"n": 0}
             n, k = 8, 400
 
@@ -104,7 +104,7 @@ class TestMutex(unittest.TestCase):
                     ctr["n"] += 1
                     mu.unlock()
             for _ in range(n):
-                runloom_c.mn_fiber(worker)
+                stackweave_c.mn_fiber(worker)
             # the root fiber also contends, then we read after mn_run
             return (ctr, n * k)
         ctr, want = _drive_mn(body)
@@ -112,7 +112,7 @@ class TestMutex(unittest.TestCase):
 
     def test_try_lock_and_locked(self):
         def body():
-            mu = runloom_c.Mutex()
+            mu = stackweave_c.Mutex()
             self.assertFalse(mu.locked())
             self.assertTrue(mu.try_lock())
             self.assertTrue(mu.locked())
@@ -123,7 +123,7 @@ class TestMutex(unittest.TestCase):
 
     def test_double_unlock_raises(self):
         def body():
-            mu = runloom_c.Mutex()
+            mu = stackweave_c.Mutex()
             mu.lock()
             mu.unlock()
             with self.assertRaises(RuntimeError):
@@ -132,7 +132,7 @@ class TestMutex(unittest.TestCase):
 
     def test_context_manager(self):
         def body():
-            mu = runloom_c.Mutex()
+            mu = stackweave_c.Mutex()
             with mu:
                 self.assertTrue(mu.locked())
             self.assertFalse(mu.locked())
@@ -143,8 +143,8 @@ class TestMutex(unittest.TestCase):
 class TestCurrentG(unittest.TestCase):
     def test_non_none_and_stable_under_mn(self):
         def body():
-            g1 = runloom_c.current_g()
-            g2 = runloom_c.current_g()
+            g1 = stackweave_c.current_g()
+            g2 = stackweave_c.current_g()
             self.assertIsNotNone(g1)             # was None on hubs before the fix
             self.assertEqual(g1, g2)             # same g => CoRLock owner identity
         _drive_mn(body)
@@ -163,7 +163,7 @@ class TestThreadingMN(unittest.TestCase):
                     with lock:
                         ctr["n"] += 1
             for _ in range(n):
-                runloom_c.mn_fiber(worker)
+                stackweave_c.mn_fiber(worker)
             return ctr, n * k
         ctr, want = _drive_mn(body)
         self.assertEqual(ctr["n"], want)
@@ -180,7 +180,7 @@ class TestThreadingMN(unittest.TestCase):
                         with lock:               # reentrant
                             ctr["n"] += 1
             for _ in range(n):
-                runloom_c.mn_fiber(worker)
+                stackweave_c.mn_fiber(worker)
             return ctr, n * k
         ctr, want = _drive_mn(body)
         self.assertEqual(ctr["n"], want)
@@ -206,9 +206,9 @@ class TestQueueMN(unittest.TestCase):
                     bus.get()
                     got += 1
                 state["got"] = got
-            runloom_c.mn_fiber(consumer)
+            stackweave_c.mn_fiber(consumer)
             for _ in range(n):
-                runloom_c.mn_fiber(producer)
+                stackweave_c.mn_fiber(producer)
             return state, n * per
         state, want = _drive_mn(body)
         self.assertEqual(state["got"], want)
@@ -221,9 +221,9 @@ class TestTimeContextMN(unittest.TestCase):
             state = {}
 
             def waiter():
-                value, ok = runloom.time.After(0.02).recv()
+                value, ok = stackweave.time.After(0.02).recv()
                 state["ok"] = ok
-            runloom_c.mn_fiber(waiter)
+            stackweave_c.mn_fiber(waiter)
             return state
         state = _drive_mn(body)
         self.assertTrue(state.get("ok"))         # would hang/never-fire before the fix
@@ -233,31 +233,31 @@ class TestTimeContextMN(unittest.TestCase):
             state = {}
 
             def waiter():
-                ctx, _cancel = runloom.context.WithTimeout(
-                    runloom.context.Background(), 0.02)
-                runloom.sleep(0.2)
+                ctx, _cancel = stackweave.context.WithTimeout(
+                    stackweave.context.Background(), 0.02)
+                stackweave.sleep(0.2)
                 state["err"] = ctx.err()
-            runloom_c.mn_fiber(waiter)
+            stackweave_c.mn_fiber(waiter)
             return state
         state = _drive_mn(body)
-        self.assertEqual(state.get("err"), runloom.context.DEADLINE_EXCEEDED)
+        self.assertEqual(state.get("err"), stackweave.context.DEADLINE_EXCEEDED)
 
     def test_withcancel_propagates(self):
         def body():
             woke = []
 
             def run():
-                ctx, cancel = runloom.context.WithCancel(
-                    runloom.context.Background())
+                ctx, cancel = stackweave.context.WithCancel(
+                    stackweave.context.Background())
 
                 def child():
                     ctx.done.recv()
                     woke.append(1)
                 for _ in range(6):
-                    runloom_c.mn_fiber(child)
-                runloom.sleep(0.02)
+                    stackweave_c.mn_fiber(child)
+                stackweave.sleep(0.02)
                 cancel()
-            runloom_c.mn_fiber(run)
+            stackweave_c.mn_fiber(run)
             return woke
         woke = _drive_mn(body)
         # children run within the same cycle; mn_run drains them
@@ -279,7 +279,7 @@ class TestDNSMN(unittest.TestCase):
                 except socket.gaierror:
                     state["err"] = "gaierror"
                 state["dt"] = time.monotonic() - t0
-            runloom_c.mn_fiber(worker)
+            stackweave_c.mn_fiber(worker)
             return state
         state = _drive_mn(body)
         self.assertEqual(state.get("err"), "gaierror")
@@ -338,8 +338,8 @@ class TestSSLMN(unittest.TestCase):
                 s.sendall(b"ping")
                 state["resp"] = s.recv(64)
                 s.close()
-            runloom_c.mn_fiber(server)
-            runloom_c.mn_fiber(client)
+            stackweave_c.mn_fiber(server)
+            stackweave_c.mn_fiber(client)
             return state
         state = _drive_mn(body)
         self.assertEqual(state.get("resp"), b"pong")
@@ -358,7 +358,7 @@ class TestBufferedPipeMN(unittest.TestCase):
 
             def canary_loop():
                 while not canary["stop"]:
-                    runloom.sleep(0.005)
+                    stackweave.sleep(0.005)
                     canary["ticks"] += 1
 
             def reader():
@@ -370,8 +370,8 @@ class TestBufferedPipeMN(unittest.TestCase):
                 state["data"] = proc.stdout.read()
                 proc.wait()
                 canary["stop"] = True
-            runloom_c.mn_fiber(canary_loop)
-            runloom_c.mn_fiber(reader)
+            stackweave_c.mn_fiber(canary_loop)
+            stackweave_c.mn_fiber(reader)
             return canary, state
         canary, state = _drive_mn(body, nhubs=1)   # 1 hub: a hub-block freezes the canary
         # The child's full output comes back on every platform.
@@ -402,7 +402,7 @@ class TestSelectPollMN(unittest.TestCase):
             state = {}
 
             def writer():
-                runloom.sleep(0.03)
+                stackweave.sleep(0.03)
                 pairs[2][1].sendall(b"x")
 
             def worker():
@@ -414,8 +414,8 @@ class TestSelectPollMN(unittest.TestCase):
                 else:
                     r, _w, _x = _sel.select([a for a, b in pairs], [], [], 3.0)
                     state["n"] = len(r)
-            runloom_c.mn_fiber(writer)
-            runloom_c.mn_fiber(worker)
+            stackweave_c.mn_fiber(writer)
+            stackweave_c.mn_fiber(worker)
             return state
         # >=2 hubs is where the old busy-poll deterministically SIGSEGV'd
         state = _drive_mn(body, nhubs=2)

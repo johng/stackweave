@@ -13,7 +13,7 @@ import os
 
 import harness
 import cancelutil
-import runloom
+import stackweave
 
 
 def op_sleep(H, ctx, rng, state):
@@ -72,8 +72,8 @@ def worker(H, wid, rng, state):
 
 def setup(H):
     H.state = {"base": H.make_tmpdir("big100_cancel_"),
-               "lock": runloom.sync.Lock(),
-               "ch": runloom.Chan(1)}
+               "lock": stackweave.sync.Lock(),
+               "ch": stackweave.Chan(1)}
     H.fd_ceiling = 0
 
 

@@ -90,7 +90,7 @@ write/read often localizes it before the universe-membership assert even fires.
 import random
 
 import harness
-import runloom
+import stackweave
 
 # Finite sentinel UNIVERSE: a fixed, recognizable set of keys.  A key a view ever
 # yields or claims-to-contain that is NOT in this set is a torn/freed-slot read --
@@ -246,7 +246,7 @@ def hold_view(H, kind, d, gate, counts, slot):
     # Trip the gate (lets the mutator proceed) then PARK with the view object live
     # on this grown-down C stack -- the clear()+rebuild lands DURING this park.
     gate.done()
-    runloom.yield_now()
+    stackweave.yield_now()
     result = observe_view(H, kind, view)
     if result == "clean":
         counts["clean"][slot] += 1
@@ -368,9 +368,9 @@ def worker(H, wid, rng, state):
 
         # ---- SHARED ARM (holder view live across a park, sibling rebuilds) ----
         d = fresh_dict()
-        gate = runloom.WaitGroup()
+        gate = stackweave.WaitGroup()
         gate.add(1)
-        wg = runloom.WaitGroup()
+        wg = stackweave.WaitGroup()
         wg.add(2)
         mseed = rng.getrandbits(48)
 
@@ -410,7 +410,7 @@ def worker(H, wid, rng, state):
 
 
 def setup(H):
-    # Built INSIDE the root (monkey.patch() already ran), so runloom.WaitGroup etc.
+    # Built INSIDE the root (monkey.patch() already ran), so stackweave.WaitGroup etc.
     # are the cooperative M:N-safe primitives.  Per-slot tallies are single-writer.
     H.state = {
         "counts": {"clean": [0] * 1024, "rterror": [0] * 1024},

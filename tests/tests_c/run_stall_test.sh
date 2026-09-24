@@ -24,10 +24,10 @@ ls -la test_stall_steal 2>&1 || { echo "BUILD FAILED"; exit 1; }
 # drains mid-stall).  The surviving invariant is no-lost-wake: every woken worker
 # eventually runs even behind a stalled hub.  Run a few times; any non-PASS is a
 # regression.
-echo "--- RUN no-lost-wake check (DETACHED staller, RUNLOOM_HANDOFF=1) -- expect PASS 64/64 ---"
+echo "--- RUN no-lost-wake check (DETACHED staller, STACKWEAVE_HANDOFF=1) -- expect PASS 64/64 ---"
 rc=0
 for r in 1 2 3 4 5; do
-    PYTHON_GIL=0 STALL_ALLOW_THREADS=1 RUNLOOM_HANDOFF=1 RUNLOOM_PREEMPT=1 RUNLOOM_SYSMON_MS=20 \
+    PYTHON_GIL=0 STALL_ALLOW_THREADS=1 STACKWEAVE_HANDOFF=1 STACKWEAVE_PREEMPT=1 STACKWEAVE_SYSMON_MS=20 \
         timeout 30 ./test_stall_steal || rc=1
     echo "  run $r exit rc=$?"
 done

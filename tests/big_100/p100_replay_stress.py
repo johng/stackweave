@@ -14,14 +14,14 @@ import collections
 import sys
 
 import harness
-import runloom
+import stackweave
 
 NACCOUNTS = 512
 START = 1000
 TOTAL = NACCOUNTS * START
 
 def setup(H):
-    H.state = {"acct": [START] * NACCOUNTS, "lock": runloom.sync.Lock(),
+    H.state = {"acct": [START] * NACCOUNTS, "lock": stackweave.sync.Lock(),
                "broke": [False]}
 
 
@@ -40,7 +40,7 @@ def worker(H, wid, rng, state):
                 if acct[a] >= amt:
                     acct[a] -= amt
                     if rng.random() < 0.3:
-                        runloom.yield_now()  # widen the race window
+                        stackweave.yield_now()  # widen the race window
                     acct[b] += amt
         elif op == 1 and a != b:
             with lock:

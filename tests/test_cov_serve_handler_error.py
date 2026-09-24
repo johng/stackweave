@@ -1,7 +1,7 @@
 """serve(): a Python handler that RAISES before conn.close().
 
 Audit gap (docs/dev/API_COVERAGE_GAPS.md #1, "serve() handler raises"): when a
-Python handler passed to runloom_c.serve() raises an exception *before* it calls
+Python handler passed to stackweave_c.serve() raises an exception *before* it calls
 conn.close(), m_serve_acceptor / runloom_g_entry catch the escaping exception and
 report it via the unraisable hook ("Exception ignored ..."), and the acceptor
 keeps serving other connections.  The audit flags what happens to the OFFENDING
@@ -43,7 +43,7 @@ weaken the assertion to make it green.
 Bounded time is enforced three ways so a real strand surfaces as a failed
 assertion, never a wedged process: each client socket carries settimeout(), the
 serve() M:N session runs under a wall-clock hang_guard, and the whole thing runs
-in a subprocess with an outer timeout.  serve() spins a full runloom.run(N) M:N
+in a subprocess with an outer timeout.  serve() spins a full stackweave.run(N) M:N
 session (it needs >=2 hubs), so -- as in test_cov95_module_io.py -- each session
 is driven in its own clean-exit subprocess: isolates scheduler/teardown state and
 dodges the known multi-session mn_fini teardown flake.
@@ -105,7 +105,7 @@ _SERVE_HANDLER_RAISES = r'''
 import socket, sys, threading, time
 sys.path.insert(0, "src")
 sys.path.insert(0, "tests")
-import runloom_c as rc, runloom
+import stackweave_c as rc, stackweave
 from adv_util import hang_guard
 
 SOCK_TIMEOUT = 4.0          # per-recv ceiling: a stranded peer times out here
@@ -210,7 +210,7 @@ def main():
             pass
 
 with hang_guard(90, "serve_handler_raises", capture=True):
-    runloom.run(3, main)
+    stackweave.run(3, main)
 
 stranded = [x for x in result["stranded"] if x is not False]  # True or an errstr
 n_stranded = len(stranded)

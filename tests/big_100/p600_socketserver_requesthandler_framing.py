@@ -17,7 +17,7 @@ framing carried on the handler's grown-down C stack ACROSS a cooperative park:
   * the accepted-socket fd + the wfile buffer the response is written through;
   * the recv/send offsets while a response is delivered in TWO wire slices.
 
-WHERE M:N COULD BREAK IT.  runloom runs each fiber on its own grown-down C stack
+WHERE M:N COULD BREAK IT.  stackweave runs each fiber on its own grown-down C stack
 and migrates parked fibers across hubs.  A single handler fiber, mid-``handle()``,
 does ``self.wfile.write(first_slice); flush; sleep; write(tail); flush`` while the
 client reads the response in two ``recv`` calls straddling a ``yield`` -- the second
@@ -50,7 +50,7 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (single-owner, closed-world).
   ``make_frame(wid, salt, RESP_LEN)``.  Because the server, both socket ends, the
   handler, and the expected bytes are all single-owner, a mismatch is NOT the
   documented "a shared handler/socket is not concurrency-safe" semantics -- it is a
-  runloom framing desync across the park (torn/dropped/leaked bytes, a corrupted
+  stackweave framing desync across the park (torn/dropped/leaked bytes, a corrupted
   recv/send offset, or a buffered-rfile read-position leak between requests).
 
   COMPLETENESS (post, HARD): require_no_lost -- a handler parked mid-write, or a
@@ -80,7 +80,7 @@ import socket
 import socketserver
 
 import harness
-import runloom
+import stackweave
 
 # Fixed request / response geometry.  RESP_LEN is odd so HALF != tail and both wire
 # slices are non-empty; SPLIT sends >HALF of the response first (so recv_exactly(HALF)
@@ -134,7 +134,7 @@ class RoundTripHandler(socketserver.StreamRequestHandler):
     """One ``handle()`` per accepted connection; LOOPS one request/response exchange
     per iteration until the client closes (rfile EOF).  Everything it touches --
     the accepted socket, self.rfile/self.wfile, and its server -- is single-owner
-    (this worker's private server), so a fail here is a runloom framing desync, not
+    (this worker's private server), so a fail here is a stackweave framing desync, not
     shared-object contention.  Writes the response in TWO wire slices with a sleep
     between to force the client's second recv to park."""
 
@@ -168,7 +168,7 @@ class RoundTripHandler(socketserver.StreamRequestHandler):
             try:
                 self.wfile.write(resp[:SPLIT])
                 self.wfile.flush()
-                runloom.sleep(WRITER_GAP)   # client parks on its 2nd recv here
+                stackweave.sleep(WRITER_GAP)   # client parks on its 2nd recv here
                 self.wfile.write(resp[SPLIT:])
                 self.wfile.flush()
             except OSError:
@@ -205,7 +205,7 @@ def do_exchange(H, wid, salt, csock):
     first = recv_exactly(csock, HALF)
     if len(first) < HALF:
         return False                       # EOF -> teardown / server-side fail
-    runloom.yield_now()                    # force a sibling interleave at the hazard
+    stackweave.yield_now()                    # force a sibling interleave at the hazard
     rest = recv_exactly(csock, RESP_LEN - HALF)   # PARKS on recv for the tail slice
     got = first + rest
 
@@ -231,7 +231,7 @@ def do_exchange(H, wid, salt, csock):
 def worker(H, wid, rng, state):
     """Single-owner: build this worker's private Unix server, open ONE persistent
     client connection, and drive one request/response exchange per round over it.
-    No per-round port/inode churn; a fail is a runloom framing desync."""
+    No per-round port/inode churn; a fail is a stackweave framing desync."""
     tmpdir = state["tmpdir"]
     path = os.path.join(tmpdir, "p600_w{0}.sock".format(wid))
     try:
@@ -247,7 +247,7 @@ def worker(H, wid, rng, state):
     server.wid = wid
 
     csock = None
-    wg = runloom.WaitGroup()
+    wg = stackweave.WaitGroup()
     wg.add(1)
     server_spawned = False
     try:
@@ -339,5 +339,5 @@ if __name__ == "__main__":
                  "two wire slices with a sleep between so the client's second recv "
                  "parks; every response byte MUST exactly match what the server "
                  "computed.  A torn request tail, a response length/content "
-                 "mismatch, or a cross-connection byte leak is a runloom framing "
+                 "mismatch, or a cross-connection byte leak is a stackweave framing "
                  "desync across the park")

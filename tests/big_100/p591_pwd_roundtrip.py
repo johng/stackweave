@@ -18,7 +18,7 @@ call from ANY thread.  CPython copies the fields out of that buffer into a Pytho
 struct_passwd; if that copy is not serialized against a concurrent sibling call
 that overwrites the same static buffer mid-copy, a fiber could observe a TORN
 struct -- e.g. pw_name from entry A but pw_dir from entry B -- a cross-fiber leak
-through libc's shared static storage.  Under a CORRECT runloom + a correctly
+through libc's shared static storage.  Under a CORRECT stackweave + a correctly
 free-threading-audited pwd module (gh-116738 class of fix), every returned
 struct must be a faithful, self-consistent copy of exactly ONE database entry.
 
@@ -85,7 +85,7 @@ oracle fires.
 import pwd
 
 import harness
-import runloom
+import stackweave
 
 
 def build_snapshot():
@@ -150,9 +150,9 @@ def check_one(H, wid, name, state):
 
     # YIELD so a sibling reliably drives the pwd C path (and any shared libc
     # static buffer) before we re-validate this fiber's target.
-    runloom.yield_now()
+    stackweave.yield_now()
     if s.pw_uid & 1:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
 
     # Second read must be bit-identical to the first AND to the snapshot.
     t = pwd.getpwnam(name)

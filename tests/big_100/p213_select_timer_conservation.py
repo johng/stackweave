@@ -31,15 +31,15 @@ through select, no item lost or double-consumed.
 import random
 
 import harness
-import runloom
-import runloom.time as rtime
+import stackweave
+import stackweave.time as rtime
 
 ITEMS_PER_ROUND = 64
 
 
 def try_recv(ch):
     """Chan.try_recv normalized: (value, True) if present else (None, False).
-    runloom_c.Chan.try_recv returns None (not a tuple) when nothing is ready."""
+    stackweave_c.Chan.try_recv returns None (not a tuple) when nothing is ready."""
     r = ch.try_recv()
     if r is None:
         return (None, False)
@@ -56,7 +56,7 @@ def producer(ch, n, base, jitter_seed):
         for i in range(n):
             ch.send(base + i)
             if (i & 7) == 0:
-                runloom.sleep(prng.uniform(0.0, 0.0008))
+                stackweave.sleep(prng.uniform(0.0, 0.0008))
     finally:
         ch.close()
 
@@ -78,7 +78,7 @@ def consumer(ch, counts, slot, to_seed):
     timed_out = 0
     while True:
         timer = rtime.After(prng.uniform(0.001, 0.004))
-        idx, payload = runloom.select([("recv", ch), ("recv", timer)])
+        idx, payload = stackweave.select([("recv", ch), ("recv", timer)])
         if idx == 0:
             _v, ok = payload
             if not ok:
@@ -98,13 +98,13 @@ def worker(H, wid, rng, state):
         if not H.running():
             break
         rno += 1
-        ch = runloom.Chan(rng.choice([1, 4, 16]))
+        ch = stackweave.Chan(rng.choice([1, 4, 16]))
         base = (wid << 20) | ((rno & 0xFFF) << 8)
         n = ITEMS_PER_ROUND
         # Distinct per-round seeds for the producer/consumer's OWN RNGs.
         pseed = rng.getrandbits(48)
         cseed = rng.getrandbits(48)
-        wg = runloom.WaitGroup()
+        wg = stackweave.WaitGroup()
         wg.add(2)
 
         def run_producer(ch=ch, base=base, n=n, pseed=pseed):

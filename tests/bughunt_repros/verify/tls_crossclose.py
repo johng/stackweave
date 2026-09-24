@@ -1,5 +1,5 @@
 import socket, ssl, os, sys
-import runloom
+import stackweave
 D = os.path.dirname(os.path.abspath(__file__))
 
 def main():
@@ -10,16 +10,16 @@ def main():
     cctx.check_hostname = False; cctx.verify_mode = ssl.CERT_NONE
     def server():
         state["srv"] = sctx.wrap_socket(a, server_side=True)
-    runloom.fiber(server)
+    stackweave.fiber(server)
     ctls = cctx.wrap_socket(b)
     def reader():
         try: state["out"] = ("recv", ctls.recv(100))
         except Exception as e: state["out"] = ("exc", type(e).__name__, str(e))
-    runloom.fiber(reader)
-    runloom.sleep(0.3)
+    stackweave.fiber(reader)
+    stackweave.sleep(0.3)
     ctls.close()   # cross-fiber close while reader parked in SSL recv
-    runloom.sleep(0.7)
+    stackweave.sleep(0.7)
     print("reader:", state.get("out", "STILL PARKED"), flush=True)
 
-runloom.monkey.patch(); runloom.run(4, main)
+stackweave.monkey.patch(); stackweave.run(4, main)
 print("run() returned", flush=True)

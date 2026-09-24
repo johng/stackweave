@@ -621,7 +621,7 @@ static PyObject *m_fiber_fast(PyObject *self, PyObject *const *args,
     }
     if (runloom_py_fiber_full == NULL) {
         PyErr_SetString(PyExc_RuntimeError,
-                        "runloom: fiber fallback not registered");
+                        "stackweave: fiber fallback not registered");
         return NULL;
     }
     return PyObject_Vectorcall(runloom_py_fiber_full, args, (size_t)nargs, kwnames);
@@ -754,7 +754,7 @@ static PyObject *m_fiber_grow(PyObject *self, PyObject *const *args,
     }
     if (runloom_py_fiber_full == NULL) {
         PyErr_SetString(PyExc_RuntimeError,
-                        "runloom: fiber fallback not registered");
+                        "stackweave: fiber fallback not registered");
         return NULL;
     }
     return PyObject_Vectorcall(runloom_py_fiber_full, args, (size_t)nargs, kwnames);

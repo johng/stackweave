@@ -7,10 +7,10 @@ nothing duplicated).
 
 Stresses: channel fairness, consumer wake-ups, producer/consumer contention.
 
-SCALE NOTE (memory ceiling, NOT a runloom bug): every func is a long-lived goroutine that PARKS on the channel/work and all resume ~simultaneously at teardown (close wakes every parked waiter -- chan_ops.c.inc). At 1M on a 16 GB box that simultaneous-resume working set exceeds RAM even with macOS compression -> jetsam SIGKILL (137). Verified mem-bound: PASSES at 400k, jetsam at 1M; close correctly wakes all waiters (not a lost-wakeup). Cap funcs to a memory- and drain-budget-safe level.
+SCALE NOTE (memory ceiling, NOT a stackweave bug): every func is a long-lived goroutine that PARKS on the channel/work and all resume ~simultaneously at teardown (close wakes every parked waiter -- chan_ops.c.inc). At 1M on a 16 GB box that simultaneous-resume working set exceeds RAM even with macOS compression -> jetsam SIGKILL (137). Verified mem-bound: PASSES at 400k, jetsam at 1M; close correctly wakes all waiters (not a lost-wakeup). Cap funcs to a memory- and drain-budget-safe level.
 """
 import harness
-import runloom
+import stackweave
 
 
 def setup(H):
@@ -19,7 +19,7 @@ def setup(H):
     # per goroutine so no two consumers ever share a slot, eliminating the data
     # race that silently lost updates at 100k goroutines (97 sharers/slot at the
     # old 1024 shards; free-threaded list[i] += x is not atomic under GIL=0).
-    H.state = {"ch": runloom.Chan(8192),
+    H.state = {"ch": stackweave.Chan(8192),
                "produced_sum": [0], "produced_n": [0],
                "consumed_sum": [0] * H.funcs, "consumed_n": [0] * H.funcs}
 

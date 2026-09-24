@@ -1,6 +1,6 @@
 # hang-hunter
 
-An autonomous, always-on **stress + fuzz daemon** for the runloom M:N scheduler
+An autonomous, always-on **stress + fuzz daemon** for the stackweave M:N scheduler
 that **auto-triages and deduplicates** any hang or crash it finds.
 
 ## Why
@@ -22,7 +22,7 @@ instant one wedges or crashes, capture a root-cause-ready report.
 
 ## What it does
 
-- Runs randomized runloom workloads in parallel, **load-gated** (pauses launching
+- Runs randomized stackweave workloads in parallel, **load-gated** (pauses launching
   when 1-minute load exceeds `--load-frac × cores`, default 0.7) so it never
   fights the CI runner or foreground work; children are `nice`d.
 - **HANG** (a job still alive past its timeout): attaches gdb to the *live*
@@ -53,14 +53,14 @@ Shipped (run on this box today):
   (varied-stack goroutines, channel ref churn, nested spawn/migration, timed parks,
   select+close, undrained buffers). Always-terminating, so a hang is a real lost
   wakeup; a nonzero exit (crash / life-cycle-oracle violation) is a bug. Each job
-  pins a `RUNLOOM_MN_SEED` so the daemon's repro replays the exact execution, and
+  pins a `STACKWEAVE_MN_SEED` so the daemon's repro replays the exact execution, and
   the worker's internal watchdog is set high so a true wedge reaches the daemon's
   gdb-on-live-process triage.
 
 Auto-selected when the ext is **TSan-built**:
 
 - **lifefuzz-tsan** — the same generative programs under the gold-standard TSan ext
-  (`setarch -R` + `LD_PRELOAD=libtsan` + the runloom suppressions); a non-suppressed
+  (`setarch -R` + `LD_PRELOAD=libtsan` + the stackweave suppressions); a non-suppressed
   data race exits 86 → CRASH triage. This is the engine that found the deadlock-
   census race cluster (`tools/README.md` Finding D). Because a TSan-linked ext can
   only load with `libtsan` preloaded, this engine **replaces** the normal set when

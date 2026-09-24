@@ -1,16 +1,16 @@
-"""mnweb -- a micro HTTP framework built purely on runloom's M:N sync API.
+"""mnweb -- a micro HTTP framework built purely on stackweave's M:N sync API.
 
 No async/await, no event loop ceremony, no monkey-patching.  You write
 straight-line blocking-looking handlers; every connection is a goroutine
-spawned with ``runloom_c.mn_fiber`` and scheduled across N hub threads (one
+spawned with ``stackweave_c.mn_fiber`` and scheduled across N hub threads (one
 per core) with the GIL off (free-threaded 3.13t).
 
-The only runloom primitives used:
+The only stackweave primitives used:
 
-    runloom_c.mn_init / mn_fiber / mn_run / mn_fini   -- the M:N scheduler
-    runloom_c.wait_fd(fd, events, timeout_ms)      -- cooperative readiness
-    runloom_c.Chan / select                        -- channels
-    runloom.sync.Lock                              -- cooperative mutex
+    stackweave_c.mn_init / mn_fiber / mn_run / mn_fini   -- the M:N scheduler
+    stackweave_c.wait_fd(fd, events, timeout_ms)      -- cooperative readiness
+    stackweave_c.Chan / select                        -- channels
+    stackweave.sync.Lock                              -- cooperative mutex
 
 A handler is ``def handler(req) -> Response`` (or returns a str / bytes /
 (status, body) tuple, which gets coerced to a Response).
@@ -30,8 +30,8 @@ import sys
 import time
 import traceback
 
-import runloom_c
-import runloom.sync as sync
+import stackweave_c
+import stackweave.sync as sync
 
 READ = 1   # wait_fd events bit: readable
 WRITE = 2  # wait_fd events bit: writable
@@ -72,7 +72,7 @@ class CoSock:
             try:
                 conn, addr = self.sock.accept()
             except (BlockingIOError, InterruptedError):
-                runloom_c.wait_fd(self.fd, READ)
+                stackweave_c.wait_fd(self.fd, READ)
                 continue
             return CoSock(conn), addr
 
@@ -81,7 +81,7 @@ class CoSock:
             try:
                 return self.sock.recv(n)
             except (BlockingIOError, InterruptedError):
-                ready = runloom_c.wait_fd(self.fd, READ, timeout_ms)
+                ready = stackweave_c.wait_fd(self.fd, READ, timeout_ms)
                 if ready == 0:
                     raise TimeoutError("recv timed out")
 
@@ -93,7 +93,7 @@ class CoSock:
             try:
                 sent += self.sock.send(view[sent:])
             except (BlockingIOError, InterruptedError):
-                runloom_c.wait_fd(self.fd, WRITE)
+                stackweave_c.wait_fd(self.fd, WRITE)
 
     def close(self):
         fd = -1
@@ -103,7 +103,7 @@ class CoSock:
             pass
         if fd >= 0:
             try:
-                runloom_c.netpoll_unregister(fd)
+                stackweave_c.netpoll_unregister(fd)
             except (AttributeError, OSError):
                 pass
         try:
@@ -116,7 +116,7 @@ def dial(host, port, timeout_ms=10_000):
     """Cooperative outbound TCP connect.  Returns a connected CoSock.
 
     getaddrinfo (DNS) is a blocking C call -- under M:N it briefly parks
-    the hub thread, same as runloom.sync.tcp_connect.  The connect itself
+    the hub thread, same as stackweave.sync.tcp_connect.  The connect itself
     parks the goroutine on wait_fd(WRITE)."""
     infos = socket.getaddrinfo(host, port, socket.AF_UNSPEC, socket.SOCK_STREAM)
     last_err = None
@@ -128,7 +128,7 @@ def dial(host, port, timeout_ms=10_000):
             try:
                 raw.connect(sa)
             except BlockingIOError:
-                ready = runloom_c.wait_fd(raw.fileno(), WRITE, timeout_ms)
+                ready = stackweave_c.wait_fd(raw.fileno(), WRITE, timeout_ms)
                 if ready == 0:
                     raise TimeoutError("connect timed out")
                 err = raw.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
@@ -179,7 +179,7 @@ def every(interval_s, fn, *args):
     one failure never kills the loop."""
     def loop():
         while True:
-            runloom_c.sched_sleep(interval_s)
+            stackweave_c.sched_sleep(interval_s)
             try:
                 fn(*args)
             except Exception:
@@ -384,7 +384,7 @@ class App:
                 conn, addr = listener.accept()
             except OSError:
                 return
-            runloom_c.mn_fiber(lambda c=conn, a=addr: self.handle_connection(c, a))
+            stackweave_c.mn_fiber(lambda c=conn, a=addr: self.handle_connection(c, a))
 
     def run(self, host, port, hubs=0, background_goroutines=()):
         """Start the M:N scheduler and serve forever.
@@ -398,12 +398,12 @@ class App:
         raw.listen(512)
         listener = CoSock(raw)
 
-        nhubs = runloom_c.mn_init(hubs) if hubs else runloom_c.mn_init()
+        nhubs = stackweave_c.mn_init(hubs) if hubs else stackweave_c.mn_init()
         print("[mnweb] serving on {}:{} across {} hubs (backend={}, netpoll={})".format(
-            host, port, nhubs, runloom_c.backend(), runloom_c.netpoll_backend()), flush=True)
+            host, port, nhubs, stackweave_c.backend(), stackweave_c.netpoll_backend()), flush=True)
 
         for fn in background_goroutines:
-            runloom_c.mn_fiber(fn)
-        runloom_c.mn_fiber(lambda: self.accept_loop(listener))
-        runloom_c.mn_run()
-        runloom_c.mn_fini()
+            stackweave_c.mn_fiber(fn)
+        stackweave_c.mn_fiber(lambda: self.accept_loop(listener))
+        stackweave_c.mn_run()
+        stackweave_c.mn_fini()

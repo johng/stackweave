@@ -21,7 +21,7 @@ import _thread as _real_thread        # captured BEFORE monkey.patch()
 import time as _time
 
 import harness
-import runloom
+import stackweave
 
 REAL_SLEEP = _time.sleep
 
@@ -73,7 +73,7 @@ def worker(H, wid, rng, state):
         H.op(wid)
         H.task_done(wid)
         if (wid & 7) == 0 and rng.random() < 0.05:
-            runloom.yield_now()            # migrate hubs mid-churn
+            stackweave.yield_now()            # migrate hubs mid-churn
 
 
 def setup(H):

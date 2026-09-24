@@ -12,7 +12,7 @@ Run:
 
 import os
 
-import runloom
+import stackweave
 
 # Free-threaded build: fan fibers across all cores (M:N scheduler).
 HUBS = os.cpu_count() or 4
@@ -31,8 +31,8 @@ def filter_multiples(prime, inp, out):
     out.close()
 
 def main():
-    ch = runloom.Chan()
-    runloom.fiber(generate, ch)
+    ch = stackweave.Chan()
+    stackweave.fiber(generate, ch)
 
     primes = []
     while True:
@@ -40,12 +40,12 @@ def main():
         if not ok:
             break
         primes.append(prime)
-        nxt = runloom.Chan()
-        runloom.fiber(filter_multiples, prime, ch, nxt)
+        nxt = stackweave.Chan()
+        stackweave.fiber(filter_multiples, prime, ch, nxt)
         ch = nxt                    # next round reads from the filtered stream
 
     print("primes up to {0}:".format(LIMIT))
     print(" ".join(str(p) for p in primes))
 
 if __name__ == "__main__":
-    runloom.run(HUBS, main)
+    stackweave.run(HUBS, main)

@@ -14,7 +14,7 @@ WHERE M:N BREAKS IT (the gap this program probes).  We verified empirically
 (standalone plain-threads control: PYTHON_GIL=1 AND PYTHON_GIL=0) that parsing
 a sequence of DISTINCT emails in rapid succession, with parses interleaved via
 yield() on different threads, produces identical headers/payload on all threads.
-Under runloom M:N, if a sibling fiber on the same hub corrupts the shared internal
+Under stackweave M:N, if a sibling fiber on the same hub corrupts the shared internal
 state mid-parse, this fiber's parsed headers/payload may mismatch the expected
 canonical value, or the message object may hold a sibling's body.  This is the
 shared-hub-identity class: the gap is thread-affine mutable state (like p66's
@@ -33,10 +33,10 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (verified against plain threads):
   We verified this oracle fires 0 times under plain threads (PYTHON_GIL=1 AND =0,
   64 threads, 25600 checks each) because each thread gets its own Message object
   (distinct id) and each call to parser.parse() returns a fresh message.  Under
-  a CORRECT runloom each fiber also gets its own message (distinct id per parse
+  a CORRECT stackweave each fiber also gets its own message (distinct id per parse
   call), so siblings' parse state cannot corrupt this fiber's result.  If a
-  runloom parse() call reuses a message object, or mutates a shared parser cache,
-  or leaks a sibling's headers into this message's dict, that is a runloom M:N
+  stackweave parse() call reuses a message object, or mutates a shared parser cache,
+  or leaks a sibling's headers into this message's dict, that is a stackweave M:N
   isolation bug.  The oracle PASSES on a correct runtime (program exits 0).
 
 ARMS:
@@ -46,7 +46,7 @@ ARMS:
     parsed header/payload that does NOT match the canonical value for this mid,
     or contains a sibling's data, is a corruption -- fail fast.
     The oracle is non-vacuous: a correct plain-thread run fires 0 times; under
-    runloom M:N a parsing cache leak or mid-parse yield bug WILL fire.
+    stackweave M:N a parsing cache leak or mid-parse yield bug WILL fire.
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber that vanished mid-parse
     (stranded inside parser.parse() or message.__getitem__) never returns; the
     watchdog + require_no_lost catch it.
@@ -75,7 +75,7 @@ from email.message import EmailMessage
 import io
 
 import harness
-import runloom
+import stackweave
 
 # Corpus size: a small set of DISTINCT emails (each with a unique Subject).
 # Each worker picks email[wid % MSG_COUNT], so many workers hit the SAME email
@@ -254,9 +254,9 @@ def worker(H, wid, rng, state):
                 return
             # Yield / park so the scheduler runs a sibling's parse on the shared
             # parser state before we resume.  Sleep-park is more reliable.
-            runloom.yield_now()
+            stackweave.yield_now()
             if idx & 1:
-                runloom.sleep(0.0002)
+                stackweave.sleep(0.0002)
             H.op(wid)
             idx += 1
         H.task_done(wid)
@@ -298,5 +298,5 @@ if __name__ == "__main__":
                  "email to a fresh Message (distinct id); parsed headers and "
                  "payload MUST match the precomputed canonical value for that email "
                  "(0 mismatches under plain threads GIL on AND off; a sibling "
-                 "parse-state leak is the runloom bug).  Same class as p66/p67/"
+                 "parse-state leak is the stackweave bug).  Same class as p66/p67/"
                  "p460/p468 thread-affine state isolation.")

@@ -5,8 +5,8 @@ depot, scrub, paint, HWM scan, prewarm/warmup), fcontext.c (the asm context
 make/swap), runloom_stackadvice.c (per-kind autosize learning).
 
 Python-visible surface:
-  runloom_c.Coro                       -- bare stackful coroutine (resume/done/result)
-  runloom_c.MachineCode                -- W^X native blob, callable 0..6 args
+  stackweave_c.Coro                       -- bare stackful coroutine (resume/done/result)
+  stackweave_c.MachineCode                -- W^X native blob, callable 0..6 args
   set_stack_size/get_stack_size        -- program-wide default fiber stack
   set_stack_scrub/get_stack_scrub      -- zero-on-recycle toggle
   enable_stack_advice/stack_advice_enabled/stack_advice/reset_stack_advice
@@ -44,8 +44,8 @@ import time
 
 import pytest
 
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 from adv_util import (hang_guard, assert_faster_than, raw_thread,
                       needs_free_threading)
 
@@ -70,7 +70,7 @@ _DEVNULL = os.open(os.devnull, os.O_WRONLY)
 def _subproc(script, env_extra=None, timeout=40):
     env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
     # keep deliberate fiber panics from spamming the captured stderr
-    env.setdefault("RUNLOOM_GOROUTINE_PANIC", "silent")
+    env.setdefault("STACKWEAVE_GOROUTINE_PANIC", "silent")
     if env_extra:
         env.update(env_extra)
     return subprocess.run([sys.executable, "-c", script], cwd=REPO, env=env,
@@ -303,7 +303,7 @@ def test_mn_fiber_stack_arg_edges():
         for _ in range(20):
             rc.sched_yield()
     with hang_guard(20, "mn_fiber stack edges"):
-        runloom.run(2, main)
+        stackweave.run(2, main)
     assert sum(done) == 3, "only %d/3 mn_fiber stack-edge fibers ran" % sum(done)
 
 
@@ -330,7 +330,7 @@ def test_mn_fiber_huge_stack_should_clamp_like_single_thread():
             rc.sched_yield()
     try:
         with hang_guard(20, "mn_fiber huge clamp"):
-            runloom.run(2, main)
+            stackweave.run(2, main)
     finally:
         sys.unraisablehook = old_hook
     # CORRECT behaviour (currently failing): the huge size is clamped and runs.
@@ -342,7 +342,7 @@ def test_mn_fiber_huge_stack_should_clamp_like_single_thread():
 # ==========================================================================
 _OVERFLOW_ST = r'''
 import sys; sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 rc.install_crash_handler("backtrace")
 def f():
     rc._crash_selftest_overflow()
@@ -353,7 +353,7 @@ print("UNREACHABLE")
 
 _OVERFLOW_MN = r'''
 import sys; sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 rc.install_crash_handler("backtrace")
 def f():
     rc._crash_selftest_overflow()
@@ -685,8 +685,8 @@ def test_prewarm_keep_daemon_under_concurrent_mn_spawn_storm():
     # depot) running CONCURRENTLY with a multi-hub spawn storm: both hammer the
     # shared depot lock from different threads.  Must finish, stay consistent,
     # no crash / no hang / no lost work.
-    from runloom.sync import WaitGroup
-    runloom.prewarm_keep(800, 512 * 1024)
+    from stackweave.sync import WaitGroup
+    stackweave.prewarm_keep(800, 512 * 1024)
     try:
         done = bytearray(600)
 
@@ -702,11 +702,11 @@ def test_prewarm_keep_daemon_under_concurrent_mn_spawn_storm():
                 rc.mn_fiber(lambda i=i: w(i))
             wg.wait()
         with hang_guard(45, "prewarm_keep + mn storm"):
-            runloom.run(4, main)
+            stackweave.run(4, main)
         assert sum(done) == 600, "lost %d fibers" % (600 - sum(done))
     finally:
-        runloom.prewarm_stop()
-        runloom.prewarm_stop()   # idempotent
+        stackweave.prewarm_stop()
+        stackweave.prewarm_stop()   # idempotent
     assert rc._self_check(0) == 0
 
 
@@ -716,14 +716,14 @@ def test_prewarm_keep_rapid_start_stop_churn():
     # no leaked daemon, no hang in stop's join.
     with hang_guard(30, "prewarm_keep churn"):
         for _ in range(20):
-            assert runloom.prewarm_keep(100, 512 * 1024) == 0
-            assert runloom.prewarm_keep(300) == 0      # retarget running daemon
-            runloom.prewarm_stop()
-        runloom.prewarm_stop()                         # already stopped: no-op
+            assert stackweave.prewarm_keep(100, 512 * 1024) == 0
+            assert stackweave.prewarm_keep(300) == 0      # retarget running daemon
+            stackweave.prewarm_stop()
+        stackweave.prewarm_stop()                         # already stopped: no-op
     # target<=0 also stops a running daemon
-    assert runloom.prewarm_keep(50) == 0
-    assert runloom.prewarm_keep(0) == 0
-    runloom.prewarm_stop()
+    assert stackweave.prewarm_keep(50) == 0
+    assert stackweave.prewarm_keep(0) == 0
+    stackweave.prewarm_stop()
 
 
 def test_prewarm_from_foreign_thread_is_safe():
@@ -742,7 +742,7 @@ def test_prewarm_from_foreign_thread_is_safe():
     script = r'''
 import sys
 sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 import _thread, time
 res = {}
 def worker():
@@ -888,7 +888,7 @@ def test_machinecode_runs_across_mn_fibers():
             got[n] = v
         box["r"] = got
     with hang_guard(25, "mn machinecode"):
-        runloom.run(2, main)
+        stackweave.run(2, main)
     assert box.get("r") == {n: n * n for n in range(N)}
 
 
@@ -899,7 +899,7 @@ def test_machinecode_close_in_subprocess_then_use_after_free_is_guarded():
     # SEGV the interpreter -- the guard returns to Python cleanly.
     script = r'''
 import sys; sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 mc = rc.MachineCode(b"\xc3")
 mc.close()
 try:
@@ -1138,7 +1138,7 @@ def test_prewarm_zero_stack_size_floors_and_succeeds():
 # --- 12c. fault injection on the stack-spawn path -------------------------
 _FAULT_SPAWN = r'''
 import sys; sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 done = bytearray(40)
 def main():
     for i in range(40):
@@ -1219,7 +1219,7 @@ def test_machinecode_create_close_churn_across_mn_hubs():
     # Each fiber on its own hub creates, calls, and closes its own blob in a
     # tight loop -- genuine parallel W^X map/unmap churn across hubs.  No crash,
     # no hang, every result correct (mov rax,rdi; ret -> identity).
-    from runloom.sync import WaitGroup
+    from stackweave.sync import WaitGroup
     ident = b"\x48\x89\xf8\xc3"
     N = 12
     results = bytearray(N)
@@ -1241,7 +1241,7 @@ def test_machinecode_create_close_churn_across_mn_hubs():
             rc.mn_fiber(lambda n=n: worker(n, wg))
         wg.wait()
     with hang_guard(30, "mn machinecode churn"):
-        runloom.run(3, main)
+        stackweave.run(3, main)
     assert sum(results) == N, "%d/%d workers correct" % (sum(results), N)
     assert rc._self_check(0) == 0
 
@@ -1291,7 +1291,7 @@ def test_current_g_hwm_inside_mn_hub_fiber():
         for _ in range(40):
             rc.sched_yield()
     with hang_guard(20, "mn hwm"):
-        runloom.run(2, main)
+        stackweave.run(2, main)
     assert box["hwm"] >= 0, "current_g_hwm not read inside the hub fiber"
     assert box["hwm"] <= 262144 + _PAGE, (
         "M:N current_g_hwm OVER-reported (%d > stack) -- OOB scan?" % box["hwm"])
@@ -1316,7 +1316,7 @@ def test_stack_advice_records_and_resets_cleanly_under_mn():
             for _ in range(40):
                 rc.sched_yield()
         with hang_guard(25, "advice under mn"):
-            runloom.run(3, main)
+            stackweave.run(3, main)
         rep = rc.stack_advice()
         assert isinstance(rep, list) and len(rep) >= 1
         assert all(d["samples"] >= 1 for d in rep)
@@ -1364,11 +1364,11 @@ def test_prewarm_keep_left_running_then_overridden_then_stopped():
     # stop.  A leaked daemon would keep topping the depot forever; verify the
     # final stop joins cleanly and the structure is consistent.
     with hang_guard(25, "prewarm_keep retarget"):
-        assert runloom.prewarm_keep(200, 256 * 1024) == 0
-        assert runloom.prewarm_keep(400, 512 * 1024) == 0   # retarget (size too)
-        assert runloom.prewarm_keep(100) == 0               # retarget down
-        runloom.prewarm_stop()
-        runloom.prewarm_stop()                              # idempotent join
+        assert stackweave.prewarm_keep(200, 256 * 1024) == 0
+        assert stackweave.prewarm_keep(400, 512 * 1024) == 0   # retarget (size too)
+        assert stackweave.prewarm_keep(100) == 0               # retarget down
+        stackweave.prewarm_stop()
+        stackweave.prewarm_stop()                              # idempotent join
     assert rc._self_check(0) == 0
 
 
@@ -1379,7 +1379,7 @@ def test_prewarm_background_then_immediate_stop_no_hang():
     # daemon is a no-op.  Race the two.
     with hang_guard(15, "bg prewarm + stop"):
         rc.prewarm(300, 256 * 1024, True)
-        runloom.prewarm_stop()
+        stackweave.prewarm_stop()
         rc.prewarm(300, 256 * 1024, True)
     # let any background fill settle, then a spawn storm must still be correct
     done = bytearray(50)
@@ -1416,7 +1416,7 @@ def test_fiber_stack_on_live_mn_parked_fiber():
         for _ in range(10):
             rc.sched_yield()
     with hang_guard(25, "mn fiber_stack"):
-        runloom.run(2, main)
+        stackweave.run(2, main)
     assert snap.get("ok") is True
 
 

@@ -28,7 +28,7 @@ static int runloom_sim_on = -1;                  /* -1 = lazy-init from env */
 int runloom_sim_enabled(void)
 {
     if (__builtin_expect(runloom_sim_on < 0, 0)) {
-        const char *e = getenv("RUNLOOM_SIM");
+        const char *e = getenv("STACKWEAVE_SIM");
         runloom_sim_on = (e != NULL && e[0] != '\0') ? 1 : 0;
     }
     return runloom_sim_on;
@@ -37,7 +37,7 @@ int runloom_sim_enabled(void)
 static int runloom_sched_logical_enabled(void)
 {
     if (__builtin_expect(runloom_sched_logical_on < 0, 0)) {
-        const char *e = getenv("RUNLOOM_LOGICAL_CLOCK");
+        const char *e = getenv("STACKWEAVE_LOGICAL_CLOCK");
         /* RUNLOOM_SIM REQUIRES logical time: wait_fd deadlines ride the logical
          * clock under sim and sched_sleep must share it, so sim implies the
          * logical clock even when RUNLOOM_LOGICAL_CLOCK is unset -- otherwise a
@@ -688,7 +688,7 @@ Py_ssize_t runloom_sched_drain(runloom_sched_t *s)
             runloom_dump_fibers_fd(2);
             if (runloom_deadlock_mode() == 2) {
                 PyErr_Format(PyExc_RuntimeError,
-                    "runloom: all fibers are blocked -- deadlock "
+                    "stackweave: all fibers are blocked -- deadlock "
                     "(%ld parked, none runnable)", ndead);
             }
         }

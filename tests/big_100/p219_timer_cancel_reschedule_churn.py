@@ -15,8 +15,8 @@ Stresses: timer arm/Stop/re-arm churn, no fire-after-cancel, timer-goroutine and
 g-ref lifetime (no leak), select over racing timers.
 """
 import harness
-import runloom
-import runloom.time as rtime
+import stackweave
+import stackweave.time as rtime
 
 
 def _timer_chan(timer):
@@ -41,12 +41,12 @@ def worker(H, wid, rng, state):
             if ok:
                 stopped[wid & 1023] += 1
                 cancelled_timers.append(t)
-        runloom.yield_now()                # migrate hubs between arm and check
+        stackweave.yield_now()                # migrate hubs between arm and check
 
         # One live timer we DO let fire: a short deadline + a select that waits
         # for it (so the firing path is exercised too).
         live = rtime.NewTimer(rng.uniform(0.001, 0.005))
-        idx, _ = runloom.select([("recv", _timer_chan(live))])
+        idx, _ = stackweave.select([("recv", _timer_chan(live))])
         if idx == 0:
             fired[wid & 1023] += 1
 
@@ -54,7 +54,7 @@ def worker(H, wid, rng, state):
         # have delivered.  select(default=True) returns -1 when nothing is
         # ready, or (idx, (val, ok)) when a value is waiting on the channel.
         for t in cancelled_timers:
-            res = runloom.select([("recv", _timer_chan(t))], default=True)
+            res = stackweave.select([("recv", _timer_chan(t))], default=True)
             if res != -1:
                 idx2, payload = res
                 if idx2 == 0 and payload is not None and payload[1]:

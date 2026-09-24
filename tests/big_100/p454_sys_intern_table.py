@@ -35,7 +35,7 @@ text value is BUILT FRESH per round from its parts (``"".join(...)`` -- never a
 literal, so the constant-folder has NOT pre-interned it and every round forces a
 real lookup-then-insert into the live table).  For each text we keep a shared
 per-text CANONICAL CELL: the FIRST interned result, recorded ONCE under a
-per-text guard that is DISTINCT from the intern table (a runloom Lock array, not
+per-text guard that is DISTINCT from the intern table (a stackweave Lock array, not
 the dict).  Every later sys.intern(same text) MUST return an object that ``is``
 that recorded canonical and whose ``str`` value ``==`` the original text.
 
@@ -83,7 +83,7 @@ torn rehash before the conservation set even closes.
 import sys
 
 import harness
-import runloom
+import stackweave
 
 # Finite sentinel UNIVERSE of text values.  Sized to push the interned dict
 # through several growth/rehash boundaries (dictresize is what realloc's the
@@ -155,7 +155,7 @@ def intern_and_check(H, wid, state, idx, universe_set):
     # The racing insert/lookup is INSIDE this call: another hub may be growing
     # the table (dictresize) while we lookdict.  Yield right before so a sibling's
     # insert is more likely to land in our park window during the intern.
-    runloom.yield_now()
+    stackweave.yield_now()
     obj = sys.intern(text)
 
     if not isinstance(obj, str):
@@ -180,7 +180,7 @@ def intern_and_check(H, wid, state, idx, universe_set):
     # Hold the borrowed reference across a park: a sibling hub may be
     # immortalizing (refcount-freeze store) or rehashing this very entry right
     # now.  On resume, identity must still hold.
-    runloom.yield_now()
+    stackweave.yield_now()
 
     if obj is not canon:
         # IDENTITY SPLIT: same text, two distinct canonical objects.  This is the
@@ -224,7 +224,7 @@ def control_intern_universe(H, state, universe_set):
             return
         # Single writer: race-free record.
         control[idx] = obj
-        runloom.yield_now()
+        stackweave.yield_now()
 
 
 def worker(H, wid, rng, state):
@@ -255,7 +255,7 @@ def worker(H, wid, rng, state):
 
 
 def setup(H):
-    # Built INSIDE the root (monkey.patch() already ran), so runloom.sync.Lock is
+    # Built INSIDE the root (monkey.patch() already ran), so stackweave.sync.Lock is
     # the cooperative M:N-safe primitive.  These shared cells are accounting that
     # is DISTINCT from the intern table under test:
     #   guards[idx]  -- per-text cooperative Lock (NOT the intern dict) guarding
@@ -271,11 +271,11 @@ def setup(H):
     #   tally        -- per-slot count of successful interns (summed in post()).
     H.state = {
         "universe_set": build_universe_set(),
-        "guards": [runloom.sync.Lock() for _ in range(UNIVERSE_SIZE)],
+        "guards": [stackweave.sync.Lock() for _ in range(UNIVERSE_SIZE)],
         "canon": [None] * UNIVERSE_SIZE,
         "seen_ids": [set() for _ in range(UNIVERSE_SIZE)],
         "control": [None] * UNIVERSE_SIZE,
-        "control_wg": runloom.WaitGroup(),
+        "control_wg": stackweave.WaitGroup(),
         "tally": [0] * SLOTS,
     }
 

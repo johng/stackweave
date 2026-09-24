@@ -8,11 +8,11 @@ get/set of the ctypes object and whose get_lock() returns an RLock backed by a
 synchronize.SemLock -- a kernel sem_t-backed primitive (the SemLock's C state is
 its `handle` + the recursive-lock `count`/`_last_acquire_time` bookkeeping).
 
-Under monkey.patch() runloom replaces SemLock.acquire (see
-runloom/monkey/executors.py::_co_semlock_acquire): a BLOCKING acquire from a
+Under monkey.patch() stackweave replaces SemLock.acquire (see
+stackweave/monkey/executors.py::_co_semlock_acquire): a BLOCKING acquire from a
 fiber does NOT call the C sem_wait (which would OS-block the whole hub thread);
 it does a non-blocking sem_trywait + cooperative _co_sleep backoff, so the fiber
-PARKS at the runloom layer while it waits for the cross-process semaphore.  That
+PARKS at the stackweave layer while it waits for the cross-process semaphore.  That
 park is the hazard surface:
 
     SynchronizedBase.__init__ ->  self._obj = ctypes c_int in the Heap arena
@@ -35,7 +35,7 @@ Two M:N hazards, both made falsifiable here:
       for two fibers because the recursive-count bookkeeping tore -- then the two
       ctypes c_int RMWs interleave (read v, read v, write v+1, write v+1) and ONE
       increment is LOST.  We force the interleave window open by doing a
-      runloom.yield_now() BETWEEN the read and the write inside the held region,
+      stackweave.yield_now() BETWEEN the read and the write inside the held region,
       so if the SemLock did not actually serialize us a sibling's write lands in
       the gap and the final count tears low.
 
@@ -104,7 +104,7 @@ import multiprocessing  # imported BEFORE monkey.patch() so SemLock._make_method
                          # sys.modules at patch time -- which runs in H.run()).
 
 import harness
-import runloom
+import stackweave
 
 # A small pool of SHARED Value('i') so thousands of fibers pile onto each one --
 # that is what drives genuine cross-hub get_lock()/RMW interleave on the SAME
@@ -152,7 +152,7 @@ def shared_value_rmw(H, wid, rng, state, slot):
         # the cooperative SemLock acquire double-entered, a sibling's write lands
         # now and our write below clobbers it -> a LOST increment, caught by the
         # post() conservation sum.
-        runloom.yield_now()
+        stackweave.yield_now()
         v.value = cur + 1               # store back self._obj.value = cur + 1
     finally:
         lock.release()
@@ -176,7 +176,7 @@ def array_slot_write(H, wid, rng, state, slot):
     lock.acquire()
     try:
         cur = arr[own]                  # read the ctypes array element from the slab
-        runloom.yield_now()             # park with the read latched (same window)
+        stackweave.yield_now()             # park with the read latched (same window)
         arr[own] = cur + 1              # single-owner store -> must be race-free
     finally:
         lock.release()
@@ -196,7 +196,7 @@ def private_value_rmw(H, wid, rng, state, slot):
         lock.acquire()
         try:
             cur = v.value
-            runloom.yield_now()
+            stackweave.yield_now()
             v.value = cur + 1
         finally:
             lock.release()

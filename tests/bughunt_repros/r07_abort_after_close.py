@@ -3,7 +3,7 @@ data must still deliver connection_lost (asyncio does). Suspected: abort()
 clears the buffer, close() early-returns on _closed, _close_when_drained
 never fires -> connection_lost never delivered."""
 import sys, asyncio, socket, threading, time
-import runloom.aio as aio
+import stackweave.aio as aio
 
 def slow_server(srv_sock, stop):
     conn, _ = srv_sock.accept()

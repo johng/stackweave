@@ -2,7 +2,7 @@
 
 Single-threaded (decision #4: GIL build, best case). One greenlet per connection.
 
---work N applies the SAME FNV-1a byte hash as the runloom work curve (py_fnv,
+--work N applies the SAME FNV-1a byte hash as the stackweave work curve (py_fnv,
 identical constants) N times over each chunk before echoing, folded into byte 0.
 work=0 is the plain echo. Interpreted-Python reference (1 core) for the
 cross-runtime handler work curve.

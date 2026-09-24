@@ -27,7 +27,7 @@ pytestmark = pytest.mark.skipif(
     not sys.platform.startswith("win"),
     reason="IOCP (iocp-afd) backend is Windows-only")
 
-import runloom_c          # noqa: E402
+import stackweave_c          # noqa: E402
 
 READ = 1
 WRITE = 2
@@ -60,8 +60,8 @@ def _drive(*fibers):
         return runner
 
     for g in fibers:
-        runloom_c.go(wrap(g))
-    runloom_c.run()
+        stackweave_c.go(wrap(g))
+    stackweave_c.run()
     if box:
         raise box[0]
 
@@ -69,7 +69,7 @@ def _drive(*fibers):
 def _reset_netpoll_registration():
     for fd in range(3, 1024):
         try:
-            runloom_c.netpoll_unregister(fd)
+            stackweave_c.netpoll_unregister(fd)
         except Exception:                # noqa: BLE001
             pass
 
@@ -78,12 +78,12 @@ def _reset_netpoll_registration():
 def _netpoll_reset():
     _reset_netpoll_registration()
     try:
-        runloom_c.cancel_all_parked()
+        stackweave_c.cancel_all_parked()
     except Exception:                    # noqa: BLE001
         pass
     yield
     try:
-        runloom_c.cancel_all_parked()
+        stackweave_c.cancel_all_parked()
     except Exception:                    # noqa: BLE001
         pass
     _reset_netpoll_registration()
@@ -91,9 +91,9 @@ def _netpoll_reset():
 
 def test_backend_is_iocp():
     """Guard: this module asserts iocp-afd close-waker behaviour."""
-    assert runloom_c.netpoll_backend() == "iocp-afd", (
-        "force the IOCP backend: set RUNLOOM_NETPOLL=iocp-afd "
-        "(got %r)" % runloom_c.netpoll_backend())
+    assert stackweave_c.netpoll_backend() == "iocp-afd", (
+        "force the IOCP backend: set STACKWEAVE_NETPOLL=iocp-afd "
+        "(got %r)" % stackweave_c.netpoll_backend())
 
 
 def test_write_parker_woken_by_close():
@@ -104,7 +104,7 @@ def test_write_parker_woken_by_close():
 
     def parker():
         t0 = time.monotonic()
-        rv = runloom_c.wait_fd(a.fileno(), WRITE, DEADLINE_MS)
+        rv = stackweave_c.wait_fd(a.fileno(), WRITE, DEADLINE_MS)
         got.append((rv, time.monotonic() - t0))
 
     def closer():
@@ -136,7 +136,7 @@ def test_read_parker_woken_by_close_control():
     got = []
 
     def parker():
-        got.append(runloom_c.wait_fd(a.fileno(), READ, DEADLINE_MS))
+        got.append(stackweave_c.wait_fd(a.fileno(), READ, DEADLINE_MS))
 
     def closer():
         a.close()

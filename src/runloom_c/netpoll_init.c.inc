@@ -235,14 +235,14 @@ void runloom_fault_reset(void)
  * WSAPOLL) only fire on their own backend, but the syscall-surface faults
  * (TCP_*, FD_*) are reachable on Linux too (e.g. module.c fd_read/fd_write). */
 static const char *const runloom_fault_envs[RUNLOOM_FAULT_NSITES] = {
-    "RUNLOOM_FAULT_WSAPOLL", "RUNLOOM_FAULT_SELECT", "RUNLOOM_FAULT_IOCP_WAIT",
-    "RUNLOOM_FAULT_IOCP_SUBMIT", "RUNLOOM_FAULT_KQUEUE_WAIT",
-    "RUNLOOM_FAULT_KQUEUE_CREATE", "RUNLOOM_FAULT_KQUEUE_CTL",
-    "RUNLOOM_FAULT_KQUEUE_PERHUB",
-    "RUNLOOM_FAULT_TCP_SOCKET", "RUNLOOM_FAULT_TCP_CONNECT", "RUNLOOM_FAULT_TCP_ACCEPT",
-    "RUNLOOM_FAULT_TCP_RECV", "RUNLOOM_FAULT_TCP_SEND",
-    "RUNLOOM_FAULT_FD_READ", "RUNLOOM_FAULT_FD_WRITE",
-    "RUNLOOM_FAULT_SPAWN_G", "RUNLOOM_FAULT_SPAWN_STACK", "RUNLOOM_FAULT_SPAWN_TSTATE" };
+    "STACKWEAVE_FAULT_WSAPOLL", "STACKWEAVE_FAULT_SELECT", "STACKWEAVE_FAULT_IOCP_WAIT",
+    "STACKWEAVE_FAULT_IOCP_SUBMIT", "STACKWEAVE_FAULT_KQUEUE_WAIT",
+    "STACKWEAVE_FAULT_KQUEUE_CREATE", "STACKWEAVE_FAULT_KQUEUE_CTL",
+    "STACKWEAVE_FAULT_KQUEUE_PERHUB",
+    "STACKWEAVE_FAULT_TCP_SOCKET", "STACKWEAVE_FAULT_TCP_CONNECT", "STACKWEAVE_FAULT_TCP_ACCEPT",
+    "STACKWEAVE_FAULT_TCP_RECV", "STACKWEAVE_FAULT_TCP_SEND",
+    "STACKWEAVE_FAULT_FD_READ", "STACKWEAVE_FAULT_FD_WRITE",
+    "STACKWEAVE_FAULT_SPAWN_G", "STACKWEAVE_FAULT_SPAWN_STACK", "STACKWEAVE_FAULT_SPAWN_TSTATE" };
 
 /* Cached "any spawn-OOM fault armed" -- keeps the hot spawn alloc sites at a
  * single branch when no RUNLOOM_FAULT_SPAWN_* env is set.  Read once. */
@@ -250,8 +250,8 @@ int runloom_spawn_fault_armed(void)
 {
     static int cached = -1;
     if (cached < 0) {
-        cached = (getenv("RUNLOOM_FAULT_SPAWN_G") || getenv("RUNLOOM_FAULT_SPAWN_STACK")
-                  || getenv("RUNLOOM_FAULT_SPAWN_TSTATE")) ? 1 : 0;
+        cached = (getenv("STACKWEAVE_FAULT_SPAWN_G") || getenv("STACKWEAVE_FAULT_SPAWN_STACK")
+                  || getenv("STACKWEAVE_FAULT_SPAWN_TSTATE")) ? 1 : 0;
     }
     return cached;
 }
@@ -321,7 +321,7 @@ static int runloom_netpoll_win_wait_failed(int wsa_err)
     if (wsa_err == WSAEINTR) return 1;
     if (InterlockedExchange(&warned, 1) == 0) {
         fprintf(stderr,
-                "[runloom] netpoll pump: Windows poll failed (WSA=%d); backing off "
+                "[stackweave] netpoll pump: Windows poll failed (WSA=%d); backing off "
                 "to avoid a busy-spin -- the polled socket is likely closed "
                 "(teardown race) or invalid\n", wsa_err);
     }
@@ -425,7 +425,7 @@ int runloom_netpoll_init(void)
      *   RUNLOOM_NETPOLL=wsapoll  -> force WSAPoll
      *   RUNLOOM_NETPOLL=select   -> force select() */
     {
-        const char *env = getenv("RUNLOOM_NETPOLL");
+        const char *env = getenv("STACKWEAVE_NETPOLL");
         int want_wsapoll = (env != NULL && strcmp(env, "wsapoll") == 0);
         int want_select  = (env != NULL && strcmp(env, "select")  == 0);
 

@@ -13,7 +13,7 @@ instead of recompiling" idea.)
   Clang-based) does the schemata rewrite. `setup_dredd.sh` fetches the release +
   its LLVM-17 runtime libs; callers feed it clang-18's builtin-header dir.
 - **The .inc problem**: dredd only mutates the *primary* `.c` it's given, never
-  `#include`d fragments — but runloom's core logic lives in `*.c.inc` fragments.
+  `#include`d fragments — but stackweave's core logic lives in `*.c.inc` fragments.
   `flatten.py` inlines a TU's fragments into one physical `.c` first (tracking
   provenance so a mutant maps back to the real `.inc:line`), so dredd reaches
   all of it. (No `#line` directives — they'd send dredd's presumed location back
@@ -30,7 +30,7 @@ instead of recompiling" idea.)
     tools/mutate/schemata/sweep.py netpoll --sample 500   # fast first signal
     tools/mutate/schemata/sweep.py netpoll                # full TU sweep
 
-Everything runs in an **isolated git worktree** (`RUNLOOM_MUT_WORKTREE`, default
+Everything runs in an **isolated git worktree** (`STACKWEAVE_MUT_WORKTREE`, default
 `~/projects/pygo-mutants`) at live HEAD — the live tree's `.so` is never touched,
 so the soaks keep running.
 

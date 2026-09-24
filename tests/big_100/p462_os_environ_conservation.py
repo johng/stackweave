@@ -4,7 +4,7 @@ os.environ is a PROCESS-GLOBAL mapping (os._Environ) backed at the C level by
 putenv()/setenv(), which CPython documents as NOT thread-safe: the libc
 environ array is a bare char** that putenv() may realloc, and the Python side is
 a plain dict (os.environ._data / the _Environ wrapper) mutated without a lock.
-Under runloom M:N, many fibers share a hub OS-thread (and a shared hub
+Under stackweave M:N, many fibers share a hub OS-thread (and a shared hub
 PyThreadState) AND run in parallel across hubs with the GIL off, so every
 `os.environ[k] = v` is a concurrent read-modify-write of one shared global
 mapping -- exactly the shape that loses updates / tears entries if the runtime
@@ -25,22 +25,22 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (calibrated, not assumed):
   writer, the value at a fiber's own key is NOT subject to a write-write race --
   under plain OS threads WITH THE GIL ON this invariant ALWAYS holds (every
   os.environ[k]=v is serialized by the GIL, and each key has one writer, so no
-  update is lost and no key is cross-written).  A correct runloom MUST preserve
+  update is lost and no key is cross-written).  A correct stackweave MUST preserve
   that: a fiber that sets BIG100_W<wid>="<wid>" and later reads BIG100_W<wid>
   MUST read back exactly "<wid>", and at quiesce the global mapping MUST contain
   EXACTLY the expected BIG100_W* keys (count == funcs), each holding its own
   value.  A lost update (key absent), a cross-write (key holds another fiber's
-  value), an extra/missing BIG100_W* key, or a torn value is a runloom
+  value), an extra/missing BIG100_W* key, or a torn value is a stackweave
   coherence bug in the shared global-mapping mutation -- NOT a documented caveat,
   because single-owner-per-key os.environ writes are race-free under the GIL.
   The serialized arm PASSES on a correct runtime, so the program EXITS 0 when
   there is no bug.
 
   We VERIFIED (standalone plain-threads control, PYTHON_GIL=1 and PYTHON_GIL=0,
-  no runloom) that this single-owner identity/conservation oracle does NOT
+  no stackweave) that this single-owner identity/conservation oracle does NOT
   false-fire: under the GIL it is always clean; even GIL-off plain threads keep
   single-owner keys coherent at the Python-dict level here.  So a failure under
-  runloom M:N is a genuine runtime signal, not documented-unsafe usage.
+  stackweave M:N is a genuine runtime signal, not documented-unsafe usage.
 
 ORACLES:
   * LOAD-BEARING -- SINGLE-OWNER IDENTITY (per-op, fail-fast): after a fiber sets
@@ -82,7 +82,7 @@ lost update before the post() conservation count even closes.
 import os
 
 import harness
-import runloom
+import stackweave
 
 # Single-owner key namespace.  Each worker owns exactly ONE key
 # BIG100_W<wid>; it is the only writer of that key (the single-owner control).
@@ -127,7 +127,7 @@ def worker(H, wid, rng, state):
     This fiber is the SOLE writer of key BIG100_W<wid>.  It sets its key, parks /
     migrates hubs, then reads its OWN key back -- which MUST equal str(wid) on a
     correct runtime (single-owner keys are race-free under the GIL, so a
-    cross-write / lost update is a runloom mapping-coherence bug).  It also peeks
+    cross-write / lost update is a stackweave mapping-coherence bug).  It also peeks
     a few sibling keys (the report-only measured arm)."""
     nworkers = state["nworkers"]
     ran = state["ran"]
@@ -147,9 +147,9 @@ def worker(H, wid, rng, state):
         # Park / yield / migrate hubs between the write and the read-back so the
         # mutation and the read straddle a scheduling point (and likely different
         # hubs) -- the window a coherence bug would corrupt.
-        runloom.yield_now()
+        stackweave.yield_now()
         if rng.random() < 0.5:
-            runloom.sleep(0.0003)
+            stackweave.sleep(0.0003)
 
         # ---- LOAD-BEARING: read our OWN key back; it MUST be exactly ours ----
         try:
@@ -159,7 +159,7 @@ def worker(H, wid, rng, state):
         if got != my_val:
             # A missing key (lost update) or a sibling's value (cross-write) at
             # OUR single-owner key is impossible under GIL single-owner
-            # serialization -> a runloom shared-mapping coherence bug.
+            # serialization -> a stackweave shared-mapping coherence bug.
             H.fail(
                 "os.environ SINGLE-OWNER VIOLATION: our key {0!r} read back "
                 "{1!r} but we (the SOLE writer) set it to {2!r} -- a lost "
@@ -302,7 +302,7 @@ def post(H):
         H.log("note: {0} sibling reads ({1:.1f}%) saw an absent / mid-flight "
               "sibling key -- benign concurrent-read staleness on the shared "
               "os.environ mapping (reproduces under plain GIL-off threads), NOT "
-              "a runloom bug; the load-bearing oracle is the SINGLE-OWNER "
+              "a stackweave bug; the load-bearing oracle is the SINGLE-OWNER "
               "identity/conservation of each fiber's OWN key".format(
                   stale, stale_pct))
 

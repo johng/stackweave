@@ -69,9 +69,9 @@ def recv_text_timeout(sock, timeout_ms):
     Once the socket is readable we read the whole (small) frame; on loopback a
     short frame's bytes arrive together.  Keeps the caller single-goroutine so
     there is never a second goroutine parked on this fd at teardown."""
-    import runloom_c
+    import stackweave_c
     fd = sock.fileno()
-    if not (runloom_c.wait_fd(fd, 1, timeout_ms) & 1):
+    if not (stackweave_c.wait_fd(fd, 1, timeout_ms) & 1):
         return TIMEOUT
     return recv_text(sock)
 

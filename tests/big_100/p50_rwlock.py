@@ -11,7 +11,7 @@ Stresses: reader/writer exclusion, fairness, data consistency.
 import threading
 
 import harness
-import runloom
+import stackweave
 
 
 class RWLock(object):
@@ -95,7 +95,7 @@ def writer(H, wid, rng, state):
         try:
             nv = rng.randint(0, 1 << 30)
             data["v"] = nv
-            runloom.yield_now()         # widen the window an unguarded reader could hit
+            stackweave.yield_now()         # widen the window an unguarded reader could hit
             data["sum"] = checksum(nv)
         finally:
             rw.wrelease()

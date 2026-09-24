@@ -1,5 +1,5 @@
 import socket, time
-import runloom
+import stackweave
 
 def main():
     srv = socket.socket(); srv.bind(("127.0.0.1", 0)); srv.listen(4)
@@ -14,11 +14,11 @@ def main():
         print("connect succeeded WITHOUT patched getaddrinfo -> inline libc DNS on hub", flush=True)
         c.close()
         done.append(1)
-    runloom.fiber(f)
+    stackweave.fiber(f)
     conn, _ = srv.accept()   # keeps srv alive and proves the connect landed
     while not done:
-        runloom.sleep(0.01)
+        stackweave.sleep(0.01)
     conn.close(); srv.close()
 
-runloom.monkey.patch()
-runloom.run(2, main)
+stackweave.monkey.patch()
+stackweave.run(2, main)

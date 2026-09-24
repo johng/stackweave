@@ -1,4 +1,4 @@
-"""big_100 shared test harness for the runloom (pygo) extension.
+"""big_100 shared test harness for the stackweave (pygo) extension.
 
 Every one of the 100 stress projects is a thin workload on top of this
 module.  The harness owns all the cross-cutting requirements so the
@@ -10,7 +10,7 @@ project files stay focused on the thing they actually stress:
                  run exits as soon as all workers finish their rounds)
   * --seed       deterministic per-worker RNG derivation for replay
   * --hubs       number of M:N scheduler hubs (REQUIRED > 1; this whole
-                 campaign runs runloom in M:N parallel mode, never the aio
+                 campaign runs stackweave in M:N parallel mode, never the aio
                  bridge and never single-thread run(1))
   * --funcs      how many lightweight goroutines to field (tens of thousands)
   * progress     a log line every --log-interval seconds (default 5س -> 5s)
@@ -54,18 +54,18 @@ REAL_SLEEP = time.sleep
 REAL_PERF = time.perf_counter
 import _thread as _real_thread
 
-# ---- make `runloom` importable from the repo checkout ---------------------
-# Walk up from here to the repo root (the dir whose src/ holds the runloom
+# ---- make `stackweave` importable from the repo checkout ---------------------
+# Walk up from here to the repo root (the dir whose src/ holds the stackweave
 # package) instead of hardcoding a fixed number of levels: the repo reorg moved
 # big_100 -> tests/big_100, which made the old one-level-up path point at a
-# nonexistent tests/src.  That stayed invisible wherever runloom is editable-
+# nonexistent tests/src.  That stayed invisible wherever stackweave is editable-
 # installed or PYTHONPATH=src is set (Linux/CI), but breaks a bare run on a box
 # without either (e.g. a fresh mac soak loop).
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _d = _HERE
 for _ in range(6):
     _cand = os.path.join(_d, "src")
-    if os.path.isdir(os.path.join(_cand, "runloom")):
+    if os.path.isdir(os.path.join(_cand, "stackweave")):
         if _cand not in sys.path:
             sys.path.insert(0, _cand)
         break
@@ -77,12 +77,12 @@ for _ in range(6):
 # Quiet the per-wedge SYSMON diagnostic spam by default (the detector +
 # handoff + preemption stay fully ON -- this only suppresses the WEDGED/
 # RECOVERED stderr lines that otherwise flood a multi-hour log).  Override
-# with RUNLOOM_SYSMON_QUIET=0 to see them.  Must be set before mn_init().
-os.environ.setdefault("RUNLOOM_SYSMON_QUIET", "1")
+# with STACKWEAVE_SYSMON_QUIET=0 to see them.  Must be set before mn_init().
+os.environ.setdefault("STACKWEAVE_SYSMON_QUIET", "1")
 
-import runloom            # noqa: E402
-import runloom.monkey     # noqa: E402
-import runloom_c          # noqa: E402
+import stackweave            # noqa: E402
+import stackweave.monkey     # noqa: E402
+import stackweave_c          # noqa: E402
 
 # Exit codes
 EXIT_OK = 0
@@ -470,7 +470,7 @@ class Harness(object):
         ap.add_argument("--no-fail-fast", dest="fail_fast",
                         action="store_false")
         ap.add_argument("--handoff", action="store_true", default=False,
-                        help="enable the RUNLOOM_HANDOFF rescue (default OFF: "
+                        help="enable the STACKWEAVE_HANDOFF rescue (default OFF: "
                              "the campaign found it corrupts memory under high "
                              "socket concurrency -- see FINDINGS.md BUG #2; "
                              "pass this to reproduce that crash)")
@@ -481,7 +481,7 @@ class Harness(object):
                              "makes drain time scale with goroutine count: "
                              "with K goroutines the lock can't be held for "
                              ">K/hubs scheduler ticks.  Defaults to "
-                             "RUNLOOM_MAX_CONCURRENT env var if set, else "
+                             "STACKWEAVE_MAX_CONCURRENT env var if set, else "
                              "unlimited.  Programs with hard resource limits "
                              "(PTY count, socket FDs) may apply a tighter cap "
                              "via run_pool(max_concurrent=N).")
@@ -522,8 +522,8 @@ class Harness(object):
         # sentinel env guards against re-exec looping; bring lo up, then exec the
         # identical argv.  (See CLAUDE.md "loopback firewall tax".)
         if getattr(self.args, "netns", False) and \
-                os.environ.get("RUNLOOM_BENCH_IN_NETNS") != "1":
-            os.environ["RUNLOOM_BENCH_IN_NETNS"] = "1"
+                os.environ.get("STACKWEAVE_BENCH_IN_NETNS") != "1":
+            os.environ["STACKWEAVE_BENCH_IN_NETNS"] = "1"
             _inner = 'ip link set lo up 2>/dev/null; exec "$@"'
             os.execvp("unshare",
                       ["unshare", "--net", "--map-root-user", "--",
@@ -531,7 +531,7 @@ class Harness(object):
 
         if self.args.hubs < 2:
             sys.stderr.write(
-                "[{0}] --hubs must be > 1: this campaign exercises runloom in "
+                "[{0}] --hubs must be > 1: this campaign exercises stackweave in "
                 "M:N parallel mode (run(n>1)).\n".format(name))
             raise SystemExit(EXIT_ERROR)
 
@@ -542,21 +542,21 @@ class Harness(object):
         self.funcs = self.args.funcs
         self._max_funcs = None   # set by harness.main(max_funcs=) to cap H.funcs
 
-        # Fast bulk spawn via runloom_c.fiber_n(indexed=True): one C call builds the
+        # Fast bulk spawn via stackweave_c.fiber_n(indexed=True): one C call builds the
         # whole worker pool (arena g/coro/stacks + deferred stack frames) instead
-        # of N Python-level runloom.fiber() calls.  Opt-in (RUNLOOM_HARNESS_GON=1)
-        # AND requires the bulk gates (RUNLOOM_GON_BULK=1, usually +GON_FRESH=1).
+        # of N Python-level stackweave.fiber() calls.  Opt-in (STACKWEAVE_HARNESS_GON=1)
+        # AND requires the bulk gates (STACKWEAVE_GON_BULK=1, usually +GON_FRESH=1).
         # The deferred stack frames materialize on the hubs in parallel, so it
         # NEEDS hubs >= 8 -- with fewer, 1M goroutines funnel through too few
         # threads (materialization + cooperative I/O serialize) and it degrades
         # badly.  Below 8 we refuse the fast path and fall back to per-g spawn.
-        self._use_gon = (os.environ.get("RUNLOOM_HARNESS_GON") == "1"
-                         and os.environ.get("RUNLOOM_GON_BULK") == "1")
+        self._use_gon = (os.environ.get("STACKWEAVE_HARNESS_GON") == "1"
+                         and os.environ.get("STACKWEAVE_GON_BULK") == "1")
 
         # Global concurrent-goroutine cap per run_pool call.
         # Programs with hard resource limits may override with a lower value
         # passed directly to run_pool(max_concurrent=N).
-        _env_mc = os.environ.get("RUNLOOM_MAX_CONCURRENT", "")
+        _env_mc = os.environ.get("STACKWEAVE_MAX_CONCURRENT", "")
         _arg_mc = getattr(self.args, "max_concurrent", None)
         if _arg_mc is not None:
             self.max_concurrent = _arg_mc
@@ -675,16 +675,16 @@ class Harness(object):
         self.stack_kb = self.args.stack_kb
         if self.stack_kb > 0:
             try:
-                runloom_c.set_stack_size(self.stack_kb * 1024)
+                stackweave_c.set_stack_size(self.stack_kb * 1024)
             except Exception:
                 pass
 
         # BUG #2 workaround (see FINDINGS.md): the handoff rescue corrupts
         # memory under high socket concurrency.  Default it OFF so the whole
         # campaign can soak; --handoff turns it back on to reproduce.  Must be
-        # set before mn_init() reads it (runloom.run, below).
+        # set before mn_init() reads it (stackweave.run, below).
         self.handoff = self.args.handoff
-        os.environ["RUNLOOM_HANDOFF"] = "1" if self.handoff else "0"
+        os.environ["STACKWEAVE_HANDOFF"] = "1" if self.handoff else "0"
 
     # ---------------- determinism ----------------
     def derive(self, *parts):
@@ -723,7 +723,7 @@ class Harness(object):
                 yield
 
     def sleep(self, seconds):
-        runloom.sleep(seconds)
+        stackweave.sleep(seconds)
 
     # ---------------- counters ----------------
     def op(self, shard, k=1):
@@ -789,11 +789,11 @@ class Harness(object):
         offload-pool fd floor is already in fd_base, captured post-setup, so it
         is NOT counted here).  FAILS if the run ended holding more than `tol` fds
         beyond baseline -- a real leak is a monotonic per-op climb, not a handful,
-        so the default is generous (env RUNLOOM_FD_LEAK_TOL, else 256).  Reliable
+        so the default is generous (env STACKWEAVE_FD_LEAK_TOL, else 256).  Reliable
         because fd_end is measured after full teardown (unlike a live goroutine
         count).  Returns True iff no leak."""
         if tol is None:
-            tol = int(os.environ.get("RUNLOOM_FD_LEAK_TOL", "256"))
+            tol = int(os.environ.get("STACKWEAVE_FD_LEAK_TOL", "256"))
         if self.fd_base < 0 or self.fd_end < 0:
             return True               # fd accounting unavailable (e.g. non-Linux)
         leaked = self.fd_end - self.fd_base
@@ -898,7 +898,7 @@ class Harness(object):
     # ---------------- spawning ----------------
     def fiber(self, fn, *args, **kwargs):
         """Spawn a goroutine.  Must be called from inside the root (M:N)."""
-        return runloom.fiber(fn, *args, **kwargs)
+        return stackweave.fiber(fn, *args, **kwargs)
 
     def register_close(self, obj):
         """Register a socket/file to be closed at shutdown so a parked
@@ -938,7 +938,7 @@ class Harness(object):
                            Overrides H.max_concurrent for this pool.
                            Use for hard resource limits (PTY count, socket FDs).
                            Most programs should omit this and let H.max_concurrent
-                           (set via --max-concurrent / RUNLOOM_MAX_CONCURRENT) do
+                           (set via --max-concurrent / STACKWEAVE_MAX_CONCURRENT) do
                            the job.
         """
         max_concurrent = kw.pop("max_concurrent", self.max_concurrent)
@@ -947,7 +947,7 @@ class Harness(object):
         actual = n if (max_concurrent is None or max_concurrent >= n) else max_concurrent
         self.expected += actual
 
-        # Fast path: build the whole pool with ONE runloom_c.fiber_n(indexed=True).
+        # Fast path: build the whole pool with ONE stackweave_c.fiber_n(indexed=True).
         # Needs hubs >= 8 (deferred stack frames materialize across hubs in
         # parallel); below that, fall back to per-g spawn so we never run the
         # bulk path in a regime where it degrades.
@@ -959,7 +959,7 @@ class Harness(object):
                 rng = self.derive("pool", name, wid)
                 self._worker_wrap(worker_fn, wid, rng, captured)
 
-            runloom_c.fiber_n(spawn_one, actual, indexed=True)
+            stackweave_c.fiber_n(spawn_one, actual, indexed=True)
             return
         if self._use_gon and self.hubs < 8:
             sys.stderr.write(
@@ -1000,13 +1000,13 @@ class Harness(object):
                  "netpoll={4} backend={5} gil={6} nofile={7} stack={8}KB "
                  "handoff={9}".format(
                      self.hubs, self.funcs, self.seed, self.duration,
-                     runloom_c.netpoll_backend(), runloom_c.backend(),
+                     stackweave_c.netpoll_backend(), stackweave_c.backend(),
                      sys._is_gil_enabled(), self.fd_limit, self.stack_kb,
                      "on" if self.handoff else "off"))
         while self.running():
             target = self.now() + self.log_interval
             while self.running() and self.now() < target:
-                runloom.sleep(0.25)
+                stackweave.sleep(0.25)
             t = self.now()
             ops = self.total_ops()
             dt = max(1e-6, t - last_t)
@@ -1052,13 +1052,13 @@ class Harness(object):
         # watchdog is a real OS thread, so it still samples even when the scheduler
         # is swamped (and it reads memory subprocess-free, so monkey.patch() can't
         # break it).  Tunable / disable-able via env.
-        mem_guard = os.environ.get("RUNLOOM_MEM_GUARD", "1") not in ("0", "no", "off")
+        mem_guard = os.environ.get("STACKWEAVE_MEM_GUARD", "1") not in ("0", "no", "off")
         try:
-            mem_floor = float(os.environ.get("RUNLOOM_MEM_FLOOR", "0.06"))
+            mem_floor = float(os.environ.get("STACKWEAVE_MEM_FLOOR", "0.06"))
         except ValueError:
             mem_floor = 0.06
         try:                  # NEW swap this run may push before it's "thrashing"
-            growth_frac = float(os.environ.get("RUNLOOM_SWAP_GROWTH", "0.40"))
+            growth_frac = float(os.environ.get("STACKWEAVE_SWAP_GROWTH", "0.40"))
         except ValueError:
             growth_frac = 0.40
         growth_limit = int(growth_frac * phys_mem_gib() * (1024 ** 3))   # bytes
@@ -1069,7 +1069,7 @@ class Harness(object):
                           # GRADUAL swap-death, the real box-destabilizer; a sub-1s
                           # allocation-failure crash is a PROCESS crash, not a box
                           # hazard -- it dies fast and frees its memory.)
-        _dbg = os.environ.get("RUNLOOM_MEM_DEBUG")
+        _dbg = os.environ.get("STACKWEAVE_MEM_DEBUG")
         while not self.finished:
             REAL_SLEEP(interval)
             if self.finished:
@@ -1173,7 +1173,7 @@ class Harness(object):
             "~{6} workers spawned.\n"
             "[{0}] This BOX ({7:.0f} GiB) cannot sustain --funcs {8} -- aborting "
             "cleanly before the OS OOM-killer/swap-thrash destabilizes it.  Reduce "
-            "--funcs, or set RUNLOOM_MEM_GUARD=0 to override.\n".format(
+            "--funcs, or set STACKWEAVE_MEM_GUARD=0 to override.\n".format(
                 self.name, avail * 100.0, floor * 100.0,
                 grew_bytes / float(1024 ** 3), growth_limit / float(1024 ** 3),
                 swap_frac * 100.0, self.total_tasks(), phys_mem_gib(),
@@ -1224,8 +1224,8 @@ class Harness(object):
         never manufacture a HANG from a missing counter (it defers to the climbing
         signal / benign verdict instead)."""
         try:
-            st = runloom_c.stats()
-            deadlockable = runloom_c.count_deadlocked()
+            st = stackweave_c.stats()
+            deadlockable = stackweave_c.count_deadlocked()
         except Exception:
             return False
         # Runnable work present -> still draining, not stranded.
@@ -1279,11 +1279,11 @@ class Harness(object):
         except Exception:
             pass
         try:
-            runloom.dump()
+            stackweave.dump()
         except Exception:
             pass
         try:
-            import runloom_c as _rc
+            import stackweave_c as _rc
             _rc._dump_parkers()    # readyParked = lost-wakeup detector
         except Exception as _e:
             sys.stderr.write("[{0}] parker dump err: {1}\n".format(self.name, _e))
@@ -1298,25 +1298,25 @@ class Harness(object):
     def _profile_mark(self, label):
         """Emit an absolute CLOCK_MONOTONIC marker for correlating perf samples
         with the drain/teardown phases (env-gated; no-op normally)."""
-        if os.environ.get("RUNLOOM_PROFILE_MARKS"):
+        if os.environ.get("STACKWEAVE_PROFILE_MARKS"):
             sys.stderr.write("PROFILE_MARK {0} {1:.6f}\n".format(label, REAL_MONO()))
             sys.stderr.flush()
 
     def mark_done(self):
         """Signal workers to stop and unblock parked servers by closing
         the registered listeners/sockets."""
-        # Diagnostic (RUNLOOM_DUMP_STATES=path): write the goroutine state
+        # Diagnostic (STACKWEAVE_DUMP_STATES=path): write the goroutine state
         # histogram RIGHT NOW -- at the deadline, before we close anything --
         # so we can see WHERE goroutines are parked (connect / recv / sleep /
         # accept).  Cheap structural dump, no Python.  CAVEAT: fiber_n bulk-arena
         # workers skip the introspection registry (the hot spawn path takes no
         # greg lock), so this shows only H.fiber()-spawned goroutines (servers,
         # handlers, accept loops) -- not the bulk client pool.
-        _ds = os.environ.get("RUNLOOM_DUMP_STATES")
+        _ds = os.environ.get("STACKWEAVE_DUMP_STATES")
         if _ds:
             try:
                 fd = os.open(_ds, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
-                runloom_c.dump_goroutines(fd)
+                stackweave_c.dump_goroutines(fd)
                 os.close(fd)
             except Exception:
                 pass
@@ -1332,14 +1332,14 @@ class Harness(object):
         while self.running():
             if self.expected > 0 and self.exited >= self.expected:
                 break
-            runloom.sleep(poll)
+            stackweave.sleep(poll)
 
     def drain_workers(self, grace=30.0):
         """After mark_done(), give worker goroutines a bounded window to
         return so we can report an accurate completed count."""
         until = REAL_MONO() + grace
         while self.exited < self.expected and REAL_MONO() < until:
-            runloom.sleep(0.05)
+            stackweave.sleep(0.05)
 
     def _settle_stragglers(self, stall_s=3.0):
         """Give post-deadline stragglers a bounded window to finish BEFORE run()
@@ -1347,7 +1347,7 @@ class Harness(object):
         count) is measured against a fair drain.  Keeps draining while workers
         keep RETURNING; stops once `exited` plateaus for stall_s with work still
         outstanding (a genuine wedge is the watchdog's job, EXIT_HANG).  Runs
-        inside the root goroutine; runloom.sleep yields so the stragglers
+        inside the root goroutine; stackweave.sleep yields so the stragglers
         actually get scheduled while we watch them.
 
         NOTE: this loop does NOT decide lost-vs-slow.  An earlier version froze
@@ -1364,7 +1364,7 @@ class Harness(object):
         stalled = 0.0
         while self.exited < self.expected and REAL_MONO() < hard:
             prev = self.exited
-            runloom.sleep(0.2)
+            stackweave.sleep(0.2)
             if self.exited > prev:
                 stalled = 0.0           # still finishing -> keep waiting
             else:
@@ -1389,7 +1389,7 @@ class Harness(object):
         self.start_watchdog()
 
         def root():
-            self.lock = runloom.sync.Lock()
+            self.lock = stackweave.sync.Lock()
             self.fiber(self.progress_loop)
             if setup is not None:
                 try:
@@ -1434,7 +1434,7 @@ class Harness(object):
             # cancelled op raises OSError, which _worker_wrap swallows when the
             # run is over.  No-op (cancels 0) on a clean drain.
             try:
-                n = runloom_c.cancel_all_parked()
+                n = stackweave_c.cancel_all_parked()
                 self.parked_cancelled = n
                 if n:
                     self.log("teardown: force-cancelled {0} stranded "
@@ -1452,13 +1452,13 @@ class Harness(object):
             # (+ any daemon servers it left running) alive.  For the opt-in
             # require_no_goroutine_leak() oracle.
             try:
-                self.residual_goroutines = runloom_c.fiber_count()
+                self.residual_goroutines = stackweave_c.fiber_count()
             except Exception:
                 self.residual_goroutines = -1
 
-        runloom.monkey.patch()
+        stackweave.monkey.patch()
         try:
-            runloom.run(self.hubs, root)
+            stackweave.run(self.hubs, root)
             self._profile_mark("run_returned")  # mn_run join + mn_fini complete
         except SystemExit:
             raise
@@ -1516,11 +1516,11 @@ class Harness(object):
         self.lost_workers = max(0, self.expected - self.exited)
         if self.lost_workers > 0:
             try:
-                self.deadlocked_at_end = runloom_c.count_deadlocked()
+                self.deadlocked_at_end = stackweave_c.count_deadlocked()
             except Exception:
                 self.deadlocked_at_end = -1
             try:
-                runloom_c._dump_parkers()   # WHERE the lost workers are parked
+                stackweave_c._dump_parkers()   # WHERE the lost workers are parked
             except Exception:
                 pass
 

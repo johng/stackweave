@@ -20,7 +20,7 @@ import sys
 
 import pytest
 
-import runloom_c as rc  # noqa: F401  (import side effects + the FT gate below)
+import stackweave_c as rc  # noqa: F401  (import side effects + the FT gate below)
 from adv_util import needs_free_threading
 
 FT = needs_free_threading()
@@ -33,15 +33,15 @@ pytestmark = pytest.mark.skipif(not FT, reason="M:N work-stealing needs the GIL-
 def _run(body, env_extra, timeout=90):
     """Run `body` as a fresh child Python process under the given env; return it.
 
-    The child imports the same in-tree runloom_c (PYTHONPATH=src, cwd=REPO) and
+    The child imports the same in-tree stackweave_c (PYTHONPATH=src, cwd=REPO) and
     must finish cleanly for gcov counters to flush -- we assert rc==0 + marker.
     """
     src = ("import sys\n"
            "sys.path.insert(0, 'src')\n"
-           "import runloom\n"
-           "import runloom_c as rc\n"
+           "import stackweave\n"
+           "import stackweave_c as rc\n"
            "import time\n"
-           "from runloom.sync import WaitGroup\n") + body
+           "from stackweave.sync import WaitGroup\n") + body
     env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src", **env_extra)
     return subprocess.run([PY, "-c", src], cwd=REPO, env=env,
                           capture_output=True, text=True, timeout=timeout)
@@ -50,8 +50,8 @@ def _run(body, env_extra, timeout=90):
 # --------------------------------------------------------------------------- #
 # Several hubs wedge on a real blocking call while a fan-out of fresh fibers is
 # queued.  Work-stealing must drain the stranded fresh fibers to the idle hubs,
-# so every fiber completes (no rescue thread exists).  RUNLOOM_SYSMON=1 +
-# a low RUNLOOM_SYSMON_MS arm the detector so its instrumentation is exercised.
+# so every fiber completes (no rescue thread exists).  STACKWEAVE_SYSMON=1 +
+# a low STACKWEAVE_SYSMON_MS arm the detector so its instrumentation is exercised.
 # --------------------------------------------------------------------------- #
 def test_wedged_hubs_drain_via_work_stealing():
     body = r"""
@@ -81,15 +81,15 @@ def main():
     wg.wait()
     R["done"] = sum(done)
 
-runloom.run(NHUBS, main)
+stackweave.run(NHUBS, main)
 # Every fresh fiber must complete (drained off the wedged hubs by idle hubs, or
 # by the owners after the blockers wake).  A work-stealing bug that stranded a
 # fiber behind a wedged hub would show up as done < NFRESH (or a hang).
 assert R["done"] == 120, R
 print("WORKSTEAL_OK done=%d" % R["done"])
 """
-    p = _run(body, {"RUNLOOM_SYSMON": "1", "RUNLOOM_SYSMON_QUIET": "1",
-                    "RUNLOOM_SYSMON_MS": "20"})
+    p = _run(body, {"STACKWEAVE_SYSMON": "1", "STACKWEAVE_SYSMON_QUIET": "1",
+                    "STACKWEAVE_SYSMON_MS": "20"})
     assert p.returncode == 0, "wedge workload crashed (rc=%d)\nstderr=%s" % (
         p.returncode, p.stderr[-2000:])
     assert "WORKSTEAL_OK done=120" in p.stdout, (

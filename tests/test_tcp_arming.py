@@ -18,7 +18,7 @@ import socket
 
 import pytest
 
-import runloom_c
+import stackweave_c
 
 
 def _drive(*fibers):
@@ -34,8 +34,8 @@ def _drive(*fibers):
         return runner
 
     for g in fibers:
-        runloom_c.fiber(wrap(g))
-    runloom_c.run()
+        stackweave_c.fiber(wrap(g))
+    stackweave_c.run()
     if box:
         raise box[0]
 
@@ -65,7 +65,7 @@ def test_echo_round_trip():
     result = [None]
 
     def server():
-        ln = runloom_c.TCPConn.listen("127.0.0.1", 0)
+        ln = stackweave_c.TCPConn.listen("127.0.0.1", 0)
         port[0] = _port(ln)
         conn = ln.accept()
         result[0] = conn.recv(1024)
@@ -75,8 +75,8 @@ def test_echo_round_trip():
 
     def client():
         while port[0] is None:
-            runloom_c.sched_yield()
-        c = runloom_c.TCPConn.connect("127.0.0.1", port[0])
+            stackweave_c.sched_yield()
+        c = stackweave_c.TCPConn.connect("127.0.0.1", port[0])
         c.send_all(b"ping")
         echo = c.recv(1024)
         c.close()
@@ -93,7 +93,7 @@ def test_recv_returns_empty_on_clean_peer_close():
     got = [None]
 
     def server():
-        ln = runloom_c.TCPConn.listen("127.0.0.1", 0)
+        ln = stackweave_c.TCPConn.listen("127.0.0.1", 0)
         port[0] = _port(ln)
         conn = ln.accept()
         conn.close()          # close immediately, no data -> client sees EOF
@@ -101,8 +101,8 @@ def test_recv_returns_empty_on_clean_peer_close():
 
     def client():
         while port[0] is None:
-            runloom_c.sched_yield()
-        c = runloom_c.TCPConn.connect("127.0.0.1", port[0])
+            stackweave_c.sched_yield()
+        c = stackweave_c.TCPConn.connect("127.0.0.1", port[0])
         got[0] = c.recv(1024)
         c.close()
 
@@ -118,7 +118,7 @@ def test_connect_refused_raises_oserror():
 
     def client():
         try:
-            runloom_c.TCPConn.connect("127.0.0.1", dead)
+            stackweave_c.TCPConn.connect("127.0.0.1", dead)
         except OSError as e:
             box["errno"] = e.errno
 
@@ -131,7 +131,7 @@ def test_recv_into_round_trip():
     out = [None]
 
     def server():
-        ln = runloom_c.TCPConn.listen("127.0.0.1", 0)
+        ln = stackweave_c.TCPConn.listen("127.0.0.1", 0)
         port[0] = _port(ln)
         conn = ln.accept()
         conn.send_all(b"abcdef")
@@ -140,8 +140,8 @@ def test_recv_into_round_trip():
 
     def client():
         while port[0] is None:
-            runloom_c.sched_yield()
-        c = runloom_c.TCPConn.connect("127.0.0.1", port[0])
+            stackweave_c.sched_yield()
+        c = stackweave_c.TCPConn.connect("127.0.0.1", port[0])
         buf = bytearray(16)
         n = c.recv_into(buf)
         out[0] = (n, bytes(buf[:n]))

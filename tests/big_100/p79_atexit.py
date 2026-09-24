@@ -1,10 +1,10 @@
 """big_100 / 79 -- atexit shutdown test.
 
-Each iteration launches a child that runs a small runloom program: it registers
+Each iteration launches a child that runs a small stackweave program: it registers
 an atexit handler, spawns background goroutines, lets them wind down, and exits.
 The parent verifies the child printed both its main-exit marker AND its atexit
 marker and exited 0 -- i.e. interpreter shutdown ran the atexit handlers in the
-right order even with runloom's hub threads in the picture.
+right order even with stackweave's hub threads in the picture.
 
 Stresses: interpreter shutdown order, atexit under the M:N runtime.
 """
@@ -13,25 +13,25 @@ import subprocess
 
 import harness
 import procutil
-import runloom
+import stackweave
 
 CHILD = r'''
 import sys
 sys.path.insert(0, {src!r})
 import atexit
-import runloom
+import stackweave
 atexit.register(lambda: (sys.stdout.write("ATEXIT-RAN\n"), sys.stdout.flush()))
 flag = [True]
 def w():
     n = 0
     while flag[0] and n < 800:
-        runloom.sleep(0.001); n += 1
+        stackweave.sleep(0.001); n += 1
 def main():
     for _ in range(24):
-        runloom.fiber(w)
-    runloom.sleep(0.03)
+        stackweave.fiber(w)
+    stackweave.sleep(0.03)
     flag[0] = False                 # let the background goroutines wind down
-runloom.run(4, main)
+stackweave.run(4, main)
 sys.stdout.write("MAIN-EXIT\n"); sys.stdout.flush()
 '''
 
@@ -75,4 +75,4 @@ def body(H):
 
 if __name__ == "__main__":
     harness.main("p79_atexit", body, setup=setup, default_funcs=120,
-                 describe="child runloom programs run atexit handlers on exit")
+                 describe="child stackweave programs run atexit handlers on exit")

@@ -60,7 +60,7 @@ strict single-owner CONSERVATION law:
 Single-owner: the graph, its bytes, and every intermediate are fiber-local; there
 is no shared mutable object anywhere, so ANY cross-fiber observation (non-
 deterministic dumps, a broken round-trip, a sibling's wid, a mis-resolved back-
-ref) is a genuine runloom object/scratch-isolation bug, never documented Python
+ref) is a genuine stackweave object/scratch-isolation bug, never documented Python
 semantics.  On a correct runtime the oracle PASSES (program exits 0).
 
 ORACLES:
@@ -87,7 +87,7 @@ value/identity conservation law even closes.
 import marshal
 
 import harness
-import runloom
+import stackweave
 
 # Number of member "num" leaves per graph -- enough nesting that the marshal
 # traversal is non-trivial and the ref table has real work at version 4.
@@ -167,9 +167,9 @@ def rt_check(H, wid, idx, state):
     # while holding its own bytes; siblings run their own marshal calls here.  If
     # marshal's WFILE/RFILE scratch is keyed off the hub PyThreadState, a sibling
     # dumping/loading now would corrupt this fiber's ref indices.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
 
     # dumps() AFTER the yield -- must be byte-identical (marshal is deterministic
     # for a fixed graph; ref indices are assigned in a fixed traversal order).
@@ -310,5 +310,5 @@ if __name__ == "__main__":
                  "fiber's wid, and (4) at version>=3 the reused object comes back "
                  "as the SAME object.  Versions 2 (no-ref) and 4 (FLAG_REF) are "
                  "round-robined by wid.  Any cross-yield non-determinism, broken "
-                 "round-trip, wrong wid, or mis-resolved back-ref is the runloom "
+                 "round-trip, wrong wid, or mis-resolved back-ref is the stackweave "
                  "marshal-scratch isolation bug")

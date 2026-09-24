@@ -19,7 +19,7 @@ processes.  Exercising lockf in-process would let two "holders" coexist legally
 and is the wrong primitive for an in-process cross-fiber lock; flock is the
 right one and is what the PRIMITIVE here names.)
 
-runloom monkey-patches fcntl.flock: a blocking LOCK_EX can't be handed to
+stackweave monkey-patches fcntl.flock: a blocking LOCK_EX can't be handed to
 netpoll (you cannot epoll a file lock), so the cooperative form acquires with
 LOCK_NB and, on EWOULDBLOCK/EAGAIN/EACCES contention, PARKS the fiber via a
 backoff _co_sleep and retries.  An advisory file lock thus becomes a cross-hub
@@ -61,7 +61,7 @@ conservation of a lock-guarded counter, lost-release-wake stranding.
 import os
 
 import harness
-import runloom
+import stackweave
 
 try:
     import fcntl
@@ -104,7 +104,7 @@ def critical_section(H, wid, state, slot):
     # Widen the window: yield mid-critical-section so any racing entrant that
     # wrongly believes it holds the lock gets a real chance to be scheduled on
     # another hub and trip the sentinel above.
-    runloom.yield_now()
+    stackweave.yield_now()
 
     # Re-check the sentinel after the yield: a second holder that slipped in
     # during the yield is just as much a violation.

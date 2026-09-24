@@ -1,15 +1,15 @@
-# mnweb — a micro web stack on runloom's M:N sync API
+# mnweb — a micro web stack on stackweave's M:N sync API
 
-A self-contained demo that exercises [runloom](../README.md)'s **M:N
+A self-contained demo that exercises [stackweave](../README.md)'s **M:N
 synchronous** API (Go-style stackful goroutines across N hub threads, GIL
 off, free-threaded CPython 3.13t) under a realistic, long-running web
 workload — plus a supervisor that detects crashes/hangs, gathers cores and
 gdb backtraces, and restarts the stack automatically.
 
 Everything is written in the *blocking* style: no `async`/`await`, no event
-loop ceremony. Concurrency comes from `runloom_c.mn_fiber` + cooperative I/O
-(`runloom_c.wait_fd`), channels (`runloom_c.Chan`), and a cooperative lock
-(`runloom.sync.Lock`).
+loop ceremony. Concurrency comes from `stackweave_c.mn_fiber` + cooperative I/O
+(`stackweave_c.wait_fd`), channels (`stackweave_c.Chan`), and a cooperative lock
+(`stackweave.sync.Lock`).
 
 ## Pieces
 
@@ -37,7 +37,7 @@ Knobs are env vars: `SERVER_PORT`, `SERVER_HUBS`, `CLIENT_BURST`,
 
 ## Crash / hang detection
 
-The server and client both arm runloom's in-process diagnostics:
+The server and client both arm stackweave's in-process diagnostics:
 
 - `install_crash_handler("goroutine,backtrace", …)` — on a fatal signal,
   dumps the goroutine registry + a native backtrace to `run/crash_report.txt`
@@ -66,9 +66,9 @@ Core dumps: `kernel.core_pattern` → `run/cores/` and `kernel.yama.ptrace_scope
 `DEMO_ALLOW_CRASH=1` enables fault-injection routes (`/debug/segv`,
 `/debug/crash`, `/debug/wedge`) used to validate the pipeline; off by default.
 
-## Bugs found + fixed in runloom while building this
+## Bugs found + fixed in stackweave while building this
 
-Building this surfaced two real defects in runloom's **fatal-signal crash
+Building this surfaced two real defects in stackweave's **fatal-signal crash
 handler under the M:N runtime** — both made a genuine fault *wedge* the
 process (a stranded hub, service dead, **no core**) instead of coring and
 dying cleanly. See [BUGS_FOUND.md](BUGS_FOUND.md). Both are fixed in this
@@ -76,8 +76,8 @@ branch and validated (6/6 faults now core+die; `test_crash_handler`,
 `test_mn`, `test_sysmon_oracle`, `test_sched_fairness` all green):
 
 1. **`runloom_crash_install` was not idempotent** (`runloom_crash.c`). When
-   the handler is installed twice — runloom's package `__init__` auto-installs
-   from `$RUNLOOM_CRASH`, then app code calls `install_crash_handler()` to set
+   the handler is installed twice — stackweave's package `__init__` auto-installs
+   from `$STACKWEAVE_CRASH`, then app code calls `install_crash_handler()` to set
    a level/file — the second install saved *its own* `crash_handler` as the
    "previous" disposition. On a real fault the chain-out then restored
    `crash_handler` and re-faulted straight into its own re-entrancy `pause()`

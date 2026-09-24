@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Memory benchmark orchestrator.
 
-Matrix (spec): columns = [go, runloom py handler, runloom py+optimize(memory),
-runloom c handler]; rows = [empty bytes/fiber, with-socket bytes/fiber,
+Matrix (spec): columns = [go, stackweave py handler, stackweave py+optimize(memory),
+stackweave c handler]; rows = [empty bytes/fiber, with-socket bytes/fiber,
 1M fibers total RSS].
 
 Per-fiber rows use a baseline (n=0) RSS subtracted from an n=K RSS, so the number
@@ -65,7 +65,7 @@ CONFIGS = [
     ("go", go_argv, False),
     ("runloom_py", rl_argv("py", "none"), True),
     ("runloom_py_optmem", rl_argv("py", "memory"), True),
-    ("runloom_c", rl_argv("c", "none"), True),
+    ("stackweave_c", rl_argv("c", "none"), True),
 ]
 
 

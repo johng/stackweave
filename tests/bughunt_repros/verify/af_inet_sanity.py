@@ -1,5 +1,5 @@
 import socket
-import runloom.monkey as monkey
+import stackweave.monkey as monkey
 monkey.patch()
 try:
     r = socket.getaddrinfo("example.com", 80, socket.AF_INET, socket.SOCK_STREAM)

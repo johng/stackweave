@@ -1,5 +1,5 @@
 @echo off
-REM install.bat -- detect / bootstrap / build / install runloom on Windows.
+REM install.bat -- detect / bootstrap / build / install stackweave on Windows.
 REM
 REM Mirrors scripts/install.sh.  Uses cmd.exe directly so it works on
 REM stock Windows installs without any PowerShell policy fuss.
@@ -19,7 +19,7 @@ if errorlevel 1 (
 REM 2. Version gate.
 "%PYTHON%" -c "import sys; sys.exit(0 if sys.version_info>=(3,11) else 1)"
 if errorlevel 1 (
-    echo [install] runloom requires Python 3.11+
+    echo [install] stackweave requires Python 3.11+
     exit /b 1
 )
 
@@ -64,6 +64,6 @@ cd /d "%REPO_DIR%"
 if errorlevel 1 exit /b 4
 
 REM 6. Sanity-check.
-"%PYTHON%" -c "import runloom_c; print('coro=', runloom_c.backend(), ' netpoll=', runloom_c.netpoll_backend())"
+"%PYTHON%" -c "import stackweave_c; print('coro=', stackweave_c.backend(), ' netpoll=', stackweave_c.netpoll_backend())"
 echo [install] done
 endlocal

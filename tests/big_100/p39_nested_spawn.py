@@ -7,15 +7,15 @@ complete -- no goroutine is dropped or lost on the way down or back up.
 Stresses: goroutine creation at depth, join/aggregation, memory.
 """
 import harness
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
 BRANCH = 3
 DEPTH = 8           # 3^(8+1)-1)/(3-1) = 9841 nodes per tree
 
 # max_concurrent=MAX_TREES spawns only MAX_TREES worker goroutines, each
 # looping.  Each active worker spawns a full 9841-node tree, so peak
-# goroutines ≈ MAX_TREES * 9841 ≈ 2M -- feasible and well within runloom's
+# goroutines ≈ MAX_TREES * 9841 ≈ 2M -- feasible and well within stackweave's
 # tested range.  No CoSemaphore needed.
 MAX_TREES = 200
 
@@ -42,7 +42,7 @@ def setup(H):
 def worker(H, wid, rng, state):
     total = expected_nodes()
     while H.running():
-        done = runloom.Chan(total)
+        done = stackweave.Chan(total)
         H.fiber(spawn_tree, H, DEPTH, done)
         seen = 0
         while seen < total:
@@ -59,7 +59,7 @@ def worker(H, wid, rng, state):
 def body(H):
     # Tree nodes are many and shallow (each is its own goroutine, no deep C
     # recursion), so a small stack keeps the wide fan-out affordable.
-    runloom_c.set_stack_size(96 * 1024)
+    stackweave_c.set_stack_size(96 * 1024)
     H.run_pool(H.funcs, worker, H.state, max_concurrent=MAX_TREES)
 
 

@@ -16,10 +16,10 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-import runloom.monkey
-import runloom_c
+import stackweave.monkey
+import stackweave_c
 
-runloom.monkey.patch()
+stackweave.monkey.patch()
 
 
 def worker(gid, ops):
@@ -50,15 +50,15 @@ def main():
     # single-thread cooperative model as the design target.  See FINDINGS.
     if nhubs <= 1:
         for i in range(ngor):
-            runloom_c.fiber(lambda i=i: worker(i, ops), stack_size=2 << 20)
-        runloom_c.run()
+            stackweave_c.fiber(lambda i=i: worker(i, ops), stack_size=2 << 20)
+        stackweave_c.run()
     else:
-        runloom_c.mn_init(nhubs)
+        stackweave_c.mn_init(nhubs)
         for i in range(ngor):
-            runloom_c.mn_fiber(lambda i=i: worker(i, ops))
-        runloom_c.mn_run()
-        runloom_c.mn_fini()
-    assert runloom_c._self_check(0) == 0, "self_check failed after offload stress"
+            stackweave_c.mn_fiber(lambda i=i: worker(i, ops))
+        stackweave_c.mn_run()
+        stackweave_c.mn_fini()
+    assert stackweave_c._self_check(0) == 0, "self_check failed after offload stress"
     print("[offload-stress] {0} goroutines x {1} ops x {2} hub(s) OK".format(ngor, ops, nhubs))
     return 0
 

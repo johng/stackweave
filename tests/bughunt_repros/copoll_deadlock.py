@@ -15,8 +15,8 @@ def scenario(spawn, join_all):
         state.append("poll done: %r" % ev)
     def writer():
         time.sleep(0.1)                      # let poller park first
-        import runloom
-        runloom.monkey.offload(time.sleep, 0.05)   # any offloaded blocking call
+        import stackweave
+        stackweave.monkey.offload(time.sleep, 0.05)   # any offloaded blocking call
         os.write(w, b"x")                    # unblocks the poll
         state.append("writer done")
     t1 = spawn(poller); t2 = spawn(writer)
@@ -29,7 +29,7 @@ if sys.argv[1] == "stock":
         t = threading.Thread(target=fn); t.start(); return t
     scenario(spawn, lambda *ts: [t.join(8) for t in ts])
 else:
-    import runloom
+    import stackweave
     def main():
         done = []
         def wrap(fn):
@@ -37,8 +37,8 @@ else:
                 fn(); done.append(1)
             return g
         def spawn(fn):
-            runloom.fiber(wrap(fn)); return None
-        # crude join: fibers run to completion under runloom.run
+            stackweave.fiber(wrap(fn)); return None
+        # crude join: fibers run to completion under stackweave.run
         r, w = os.pipe()
         state = []
         def poller():
@@ -47,12 +47,12 @@ else:
             ev = p.poll(None)
             print("poll done:", ev, flush=True)
         def writer():
-            runloom.sleep(0.2)
-            runloom.monkey.offload(time.sleep, 0.05)
+            stackweave.sleep(0.2)
+            stackweave.monkey.offload(time.sleep, 0.05)
             os.write(w, b"x")
             print("writer done", flush=True)
-        runloom.fiber(poller)
-        runloom.fiber(writer)
-    runloom.monkey.patch()
-    runloom.run(1, main)   # ONE hub: both fibers submit from the same OS thread
+        stackweave.fiber(poller)
+        stackweave.fiber(writer)
+    stackweave.monkey.patch()
+    stackweave.run(1, main)   # ONE hub: both fibers submit from the same OS thread
     print("ALL DONE", flush=True)

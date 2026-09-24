@@ -2,7 +2,7 @@
 
 `multiprocessing.Queue` runs an internal `_feed` daemon thread (a FOREIGN OS
 thread to the scheduler) that takes patched locks/conditions to serialise puts
-onto the underlying pipe.  Under runloom + monkey.patch() that foreign thread
+onto the underlying pipe.  Under stackweave + monkey.patch() that foreign thread
 must use the FOREIGN-OS-THREAD-safe fallback (real OS blocking) -- the historic
 free-threaded mp.Queue SIGSEGV/UAF (CLAUDE.md "Cooperative primitives must be
 FOREIGN-OS-THREAD-safe") is exactly this path.
@@ -12,7 +12,7 @@ through ONE shared mp.Queue.  Items are conserved: every item put is got exactly
 once (sum tracked), no crash.
 
 Uses the **forkserver** start method (NOT fork -- the fork start-method
-deadlocks under runloom).  Kept deliberately small and bounded.
+deadlocks under stackweave).  Kept deliberately small and bounded.
 
 Stresses: mp.Queue _feed foreign thread, patched-primitive foreign fallback,
 item conservation across goroutine producers/consumers.
@@ -20,7 +20,7 @@ item conservation across goroutine producers/consumers.
 import multiprocessing
 
 import harness
-import runloom
+import stackweave
 
 NPRODUCERS = 8
 NCONSUMERS = 8
@@ -30,7 +30,7 @@ SENTINEL = ("STOP", None)
 
 def setup(H):
     # forkserver: a clean control process forks the workers, avoiding the
-    # runloom fork-start-method deadlock.  We don't actually spawn worker
+    # stackweave fork-start-method deadlock.  We don't actually spawn worker
     # PROCESSES here (the Queue + its _feed thread are the target), but we use
     # the context's Queue so its locks come from the chosen start method.
     try:
@@ -58,7 +58,7 @@ def producer(H, pid):
         chk[pid] = (chk[pid] + val) & 0xFFFFFFFFFFFF
         n += 1
         if (n & 15) == 0:
-            runloom.yield_now()
+            stackweave.yield_now()
 
 
 def consumer(H, cid, total_expected, done_event):
@@ -92,7 +92,7 @@ def body(H):
 
     # Spawn producers + consumers as goroutines.
     prod_done = [0]
-    prod_lock = runloom.sync.Lock()
+    prod_lock = stackweave.sync.Lock()
 
     def prod_wrap(pid):
         producer(H, pid)

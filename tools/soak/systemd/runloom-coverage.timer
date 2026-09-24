@@ -3,7 +3,7 @@
 # its own worktree so the two never contend for the live tree's .so anyway.
 # NOT installed by the repo -- see README.md in this directory.
 [Unit]
-Description=Nightly runloom coverage recompute
+Description=Nightly stackweave coverage recompute
 
 [Timer]
 OnCalendar=*-*-* 01:00:00

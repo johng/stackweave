@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # build_tsan_cpython.sh -- build a free-threaded CPython instrumented with
-# ThreadSanitizer, the "gold standard" interpreter for TSan-ing runloom (CPython's
+# ThreadSanitizer, the "gold standard" interpreter for TSan-ing stackweave (CPython's
 # own internals are then instrumented too, so races that cross the
 # ext <-> interpreter boundary are attributed precisely).
 #
@@ -23,11 +23,11 @@
 # the ext, no patched interpreter needed); this is the gold-standard complement.
 #
 # WHICH VERSION YOU BUILD IS PART OF THE RESULT.  This defaulted to 3.13.13,
-# and that default is how the previous "runloom's C is TSan-clean" claim went
+# and that default is how the previous "stackweave's C is TSan-clean" claim went
 # stale without anyone noticing: RUNLOOM_GCFRAMES_ANCHOR is gated
 # `Py_GIL_DISABLED && PY_VERSION_HEX >= 0x030E0000`, so on 3.13 the entire
 # GC-frames anchor compiles to nothing and a gold run there never saw it.
-# Build the version you SHIP.  Default moved to 3.14.4 to match what runloom
+# Build the version you SHIP.  Default moved to 3.14.4 to match what stackweave
 # is developed and deployed against; override with PY_VER for anything else.
 #
 # Usage:  tools/build_tsan_cpython.sh [VERSION]

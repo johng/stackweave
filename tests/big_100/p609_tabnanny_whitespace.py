@@ -39,8 +39,8 @@ WHY THIS IS A LEGITIMATE SINGLE-OWNER ORACLE (not a shared-object race):
   are read-only ints we never touch; check()/main()/process_tokens() -- the I/O and
   token paths -- are NOT exercised).  So this is pure arithmetic over private data,
   exactly like p490's single-owner arm.  On plain OS threads (GIL on or off) the
-  same computation is deterministic and thread-safe; under a CORRECT runloom it must
-  be too.  A divergence is therefore a runloom frame/stack-isolation bug, never
+  same computation is deterministic and thread-safe; under a CORRECT stackweave it must
+  be too.  A divergence is therefore a stackweave frame/stack-isolation bug, never
   documented Python semantics.
 
 TWO INDEPENDENT CROSS-CHECKS make a FAIL mean a real bug, not a tautology:
@@ -76,7 +76,7 @@ ORACLES:
 
 FAIL ON: a derived Whitespace property that changes across a yield, disagrees with
 the independent closed-form, or violates the module's own indent-level theorem --
-i.e. a torn frame / cross-fiber locals leak / lost-wakeup in the runloom runtime.
+i.e. a torn frame / cross-fiber locals leak / lost-wakeup in the stackweave runtime.
 
 Stresses: pure integer/tuple arithmetic in a stdlib value class across hub
 migration + yield, fiber-frame isolation of Python locals and small-int/tuple
@@ -85,7 +85,7 @@ intermediates, deterministic recompute stability under sustained M:N churn.
 import tabnanny
 
 import harness
-import runloom
+import stackweave
 
 
 # ---- independent closed-form reimplementation (the anchor) ----------------
@@ -198,9 +198,9 @@ def check_one_string(H, wid, ws):
             return None
 
     # ---- YIELD: let siblings run / migrate this fiber to another hub ----------
-    runloom.yield_now()
+    stackweave.yield_now()
     if w.nt & 1:
-        runloom.sleep(0.0002)
+        stackweave.sleep(0.0002)
 
     # ---- re-derive on a FRESH object and RE-READ the old one -----------------
     w2 = tabnanny.Whitespace(ws)

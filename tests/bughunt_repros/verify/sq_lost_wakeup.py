@@ -1,8 +1,8 @@
 import os, sys, threading as _th_pre
-import runloom.monkey as monkey
+import stackweave.monkey as monkey
 monkey.patch()
 import time, queue
-import runloom_c as rc
+import stackweave_c as rc
 
 q = queue.SimpleQueue()
 results = []

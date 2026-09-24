@@ -1,13 +1,13 @@
 """Committed skip baseline for the vendored asyncio conformance suite.
 
-Each entry marks a CPython test that DIVERGES on the runloom bridge, so the suite
-is green on the DEFAULT bridge (no src/runloom changes).  A failure NOT listed
+Each entry marks a CPython test that DIVERGES on the stackweave bridge, so the suite
+is green on the DEFAULT bridge (no src/stackweave changes).  A failure NOT listed
 here reds the suite -- that is the regression signal.
 
 Format: SKIPS[<module basename>][<key>] = "<reason>", where <key> is either
   "ClassName.method_name"   -- skip one test (parametrization suffix ignored), or
   "ClassName.*"             -- skip an entire test class (e.g. a redundant
-                               selector-variant class that adds no runloom coverage).
+                               selector-variant class that adds no stackweave coverage).
 
 Populated per module as each is vendored + brought to green; see conftest.py
 (apply via pytest_collection_modifyitems).
@@ -19,16 +19,16 @@ GH96704 = ("gh-96704: the bridge runs the exception handler in the outer context
 
 # Reasons shared by several test_events entries (stated once, here).  The three
 # selector-variant classes (EPoll/Poll/Select) are identical runs once conftest
-# makes create_event_loop() return RunloomEventLoop(): the loop drives its own
+# makes create_event_loop() return StackweaveEventLoop(): the loop drives its own
 # netpoll and ignores the selector.  SelectEventLoopTests is the canonical one.
 EV_SELECTOR_REDUNDANT = ("redundant selector variant -- identical to "
-                         "SelectEventLoopTests once the loop is runloom "
+                         "SelectEventLoopTests once the loop is stackweave "
                          "(selector-independent)")
 EV_MULTIHOST = ("test mocks asyncio's internal socket.socket()/getsockbyname "
-                "create_server bind loop, which runloom's create_server does not "
-                "mirror; runloom binds real multi-host servers fine")
+                "create_server bind loop, which stackweave's create_server does not "
+                "mirror; stackweave binds real multi-host servers fine")
 EV_NEW_PROCESS = ("HANGS: run_in_executor(ProcessPoolExecutor) never completes "
-                  "on the runloom loop")
+                  "on the stackweave loop")
 
 SKIPS = {
     "test_futures2": {
@@ -43,7 +43,7 @@ SKIPS = {
     "test_tasks": {
         # run_coroutine_threadsafe(...).cancel() from a FOREIGN thread: the task
         # is not observed cancelled by the deadline the stock loop guarantees --
-        # a cross-thread cancel-timing divergence on the runloom bridge.
+        # a cross-thread cancel-timing divergence on the stackweave bridge.
         "RunCoroutineThreadsafeTests.test_run_coroutine_threadsafe_and_cancel":
             "cross-thread run_coroutine_threadsafe cancel not observed cancelled (bridge cross-thread cancel timing)",
     },
@@ -51,19 +51,19 @@ SKIPS = {
         # --- Redundant selector-variant classes ------------------------------
         # EPoll/Poll/Select all inherit EventLoopTestsMixin and differ only in
         # the selector passed to create_event_loop(); conftest replaces that
-        # with RunloomEventLoop() regardless, so they run identically.  Keep
+        # with StackweaveEventLoop() regardless, so they run identically.  Keep
         # SelectEventLoopTests (always present) as canonical; skip the others.
         "EPollEventLoopTests.*": EV_SELECTOR_REDUNDANT,
         "PollEventLoopTests.*": EV_SELECTOR_REDUNDANT,
 
         # --- Canonical class (SelectEventLoopTests) remaining divergences -----
-        # These few tests reach into asyncio-internal structure the runloom loop
+        # These few tests reach into asyncio-internal structure the stackweave loop
         # deliberately does not mirror (mock-driven or private-attribute tests),
-        # NOT real runloom behavior gaps -- so they are left skipped by design.
+        # NOT real stackweave behavior gaps -- so they are left skipped by design.
         "SelectEventLoopTests.test_timeout_rounding":
-            "test reads loop._run_once (stock-loop internal the runloom loop doesn't mirror)",
+            "test reads loop._run_once (stock-loop internal the stackweave loop doesn't mirror)",
         "SelectEventLoopTests.test_prompt_cancellation":
-            "test reads loop._stop_serving (stock-loop internal the runloom loop doesn't mirror)",
+            "test reads loop._stop_serving (stock-loop internal the stackweave loop doesn't mirror)",
         "SelectEventLoopTests.test_create_server_multiple_hosts_ipv4": EV_MULTIHOST,
         "SelectEventLoopTests.test_create_server_multiple_hosts_ipv6": EV_MULTIHOST,
 

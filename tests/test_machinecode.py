@@ -1,4 +1,4 @@
-"""runloom_c.MachineCode -- execute runtime-provided native machine code.
+"""stackweave_c.MachineCode -- execute runtime-provided native machine code.
 
 A fiber runs on a real C stack, so a JIT'd blob can be called straight from
 one: MachineCode maps the bytes W^X and a call jumps the CPU directly into them
@@ -16,8 +16,8 @@ import os
 import platform
 import unittest
 
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
 _IS_X86_64 = platform.machine() in ("x86_64", "AMD64", "x86-64")
 _IS_WIN64 = _IS_X86_64 and os.name == "nt"
@@ -38,17 +38,17 @@ RET0 = bytes([0x48, 0x31, 0xc0, 0xc3])                            # xor eax,eax;
 
 class TestMachineCodeType(unittest.TestCase):
     def test_type_exists(self):
-        self.assertTrue(hasattr(runloom_c, "MachineCode"))
+        self.assertTrue(hasattr(stackweave_c, "MachineCode"))
 
     def test_empty_rejected(self):
         with self.assertRaises(ValueError):
-            runloom_c.MachineCode(b"")
+            stackweave_c.MachineCode(b"")
 
 
 @unittest.skipUnless(_IS_X86_64, "blobs are x86-64 machine code")
 class TestMachineCodeExec(unittest.TestCase):
     def test_inc(self):
-        fn = runloom_c.MachineCode(INC)
+        fn = stackweave_c.MachineCode(INC)
         try:
             self.assertEqual(fn(41), 42)
             self.assertEqual(fn(-1), 0)
@@ -57,28 +57,28 @@ class TestMachineCodeExec(unittest.TestCase):
             fn.close()
 
     def test_square(self):
-        with runloom_c.MachineCode(SQ) as fn:
+        with stackweave_c.MachineCode(SQ) as fn:
             self.assertEqual(fn(9), 81)
             self.assertEqual(fn(0), 0)
             self.assertEqual(fn(7), 49)
 
     def test_two_args(self):
-        with runloom_c.MachineCode(ADD) as fn:
+        with stackweave_c.MachineCode(ADD) as fn:
             self.assertEqual(fn(20, 22), 42)
             self.assertEqual(fn(0, 0), 0)
 
     def test_zero_args(self):
-        with runloom_c.MachineCode(RET0) as fn:
+        with stackweave_c.MachineCode(RET0) as fn:
             self.assertEqual(fn(), 0)
 
     def test_address_and_size(self):
-        with runloom_c.MachineCode(INC) as fn:
+        with stackweave_c.MachineCode(INC) as fn:
             self.assertEqual(fn.size, len(INC))
             self.assertIsInstance(fn.address, int)
             self.assertNotEqual(fn.address, 0)
 
     def test_close_is_idempotent_and_guards(self):
-        fn = runloom_c.MachineCode(INC)
+        fn = stackweave_c.MachineCode(INC)
         self.assertEqual(fn(1), 2)
         fn.close()
         fn.close()                       # idempotent
@@ -86,7 +86,7 @@ class TestMachineCodeExec(unittest.TestCase):
             fn(1)                        # call-after-close guarded
 
     def test_too_many_args(self):
-        with runloom_c.MachineCode(RET0) as fn:
+        with stackweave_c.MachineCode(RET0) as fn:
             with self.assertRaises(TypeError):
                 fn(1, 2, 3, 4, 5, 6, 7)
 
@@ -94,38 +94,38 @@ class TestMachineCodeExec(unittest.TestCase):
         box = []
 
         def g():
-            fn = runloom_c.MachineCode(SQ)
+            fn = stackweave_c.MachineCode(SQ)
             box.append(fn(12))
             fn.close()
 
-        runloom_c.fiber(g)
-        runloom_c.run()
+        stackweave_c.fiber(g)
+        stackweave_c.run()
         self.assertEqual(box, [144])
 
     def test_runs_across_mn_fibers(self):
         # Each fiber JITs + calls native code on its own swapped C stack,
         # in genuine parallel under M:N.  Results come back over a Chan.
         N = 8
-        ch = runloom_c.Chan()
+        ch = stackweave_c.Chan()
         box = {}
 
         def worker(n):
-            with runloom_c.MachineCode(SQ) as fn:
+            with stackweave_c.MachineCode(SQ) as fn:
                 ch.send((n, fn(n)))
 
         def main():
             for n in range(N):
-                runloom_c.mn_fiber(lambda n=n: worker(n))
+                stackweave_c.mn_fiber(lambda n=n: worker(n))
             got = {}
             for _ in range(N):
                 (n, sq), ok = ch.recv()    # Chan.recv() -> (value, ok)
                 got[n] = sq
             box["r"] = got
 
-        runloom_c.mn_init(2)
-        runloom_c.mn_fiber(main)
-        runloom_c.mn_run()
-        runloom_c.mn_fini()
+        stackweave_c.mn_init(2)
+        stackweave_c.mn_fiber(main)
+        stackweave_c.mn_run()
+        stackweave_c.mn_fini()
         self.assertEqual(box["r"], {n: n * n for n in range(N)})
 
 

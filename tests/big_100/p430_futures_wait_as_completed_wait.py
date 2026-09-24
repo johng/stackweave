@@ -96,7 +96,7 @@ read-modify-write data race; a TSan report on that list's ob_item/ob_size store
 localizes the lost/doubled future before the set-conservation assert closes.
 """
 import harness
-import runloom
+import stackweave
 
 # Futures per round.  Big enough that the shared _Waiter.finished_futures list is
 # grown past several ob_item realloc boundaries by concurrent appenders (where a
@@ -316,7 +316,7 @@ def run_serial_control(H, wid, rng):
     task acquires the permit.  Completions therefore land STRICTLY ONE AT A TIME
     and the shared _Waiter.finished_futures list is grown by ONE race-free append
     at a time -- there is no concurrent appender to tear the ob_item store.  (We
-    do a single runloom.yield_now() inside each task so the wait()/as_completed()
+    do a single stackweave.yield_now() inside each task so the wait()/as_completed()
     caller genuinely parks on the waiter event across the serialized completions,
     rather than the whole batch finishing before the caller looks.)
 
@@ -342,7 +342,7 @@ def run_serial_control(H, wid, rng):
         def serial_task(payload):
             # One cooperative hand-off so the wait()/as_completed() caller actually
             # parks on the waiter event between serialized completions.
-            runloom.yield_now()
+            stackweave.yield_now()
             return g(payload)
 
         futs = []

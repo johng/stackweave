@@ -1,7 +1,7 @@
 """Channel torture: many senders/receivers, checksummed payloads, close mid-stream.
 Verify no loss, duplication, or corruption. Run under both run(1) and run(N)."""
 import sys, hashlib, threading
-import runloom
+import stackweave
 
 HUBS = int(sys.argv[1]) if len(sys.argv) > 1 else 8
 NSEND = 16
@@ -17,8 +17,8 @@ def payload(sender, seq):
 
 
 def main():
-    ch = runloom.Chan(CAP)
-    done = runloom.Chan(0)
+    ch = stackweave.Chan(CAP)
+    done = stackweave.Chan(0)
     recv_lock = threading.Lock()
     got = []           # (sender, seq)
     corrupt = []
@@ -52,9 +52,9 @@ def main():
         done.send(("r", rid, cnt))
 
     for i in range(NSEND):
-        runloom.fiber(sender, i)
+        stackweave.fiber(sender, i)
     for i in range(NRECV):
-        runloom.fiber(receiver, i)
+        stackweave.fiber(receiver, i)
 
     def waiter():
         sdone = 0
@@ -87,7 +87,7 @@ def main():
         assert len(set(got)) == len(got), "DUPLICATES: %d dups" % (len(got) - len(set(got)))
         print("hubs=%d cap=%d sent=%d recv=%d OK" % (HUBS, CAP, total_sent, len(got)))
 
-    runloom.fiber(collector)
+    stackweave.fiber(collector)
 
 
-runloom.run(HUBS, main)
+stackweave.run(HUBS, main)

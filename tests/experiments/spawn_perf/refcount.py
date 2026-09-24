@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Exp E: the free-threaded cross-core refcount tax on spawn.
 
-Each runloom.fiber(noop) increfs the shared callable `noop` when it stows it in the
+Each stackweave.fiber(noop) increfs the shared callable `noop` when it stows it in the
 g, and decrefs it at completion -- on whichever hub ran the fiber.  Under the GIL
 those are cheap biased-refcount ops; free-threaded they are cross-core atomic RMWs
 on ONE cache line (noop's refcount), bouncing between all the hub cores.  Same for
@@ -16,8 +16,8 @@ import sys
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "src"))
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
 
 def noop():
@@ -38,24 +38,24 @@ def main():
 
     def producer(count):
         for _ in range(count):
-            runloom.fiber(noop)
+            stackweave.fiber(noop)
 
     def root():
         for i in range(args.issuers):
-            runloom.fiber(producer, base + (1 if i < rem else 0))
+            stackweave.fiber(producer, base + (1 if i < rem else 0))
 
     if args.immortalize:
         # Freeze every object the per-fiber spawn touches the refcount of: the
         # callable graph + the producer closure graph + the spawn entrypoint.
         for obj in (noop, noop.__code__, noop.__globals__,
                     producer, producer.__code__, root, root.__code__,
-                    runloom.fiber):
-            runloom_c.immortalize(obj)
+                    stackweave.fiber):
+            stackweave_c.immortalize(obj)
 
     best = 1e18
     for _ in range(args.reps):
         t0 = time.perf_counter()
-        runloom.run(args.hubs, root)
+        stackweave.run(args.hubs, root)
         best = min(best, time.perf_counter() - t0)
     rate = args.n / best
     rec = {"label": args.label, "hubs": args.hubs, "issuers": args.issuers,

@@ -12,7 +12,7 @@ deterministic functions of their string input.
 WHERE M:N COULD BREAK IT (the hazard this program probes).  Each `loads()` call
 constructs its OWN parser + Unmarshaller (getparser() news them up per call),
 so the Unmarshaller's `_stack`/`_marks`/`_value` accumulation is, by design,
-private to that one call on that one fiber.  runloom gives every fiber its own
+private to that one call on that one fiber.  stackweave gives every fiber its own
 Python frame stack and its own C stack; a correctly isolated runtime keeps each
 fiber's Unmarshaller instance state entirely local.  The hazard: if instance
 state leaked across hubs -- e.g. a sibling fiber mid-`loads()` on another hub
@@ -53,7 +53,7 @@ ORACLES:
   * LOAD-BEARING -- ROUND-TRIP CONSERVATION (worker, HARD, fail-fast).  Single-
     owner dumps->yield->loads equality per the closed-world law above.  The XML
     string is fiber-private; a mismatch means Unmarshaller/parser instance state
-    leaked across fibers (or a torn value), which is a runloom isolation bug.
+    leaked across fibers (or a torn value), which is a stackweave isolation bug.
   * NON-VACUITY (post, HARD): the round-trip arm actually ran (roundtrips > 0).
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber stranded inside loads()
     (parked mid-parse on a desynced Unmarshaller) never returns; watchdog catches.
@@ -77,7 +77,7 @@ tuple with a sibling's wid, localizes the leak before the equality oracle fires.
 import xmlrpc.client as xmlrpc
 
 import harness
-import runloom
+import stackweave
 
 # Per-fiber value band.  Every element of a fiber's param tuple embeds its wid so
 # a value that leaked from a sibling carries a DIFFERENT wid and is caught by the
@@ -150,9 +150,9 @@ def roundtrip_check(H, wid, idx, state):
     # YIELD: a sibling fiber's dumps/loads runs here, possibly on another hub.
     # If parser/Unmarshaller instance state leaked across fibers, the loads()
     # below would recover a corrupted tuple.
-    runloom.yield_now()
+    stackweave.yield_now()
     if idx & 1:
-        runloom.sleep(0.0003)
+        stackweave.sleep(0.0003)
 
     # Deserialize (getparser() news up a fresh parser + Unmarshaller per call).
     recovered, recovered_name = xmlrpc.loads(xml)
@@ -194,7 +194,7 @@ def worker(H, wid, rng, state):
     """Each fiber runs a SUSTAINED stream of single-owner dumps->yield->loads
     conservation checks (fail-fast).  The XML strings and param tuples are all
     fiber-private, so nothing is shared across fibers -- the only way the oracle
-    fails is a runloom leak of per-call parser/Unmarshaller instance state."""
+    fails is a stackweave leak of per-call parser/Unmarshaller instance state."""
     for _ in H.round_range():
         if not H.running():
             break
@@ -250,4 +250,4 @@ if __name__ == "__main__":
                  "closed-world conservation law over serialize->yield->deserialize. "
                  "A recovered tuple with wrong arity, a corrupted methodname, or "
                  "an element carrying a sibling's wid is a cross-fiber leak of "
-                 "Unmarshaller instance state (a runloom isolation bug)")
+                 "Unmarshaller instance state (a stackweave isolation bug)")

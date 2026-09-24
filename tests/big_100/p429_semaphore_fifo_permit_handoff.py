@@ -1,7 +1,7 @@
 """big_100 / 429 -- plain Semaphore FIFO permit hand-off + conservation under M:N.
 
 The subject is the cooperative ``threading.Semaphore`` (monkey.patch() hands
-every fiber the cooperative CoSemaphore, src/runloom/monkey/events.py:216).  Its
+every fiber the cooperative CoSemaphore, src/stackweave/monkey/events.py:216).  Its
 internal state -- the EXACT fields this program attacks -- is::
 
     __slots__ = ("_value", "_waiters", "_guard", "_cancelled")
@@ -113,7 +113,7 @@ or on _value (release += vs acquire -=); a TSan report on that record/field
 localises a lost or doubled permit before the conservation sum even closes.
 """
 import harness
-import runloom
+import stackweave
 
 
 # K permits per shared semaphore.  Small enough that contention is real (most
@@ -201,7 +201,7 @@ def shared_conserve(H, wid, rng, state, slot):
         return False
 
     for _ in range(HOLD_YIELDS):
-        runloom.yield_now()
+        stackweave.yield_now()
 
     with guard:
         holders[idx] -= 1
@@ -246,7 +246,7 @@ def timed_self_cancel(H, wid, rng, state, slot):
         # release() -- that is the popleft-hand-off vs w[1]=False race we attack.
         granted[slot] += 1
         tg[slot] += 1
-        runloom.sleep(SELF_CANCEL_TIMEOUT * 2.0)
+        stackweave.sleep(SELF_CANCEL_TIMEOUT * 2.0)
         sem.release()
         returned[slot] += 1
         return True
@@ -334,7 +334,7 @@ def fairness_round(H, wid, rng, state, slot):
     gseq = [0]                 # next grant index to hand out (under guard)
     grant_of = {}              # waiter id (== its proven queue index) -> grant index
     parked = [0]               # how many waiters are CONFIRMED in sem._waiters
-    wg = runloom.WaitGroup()
+    wg = stackweave.WaitGroup()
     wg.add(FAIR_WAITERS)
 
     def waiter(myid):
@@ -387,7 +387,7 @@ def fairness_round(H, wid, rng, state, slot):
                        "{1} yields -- it was lost on the way to park (a permit "
                        "queue never formed)".format(i, spins))
                 return False
-            runloom.yield_now()
+            stackweave.yield_now()
 
     # All FAIR_WAITERS are now confirmed queued in _waiters in index order.
     # Release ONE permit at a time and WAIT for that permit's grant to be RECORDED
@@ -412,7 +412,7 @@ def fairness_round(H, wid, rng, state, slot):
                        "yields -- the permit was not handed to any queued waiter "
                        "(lost hand-off / vanished permit)".format(r, spins))
                 return False
-            runloom.yield_now()
+            stackweave.yield_now()
 
     wg.wait()
     if H.failed:

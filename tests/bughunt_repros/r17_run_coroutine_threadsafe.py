@@ -1,9 +1,9 @@
 """asyncio.run_coroutine_threadsafe from a foreign thread into a running
-runloom loop + signal handler smoke test."""
+stackweave loop + signal handler smoke test."""
 import sys, threading, asyncio, time, signal, os
-import runloom.aio as aio
+import stackweave.aio as aio
 
-loop = aio.RunloomEventLoop()
+loop = aio.StackweaveEventLoop()
 asyncio.set_event_loop(loop)
 got = []
 

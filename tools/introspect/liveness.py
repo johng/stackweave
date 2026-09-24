@@ -3,7 +3,7 @@
 61 of the 125 historical bugs were permanent hangs, and the dominant COST was
 multi-day live-debug arcs to assign blame -- worse, the runtime's own deadlock
 census treats a netpoll-parked fiber as wakeable, so a genuine stranded park is
-SILENT.  This module turns the existing introspection (runloom_c.fibers() +
+SILENT.  This module turns the existing introspection (stackweave_c.fibers() +
 mn_hub_states()) into a continuously-checkable liveness signal and, on a stall,
 dumps blame the way Go's schedtrace/goroutine-dump does.
 
@@ -29,7 +29,7 @@ import sys
 import threading
 import time
 
-import runloom_c
+import stackweave_c
 
 
 RUNNABLE = ("runnable", "running")
@@ -38,10 +38,10 @@ RUNNABLE = ("runnable", "running")
 def snapshot():
     """A coherent-enough snapshot of the scheduler for a liveness verdict."""
     try:
-        hubs = runloom_c.mn_hub_states()
+        hubs = stackweave_c.mn_hub_states()
     except Exception:
         hubs = []
-    return {"fibers": runloom_c.fibers(), "hubs": hubs}
+    return {"fibers": stackweave_c.fibers(), "hubs": hubs}
 
 
 def _is_io_waiter(f):

@@ -23,10 +23,10 @@ import tempfile
 
 import pytest
 
-import runloom_c
+import stackweave_c
 
 pytestmark = pytest.mark.skipif(
-    not runloom_c.iouring_available(),
+    not stackweave_c.iouring_available(),
     reason="io_uring not available (need Linux >= 5.1)")
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -39,14 +39,14 @@ def _read_via_fiber(fd, n, offset=0):
     def worker():
         buf = bytearray(n)
         try:
-            got = runloom_c.file_read(fd, buf, n, offset)
+            got = stackweave_c.file_read(fd, buf, n, offset)
             out["data"] = bytes(buf[:got])
             out["n"] = got
         except OSError as e:
             out["errno"] = e.errno
 
-    runloom_c.fiber(worker)
-    runloom_c.run()
+    stackweave_c.fiber(worker)
+    stackweave_c.run()
     return out
 
 
@@ -70,10 +70,10 @@ def test_roundtrip_write_then_read():
         out = {}
 
         def w():
-            out["written"] = runloom_c.file_write(fd, data, 0)
+            out["written"] = stackweave_c.file_write(fd, data, 0)
 
-        runloom_c.fiber(w)
-        runloom_c.run()
+        stackweave_c.fiber(w)
+        stackweave_c.run()
         assert out["written"] == len(data)
 
         got = _read_via_fiber(fd, len(data), 0)
@@ -157,13 +157,13 @@ def test_concurrent_distinct_files_single_thread():
             def worker():
                 size = os.path.getsize(paths[i])
                 buf = bytearray(size)
-                got = runloom_c.file_read(fds[i], buf, size, 0)
+                got = stackweave_c.file_read(fds[i], buf, size, 0)
                 results[i] = bytes(buf[:got])
             return worker
 
         for i in range(N):
-            runloom_c.fiber(make_worker(i))
-        runloom_c.run()
+            stackweave_c.fiber(make_worker(i))
+        stackweave_c.run()
 
         for i in range(N):
             expected = ("file-%03d-" % i).encode() * 40
@@ -182,9 +182,9 @@ def _mn_fileread_snippet(hubs, n):
     code = r'''
 import sys; sys.path.insert(0, __SRCPATH__)
 import os, tempfile
-import runloom_c
+import stackweave_c
 
-if not runloom_c.iouring_available():
+if not stackweave_c.iouring_available():
     print("PASS")   # nothing to stress
     sys.exit(0)
 
@@ -202,15 +202,15 @@ def mk(i):
     def w():
         size = len(expected[i])
         buf = bytearray(size)
-        m = runloom_c.file_read(fds[i], buf, size, 0)
+        m = stackweave_c.file_read(fds[i], buf, size, 0)
         results[i] = bytes(buf[:m])
     return w
 
-runloom_c.mn_init(H)
+stackweave_c.mn_init(H)
 for i in range(N):
-    runloom_c.mn_fiber(mk(i))
-runloom_c.mn_run()
-runloom_c.mn_fini()
+    stackweave_c.mn_fiber(mk(i))
+stackweave_c.mn_run()
+stackweave_c.mn_fini()
 
 for fd in fds: os.close(fd)
 for p in paths: os.unlink(p)
@@ -259,8 +259,8 @@ def _mn_concurrent_init_snippet(hubs, n):
     code = r'''
 import sys; sys.path.insert(0, __SRCPATH__)
 import os, tempfile
-import runloom_c
-# NB: NO runloom_c.iouring_available() here -- the fibers below are the
+import stackweave_c
+# NB: NO stackweave_c.iouring_available() here -- the fibers below are the
 # first io_uring users, exercising concurrent lazy init across hubs.
 N = __N__; H = __H__
 paths, fds, expected, results = [], [], [], [None] * N
@@ -276,15 +276,15 @@ def mk(i):
     def w():
         size = len(expected[i])
         buf = bytearray(size)
-        m = runloom_c.file_read(fds[i], buf, size, 0)
+        m = stackweave_c.file_read(fds[i], buf, size, 0)
         results[i] = bytes(buf[:m])
     return w
 
-runloom_c.mn_init(H)
+stackweave_c.mn_init(H)
 for i in range(N):
-    runloom_c.mn_fiber(mk(i))
-runloom_c.mn_run()
-runloom_c.mn_fini()
+    stackweave_c.mn_fiber(mk(i))
+stackweave_c.mn_run()
+stackweave_c.mn_fini()
 for fd in fds: os.close(fd)
 for p in paths: os.unlink(p)
 bad = [i for i in range(N) if results[i] != expected[i]]
@@ -306,7 +306,7 @@ def _mn_fileread_gc_snippet(hubs, n):
     code = r'''
 import sys; sys.path.insert(0, __SRCPATH__)
 import os, threading, time, gc
-import runloom_c
+import stackweave_c
 N = __N__; H = __H__
 rfds, wfds, results = [], [], [None] * N
 for i in range(N):
@@ -317,7 +317,7 @@ stop = [False]
 def mk(i):
     def w():
         buf = bytearray(len(PAYLOAD))
-        m = runloom_c.file_read(rfds[i], buf, len(PAYLOAD), 0)
+        m = stackweave_c.file_read(rfds[i], buf, len(PAYLOAD), 0)
         results[i] = bytes(buf[:m])
     return w
 
@@ -335,10 +335,10 @@ def gcer():
 
 gt = threading.Thread(target=gcer, daemon=True); gt.start()
 t = threading.Thread(target=feeder); t.start()
-runloom_c.mn_init(H)
-for i in range(N): runloom_c.mn_fiber(mk(i))
-runloom_c.mn_run()
-runloom_c.mn_fini()
+stackweave_c.mn_init(H)
+for i in range(N): stackweave_c.mn_fiber(mk(i))
+stackweave_c.mn_run()
+stackweave_c.mn_fini()
 stop[0] = True; t.join()
 for fd in rfds + wfds:
     try: os.close(fd)
@@ -390,7 +390,7 @@ def _mn_sockpair_recv_gc_snippet(hubs, n):
     code = r'''
 import sys; sys.path.insert(0, __SRCPATH__)
 import os, socket, threading, time, gc
-import runloom_c
+import stackweave_c
 
 N = __N__; H = __H__
 results = [None] * N
@@ -407,7 +407,7 @@ for i in range(N):
 
 def mk_server(i):
     def h():
-        conn = runloom_c.TCPConn(recv_fds[i])
+        conn = stackweave_c.TCPConn(recv_fds[i])
         results[i] = conn.recv(64)
         conn.close()
     return h
@@ -426,11 +426,11 @@ def gcer():
 
 threading.Thread(target=gcer, daemon=True).start()
 t = threading.Thread(target=feeder); t.start()
-runloom_c.mn_init(H)
+stackweave_c.mn_init(H)
 for i in range(N):
-    runloom_c.mn_fiber(mk_server(i))
-runloom_c.mn_run()
-runloom_c.mn_fini()
+    stackweave_c.mn_fiber(mk_server(i))
+stackweave_c.mn_run()
+stackweave_c.mn_fini()
 stop[0] = True; t.join()
 for fd in peer_fds:
     try: os.close(fd)

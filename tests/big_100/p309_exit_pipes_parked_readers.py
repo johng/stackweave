@@ -64,17 +64,17 @@ DRIBBLER = ("import sys,time\n"
 CHILD = r'''
 import sys, os, subprocess, threading
 sys.path.insert(0, {src!r})
-import runloom
-import runloom_c
-import runloom.monkey
-runloom.monkey.patch()                     # cooperative pipe read() on the hubs
+import stackweave
+import stackweave_c
+import stackweave.monkey
+stackweave.monkey.patch()                     # cooperative pipe read() on the hubs
 
-# Wake a goroutine parked in runloom_c.wait_fd(fd, READ): the SAME primitive the
+# Wake a goroutine parked in stackweave_c.wait_fd(fd, READ): the SAME primitive the
 # cooperative socket close uses (cancel-BEFORE-free, so the parker raises
 # OSError(ECANCELED)).  os.close(fd) alone only clears the arm bit and does NOT
 # wake a parked pipe reader -- so the clean teardown MUST cancel first or the
-# join wedges on a stranded reader.  See src/runloom/monkey/sockets.py.
-_cancel_fd = getattr(runloom_c, "netpoll_cancel_fd", None)
+# join wedges on a stranded reader.  See src/stackweave/monkey/sockets.py.
+_cancel_fd = getattr(stackweave_c, "netpoll_cancel_fd", None)
 
 MODE = sys.argv[1] if len(sys.argv) > 1 else "clean"
 KIDS = int(sys.argv[2]) if len(sys.argv) > 2 else 6
@@ -92,7 +92,7 @@ def reader(fd):
     """Park in a COOPERATIVE pipe read on the raw fd until the read end is
     closed (os.read -> b"") or torn out from under us.  The patched os.read
     sets the fd non-blocking and parks the goroutine on the fd's netpoll arm
-    (runloom_c.wait_fd), so the hub thread is NOT OS-blocked -- this is the
+    (stackweave_c.wait_fd), so the hub thread is NOT OS-blocked -- this is the
     'parked pipe-reader' the exit-instant oracle is about.  (proc.stdout.read,
     a C BufferedReader, would instead OS-block the hub via a raw read syscall;
     that starves the scheduler.  os.read on the raw fd is the cooperative path.)"""
@@ -111,12 +111,12 @@ def main():
     # goroutine parked in a cooperative read() per child.
     for _ in range(KIDS):
         try:
-            # Build the Popen OFF the goroutine (runloom.blocking runs it on a
+            # Build the Popen OFF the goroutine (stackweave.blocking runs it on a
             # pool thread where _in_goroutine() is False) to dodge the nested-
             # offload deadlock procutil.py documents as BUG #4 (Popen.__init__
             # -> _pyio FileIO -> offloaded os.fstat, whose wait can lose its
             # wakeup at high concurrent-spawn rates).  KIDS is small here.
-            p = runloom.blocking(subprocess.Popen,
+            p = stackweave.blocking(subprocess.Popen,
                                  [PY, "-u", "-c", DRIBBLER],
                                  stdout=subprocess.PIPE,
                                  stderr=subprocess.DEVNULL)
@@ -133,8 +133,8 @@ def main():
         with lock:
             procs.append(p)
             rfds.append(fd)
-        runloom.fiber(reader, fd)
-    runloom.sleep(0.08)                     # let dribblers write + readers park
+        stackweave.fiber(reader, fd)
+    stackweave.sleep(0.08)                     # let dribblers write + readers park
     sys.stdout.write("DONE-MARKER\n"); sys.stdout.flush()
 
     with lock:
@@ -172,7 +172,7 @@ def main():
         except OSError: pass
     # Fall through: mn_run joins the woken (now-returned) reader goroutines.
 
-runloom.run(4, main)
+stackweave.run(4, main)
 sys.stdout.write("MAIN-EXIT\n"); sys.stdout.flush()
 '''
 
@@ -294,14 +294,14 @@ def post(H):
 
 
 if __name__ == "__main__":
-    # SUBPROCESS program: each worker iteration forks a real child runloom
+    # SUBPROCESS program: each worker iteration forks a real child stackweave
     # process which itself forks KIDS real grandchildren -- so the real process
     # count is ~funcs*KIDS at peak.  procutil's MAX_CONCURRENT semaphore bounds
     # concurrent child spawns, but a hard funcs ceiling keeps the soak driver
     # from driving this at 1M (which would fork-bomb the box, not test a bug).
     harness.main("p309_exit_pipes_parked_readers", body, setup=setup, post=post,
                  default_funcs=100, max_funcs=300,
-                 describe="child runloom exits (clean close-read-then-reap AND "
+                 describe="child stackweave exits (clean close-read-then-reap AND "
                           "abrupt os._exit) with live child procs + open pipes + "
                           "parked pipe-readers; returncode 0, no hang, parent "
                           "fd count bounded (leak oracle)")

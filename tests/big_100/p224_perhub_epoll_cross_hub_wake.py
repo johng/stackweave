@@ -1,4 +1,4 @@
-"""big_100 / 224 -- per-hub epoll cross-hub lost-park (RUNLOOM_PERHUB_EPOLL).
+"""big_100 / 224 -- per-hub epoll cross-hub lost-park (STACKWEAVE_PERHUB_EPOLL).
 
 The primary Linux netpoll architecture is PER-HUB epoll (default ON since
 2026-06-16): each hub owns its own epoll fd plus a per-hub wake-eventfd, and a
@@ -20,10 +20,10 @@ and the watchdog/_dump_parkers fires (readyParked>0 = lost wakeup).
 
 It is meaningful only on Linux-epoll (the toggle is a no-op under kqueue/iocp/
 select), so it SKIPs cleanly off epoll.  Because the backend is resolved ONCE
-per process from RUNLOOM_PERHUB_EPOLL (read before the hubs start), the =1-vs-=0
+per process from STACKWEAVE_PERHUB_EPOLL (read before the hubs start), the =1-vs-=0
 parity comparison can't happen in one scheduler: the top-level invocation
 re-execs itself as two child sub-runs (one per backend) and asserts both PASS
-with sane throughput; a child sub-run (RUNLOOM_PERHUB_SUBMODE set) runs the
+with sane throughput; a child sub-run (STACKWEAVE_PERHUB_SUBMODE set) runs the
 workload under exactly one backend.
 
 Stresses: per-hub epoll fd registration + per-hub wake-eventfd routing under cross-hub fd parking; the lost-park-across-hubs path (fd armed on hub A, readiness/peer-write driven from a goroutine landing on hub B); =0 vs =1 backend toggle parity.
@@ -32,16 +32,16 @@ import os
 import socket
 import sys
 
-# A child sub-run carries the chosen backend in RUNLOOM_PERHUB_EPOLL already;
-# the only thing we must guarantee is that env is set BEFORE runloom_c is
+# A child sub-run carries the chosen backend in STACKWEAVE_PERHUB_EPOLL already;
+# the only thing we must guarantee is that env is set BEFORE stackweave_c is
 # imported (the backend is resolved-once via getenv before the hubs start).
 # A top-level (non-child) run leaves the inherited default (=1) in place for its
 # own quick self-probe and drives the real comparison via re-exec children.
-_SUBMODE = os.environ.get("RUNLOOM_PERHUB_SUBMODE")
+_SUBMODE = os.environ.get("STACKWEAVE_PERHUB_SUBMODE")
 
-import harness        # noqa: E402  (harness imports runloom_c after env is set)
-import runloom        # noqa: E402
-import runloom_c      # noqa: E402
+import harness        # noqa: E402  (harness imports stackweave_c after env is set)
+import stackweave        # noqa: E402
+import stackweave_c      # noqa: E402
 
 # One tagged byte travels each socketpair; the parker checks it equals the byte
 # its writer partner sent (tag = pair index, low 8 bits -- enough to catch a
@@ -141,22 +141,22 @@ def post(H):
     H.check(H.total_ops() > 0,
             "no cross-hub wakes completed (every parker stranded?)")
     H.log("perhub_epoll={0} cross_hub_wakes={1}".format(
-        os.environ.get("RUNLOOM_PERHUB_EPOLL", "1"), H.total_ops()))
+        os.environ.get("STACKWEAVE_PERHUB_EPOLL", "1"), H.total_ops()))
 
 
 # ---------------------------------------------------------------------------
 # Top-level comparison driver: re-exec this module twice (perhub=1 and =0),
 # assert both PASS and both moved a sane number of cross-hub wakes.  A child
-# sub-run (RUNLOOM_PERHUB_SUBMODE set) skips this and runs the workload above
-# under whatever backend its inherited RUNLOOM_PERHUB_EPOLL selected.
+# sub-run (STACKWEAVE_PERHUB_SUBMODE set) skips this and runs the workload above
+# under whatever backend its inherited STACKWEAVE_PERHUB_EPOLL selected.
 # ---------------------------------------------------------------------------
 def _run_child(backend):
-    """Re-exec this exact program as a sub-run with RUNLOOM_PERHUB_EPOLL=backend.
+    """Re-exec this exact program as a sub-run with STACKWEAVE_PERHUB_EPOLL=backend.
     Returns (exit_code, ops) parsed from the child's RESULTS block."""
     import subprocess
     env = dict(os.environ)
-    env["RUNLOOM_PERHUB_EPOLL"] = backend
-    env["RUNLOOM_PERHUB_SUBMODE"] = "1"
+    env["STACKWEAVE_PERHUB_EPOLL"] = backend
+    env["STACKWEAVE_PERHUB_SUBMODE"] = "1"
     # Pass through the same CLI args so --hubs/--funcs/--rounds/--duration etc.
     # apply identically to both backends.
     argv = [sys.executable, os.path.abspath(__file__)] + sys.argv[1:]
@@ -179,11 +179,11 @@ def _run_child(backend):
 def _compare_driver():
     """Drive both backends and assert =1/=0 parity.  Exit 0 PASS / 1 FAIL /
     2 error, matching the harness exit-code contract."""
-    if runloom_c.netpoll_backend() != "epoll":
+    if stackweave_c.netpoll_backend() != "epoll":
         print("SKIP: per-hub epoll toggle is meaningless off Linux-epoll "
-              "(backend={0})".format(runloom_c.netpoll_backend()))
+              "(backend={0})".format(stackweave_c.netpoll_backend()))
         return 0
-    sys.stderr.write("[p224 driver] comparing RUNLOOM_PERHUB_EPOLL=1 vs =0 "
+    sys.stderr.write("[p224 driver] comparing STACKWEAVE_PERHUB_EPOLL=1 vs =0 "
                      "via two child sub-runs\n")
     sys.stderr.flush()
     rc1, ops1 = _run_child("1")
@@ -224,9 +224,9 @@ def _compare_driver():
 
 if __name__ == "__main__":
     # Availability guard (both the driver and a directly-run child honour it).
-    if runloom_c.netpoll_backend() != "epoll":
+    if stackweave_c.netpoll_backend() != "epoll":
         print("SKIP: per-hub epoll toggle is meaningless off Linux-epoll "
-              "(backend={0})".format(runloom_c.netpoll_backend()))
+              "(backend={0})".format(stackweave_c.netpoll_backend()))
         sys.exit(0)
 
     if _SUBMODE:
@@ -234,7 +234,7 @@ if __name__ == "__main__":
         harness.main(
             "p224_perhub_epoll_cross_hub_wake", body, setup=setup, post=post,
             default_funcs=2000,
-            describe="cross-hub fd park/wake under one RUNLOOM_PERHUB_EPOLL "
+            describe="cross-hub fd park/wake under one STACKWEAVE_PERHUB_EPOLL "
                      "backend (sub-run): every parker must wake with its "
                      "writer's exact tagged byte")
     else:

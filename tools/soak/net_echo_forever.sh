@@ -18,21 +18,21 @@
 # byte echoed back, forever, exercising pygo netpoll against real WAN RTT/loss.
 #
 # Launch detached:  setsid nice -n 5 tools/soak/net_echo_forever.sh >/dev/null 2>&1 &
-# Watch:            tail -f ${RUNLOOM_SOAK_DIR:-$HOME/runloom-soak}/net_echo_forever/net_echo.log
-# Live fiber stacks:kill -USR1 $(cat ${RUNLOOM_SOAK_DIR:-$HOME/runloom-soak}/net_echo_forever/PID)
-# Stop:             kill      $(cat ${RUNLOOM_SOAK_DIR:-$HOME/runloom-soak}/net_echo_forever/PID)
+# Watch:            tail -f ${STACKWEAVE_SOAK_DIR:-$HOME/runloom-soak}/net_echo_forever/net_echo.log
+# Live fiber stacks:kill -USR1 $(cat ${STACKWEAVE_SOAK_DIR:-$HOME/runloom-soak}/net_echo_forever/PID)
+# Stop:             kill      $(cat ${STACKWEAVE_SOAK_DIR:-$HOME/runloom-soak}/net_echo_forever/PID)
 set +e
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
-PY="${RUNLOOM_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
-OUT="${RUNLOOM_SOAK_DIR:-$HOME/runloom-soak}/net_echo_forever"
+PY="${STACKWEAVE_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
+OUT="${STACKWEAVE_SOAK_DIR:-$HOME/runloom-soak}/net_echo_forever"
 mkdir -p "$OUT"
 LOG="$OUT/net_echo.log"
 
-echo "=== net_echo_forever START $(date '+%F %T') -> ${RUNLOOM_ECHO_HOST:-ovh1.p2pd.net}:${RUNLOOM_ECHO_PORT:-7} ===" >> "$LOG"
-# RUNLOOM_TLBC=1: keep TLBC ON (safe via the GC frames anchor) and guarantee
-# runloom does NOT self-re-exec (keeps one stable pid).
-env PYTHON_GIL=0 RUNLOOM_TLBC=1 PYTHONPATH="$ROOT/src" \
+echo "=== net_echo_forever START $(date '+%F %T') -> ${STACKWEAVE_ECHO_HOST:-ovh1.p2pd.net}:${STACKWEAVE_ECHO_PORT:-7} ===" >> "$LOG"
+# STACKWEAVE_TLBC=1: keep TLBC ON (safe via the GC frames anchor) and guarantee
+# stackweave does NOT self-re-exec (keeps one stable pid).
+env PYTHON_GIL=0 STACKWEAVE_TLBC=1 PYTHONPATH="$ROOT/src" \
     "$PY" "$ROOT/tools/soak/net_echo_forever.py" >> "$LOG" 2>&1 &
 child=$!
 echo "$child" > "$OUT/PID"

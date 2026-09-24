@@ -19,8 +19,8 @@ import tempfile
 
 import harness
 import netutil
-import runloom
-import runloom_c
+import stackweave
+import stackweave_c
 
 
 def make_cert():
@@ -120,9 +120,9 @@ def client(H, wid, rng, state):
                         done = True
                         break
                     except ssl.SSLWantReadError:
-                        runloom_c.wait_fd(tls.fileno(), 1, 1)
+                        stackweave_c.wait_fd(tls.fileno(), 1, 1)
                     except ssl.SSLWantWriteError:
-                        runloom_c.wait_fd(tls.fileno(), 2, 1)
+                        stackweave_c.wait_fd(tls.fileno(), 2, 1)
                     except (OSError, ssl.SSLError):
                         break
                     budget += 1

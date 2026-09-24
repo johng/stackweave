@@ -5,16 +5,16 @@ reached because each is gated behind an env mode that is resolved ONCE per
 process (so it must be set in a fresh SUBPROCESS), or behind a heap geometry
 that the happy path never produces:
 
-  1. The datastack-tail idle reclaim + its RUNLOOM_DATASTACK_DEBUG decompose
+  1. The datastack-tail idle reclaim + its STACKWEAVE_DATASTACK_DEBUG decompose
      instrumentation (runloom_ds_resident_bytes, the debug counter block, the
      public _datastack_sweep_stats readout, and the C-only-g early return).
-     Driven by RUNLOOM_STACK_PARK_SWEEP=1 + RUNLOOM_DATASTACK_DEBUG=1 in an
+     Driven by STACKWEAVE_STACK_PARK_SWEEP=1 + STACKWEAVE_DATASTACK_DEBUG=1 in an
      M:N run() with Python fibers parked deep in CPython long enough for the
      hub-idle dwell sweep to madvise their idle chunk tails.
 
   2. PCT -- the probabilistic concurrency-testing controlled scheduler
      (runloom_pct_init / _rand / _argmax / _pick), reached only when
-     RUNLOOM_PCT_SEED is set, on the single-hub run(1) ready-pop path.
+     STACKWEAVE_PCT_SEED is set, on the single-hub run(1) ready-pop path.
 
   3. The timer-heap sift-UP body (a timed in-memory park whose deadline is
      EARLIER than an already-queued one), reached via rc.park(timeout=...).
@@ -27,7 +27,7 @@ Targeted uncovered lines (gcov ##### in
 build/coverage/runloom_sched_datastack.c.inc.gcov):
   44-56  runloom_ds_resident_bytes (mincore decompose; DEBUG only)
   92     madvise_datastack_idle early-return: C-only g / no chunk installed
-  112-118 the RUNLOOM_DATASTACK_DEBUG counter block
+  112-118 the STACKWEAVE_DATASTACK_DEBUG counter block
   128-145 runloom_sched_datastack_sweep_stats (the _datastack_sweep_stats readout)
   307-348 runloom_pct_rand + runloom_pct_init (incl. the DEBUG print)
   361-398 runloom_pct_argmax + runloom_pct_pick (FIFO order, change point, shift)
@@ -64,7 +64,7 @@ def _run(script, env_extra, timeout=240):
 #    Drives, under the M:N hub-idle dwell sweep with the decompose debug flag:
 #      - runloom_sched_madvise_datastack_idle's main body (madvise the chunk
 #        tail of a Python fiber parked deep in CPython);
-#      - the RUNLOOM_DATASTACK_DEBUG counter block (gcov L112-118);
+#      - the STACKWEAVE_DATASTACK_DEBUG counter block (gcov L112-118);
 #      - runloom_ds_resident_bytes including its resident-accumulation body
 #        (gcov L44-56) -- by faulting the chunk tail (deep recurse) then
 #        parking SHALLOW so the faulted pages sit RESIDENT above the frontier;
@@ -81,8 +81,8 @@ def _run(script, env_extra, timeout=240):
 # ==========================================================================
 _DATASTACK = r'''
 import sys, socket, struct; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave, stackweave_c as rc
+from stackweave.sync import WaitGroup
 
 NC = 16            # all-C echo clients -> C-only (no-chunk) parkers (L92)
 NP = 24            # deep-then-shallow Python parkers -> resident tails (L44-56,112-118)
@@ -134,7 +134,7 @@ def main():
     for ln in lst:
         ln.close()
 
-runloom.run(3, main)
+stackweave.run(3, main)
 cgot = sum(1 for i in range(NC) if got[i] == struct.pack(">Q", i))
 tail, resident, chunks = rc._datastack_sweep_stats()
 sys.stdout.write("DS cgot=%d pywoke=%d tail=%d resident=%d chunks=%d\n"
@@ -145,9 +145,9 @@ sys.stdout.write("DS cgot=%d pywoke=%d tail=%d resident=%d chunks=%d\n"
 @pytest.mark.skipif(not FT, reason="datastack dwell sweep is an M:N hub-idle path")
 def test_datastack_sweep_debug_decompose():
     p = _run(_DATASTACK, {
-        "RUNLOOM_STACK_PARK_SWEEP": "1", "RUNLOOM_STACK_PARK_SWEEP_MS": "1",
-        "RUNLOOM_DATASTACK_SWEEP": "1", "RUNLOOM_DATASTACK_DEBUG": "1",
-        "RUNLOOM_SWEEP_MAX_CHURN": "0",   # never throttle the sweep
+        "STACKWEAVE_STACK_PARK_SWEEP": "1", "STACKWEAVE_STACK_PARK_SWEEP_MS": "1",
+        "STACKWEAVE_DATASTACK_SWEEP": "1", "STACKWEAVE_DATASTACK_DEBUG": "1",
+        "STACKWEAVE_SWEEP_MAX_CHURN": "0",   # never throttle the sweep
     })
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1600:])
     line = [l for l in p.stdout.splitlines() if l.startswith("DS ")]
@@ -179,8 +179,8 @@ def test_datastack_sweep_debug_decompose():
 # debug block -- confirming the gate at L111 short-circuits cleanly.
 _DATASTACK_NODEBUG = r'''
 import sys, socket; sys.path.insert(0, "src")
-import runloom, runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave, stackweave_c as rc
+from stackweave.sync import WaitGroup
 NP = 20
 woke = [0] * NP
 def main():
@@ -205,7 +205,7 @@ def main():
         try: rc.netpoll_unregister(a.fileno())
         except Exception: pass
         a.close(); b.close()
-runloom.run(3, main)
+stackweave.run(3, main)
 tail, resident, chunks = rc._datastack_sweep_stats()
 # DEBUG off: the decompose counters must stay zero (the L111 gate skipped them).
 sys.stdout.write("NODBG woke=%d tail=%d chunks=%d\n" % (sum(woke), tail, chunks))
@@ -215,9 +215,9 @@ sys.stdout.write("NODBG woke=%d tail=%d chunks=%d\n" % (sum(woke), tail, chunks)
 @pytest.mark.skipif(not FT, reason="datastack dwell sweep is an M:N hub-idle path")
 def test_datastack_sweep_no_debug_counters_zero():
     p = _run(_DATASTACK_NODEBUG, {
-        "RUNLOOM_STACK_PARK_SWEEP": "1", "RUNLOOM_STACK_PARK_SWEEP_MS": "1",
-        "RUNLOOM_DATASTACK_SWEEP": "1",   # sweep on, DEBUG deliberately absent
-        "RUNLOOM_SWEEP_MAX_CHURN": "0",
+        "STACKWEAVE_STACK_PARK_SWEEP": "1", "STACKWEAVE_STACK_PARK_SWEEP_MS": "1",
+        "STACKWEAVE_DATASTACK_SWEEP": "1",   # sweep on, DEBUG deliberately absent
+        "STACKWEAVE_SWEEP_MAX_CHURN": "0",
     })
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1600:])
     line = [l for l in p.stdout.splitlines() if l.startswith("NODBG ")]
@@ -231,7 +231,7 @@ def test_datastack_sweep_no_debug_counters_zero():
 # ==========================================================================
 # 2. PCT -- the probabilistic concurrency-testing controlled scheduler.
 #
-#    With RUNLOOM_PCT_SEED set, run(1)'s ready-pop stops being FIFO and routes
+#    With STACKWEAVE_PCT_SEED set, run(1)'s ready-pop stops being FIFO and routes
 #    through runloom_pct_pick (gcov L406).  This drives:
 #      - runloom_pct_init incl. the change-point sort and the DEBUG print
 #        (gcov L307-348);
@@ -248,7 +248,7 @@ def test_datastack_sweep_no_debug_counters_zero():
 # ==========================================================================
 _PCT = r'''
 import sys; sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 
 NF = 4          # FIFO gs (must keep relative spawn order)
 NR = 4          # raw reorderable gs (PCT may interleave freely)
@@ -301,10 +301,10 @@ sys.stdout.write("PCT ok_fifo=%s fifo_full=%s raw_full=%s total=%d\n"
 def test_pct_controlled_scheduler_fifo_and_change_points():
     # PCT lives on the single-hub run(1) path; works with or without the GIL.
     p = _run(_PCT, {
-        "RUNLOOM_PCT_SEED": "1234",   # nonzero decimal seed (strtoull base 10)
-        "RUNLOOM_PCT_DEPTH": "4",     # depth>=2 -> change points exist
-        "RUNLOOM_PCT_STEPS": "16",    # small k -> change points hit within the run
-        "RUNLOOM_PCT_DEBUG": "1",     # drive the one-time debug print (L342-348)
+        "STACKWEAVE_PCT_SEED": "1234",   # nonzero decimal seed (strtoull base 10)
+        "STACKWEAVE_PCT_DEPTH": "4",     # depth>=2 -> change points exist
+        "STACKWEAVE_PCT_STEPS": "16",    # small k -> change points hit within the run
+        "STACKWEAVE_PCT_DEBUG": "1",     # drive the one-time debug print (L342-348)
     })
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1600:])
     line = [l for l in p.stdout.splitlines() if l.startswith("PCT ")]
@@ -325,7 +325,7 @@ def test_pct_controlled_scheduler_fifo_and_change_points():
 # line and argmax over a single ready g.  Different priority through the init.
 _PCT_DEPTH1 = r'''
 import sys; sys.path.insert(0, "src")
-import runloom_c as rc
+import stackweave_c as rc
 runs = [0] * 6
 def main():
     def w(i):
@@ -343,8 +343,8 @@ sys.stdout.write("PCT1 total=%d allthree=%s\n"
 
 def test_pct_depth1_no_change_points():
     p = _run(_PCT_DEPTH1, {
-        "RUNLOOM_PCT_SEED": "99",
-        "RUNLOOM_PCT_DEPTH": "1",   # depth 1 -> zero change points
+        "STACKWEAVE_PCT_SEED": "99",
+        "STACKWEAVE_PCT_DEPTH": "1",   # depth 1 -> zero change points
     })
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1600:])
     line = [l for l in p.stdout.splitlines() if l.startswith("PCT1 ")]
@@ -361,9 +361,9 @@ def test_pct_seed_zero_and_clamps():
     # seed-zero + low-clamp corner so the run stays well-defined.  Re-using the
     # depth-1 workload keeps the oracle simple (every g runs all its rounds).
     p = _run(_PCT_DEPTH1, {
-        "RUNLOOM_PCT_SEED": "0",     # -> rng==0 -> fixpoint reseed (L324)
-        "RUNLOOM_PCT_DEPTH": "0",    # -> clamped to 1 (L326)
-        "RUNLOOM_PCT_STEPS": "0",    # -> clamped to 1 (L329)
+        "STACKWEAVE_PCT_SEED": "0",     # -> rng==0 -> fixpoint reseed (L324)
+        "STACKWEAVE_PCT_DEPTH": "0",    # -> clamped to 1 (L326)
+        "STACKWEAVE_PCT_STEPS": "0",    # -> clamped to 1 (L329)
     })
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1600:])
     line = [l for l in p.stdout.splitlines() if l.startswith("PCT1 ")]
@@ -377,9 +377,9 @@ def test_pct_depth_clamp_high():
     # depth far above PCT_MAX_DEPTH (16) -> clamped down (L327); a normal seed
     # so change points exist and the insertion-sort over depth-1 entries runs.
     p = _run(_PCT, {
-        "RUNLOOM_PCT_SEED": "777",
-        "RUNLOOM_PCT_DEPTH": "9999",   # -> clamped to PCT_MAX_DEPTH (L327)
-        "RUNLOOM_PCT_STEPS": "8",
+        "STACKWEAVE_PCT_SEED": "777",
+        "STACKWEAVE_PCT_DEPTH": "9999",   # -> clamped to PCT_MAX_DEPTH (L327)
+        "STACKWEAVE_PCT_STEPS": "8",
     })
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1600:])
     line = [l for l in p.stdout.splitlines() if l.startswith("PCT ")]
@@ -405,8 +405,8 @@ def test_pct_depth_clamp_high():
 # ==========================================================================
 _TIMER = r'''
 import sys; sys.path.insert(0, "src")
-import runloom_c as rc
-from runloom.sync import WaitGroup
+import stackweave_c as rc
+from stackweave.sync import WaitGroup
 res = {}
 def main():
     order = []
