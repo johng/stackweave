@@ -117,10 +117,9 @@ Lives in a **parker pool**, one per hub (up to
 `RUNLOOM_PARKER_POOL_HUBS`, 64), so registration and wake don't serialise
 across hubs on one kernel lock.
 
-**per-hub epoll** (`STACKWEAVE_PERHUB_EPOLL`, default **on**) — each hub polls its
-own epoll set plus a wake eventfd, instead of all hubs sharing one
-`runloom_epoll_fd`. Measured **+34–40 %** saturation throughput on a 64-core
-box versus the shared set; the shared path still exists at `=0`.
+**per-hub epoll** — each hub polls its own epoll set plus a wake eventfd,
+instead of all hubs sharing one `runloom_epoll_fd`. Measured **+34–40 %**
+saturation throughput on a 64-core box versus the old shared set.
 
 **arm / disarm** — adding or removing an fd's interest bits in the poller.
 Level-triggered, so a stale arm with no waiter makes `epoll_wait` return

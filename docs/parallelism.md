@@ -96,9 +96,10 @@ stackweave.mn_fini()
 
 ## Network I/O on M:N
 
-netpoll uses a **single shared** epoll/kqueue handle (created once); what is
-per-hub is the parker bookkeeping (the per-hub parker pool) and the per-hub
-io_uring ring.  Goroutines parked on I/O wake on the hub that submitted the
+On Linux and macOS/BSD each hub polls its **own** epoll/kqueue set, and the
+parker bookkeeping is per-hub too (the per-hub parker pool), as is the io_uring
+ring each hub creates when `STACKWEAVE_TCPCONN_IOURING` is on.  Goroutines parked
+on I/O wake on the hub that submitted the
 parking call -- the parker records its origin hub and the pump routes the wake
 back there.  This means your accept loop and connection handlers stay on the same
 hub by default, which is good for cache locality:

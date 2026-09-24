@@ -511,8 +511,8 @@ def test_accept_fatal_error_surfaces_oserror():
     env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
     # EINVAL is not in {EAGAIN,EWOULDBLOCK,EINTR,ECONNABORTED} -> L110 fatal.
     cmd = [strace, "-f", "-e", "signal=none",
-           # the accept path now uses accept4(SOCK_NONBLOCK) on Linux by default
-           # (STACKWEAVE_TCP_ACCEPT4); inject on BOTH so the fault fires whichever runs.
+           # the accept path uses accept4(SOCK_NONBLOCK) on Linux; inject on
+           # accept too so the fault fires whichever syscall runs.
            "-e", "inject=accept,accept4:error=EINVAL:when=1+",
            PY, "-c", _ACCEPT_FATAL]
     try:

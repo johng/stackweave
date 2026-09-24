@@ -1,4 +1,4 @@
-# Repro: STACKWEAVE_PERHUB_EPOLL cross-pool migration drops the already-armed
+# Repro: per-hub epoll cross-pool migration drops the already-armed
 # direction (netpoll_register.c.inc: migration sets target = need, not cur|need).
 #
 # Scenario: fiber R parks on READ (fd armed IN in hub H1's epoll, owner=H1).

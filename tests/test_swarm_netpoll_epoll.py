@@ -481,23 +481,22 @@ def test_raw_close_without_unregister_poisons_fd_subprocess():
 
 # ==========================================================================
 # Stale-arm probe MODE COVERAGE (R7 item 4 -- close the fix's test gaps:
-# the probe's heal/re-key/validate paths under STACKWEAVE_PERHUB_EPOLL, M:N hub
-# pools, and the disable env-gate).  All reuse the raw-poison shape but drive
+# the probe's heal/re-key/validate paths under per-hub epoll, M:N hub pools,
+# and the disable env-gate).  All reuse the raw-poison shape but drive
 # it through a different pool-routing / config path.
 # ==========================================================================
 @pytest.mark.skipif(rc.netpoll_backend() != "epoll", reason="probe is epoll-only")
 def test_stale_arm_probe_heals_under_perhub_epoll_subprocess():
-    # STACKWEAVE_PERHUB_EPOLL routes the arm/validate to the OWNING hub's epoll,
-    # not the shared one -- validate_arm's owner-lookup + re-ADD must target the
-    # right epoll.  Same poison, PERHUB on: must still WOKE.
+    # Per-hub epoll routes the arm/validate to the OWNING hub's epoll, not the
+    # shared one -- validate_arm's owner-lookup + re-ADD must target the right
+    # epoll.  Same poison in a fresh process: must still WOKE.
     for _ in range(8):
-        p = _subproc(_RAW_POISON_SCRIPT,
-                     env_extra={"STACKWEAVE_PERHUB_EPOLL": "1"}, timeout=20)
+        p = _subproc(_RAW_POISON_SCRIPT, timeout=20)
         _assert_no_signal_crash(p, "perhub-poison")
         if "SKIP" in p.stdout:
             continue
         assert "WOKE" in p.stdout, (
-            "probe did not heal under STACKWEAVE_PERHUB_EPOLL=1 (got %r)" % p.stdout)
+            "probe did not heal under per-hub epoll (got %r)" % p.stdout)
         return
     pytest.skip("fd number never reused across 8 attempts")
 

@@ -185,9 +185,10 @@ const char *runloom_netpoll_backend(void);
  * into a hub ring.  -1 on non-epoll backends.  Forces netpoll init. */
 int runloom_netpoll_epoll_fd(void);
 
-/* The epoll fd the CURRENT hub waits on: per-hub (pool->epoll_fd) under
- * RUNLOOM_PERHUB_EPOLL, else the shared one.  The io_uring-as-loop F_EPOLL bridge
- * must poll THIS so a hub's own socket fds are observed in per-hub mode. */
+/* The epoll fd the CURRENT hub waits on: its per-hub pool->epoll_fd, else the
+ * shared one.  -1 on non-epoll backends.  The io_uring-as-loop F_EPOLL bridge
+ * must poll THIS so a hub's own socket fds are observed; hub_main also calls it
+ * at startup to warm the per-hub wake infrastructure. */
 int runloom_netpoll_hub_epoll_fd(void);
 
 /* Test-only netpoll fault-injection introspection (see netpoll_init.c.inc).
