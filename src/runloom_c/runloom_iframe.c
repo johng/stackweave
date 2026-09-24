@@ -146,10 +146,19 @@ int runloom_iframe_walk(void *top, int max, runloom_iframe_cb cb, void *ctx)
     _PyInterpreterFrame *f = (_PyInterpreterFrame *)top;
     int n = 0;
     while (f != NULL && n < max) {
-        /* Skip the C-stack trampoline shim frames that bracket a real
-         * call; they carry no user code. */
+        /* Skip the trampoline/shim frames that bracket a real call; they carry
+         * no user code. */
+#if PY_VERSION_HEX >= 0x030F0000
+        /* 3.15 removed FRAME_OWNED_BY_CSTACK.  _PyFrame_IsIncomplete is CPython's
+         * own "not a complete user frame" predicate (interpreter-entry sentinel +
+         * not-yet-traceable shims) -- exactly what a traceback skips.  It tests
+         * owner >= FRAME_OWNED_BY_INTERPRETER first, so _PyFrame_GetCode inside it
+         * is only reached for real code-bearing frames. */
+        if (!_PyFrame_IsIncomplete(f)) {
+#else
         if (f->owner != FRAME_OWNED_BY_CSTACK) {
-            /* 3.14: f_executable is a tagged _PyStackRef, not a PyObject*. */
+#endif
+            /* f_executable is a tagged _PyStackRef, not a PyObject*. */
             PyObject *exec = PyStackRef_AsPyObjectBorrow(f->f_executable);
             if (exec != NULL && PyCode_Check(exec)) {
                 int line = PyUnstable_InterpreterFrame_GetLine(f);
@@ -344,22 +353,35 @@ int runloom_gc_in_subtract_pass(PyObject *self)
  * reference is NOT part of the refcount (update_refs already stripped the
  * deferred bias), so the SUBTRACT pass must skip it -- visiting would
  * double-subtract and free a LIVE object -- while every other pass treats it as a
- * regular reference so propagation from the anchor keeps its referent alive. */
+ * regular reference so propagation from the anchor keeps its referent alive.
+ *
+ * 3.15 exports _PyGC_VisitStackRef, which performs exactly this discrimination
+ * itself -- keyed on the visitproc identity (visit_decref / visit_decref_unreachable
+ * ARE the subtract pass) rather than a caller-supplied flag.  So on 3.15+ we defer
+ * to it: the `subtract` argument is unused, and PyStackRef_IsDeferred (used by the
+ * 3.14 branch) was removed in favour of that self-discrimination.  We still guard
+ * NullOrInt here, exactly as the _Py_VISIT_STACKREF macro does before calling. */
 static int runloom_visit_stackref(_PyStackRef *ref, visitproc visit, void *arg,
                                   int subtract)
 {
-    PyObject *op;
     if (PyStackRef_IsNullOrInt(*ref)) {
         return 0;
     }
+#if PY_VERSION_HEX >= 0x030F0000
+    (void)subtract;
+    return _PyGC_VisitStackRef(ref, visit, arg);
+#else
     if (subtract && PyStackRef_IsDeferred(*ref)) {
         return 0;
     }
-    op = PyStackRef_AsPyObjectBorrow(*ref);
-    if (op != NULL) {
-        return visit(op, arg);
+    {
+        PyObject *op = PyStackRef_AsPyObjectBorrow(*ref);
+        if (op != NULL) {
+            return visit(op, arg);
+        }
     }
     return 0;
+#endif
 }
 
 int runloom_gcvisit_frame_chain(void *top, visitproc visit, void *arg, int subtract)
