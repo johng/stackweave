@@ -77,6 +77,18 @@ def _watchdog(secs):
         os._exit(3)
     t = threading.Timer(secs, fire); t.daemon = True; t.start()
 
+def foreign_send(ch, value):
+    """Send from a plain OS thread.  A non-fiber thread cannot block, so an
+    unbuffered send raises RuntimeError while no receiver is parked yet (a
+    slow box reaches the send before the fiber reaches its recv); retry
+    until the hand-off happens."""
+    while True:
+        try:
+            ch.send(value)
+            return
+        except RuntimeError:
+            time.sleep(0.0005)
+
 def force_migrate(rounds=40):
     """Park on a channel until a FOREIGN OS thread wakes us (a hub-thread waker
     would push us onto its own deque -- local wake -- and we would usually
@@ -88,7 +100,7 @@ def force_migrate(rounds=40):
         before = threading.get_ident()
         def poke(i=i):
             time.sleep(0.001)
-            ch.send(i)
+            foreign_send(ch, i)
         t = threading.Thread(target=poke, daemon=True)
         t.start()
         ch.recv()
@@ -105,7 +117,7 @@ def park_n_times(n):
     for i in range(n):
         def poke(i=i):
             time.sleep(0.001)
-            ch.send(i)
+            foreign_send(ch, i)
         t = threading.Thread(target=poke, daemon=True)
         t.start()
         ch.recv()
@@ -120,11 +132,11 @@ def require_migration(moved):
 ''' % os.path.join(REPO, "src")
 
 
-def run_scenario(code, timeout=60):
+def run_scenario(code, timeout=60, migration=True):
     env = dict(os.environ)
     env["PYTHON_GIL"] = "0"
     env["RUNLOOM_GIL"] = "0"
-    env["RUNLOOM_MIGRATION"] = "1"     # read once at the first mn_init
+    env["RUNLOOM_MIGRATION"] = "1" if migration else "0"   # read once at the first mn_init
     try:
         p = subprocess.run(
             [sys.executable, "-c", PRELUDE + code],
@@ -441,7 +453,7 @@ def spinner():
         pass
 def feeder():
     time.sleep(0.5)
-    ch.send(1)                      # foreign-thread send: wake_g -> global runq
+    foreign_send(ch, 1)             # foreign-thread send: wake_g -> global runq
     time.sleep(0.2)
     signal.setitimer(signal.ITIMER_REAL, 0.01, 0)   # handler raises inside mn_run
 def main():
@@ -664,7 +676,7 @@ def main():
     def feeder():
         time.sleep(0.2)
         for _ in range(ROUNDS):
-            ch.send(1); time.sleep(0.1)
+            foreign_send(ch, 1); time.sleep(0.1)
     runloom.fiber(parker)
     runloom.sleep(0.05)
     for _ in range(GEN):
@@ -694,7 +706,11 @@ def main():
     def feeder():
         for i in range(N):
             time.sleep(0.001)
-            ch.send(time.perf_counter_ns())
+            while True:                 # stamp each attempt: a retry is a new send
+                try:
+                    ch.send(time.perf_counter_ns()); break
+                except RuntimeError:    # receiver not parked yet; a thread cannot block
+                    time.sleep(0.0002)
     threading.Thread(target=feeder, daemon=True).start()
     lat = []
     for _ in range(N):
@@ -713,13 +729,38 @@ runloom.run(4, main)
 # Cost: one PyThreadState per fiber.  (PR #23 review, 7.5)
 # ---------------------------------------------------------------------------
 
-def test_cost_gc_collect_under_0_2us_per_parked_fiber():
-    """Known gap: gc.collect() visits every parked fiber's tstate, about 0.45
-    us each (4x the per-hub scheduler at 20k parked).
-    """
-    assert_pass(r'''
+def _cost(code, timeout=90):
+    """Run a cost scenario twice, migration on then off, and return the two
+    COST= values.  The bound is a RATIO, so it means the same thing on a
+    laptop and on a 3-core CI runner; the on-run must observe a migration
+    or the pair says nothing and the test skips."""
+    pair = []
+    for migration in (True, False):
+        rc, out, err = run_scenario(code, timeout=timeout, migration=migration)
+        if migration and "NOMIG" in out:
+            pytest.skip("no cross-hub migration observed on this machine")
+        m = re.search(r"COST=([0-9.eE+-]+)", out)
+        if rc != 0 or m is None:
+            print("--- scenario stdout (migration=runloom) ---\nrunloom\n--- stderr ---\nrunloom"
+                  % (migration, out, err))
+            pytest.fail("migration=runloom rc=runloom: runloom" % (migration, rc, _key_line(out, err)),
+                        pytrace=False)
+        pair.append(float(m.group(1)))
+    return pair[0], pair[1]
+
+
+# Each cost scenario prints COST=<number>.  Under migration it first proves a
+# migration is possible (else NOMIG); with migration off that probe is skipped.
+_PROBE = '''
+if os.environ.get("RUNLOOM_MIGRATION") == "1":
+    def _probe():
+        require_migration(force_migrate())
+    runloom.run(4, _probe)
+'''
+
+GC_COLLECT_COST = _PROBE + r'''
 import gc
-_watchdog(60)
+_watchdog(80)
 N = 5000
 def best_collect(k=5):
     best = 1e9
@@ -734,23 +775,16 @@ def main():
     runloom.sleep(0.5)
     full = best_collect()
     per = (full - empty) / N * 1e6
-    print("gc.collect(): %.2f ms empty, %.2f ms with %d parked (%.2f us/parked fiber)"
-          % (empty * 1e3, full * 1e3, N, per), flush=True)
+    print("gc.collect(): %.2f ms empty, %.2f ms with %d parked" % (empty * 1e3, full * 1e3, N), flush=True)
+    print("COST=%.4f" % per, flush=True)
     for _ in range(N):
         ch.send(None)
-    assert per < 0.2, "gc.collect() costs %.2f us per parked fiber" % per
-    print("PASS", flush=True)
 runloom.run(4, main)
-''')
+'''
 
-
-def test_cost_parked_fiber_rss_under_16_kib():
-    """Known gap: a parked fiber costs ~33 KiB RSS (g + PyThreadState + its
-    datastack chunk + stack).
-    """
-    assert_pass(r'''
+PARKED_FIBER_RSS = _PROBE + r'''
 import resource
-_watchdog(60)
+_watchdog(80)
 N = 4000
 def rss_kib():
     r = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
@@ -765,21 +799,14 @@ def main():
         runloom.fiber(ch.recv)
     runloom.sleep(0.5)
     per = (rss_kib() - base) / N
-    print("%.1f KiB RSS per parked fiber" % per, flush=True)
+    print("COST=%.3f" % per, flush=True)
     for _ in range(N + 200):
         ch.send(None)
-    assert per < 16, "%.1f KiB per parked fiber" % per
-    print("PASS", flush=True)
 runloom.run(4, main)
-''')
+'''
 
-
-def test_cost_spawn_and_complete_under_1us():
-    """Known gap: PyThreadState_New per spawn -- 2.6 us per spawn+complete at
-    H=4 against 0.4 us on the per-hub scheduler.
-    """
-    assert_pass(r'''
-_watchdog(60)
+SPAWN_COST = _PROBE + r'''
+_watchdog(80)
 N = 20000
 def main():
     ch = runloom.Chan(N)
@@ -790,12 +817,37 @@ def main():
         for _ in range(N): runloom.fiber(w)
         for _ in range(N): ch.recv()
         best = min(best, time.perf_counter() - t0)
-    per = best / N * 1e6
-    print("spawn+complete %.2f us/fiber at H=4" % per, flush=True)
-    assert per < 1.0, "%.2f us per spawn" % per
-    print("PASS", flush=True)
+    print("COST=%.4f" % (best / N * 1e6), flush=True)
 runloom.run(4, main)
-''')
+'''
+
+
+def test_cost_gc_collect_per_parked_fiber_within_2x_of_migration_off():
+    """Known gap: gc.collect() visits every parked fiber's own tstate (about
+    0.45 us each on macOS, 4x the per-hub scheduler at 20k parked).
+    """
+    on, off = _cost(GC_COLLECT_COST)
+    print("gc.collect() per parked fiber: %.3f us with migration, %.3f us without" % (on, off))
+    assert on < 2 * off, "gc.collect() %.3f us per parked fiber vs %.3f us without migration (%.1fx)" % (on, off, on / off)
+
+
+def test_cost_parked_fiber_rss_within_1_5x_of_migration_off():
+    """Known gap: a parked fiber carries its own PyThreadState and its 16 KiB
+    datastack chunk (33 KiB RSS against 17 KiB without migration on macOS;
+    19 KiB with on Linux).
+    """
+    on, off = _cost(PARKED_FIBER_RSS)
+    print("RSS per parked fiber: %.1f KiB with migration, %.1f KiB without" % (on, off))
+    assert on < 1.5 * off, "%.1f KiB per parked fiber vs %.1f KiB without migration (%.2fx)" % (on, off, on / off)
+
+
+def test_cost_spawn_and_complete_within_2x_of_migration_off():
+    """Known gap: PyThreadState_New per spawn (2.6 us per spawn+complete at
+    H=4 on macOS against 0.4 us on the per-hub scheduler).
+    """
+    on, off = _cost(SPAWN_COST)
+    print("spawn+complete: %.2f us with migration, %.2f us without" % (on, off))
+    assert on < 2 * off, "spawn+complete %.2f us vs %.2f us without migration (%.1fx)" % (on, off, on / off)
 
 
 # ---------------------------------------------------------------------------
