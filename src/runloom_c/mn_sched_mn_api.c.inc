@@ -302,8 +302,8 @@ int runloom_mn_pin_for_wake(runloom_g_t *g, int hub_id)
             "pin(%d): the default scheduler cannot resume a fiber on a hub "
             "other than its own (%d) -- a woken fiber is hub-pinned by design, "
             "so this pin would be silently ignored rather than honoured.  Start "
-            "the runtime with runloom.enable_migration() on an interpreter "
-            "carrying both CPython patches (see runloom.migration_status()) to "
+            "the runtime with stackweave.enable_migration() on an interpreter "
+            "carrying both CPython patches (see stackweave.migration_status()) to "
             "target another hub.",
             hub_id, home);
         return -1;

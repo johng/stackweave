@@ -127,7 +127,7 @@ def test_mn_fiber_hub_may_target_an_offload_hub_on_purpose():
         ran_on, _ = done.recv()
         seen.update(total=total, gen=gen, target=target, ran_on=ran_on)
 
-    runloom.run(N_GEN, body, offload_hubs=K)
+    stackweave.run(N_GEN, body, offload_hubs=K)
 
     assert seen["total"] == N_GEN + K
     assert seen["gen"] == N_GEN
@@ -148,7 +148,7 @@ def test_mn_fiber_hub_still_rejects_a_hub_that_does_not_exist():
         with pytest.raises(ValueError):
             rc.mn_fiber(lambda: None, hub=rc.mn_hub_count() + 99)
 
-    runloom.run(2, body, offload_hubs=1)
+    stackweave.run(2, body, offload_hubs=1)
 
 
 def test_general_hubs_progress_while_every_offload_hub_blocks():

@@ -18,17 +18,17 @@ import os
 import threading
 
 # Read once at the first mn_init, so it has to be set before the runtime starts.
-os.environ.setdefault("RUNLOOM_MIGRATION", "1")
+os.environ.setdefault("STACKWEAVE_MIGRATION", "1")
 
 import pytest
 
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 
 from adv_util import needs_free_threading
 
 needs_migration = pytest.mark.skipif(
-    not (needs_free_threading() and runloom.migration_available()),
+    not (needs_free_threading() and stackweave.migration_available()),
     reason="needs a free-threaded build carrying both CPython migration patches")
 
 HUBS = 4

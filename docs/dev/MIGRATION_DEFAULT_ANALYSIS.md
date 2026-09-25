@@ -3,7 +3,7 @@
 Status: analysis, 2026-09-15. Written against `fibre-hubs` (de94a1e5).
 Nothing here is implemented unless a later section says so.
 
-Migration mode (`RUNLOOM_MIGRATION=1` / `runloom.enable_migration()`) gives
+Migration mode (`STACKWEAVE_MIGRATION=1` / `stackweave.enable_migration()`) gives
 every fiber its own `PyThreadState`, so a woken fiber can resume on any hub.
 Today it is opt-in and gated on the two CPython patches (alloc-home and
 exec-home). This note asks: if it became the default, what would we change?

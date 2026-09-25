@@ -13,12 +13,12 @@ import os
 import time
 
 # Read once at the first mn_init, so it has to be set before the runtime starts.
-os.environ.setdefault("RUNLOOM_MIGRATION", "1")
+os.environ.setdefault("STACKWEAVE_MIGRATION", "1")
 
 import pytest
 
-import runloom
-import runloom_c as rc
+import stackweave
+import stackweave_c as rc
 
 from adv_util import needs_free_threading
 
@@ -55,7 +55,7 @@ def spawn_on_0_resume_on(hub):
 
 
 @pytest.mark.skipif(not needs_free_threading(), reason="needs a free-threaded build")
-@pytest.mark.skipif(not runloom.migration_available(),
+@pytest.mark.skipif(not stackweave.migration_available(),
                     reason="needs both CPython migration patches (src/patches/)")
 @pytest.mark.parametrize("hub", range(HUBS))   # 0 stays put; 1-3 must move
 def test_fiber_resumes_on_the_hub_it_pinned_itself_to(hub):
@@ -105,7 +105,7 @@ def test_pin_on_a_handle_from_a_torn_down_session_is_refused():
 
 
 @pytest.mark.skipif(not needs_free_threading(), reason="needs a free-threaded build")
-@pytest.mark.skipif(not runloom.migration_available(),
+@pytest.mark.skipif(not stackweave.migration_available(),
                     reason="needs both CPython migration patches (src/patches/)")
 def test_pinned_runq_entry_does_not_spin_the_other_hubs():
     """A pinned global-runq entry is work for its target hub only; the idle scan
@@ -152,7 +152,7 @@ def test_pinned_runq_entry_does_not_spin_the_other_hubs():
 
 
 @pytest.mark.skipif(not needs_free_threading(), reason="needs a free-threaded build")
-@pytest.mark.skipif(not runloom.migration_available(),
+@pytest.mark.skipif(not stackweave.migration_available(),
                     reason="needs both CPython migration patches (src/patches/)")
 def test_repinning_a_queued_fiber_keeps_the_runq_counters_consistent():
     """pin() must not change pin_hub1 behind the runq lock's back: the fiber is
@@ -182,9 +182,9 @@ def test_repinning_a_queued_fiber_keeps_the_runq_counters_consistent():
         while g.stack()["state"] != "parked":
             rc.yield_()
         g.wake()                 # queued, pinned to the busy TARGET -> no pull yet
-        runloom.sleep(0.3)
+        stackweave.sleep(0.3)
         g.pin(None)              # re-classify WHILE QUEUED
-        runloom.sleep(BUSY + 0.5)
+        stackweave.sleep(BUSY + 0.5)
 
     rc.mn_init(HUBS)
     rc.mn_fiber(body)
@@ -199,9 +199,9 @@ def test_repinning_a_queued_fiber_keeps_the_runq_counters_consistent():
 
 
 if __name__ == "__main__":
-    if runloom.migration_available():
+    if stackweave.migration_available():
         for hub in range(HUBS):
             print("pin(%d) -> ran on hub %d, then hub %d"
                   % ((hub,) + spawn_on_0_resume_on(hub)))
     else:
-        print("skipped --", runloom.migration_status())
+        print("skipped --", stackweave.migration_status())
