@@ -399,6 +399,12 @@ struct runloom_g {
      * Set only by runloom_park_generic; a g never park_generic'd leaves it NULL
      * (it is woken by its own parker -- netpoll/chan -- not via this field). */
     void *park_hub;
+    /* Hub this g is confined to, PLUS ONE so 0 == unpinned (slab_alloc zeroes
+     * everything before `state`).  Set at spawn (force_hub) or by G.pin(); on
+     * a possibly-queued g it must only change via runloom_mn_global_runq_repin,
+     * which keeps the runq counters consistent.  Contract: mn_sched.h,
+     * runloom_mn_fiber_pinned. */
+    int pin_hub1;
     /* MPSC link for the home sched's cross-thread wake list.  Used
      * only while g is parked via park_safe AND a cross-thread wake
      * is in flight (between wake_safe's enqueue and drain's

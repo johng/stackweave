@@ -221,3 +221,6 @@ __marimo__/
 
 # check_all developer log dirs (scripts/check_all.sh)
 .check-logs/
+
+# CLion / CMake out-of-tree build dirs (CMakeLists.txt)
+cmake-build-*/

@@ -23,6 +23,7 @@ typedef enum {
     RUNLOOM_COV_G_SLAB_SPILL,         /* per-thread g-slab over cap -> global balance pool */
     RUNLOOM_COV_G_SLAB_REFILL,        /* empty slab refilled from the global pool */
     RUNLOOM_COV_CORO_POOL_MISS,       /* coro pool miss -> cold new stack */
+    RUNLOOM_COV_LOCAL_WAKE,           /* migration: a hub-thread waker pushed a woken g onto its OWN deque */
     RUNLOOM_COV__COUNT
 } runloom_cov_point_t;
 

@@ -48,7 +48,11 @@
  *   block in mn_sched_runq.c.inc).  That is what lets an idle hub rescue the
  *   woken work of a hub wedged in a blocking C call -- the failure the
  *   default mode cannot recover from.  Fresh-fiber work-stealing is unchanged
- *   and still runs alongside it.
+ *   and still runs alongside it.  A wake performed on a general hub thread
+ *   skips the global queue: the g goes onto the waker's own deque (Go-style
+ *   local wake, runloom_mn_woken_enqueue) where the waker's hub or any idle
+ *   thief picks it up; the global queue serves foreign-thread wakers, offload
+ *   hub wakers, pinned fibers, replay, and a full deque.
  *
  *   Why migration needs a patched interpreter.  In STOCK free-threaded
  *   CPython it is unsound, for two independent reasons, and either alone
@@ -111,6 +115,24 @@ PyObject *runloom_mn_fiber(PyObject *callable, size_t stack_size);
  * feature off). */
 PyObject *runloom_mn_offload_fiber(PyObject *callable, size_t stack_size);
 int runloom_mn_offload_hub_count(void);
+/* Place the fiber on hub `hub_id`, drained to that hub's local FIFO rather than
+ * its stealable deque.  hub_id < 0 or >= the live hub count raises ValueError.
+ * Alone among spawn paths it may name a reserved offload hub, so a test can
+ * force general work onto one; on a busy one the fiber strands behind the
+ * blocking call.
+ *
+ * PIN CONTRACT: a pinned fiber is NOT stealable.  It runs only when its hub
+ * does, so it starves if that hub blocks -- a determinism knob for tests, not
+ * an affinity feature. */
+PyObject *runloom_mn_fiber_pinned(PyObject *callable, size_t stack_size,
+                                  int hub_id);
+
+/* Confine `g`'s resumes to hub `hub_id` (<0 clears).  Returns 0, or -1 with a
+ * Python error set.  Exposed as G.pin(hub).  A cross-hub target is only sound
+ * under a migration mode, so elsewhere it raises RuntimeError; pinning to its
+ * own hub is always legal.  Pin contract: runloom_mn_fiber_pinned above. */
+int runloom_mn_pin_for_wake(runloom_g_t *g, int hub_id);
+
 /* Like runloom_mn_fiber but `size` is a grow-down LEARNED size: spawn it down the
  * deferred (lazy) stack-alloc path so a tight front-load loop doesn't cold-mmap a
  * guarded stack per spawn -- the alloc lands on the consumer hub where the pool
