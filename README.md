@@ -1,12 +1,17 @@
 # Stackweave
 
+> [!WARNING]
+> **Stackweave is an experimental fork of [runloom](https://github.com/robertsdotpm/runloom)**
+> by Matthew Roberts. It exists to try out new ideas before they are proposed
+> for merging into upstream runloom. Expect unstable APIs, half-finished
+> experiments, and changes that may never land upstream. For the maintained
+> project, use [runloom](https://github.com/robertsdotpm/runloom). Stackweave
+> remains MIT-licensed.
+
 Go-style stackful coroutines for Python. Write **blocking** code — `fiber(fn)`,
 plain `recv`/`send`, no `async`/`await` — and run a million of them across every
 core in one process. Hand-rolled asm context switch + C work-stealing scheduler +
 netpoll, built for **free-threaded Python 3.14t** (GIL off).
-
-> Stackweave is a fork of [runloom](https://github.com/robertsdotpm/runloom)
-> by Matthew Roberts, and remains MIT-licensed.
 
 ```python
 import threading, stackweave
