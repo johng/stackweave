@@ -1,4 +1,10 @@
-"""Regressions for the gaps cross-hub migration exposes.
+"""What must hold for a fiber after it migrates to another hub.
+
+A migrated fiber must free what it drops, keep the scheduler's timers and
+queues intact, still be the same fiber to code keyed on the OS thread, and
+not cost much more than a fiber that never moved.  Each test here states
+one such invariant; the ones marked xfail are the known gaps of migration
+mode, kept failing on purpose until each is closed.
 
 Under STACKWEAVE_MIGRATION=1 (set for every subprocess here) a woken fiber
 carries its own PyThreadState and may resume on any hub.  On an interpreter
