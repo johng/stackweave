@@ -3,8 +3,8 @@
 A migrated fiber must free what it drops, keep the scheduler's timers and
 queues intact, still be the same fiber to code keyed on the OS thread, and
 not cost much more than a fiber that never moved.  Each test here states
-one such invariant; the ones marked xfail are the known gaps of migration
-mode, kept failing on purpose until each is closed.
+one such invariant; the failing ones are the known gaps of migration mode,
+left red on purpose until each is closed.
 
 Under STACKWEAVE_MIGRATION=1 (set for every subprocess here) a woken fiber
 carries its own PyThreadState and may resume on any hub.  On an interpreter
@@ -23,11 +23,9 @@ Each scenario runs in a fresh subprocess so a lost fiber or a wedged hub is a
 clean timeout rather than a hung pytest, and so one scenario's leak cannot
 leak into the next.
 
-Tests that fail today carry ``xfail(strict=True)`` with the finding they
-track (the migration review on PR #23).  A strict xfail is visible in
-the run as "xfailed", and the moment a fix lands it turns into a hard XPASS
-failure, so the marker has to be removed deliberately -- unlike a skip list
-entry, which stays green forever.
+Tests that fail today are NOT marked xfail: each one's docstring names the
+finding it tracks (the migration review on PR #23), and the suite stays red
+until the gap is closed.
 
 Names are ``test_<area>_<invariant>``.  The area is the subsystem a fix
 lands in, so ``-k memory`` (or identity, sched, preempt, cost, harness)
@@ -41,10 +39,10 @@ selects one gap family:
     cost      the price of one PyThreadState per fiber (bound in the name)
 
 The invariant is the behaviour that must hold, not the bug, so the name
-reads as a plain guard once its xfail marker comes off.  The gaps that
-older tests already cover (hub introspection, sysmon classification, the
-stack pool, the seeded scheduler) are xfailed in place via the lists in
-conftest.py rather than duplicated here.
+reads as a plain guard once the gap is closed.  The gaps that older
+tests already cover when run with migration on (hub introspection, sysmon
+classification, the stack pool, the seeded scheduler) are not duplicated
+here.
 
 Four tests pass today and are here to pin down what was verified to work:
 that migration is actually observable through this harness, that
@@ -229,11 +227,11 @@ stackweave.run(4, main)
 # (PR #23 review, 7.2)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(strict=True, reason=(
-    "a G handle dropped on another hub is brc-queued to that "
-    "hub's tstate and its finished fiber (g + tstate + stack) survives until "
-    "a GC; the hub loop must service its own merge queue"))
 def test_memory_cross_hub_g_handle_drop_frees_the_fiber_without_gc():
+    """Known gap: a G handle dropped on another hub is brc-queued to that
+    hub's tstate and its finished fiber (g + tstate + stack) survives until
+    a GC; the hub loop must service its own merge queue.
+    """
     assert_pass(r'''
 import gc, collections
 _watchdog(50)
@@ -272,11 +270,11 @@ stackweave.run(4, main)
 ''')
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "WaitGroup's contended CoFMutex parker holds a current_g() "
-    "handle that another hub drops; each drop pins ~33 KiB of finished fiber "
-    "until a GC (the 210 -> 977 MB observation)"))
 def test_memory_waitgroup_fanout_frees_finished_fibers_without_gc():
+    """Known gap: WaitGroup's contended CoFMutex parker holds a current_g()
+    handle that another hub drops; each drop pins ~33 KiB of finished fiber
+    until a GC (the 210 -> 977 MB observation).
+    """
     assert_pass(r'''
 import gc, collections
 _watchdog(50)
@@ -316,11 +314,12 @@ stackweave.run(4, main)
 # races that came in with the global run-queue.  (PR #23 review, 7.4 and 7.5)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(strict=True, reason=(
-    "sysmon wall-clock preemption (default on in main) was "
-    "deleted; a CPU-bound fiber monopolises its hub and every sleeper whose "
-    "timer is on that hub stalls for the whole spin (main recovered in ~180 ms)"))
 def test_preempt_cpu_bound_fiber_does_not_starve_its_hubs_timers():
+    """Known gap: sysmon wall-clock preemption (default on in main) was
+    deleted; a CPU-bound fiber monopolises its hub and every sleeper whose
+    timer is on that hub stalls for the whole spin (main recovered in ~180
+    ms).
+    """
     assert_pass(r'''
 _watchdog(40)
 NS, SPIN = 8, 1.5
@@ -351,11 +350,11 @@ stackweave.run(2, main)
 ''')
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "the timer pop CASes PARKED->RUNNING and drops the fiber "
-    "when introspection holds it SWEEPING; the sleeper is then off the heap "
-    "and on no queue for good"))
 def test_sched_timer_pop_survives_a_concurrent_introspection_sweep():
+    """Known gap: the timer pop CASes PARKED->RUNNING and drops the fiber when
+    introspection holds it SWEEPING; the sleeper is then off the heap and
+    on no queue for good.
+    """
     assert_pass(r'''
 import random
 from stackweave import inspect as swi
@@ -389,11 +388,11 @@ stackweave.run(4, main)
 ''')
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "runloom_per_g_tstate_mode is process-global, so while an "
-    "M:N run is live a single-thread scheduler on another OS thread skips the "
-    "snap and context copy and its fibers share ContextVars and exc_info"))
 def test_sched_single_thread_fibers_stay_isolated_while_mn_is_live():
+    """Known gap: runloom_per_g_tstate_mode is process-global, so while an M:N
+    run is live a single-thread scheduler on another OS thread skips the
+    snap and context copy and its fibers share ContextVars and exc_info.
+    """
     assert_pass(r'''
 import contextvars
 _watchdog(40)
@@ -432,11 +431,11 @@ print("PASS", flush=True)
 ''')
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "mn_fini drains the global run-queue with one decref "
-    "per entry but a queued g holds two refs, so a fiber woken just before an "
-    "early run() exit leaks with its PyThreadState"))
 def test_sched_mn_fini_frees_a_fiber_left_on_the_global_runq():
+    """Known gap: mn_fini drains the global run-queue with one decref per
+    entry but a queued g holds two refs, so a fiber woken just before an
+    early run() exit leaks with its PyThreadState.
+    """
     assert_pass(r'''
 import signal, gc
 _watchdog(40)
@@ -480,11 +479,11 @@ os._exit(0)
 # get_ident), not a patch; the tests track the gap.  (PR #23 review, 7.3)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(strict=True, reason=(
-    "stock _thread.RLock keys ownership on the OS thread; after a "
-    "migration release() raises and the lock is wedged for good (needs a "
-    "per-fiber pin or a fiber-aware identity)"))
 def test_identity_stock_rlock_releases_after_a_migration():
+    """Known gap: stock _thread.RLock keys ownership on the OS thread; after a
+    migration release() raises and the lock is wedged for good (needs a
+    per-fiber pin or a fiber-aware identity).
+    """
     assert_pass(r'''
 _watchdog(30)
 def main():
@@ -499,10 +498,10 @@ stackweave.run(4, main)
 ''')
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "sqlite3's default check_same_thread=True compares the OS "
-    "thread; a connection used after a migration raises ProgrammingError"))
 def test_identity_sqlite_connection_works_after_a_migration():
+    """Known gap: sqlite3's default check_same_thread=True compares the OS
+    thread; a connection used after a migration raises ProgrammingError.
+    """
     assert_pass(r'''
 import sqlite3
 _watchdog(40)
@@ -531,14 +530,16 @@ stackweave.run(4, main)
 ''')
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "a large bytes object allocated on one hub and dropped on "
-    "another is brc-queued to the allocating hub's tstate; bytes never advance "
-    "the GC counters, so nothing frees it and RSS grows without bound"))
 def test_memory_cross_hub_bytes_drop_frees_them_without_gc():
     """Producer pinned to hub 0 allocates 1 MiB buffers (alloc-home: owned by
     hub 0's thread id); a consumer pinned to hub 1 drops them.  Every drop is
-    a non-owner last decref.  Peak RSS must stay near a handful of buffers."""
+    a non-owner last decref.  Peak RSS must stay near a handful of buffers.
+
+    Known gap: a large bytes object allocated on one hub and dropped on
+    another is brc-queued to the allocating hub's tstate; bytes never
+    advance the GC counters, so nothing frees it and RSS grows without
+    bound.
+    """
     assert_pass(r'''
 import gc, resource
 _watchdog(50)
@@ -587,11 +588,12 @@ stackweave.run(4, main)
 ''')
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "importlib's _ModuleLock keys its owner on _thread.get_ident(); "
-    "an importer that parks and migrates inside the module body cannot "
-    "release the lock and every other importer of that module hangs"))
 def test_identity_module_import_lock_releases_after_a_migration():
+    """Known gap: importlib's _ModuleLock keys its owner on
+    _thread.get_ident(); an importer that parks and migrates inside the
+    module body cannot release the lock and every other importer of that
+    module hangs.
+    """
     assert_pass(r'''
 import tempfile, importlib
 _watchdog(15)
@@ -620,12 +622,12 @@ stackweave.run(4, main)
 ''')
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "a fiber's tstate->thread_id is its SPAWNER's thread while "
-    "get_ident() is the current hub, so sys._current_frames() never lists the "
-    "running fiber under the ident it reports (debuggers and faulthandler "
-    "tooling look it up there)"))
 def test_identity_current_frames_lists_the_running_fiber_under_get_ident():
+    """Known gap: a fiber's tstate->thread_id is its SPAWNER's thread while
+    get_ident() is the current hub, so sys._current_frames() never lists
+    the running fiber under the ident it reports (debuggers and
+    faulthandler tooling look it up there).
+    """
     assert_pass(r'''
 _watchdog(30)
 def main():
@@ -645,14 +647,15 @@ stackweave.run(4, main)
 ''')
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "CLAUDE.md known gap: the global run-queue pull accepts any unpinned entry "
-    "(p1 == 0 || p1 == want), so an idle OFFLOAD hub takes general work and "
-    "strands it behind its next blocking call"))
 def test_sched_offload_hub_never_pulls_unpinned_general_work():
     """H=2 general hubs kept busy by spinners while a foreign thread wakes a
     general fiber: the entry sits in the global run-queue and the only idle
-    puller is the reserved offload hub."""
+    puller is the reserved offload hub.
+
+    Known gap: CLAUDE.md known gap: the global run-queue pull accepts any
+    unpinned entry (p1 == 0 || p1 == want), so an idle OFFLOAD hub takes
+    general work and strands it behind its next blocking call.
+    """
     assert_pass(r'''
 _watchdog(40)
 GEN, SPIN, ROUNDS = 2, 1.5, 6
@@ -686,12 +689,12 @@ stackweave.run(GEN, main, offload_hubs=1)
 ''')
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "a foreign-thread wake reaches a parked hub only through "
-    "wakep_one, which fires once the idle wait exceeds 2 ms; at a faster "
-    "cadence the fiber waits for the next 1 ms idle pump (p99 380-600 us vs "
-    "11-38 us on the per-hub scheduler)"))
 def test_sched_foreign_thread_wake_reaches_a_shallow_idle_hub_promptly():
+    """Known gap: a foreign-thread wake reaches a parked hub only through
+    wakep_one, which fires once the idle wait exceeds 2 ms; at a faster
+    cadence the fiber waits for the next 1 ms idle pump (p99 380-600 us vs
+    11-38 us on the per-hub scheduler).
+    """
     assert_pass(r'''
 _watchdog(40)
 N = 1500
@@ -719,10 +722,10 @@ stackweave.run(4, main)
 # Cost: one PyThreadState per fiber.  (PR #23 review, 7.5)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(strict=True, reason=(
-    "gc.collect() visits every parked fiber's tstate, "
-    "about 0.45 us each (4x the per-hub scheduler at 20k parked)"))
 def test_cost_gc_collect_under_0_2us_per_parked_fiber():
+    """Known gap: gc.collect() visits every parked fiber's tstate, about 0.45
+    us each (4x the per-hub scheduler at 20k parked).
+    """
     assert_pass(r'''
 import gc
 _watchdog(60)
@@ -750,10 +753,10 @@ stackweave.run(4, main)
 ''')
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "a parked fiber costs ~33 KiB RSS (g + PyThreadState + "
-    "its datastack chunk + stack)"))
 def test_cost_parked_fiber_rss_under_16_kib():
+    """Known gap: a parked fiber costs ~33 KiB RSS (g + PyThreadState + its
+    datastack chunk + stack).
+    """
     assert_pass(r'''
 import resource
 _watchdog(60)
@@ -780,10 +783,10 @@ stackweave.run(4, main)
 ''')
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "PyThreadState_New per spawn -- 2.6 us per "
-    "spawn+complete at H=4 against 0.4 us on the per-hub scheduler"))
 def test_cost_spawn_and_complete_under_1us():
+    """Known gap: PyThreadState_New per spawn -- 2.6 us per spawn+complete at
+    H=4 against 0.4 us on the per-hub scheduler.
+    """
     assert_pass(r'''
 _watchdog(60)
 N = 20000
