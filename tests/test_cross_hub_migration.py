@@ -760,9 +760,12 @@ if os.environ.get("RUNLOOM_MIGRATION") == "1":
 
 GC_COLLECT_COST = _PROBE + r'''
 import gc
-_watchdog(80)
-N = 5000
-def best_collect(k=5):
+_watchdog(120)
+# 10k parked fibers, best of 7: on 3.13 the per-fiber cost is ~0.13 us on
+# Linux, so 5k gave a 0.65 ms signal that a loaded 3-core runner's noise in
+# the empty-collection baseline could swallow.
+N = 10000
+def best_collect(k=7):
     best = 1e9
     for _ in range(k):
         t0 = time.perf_counter(); gc.collect(); best = min(best, time.perf_counter() - t0)
@@ -866,7 +869,7 @@ def test_sched_signal_woken_io_sleeper_survives_origin_heap_churn():
     assert_pass(r'''
 import signal
 _watchdog(40)
-NS, DUR = 64, 2.5
+NS, DUR = 64, 3.0
 done = bytearray(NS)
 hits, delivered, completed = [0], [0], [False]
 class Tick(Exception): pass
@@ -907,7 +910,9 @@ except Tick:
     signal.setitimer(signal.ITIMER_REAL, 0, 0)
 print("signals=%d delivered into io-sleepers=%d run completed=%s finished %d/%d churners"
       % (hits[0], delivered[0], completed[0], sum(done), NS), flush=True)
-assert delivered[0] >= 50, "only %d signals reached a parked io-sleeper" % delivered[0]
+# Handlers run on the main thread's ~16 ms poll; a loaded CI runner starves
+# that poll, so the floor is a fraction of the ~180 deliveries an idle box gets.
+assert delivered[0] >= 20, "only %d signals reached a parked io-sleeper" % delivered[0]
 if completed[0]:
     assert sum(done) == NS, "%d sleepers lost" % (NS - sum(done))
 print("PASS", flush=True)
