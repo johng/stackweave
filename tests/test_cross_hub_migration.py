@@ -52,6 +52,7 @@ on one OS thread, and that signal delivery into a migrating io-sleeper does
 not crash (the heap race it exercises is confirmed by reading only).
 """
 import os
+import re
 import subprocess
 import sys
 
@@ -135,13 +136,30 @@ def run_scenario(code, timeout=60):
     return p.returncode, p.stdout, p.stderr
 
 
+def _key_line(out, err):
+    """The one line that says why the scenario failed: the last error or
+    watchdog line on stderr, else the last thing the scenario printed."""
+    for line in reversed(err.splitlines()):
+        if re.match(r"\s*(\w+(Error|Exception|Interrupt)\b|WATCHDOG)", line):
+            return line.strip()
+    lines = [l for l in out.splitlines() if l.strip()]
+    return lines[-1].strip() if lines else "(no output)"
+
+
 def assert_pass(code, timeout=60):
     rc, out, err = run_scenario(code, timeout=timeout)
     if "NOMIG" in out:
         pytest.skip("no cross-hub migration observed on this machine; "
                     "the scenario needs >=2 hubs that actually trade fibers")
-    assert rc == 0 and "PASS" in out, (
-        "rc=%s\n--- stdout ---\n%s\n--- stderr ---\n%s" % (rc, out, err))
+    if rc == 0 and "PASS" in out:
+        return
+    # The full transcript goes to stdout, which pytest shows under "Captured
+    # stdout call" in the FAILURES section.  The failure message itself is
+    # ONE line, so pytest's short summary lists every failing scenario on a
+    # line of its own and a log tail (tests/run_isolated.py keeps 30 lines)
+    # still shows the whole failing set, not the last two transcripts.
+    print("--- scenario stdout ---\n%s\n--- scenario stderr ---\n%s" % (out, err))
+    pytest.fail("rc=%s: %s" % (rc, _key_line(out, err)), pytrace=False)
 
 
 # ---------------------------------------------------------------------------
