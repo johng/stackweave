@@ -502,6 +502,9 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
      * this hub -- never shared, so a plain int is fine. */
     unsigned int idle_streak = 0;
     while (!__atomic_load_n(&h->stopping, __ATOMIC_ACQUIRE)) {
+        /* Idle turns too: a hub with nothing to run still owns the merge queue
+         * for every object it allocated that another hub dropped. */
+        runloom_iframe_service_merge_queue(PyThreadState_GetUnchecked());
         runloom_g_t *g;
         /* WAKEP: a fresh loop turn -- if we registered as a deep idle sleeper last
          * turn, unregister now (whether we woke on a kick, a real event, or the
@@ -1293,6 +1296,9 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                  * introduce.  No-op unless RUNLOOM_DELAY names this site. */
                 runloom_delay_inject(RUNLOOM_DLY_HANDOFF_ADOPT);
                 PyEval_RestoreThread(g->tstate);      /* attach g's own tstate */
+                /* Drops of this hub's objects now land on the FIBER's tstate,
+                 * whose eval loop merges them as it runs (runloom_iframe_brc_adopt). */
+                runloom_iframe_brc_adopt(g->tstate, hub_ts);
                 /* Deep-surface migration oracle (RUNLOOM_DBG_MIGRATE; zero-cost
                  * otherwise).  The per-g tstate's mimalloc heap / brc / QSBR are
                  * bound to the OS thread that first used them; running it on a
@@ -1355,8 +1361,17 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                 runloom_tls_parked_offqueue = 0;
                 runloom_tls_current_g = NULL;
                 h->sched.current = NULL;
+                /* Hub tstate back to the head of its bucket; drain what was
+                 * queued to the fiber while it ran.  Before the detach: the
+                 * bucket mutex and the merge need an attached tstate, and the
+                 * fiber's is the owner of what it holds. */
+                runloom_iframe_brc_release(g->tstate, hub_ts);
                 PyEval_SaveThread();                  /* detach g's tstate */
                 PyEval_RestoreThread(hub_ts);          /* reattach hub tstate */
+                /* Free what other hubs dropped on us while the fiber ran: the
+                 * brc merge queue is keyed to THIS hub's thread state, which
+                 * never runs bytecode (see runloom_iframe_service_merge_queue). */
+                runloom_iframe_service_merge_queue(hub_ts);
                 if (runloom_coro_done(g->coro)) {
                     /* Done: the g did not park this resume (a resume ends in a
                      * park OR completion, never both), so no parker is live and

@@ -31,6 +31,9 @@
 #  include "internal/pycore_pystate.h"     /* _PyThreadStateImpl */
 #  ifdef Py_GIL_DISABLED
 #    include "internal/pycore_brc.h"        /* struct _brc_thread_state */
+#    include "internal/pycore_ceval.h"      /* _Py_HandlePending, _PY_EVAL_EXPLICIT_MERGE_BIT */
+#    include "internal/pycore_interp.h"     /* interp->brc.table (bucket by thread id) */
+#    include "internal/pycore_llist.h"      /* bucket_node reordering */
 #    include "internal/pycore_critical_section.h"  /* _PyCriticalSection_* */
 #    include "internal/pycore_tstate.h"   /* _PyThreadState_SetAllocHome (Py_TSTATE_ALLOC_HOME) */
 #    define RUNLOOM_CRITSEC_HAVE 1
@@ -114,6 +117,104 @@ void runloom_iframe_borrow_alloc_home(PyThreadState *exec, PyThreadState *home)
     }
 #else
     (void)exec; (void)home;
+#endif
+}
+
+int runloom_iframe_service_merge_queue(PyThreadState *ts)
+{
+#ifdef Py_GIL_DISABLED
+    int rounds = 0;
+    if (ts == NULL) return 0;
+    /* One relaxed load on the fast path: the bit is clear almost always. */
+    while (_Py_eval_breaker_bit_is_set(ts, _PY_EVAL_EXPLICIT_MERGE_BIT)) {
+        /* _Py_HandlePending is the eval loop's own dispatcher for this bit
+         * (the merge routine itself is not exported).  It also services any
+         * other pending bit on this state -- a scheduled GC, a stop-the-world
+         * request -- exactly as the eval loop would at a safe point, which is
+         * what a hub sitting attached between resumes is. */
+        if (_Py_HandlePending(ts) < 0) {
+            PyErr_Clear();          /* a deallocator's error; not ours to raise */
+            break;
+        }
+        if (++rounds >= 64) break;  /* pathological re-queue chain; next resume continues */
+    }
+    return rounds;
+#else
+    (void)ts;
+    return 0;
+#endif
+}
+
+#ifdef Py_GIL_DISABLED
+static inline struct _brc_bucket *runloom_brc_bucket(PyInterpreterState *interp, uintptr_t tid)
+{
+    return &interp->brc.table[tid % _Py_BRC_NUM_BUCKETS];
+}
+
+/* Move `node` to the FRONT of `bucket`'s list (llist_insert_tail inserts
+ * before its first argument, so "before the current first" is the front). */
+static inline void runloom_brc_move_to_front(struct _brc_bucket *bucket, struct llist_node *node)
+{
+    llist_remove(node);
+    llist_insert_tail(bucket->root.next, node);
+}
+#endif
+
+void runloom_iframe_brc_adopt(PyThreadState *fiber, PyThreadState *hub)
+{
+#ifdef Py_GIL_DISABLED
+    _PyThreadStateImpl *f = (_PyThreadStateImpl *)fiber;
+    _PyThreadStateImpl *h = (_PyThreadStateImpl *)hub;
+    uintptr_t tid = h->brc.tid;
+    struct _brc_bucket *nb = runloom_brc_bucket(fiber->interp, tid);
+    if (f->brc.tid == tid) {
+        PyMutex_Lock(&nb->mutex);
+        runloom_brc_move_to_front(nb, &f->brc.bucket_node);
+        PyMutex_Unlock(&nb->mutex);
+        return;
+    }
+    {
+        /* The fiber was last bound to another thread's bucket: move it.  Two
+         * bucket mutexes, taken in address order so two hubs adopting across
+         * each other's buckets cannot deadlock. */
+        struct _brc_bucket *ob = runloom_brc_bucket(fiber->interp, f->brc.tid);
+        struct _brc_bucket *first = ob < nb ? ob : nb, *second = ob < nb ? nb : ob;
+        PyMutex_Lock(&first->mutex);
+        if (second != first) PyMutex_Lock(&second->mutex);
+        llist_remove(&f->brc.bucket_node);
+        f->brc.tid = tid;
+        llist_insert_tail(nb->root.next, &f->brc.bucket_node);
+        if (second != first) PyMutex_Unlock(&second->mutex);
+        PyMutex_Unlock(&first->mutex);
+    }
+#else
+    (void)fiber; (void)hub;
+#endif
+}
+
+void runloom_iframe_brc_release(PyThreadState *fiber, PyThreadState *hub)
+{
+#ifdef Py_GIL_DISABLED
+    _PyThreadStateImpl *f = (_PyThreadStateImpl *)fiber;
+    _PyThreadStateImpl *h = (_PyThreadStateImpl *)hub;
+    struct _brc_bucket *b = runloom_brc_bucket(fiber->interp, h->brc.tid);
+    int pending;
+    PyMutex_Lock(&b->mutex);
+    runloom_brc_move_to_front(b, &h->brc.bucket_node);
+    /* Read under the bucket mutex: a dropper pushes under it and sets the
+     * fiber's merge bit only AFTER releasing it, so the bit alone could miss
+     * an object pushed just before we took the lock. */
+    pending = (f->brc.objects_to_merge.head != NULL);
+    PyMutex_Unlock(&b->mutex);
+    if (pending) {
+        /* The fiber's state is current on this thread, the owner of every
+         * object queued to it (its tid is ours), and no fiber frame is
+         * executing: a legitimate safe point for the eval loop's dispatcher. */
+        _Py_set_eval_breaker_bit(fiber, _PY_EVAL_EXPLICIT_MERGE_BIT);
+        (void)runloom_iframe_service_merge_queue(fiber);
+    }
+#else
+    (void)fiber; (void)hub;
 #endif
 }
 
