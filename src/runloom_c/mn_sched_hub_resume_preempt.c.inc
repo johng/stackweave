@@ -1114,6 +1114,12 @@ RUNLOOM_INLINE void runloom_hub_resume_begin(runloom_hub_t *h, runloom_g_t *g)
         /* Relaxed-atomic like its two siblings below: the sysmon thread reads
          * resume_g concurrently for the wedge log (best-effort sample). */
         __atomic_store_n((void **)&h->resume_g, (void *)g, __ATOMIC_RELAXED);
+        /* RELEASE: sysmon's hazard-pointer read acquires it (see
+         * runloom_sysmon_hub_attach_state).  g->tstate is already attached on
+         * this thread here (hub_main attaches it before resume_begin). */
+        __atomic_store_n((void **)&h->resume_tstate,
+                         (void *)(g->tstate != NULL ? g->tstate : h->tstate),
+                         __ATOMIC_RELEASE);
         __atomic_add_fetch(&h->resume_seq, 1, __ATOMIC_RELAXED);
         __atomic_store_n(&h->resume_start_ns, runloom_monotonic_ns(),
                          __ATOMIC_RELAXED);
@@ -1129,6 +1135,11 @@ RUNLOOM_INLINE void runloom_hub_resume_end(runloom_hub_t *h)
 {
     if (__builtin_expect(runloom_sysmon_enabled, 0)) {
         __atomic_store_n(&h->resume_start_ns, 0, __ATOMIC_RELAXED);
+        /* Cleared BEFORE this g can complete and free its tstate: completion
+         * (runloom_g_decref -> runloom_sysmon_tstate_retire_wait) is program-
+         * ordered after this on the hub thread, and a cross-hub last decref
+         * happens-after via the refcount's acq_rel. */
+        __atomic_store_n((void **)&h->resume_tstate, (void *)NULL, __ATOMIC_RELEASE);
     }
     /* Publish this segment's deferred cross-hub submits ATOMICALLY (per target)
      * before releasing the baton, so the next round sees a complete batch -- the

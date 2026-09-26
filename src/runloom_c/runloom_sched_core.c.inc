@@ -931,6 +931,7 @@ void runloom_g_decref(runloom_g_t *g)
              * are already corrupt by the time we reach this line; the fix is the
              * patch, not this teardown.
              * ==================================================================*/
+            runloom_sysmon_tstate_retire_wait(g->tstate);   /* sysmon may be reading it */
             PyThreadState_Clear(g->tstate);
             PyThreadState_Delete(g->tstate);
             g->tstate = NULL;

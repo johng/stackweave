@@ -249,6 +249,12 @@ typedef struct runloom_hub {
     alignas(RUNLOOM_CACHELINE) volatile long long   resume_start_ns;
     volatile long        resume_seq;
     runloom_g_t            *resume_g;
+    /* The thread state the current resume RUNS ON: the fiber's own under
+     * migration (per-g tstate), else this hub's.  Published by
+     * runloom_hub_resume_begin, cleared by runloom_hub_resume_end, read by the
+     * sysmon watchdog through a hazard pointer (runloom_sysmon_hub_attach_state)
+     * because a per-g tstate is freed when its fiber completes.  NULL = idle. */
+    void *volatile       resume_tstate;
     /* RUNLOOM_PREEMPT: set by the sysmon watchdog when this hub is ATTACHED-wedged
      * (a CPU-bound / non-yielding fiber, which work-stealing can't drain).
      * runloom's installed eval-frame wrapper reads it at the next Python frame
