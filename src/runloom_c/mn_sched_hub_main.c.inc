@@ -754,16 +754,36 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                      * (a g sleeping AND wakeable, e.g. a select-with-timeout)
                      * already drove PARKED->QUEUED and enqueued it on the global
                      * runq -- do NOT also push it here, or it would be scheduled
-                     * twice. */
+                     * twice.  If introspection holds it SWEEPING (a stack dump
+                     * or an idle-stack madvise), hand the wake to the sweeper
+                     * exactly as wake_g does: SWEEPING -> SWEEPING_WOKEN, and
+                     * runloom_mn_sweep_claim_release enqueues it.  Dropping the
+                     * pop there lost the sleeper for good -- off the heap, on
+                     * no queue (fibers(stacks=True) under load lost 90 of 128). */
                     int pexp = RUNLOOM_WS_PARKED;
-                    if (__atomic_compare_exchange_n(&woke->wake_state, &pexp,
-                                                    RUNLOOM_WS_RUNNING, 0,
-                                                    __ATOMIC_ACQ_REL,
-                                                    __ATOMIC_ACQUIRE)) {
-                        /* TIMER_CLAIM won: PARKED -> RUNNING (the sole edge into
-                         * RUNNING that does not pass through QUEUED). */
-                        RUNLOOM_WS_NOTE(RUNLOOM_WS_PARKED, RUNLOOM_WS_RUNNING);
-                        runloom_sched_ready_push(&h->sched, woke);
+                    for (;;) {
+                        if (pexp == RUNLOOM_WS_PARKED) {
+                            if (__atomic_compare_exchange_n(&woke->wake_state, &pexp,
+                                                            RUNLOOM_WS_RUNNING, 0,
+                                                            __ATOMIC_ACQ_REL,
+                                                            __ATOMIC_ACQUIRE)) {
+                                /* TIMER_CLAIM won: PARKED -> RUNNING (the sole edge
+                                 * into RUNNING that does not pass through QUEUED). */
+                                RUNLOOM_WS_NOTE(RUNLOOM_WS_PARKED, RUNLOOM_WS_RUNNING);
+                                runloom_sched_ready_push(&h->sched, woke);
+                                break;
+                            }
+                        } else if (pexp == RUNLOOM_WS_SWEEPING) {
+                            if (__atomic_compare_exchange_n(&woke->wake_state, &pexp,
+                                                            RUNLOOM_WS_SWEEPING_WOKEN, 0,
+                                                            __ATOMIC_ACQ_REL,
+                                                            __ATOMIC_ACQUIRE)) {
+                                RUNLOOM_WS_NOTE(RUNLOOM_WS_SWEEPING, RUNLOOM_WS_SWEEPING_WOKEN);
+                                break;   /* sweeper enqueues at release */
+                            }
+                        } else {
+                            break;   /* QUEUED / RUNNING* / SWEEPING_WOKEN: a waker owns it */
+                        }
                     }
                 } else {
                     runloom_sched_ready_push(&h->sched, woke);
