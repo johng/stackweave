@@ -247,12 +247,12 @@ Py_ssize_t runloom_sched_drain(runloom_sched_t *s)
                 }
             }
             /* io_uring CQ-OVERFLOW safety -- before any blocking pump.
-             * When the kernel CQ ring fills (multishot recv under backpressure,
-             * or many concurrent single-shot completions), excess completions go
-             * to the kernel's overflow backlog and do NOT re-signal the
-             * registered eventfd.  A blocking epoll_wait below would then sleep
-             * forever waiting for an eventfd edge that never comes, stranding the
-             * fiber whose completion is in overflow -- and the only thing that
+             * When the kernel CQ ring fills (many concurrent completions under
+             * backpressure), excess completions go to the kernel's overflow
+             * backlog and do NOT re-signal the registered eventfd.  A blocking
+             * epoll_wait below would then sleep forever waiting for an eventfd
+             * edge that never comes, stranding the fiber whose completion is in
+             * overflow -- and the only thing that
              * would free CQ space is that same stranded fiber (a real
              * backpressure deadlock; observed: CQ empty + IORING_SQ_CQ_OVERFLOW
              * set + asleep in epoll_wait(-1)).  Drain here first:
@@ -642,7 +642,7 @@ Py_ssize_t runloom_sched_drain(runloom_sched_t *s)
             } else if (runloom_g_state_in(g, RUNLOOM_GST_MASK_PARKED)) {
                 /* Parked on a waiter (netpoll/chan/sleep/park_safe):
                  * drop the g's now-idle stack pages until it's woken.
-                 * No-op unless RUNLOOM_STACK_PARK_DONTNEED=1.  Cooperative
+                 * No-op unless autosize enabled park reclaim.  Cooperative
                  * sched_yield gs are RUNNABLE (already re-queued), not
                  * PARKED, so they skip this and avoid a re-fault. */
                 runloom_coro_park(g->coro);

@@ -96,9 +96,9 @@ stackweave.mn_fini()
 
 ## Network I/O on M:N
 
-netpoll uses a **single shared** epoll/kqueue handle (created once); what is
-per-hub is the parker bookkeeping (the per-hub parker pool) and the per-hub
-io_uring ring.  Goroutines parked on I/O wake on the hub that submitted the
+On Linux and macOS/BSD each hub polls its **own** epoll/kqueue set, and the
+parker bookkeeping is per-hub too (the per-hub parker pool).  Goroutines parked
+on I/O wake on the hub that submitted the
 parking call -- the parker records its origin hub and the pump routes the wake
 back there.  This means your accept loop and connection handlers stay on the same
 hub by default, which is good for cache locality:
@@ -206,11 +206,6 @@ Python program, and `cleanup()` runs. `stackweave.run(1, ...)` and
 That covers the cooperative calls that park on a file descriptor, which is most
 of them: `recv`, `send`/`send_all`, `accept`, `connect`, `select.select`, and
 `selectors.EpollSelector`.
-
-It also covers **io_uring completions** when `STACKWEAVE_TCPCONN_IOURING` is
-enabled (off by default), for both kinds of operation: a blocked `recv` (a
-multishot receive) and a blocked `send` (a single-shot op) each get the
-interrupt in the fiber's own stack.
 
 It also covers **`select.poll`** (`selectors.PollSelector`), which has no file
 descriptor of its own and so reprobes on a short sleep rather than parking on

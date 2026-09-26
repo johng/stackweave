@@ -1,4 +1,4 @@
-# run: STACKWEAVE_TCPCONN_IOURING=1 timeout 30 .venv/bin/python r3_signal_iouring.py
+# run: timeout 30 .venv/bin/python r3_signal_iouring.py
 import signal, socket, time
 import stackweave, stackweave_c as rc
 def _port(lst):

@@ -41,7 +41,7 @@ RUNLOOM_INLINE void runloom_mn_pending_steal(runloom_hub_t *victim,
     __atomic_sub_fetch(&victim->pending, 1, __ATOMIC_ACQ_REL);
 }
 
-/* ---- Global stealable run-queue (RUNLOOM_PER_G_TSTATE only) ----
+/* ---- Global stealable run-queue ----
  *
  * Default mode routes a woken g back to its ORIGIN hub's owner-drained
  * submission list (runloom_mn_hub_submit).  That strands the g whenever the
@@ -51,7 +51,7 @@ RUNLOOM_INLINE void runloom_mn_pending_steal(runloom_hub_t *victim,
  * This is asyncio's signature failure -- one blocking task stalling a whole
  * fan-out -- reproduced in runloom's narrow blocking-C-call case.
  *
- * Under RUNLOOM_PER_G_TSTATE a woken g carries its own migratable
+ * A woken g carries its own migratable
  * PyThreadState, so it can resume on ANY hub.  We exploit that: wake_g
  * pushes the woken g onto this process-global queue instead of the origin
  * hub's sub list, and every idle hub drains it in hub_main's empty-local/
@@ -118,16 +118,14 @@ static volatile long runloom_global_runq_len  = 0;
 /* Entries with pin_hub1 == 0: the part of the queue any hub may pull. */
 static volatile long runloom_global_runq_unpinned_len = 0;
 
-/* Kick hub `h` out of whichever idle wait it is in -- the same three deliveries
- * runloom_mn_hub_submit makes for a sub_list push: the io_uring loop eventfd,
- * the idle condvar (only when the hub announced idle_waiting; the SEQ_CST fence
- * in the caller pairs with the hub's announce + re-check), and its netpoll
- * pump self-pipe.  All three are edge-safe: a kick that finds nobody waiting
- * is a wasted syscall, never a lost wake. */
+/* Kick hub `h` out of whichever idle wait it is in -- the same two deliveries
+ * runloom_mn_hub_submit makes for a sub_list push: the idle condvar (only when
+ * the hub announced idle_waiting; the SEQ_CST fence in the caller pairs with
+ * the hub's announce + re-check), and its netpoll pump self-pipe.  Both are
+ * edge-safe: a kick that finds nobody waiting is a wasted syscall, never a
+ * lost wake. */
 static void runloom_mn_kick_hub_waits(runloom_hub_t *h)
 {
-    if (__atomic_load_n(&h->ring_waiting, __ATOMIC_ACQUIRE) && h->loop_wake_fd >= 0)
-        runloom_iouring_loop_wake(h->loop_wake_fd);
     if (__atomic_load_n(&h->idle_waiting, __ATOMIC_ACQUIRE)) {
         RUNLOOM_RLOCK(&h->idle_lock, RUNLOOM_RANK_HUB_IDLE);
         runloom_cond_signal(&h->idle_cond);
@@ -308,175 +306,18 @@ static void runloom_mn_global_runq_repin(runloom_g_t *g, int new_pin1)
     }
 }
 
-/* RUNLOOM_PER_G_TSTATE (default OFF, experimental, GATED): give each fiber its
- * own PyThreadState so its Python execution state is migratable across
- * hubs.  A stolen woken g then resumes on ANY hub without the cross-hub
- * corruption that per-hub-tstate + snap migration hits (the snap bakes the
- * owning hub's tstate into the suspended frames).  Trades memory (a tstate per
- * g) for a closeable p99.9 tail.  KNOWN CRASH under churn at H>=2 (the per-g
- * tstate's mimalloc heap migrates across hub threads -> SEGV; see the "KNOWN
- * BUG" block in runloom_sched_core.c.inc and src/patches/README.md), so
- * mn_init runs this flag through runloom_resolve_migratable_mode: it activates
- * ONLY with RUNLOOM_ALLOW_UNSAFE_MIGRATION=1, else warns + stays off.  Read once. */
-static int runloom_per_g_tstate_flag(void)
-{
-    static int v = -1;
-    int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
-    if (cur < 0) {
-        const char *e = getenv("STACKWEAVE_PER_G_TSTATE");
-        cur = (e != NULL && e[0] != '0') ? 1 : 0;
-        __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
-    }
-    return cur;
-}
-
-/* RUNLOOM_STEAL_WOKEN (default OFF, experimental; Fix B): originally a snap-
- * migration mode -- route a woken g through the global stealable run-queue and
- * migrate its interpreter state via the per-g `snap` onto the stealing hub's
- * single bound tstate, needing NO extra PyThreadState per g.  That mechanism is
- * UNSOUND: a suspended fiber's eval frames bake in the ORIGIN hub's tstate
- * pointer (in registers / C locals on the coro stack), which the snap cannot
- * re-root; the migrated fiber then drives the origin hub's tstate from a foreign
- * OS thread (TSan-proven data race on datastack_chunk / c_recursion_remaining /
- * current_exception -> SEGV; H>=2 only).  See src/patches/README.md.
+/* Cross-hub migration is always on: every fiber owns its own PyThreadState, so
+ * a woken g is routed to the global stealable run-queue and resumes on ANY idle
+ * hub.  The mode flag (runloom_get_per_g_tstate_mode) is set by mn_init and
+ * cleared by mn_fini, so it doubles as "an M:N runtime is live": code shared
+ * with the single-thread scheduler still reads it to pick its path.
  *
- * The flag is therefore REDIRECTED: mn_init enables RUNLOOM_PER_G_TSTATE when this
- * is set (see mn_sched_init_fini.c.inc), so RUNLOOM_STEAL_WOKEN=1 runs the per-g-
- * tstate migration (each fiber owns a migratable tstate) and the snap-migration
- * branch in hub_main is never taken.  per-g-tstate has its OWN known crash, so the
- * redirect is GATED: it activates only with RUNLOOM_ALLOW_UNSAFE_MIGRATION=1 (see
- * runloom_resolve_migratable_mode), else warns + runs the default scheduler -- which
- * also keeps a gated request OUT of the unsound snap branch.  When OFF the default
- * scheduler is byte-unchanged. */
-static int runloom_steal_woken_flag(void)
-{
-    static int v = -1;
-    int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
-    if (cur < 0) {
-        const char *e = getenv("STACKWEAVE_STEAL_WOKEN");
-        cur = (e != NULL && e[0] != '0') ? 1 : 0;
-        __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
-    }
-    return cur;
-}
-
-/* Safety interlock for the migratable modes.  BOTH RUNLOOM_PER_G_TSTATE and
- * RUNLOOM_STEAL_WOKEN (which redirects to per-g-tstate) carry a KNOWN crash:
- * per-g-tstate migrates a PyThreadState's mimalloc heap + QSBR state across OS
- * hub threads, which corrupts under allocation churn at H>=2 (intermittent SEGV
- * in PyThreadState_Clear -> _mi_page_retire; see runloom_sched_core.c.inc's
- * "KNOWN BUG" block at the per-g tstate teardown, and docs/dev/
- * STEAL_WOKEN_CLEANUP.md).  So setting either flag alone is GATED OFF (warn +
- * run the default scheduler); activation additionally requires
- * RUNLOOM_ALLOW_UNSAFE_MIGRATION=1 -- the deliberate "I am developing / fuzzing
- * this and accept the crash" escape hatch (used by tools/combinatorial). */
-static int runloom_unsafe_migration_acked(void)
-{
-    static int v = -1;
-    int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
-    if (cur < 0) {
-        const char *e = getenv("STACKWEAVE_ALLOW_UNSAFE_MIGRATION");
-        cur = (e != NULL && e[0] != '0' && e[0] != '\0') ? 1 : 0;
-        __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
-    }
-    return cur;
-}
-
-/* RUNLOOM_MIGRATION (default OFF): the PRODUCTION-facing master flag for cross-hub
- * fiber migration.  A stable, user-friendly alias of RUNLOOM_PER_G_TSTATE -- code
- * opts in with this name (or via runloom.enable_migration()) without needing to
- * know the internal per-g-tstate machinery.  Read once. */
-static int runloom_migration_flag(void)
-{
-    static int v = -1;
-    int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
-    if (cur < 0) {
-        const char *e = getenv("STACKWEAVE_MIGRATION");
-        cur = (e != NULL && e[0] != '0' && e[0] != '\0') ? 1 : 0;
-        __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
-    }
-    return cur;
-}
-
-/* Resolve the migratable-mode request through the interlock.  Returns 1 (enable
- * per-g-tstate cross-hub migration) when a migratable flag is set AND the mode is
- * safe to run; otherwise 0.  Called once from mn_init; its result feeds
- * runloom_set_per_g_tstate_mode, so a gated-off request leaves per_g_tstate_mode
- * == 0 and runloom_use_global_runq() false -> default scheduler (and, crucially,
- * NOT the unsound snap-migration branch).
- *
- * SAFETY GATE (two-tier).  PRODUCTION requires BOTH optional CPython patches --
- * they fix independent halves of the same problem and either alone still
- * corrupts:
- *  - ALLOCATION half -- alloc-home (Py_TSTATE_ALLOC_HOME,
- *    runloom_alloc_home_active()).  Each per-g tstate borrows the running hub's
- *    heap, so no heap migrates OS threads (validated:
- *    experiments/resume_rebuild/mpmc_pergt_repro.py 24/24 + a direct migration
- *    proof 50/60 cross-hub, zero crash).
- *  - EXECUTION half -- exec-home (Py_TSTATE_EXEC_HOME,
- *    runloom_exec_home_active(), patches/cpython314t-tstate-exec-home.patch).
- *    Without it the compiler hoists/CSEs the two reads that identify the OS
- *    thread a frame runs on: a resumed fiber keeps using the ORIGIN hub's
- *    PyThreadState (freed outright if that hub has exited), and
- *    _Py_IsOwnedByCurrentThread() resolves against a stale thread id, routing
- *    decrefs down the non-atomic ob_ref_local path from the wrong thread ->
- *    lost/duplicated decrements -> use-after-free.  alloc-home does NOT cover
- *    this: it relocates the heap but leaves both reads cacheable.
- * With both present, enable WITHOUT any unsafe override -- the supported way to
- * ship migration.  Missing either (including stock CPython): keep the DEV/FUZZ
- * gate, activate only with RUNLOOM_ALLOW_UNSAFE_MIGRATION=1.  Otherwise warn +
- * run the default scheduler, so a user who flips the flag on an under-patched
- * interpreter gets a clean fallback, never a segfault.
- *
- * CAVEAT the probes cannot express: exec-home is a CODEGEN property, and
- * _Py_ThreadId() is inlined into Py_INCREF/Py_DECREF through the public
- * refcount.h.  runloom_exec_home_active() speaks only for runloom_c's own
- * translation units; any OTHER extension module in the process that was built
- * against unpatched headers still carries cacheable reads in its refcounting.
- * A fully sound migrating process needs every extension rebuilt against the
- * patched interpreter. */
-static int runloom_resolve_migratable_mode(void)
-{
-    int want = runloom_per_g_tstate_flag() || runloom_steal_woken_flag()
-               || runloom_migration_flag();
-    int have_alloc, have_exec;
-    if (!want) return 0;
-    have_alloc = runloom_alloc_home_active();
-    have_exec  = runloom_exec_home_active();
-    /* Production: both halves patched -> enable, no override needed. */
-    if (have_alloc && have_exec) return 1;
-    /* Anything less is still unsound -> require the explicit dev escape hatch. */
-    if (runloom_unsafe_migration_acked()) return 1;
-    fprintf(stderr,
-        "[stackweave] cross-hub migration (STACKWEAVE_MIGRATION / STACKWEAVE_PER_G_TSTATE / "
-        "STACKWEAVE_STEAL_WOKEN) is GATED OFF: this CPython is missing %s.\n"
-        "  alloc-home (Py_TSTATE_ALLOC_HOME): %s -- without it a per-g "
-        "PyThreadState's mimalloc heap migrates across hub threads -> SEGV under "
-        "churn at H>=2.\n"
-        "  exec-home  (Py_TSTATE_EXEC_HOME):  %s -- without it the compiler caches "
-        "_PyThreadState_GET()/_Py_ThreadId() across a park/resume, so a migrated "
-        "fiber uses the origin hub's thread state and mis-resolves biased-refcount "
-        "ownership -> use-after-free.\n"
-        "For PRODUCTION, build CPython against BOTH "
-        "patches/cpython31Xt-tstate-alloc-home.patch and "
-        "patches/cpython31Xt-tstate-exec-home.patch for your 3.1X (and rebuild extension modules "
-        "against it -- _Py_ThreadId() inlines into Py_INCREF/Py_DECREF). For "
-        "dev/fuzzing, set STACKWEAVE_ALLOW_UNSAFE_MIGRATION=1 to enable anyway. "
-        "Running the default (per-hub-tstate) scheduler instead.\n",
-        (!have_alloc && !have_exec) ? "both migration patches"
-                                    : (!have_alloc ? "the alloc-home patch"
-                                                   : "the exec-home patch"),
-        have_alloc ? "present" : "MISSING",
-        have_exec  ? "present" : "MISSING");
-    return 0;
-}
-
-/* True when woken gs route to the global stealable run-queue + wake-state
- * machine.  Derived from the RESOLVED mode (runloom_get_per_g_tstate_mode), which
- * the interlock above has already gated -- so a gated-off RUNLOOM_STEAL_WOKEN
- * leaves this false and the default scheduler runs, rather than falling into the
- * unsound snap branch (which is reachable only when use_global_runq is true while
- * per_g_tstate_mode is false). */
+ * Soundness needs CPython built with BOTH optional patches in src/patches/ --
+ * alloc-home (Py_TSTATE_ALLOC_HOME: a per-g tstate allocates on the hub now
+ * running it, so no mimalloc heap migrates OS threads) and exec-home
+ * (Py_TSTATE_EXEC_HOME: _PyThreadState_GET()/_Py_ThreadId() stay uncacheable
+ * across a park/resume).  Nothing checks for them; on a stock interpreter the
+ * scheduler migrates anyway and can crash under churn at H>=2. */
 static int runloom_use_global_runq(void)
 {
     return runloom_get_per_g_tstate_mode();
@@ -484,25 +325,21 @@ static int runloom_use_global_runq(void)
 
 /* ---- sysmon watchdog (stalled-hub detection) ----
  *
- * RUNLOOM_SYSMON (default OFF): spawn one extra OS thread that periodically
- * scans every hub's resume_start_ns and logs a hub stuck inside a single
- * runloom_coro_resume longer than RUNLOOM_SYSMON_MS (the unanticipated-block
- * signature -- a fiber occupying its hub's OS thread with a
- * non-yielding blocking C call that Group A's offload never wrapped).
+ * One extra OS thread, always on for an M:N run, periodically scans every hub's
+ * resume_start_ns and flags a hub stuck inside a single runloom_coro_resume
+ * longer than STACKWEAVE_SYSMON_MS (the unanticipated-block signature -- a fiber
+ * occupying its hub's OS thread with a non-yielding blocking C call that
+ * offload never wrapped).  It only observes: a wedged hub's woken fibers are
+ * already recovered by the global run-queue, which any idle hub drains.  The
+ * deadlock census reads the same per-resume instrumentation.
  *
- * DETECT + PREEMPT: log the wedge (and how many gs it strands), and for an
- * ATTACHED (CPU-bound) wedge arm preemption so the hub time-slices.  A DETACHED
- * (blocking-IO) wedge needs no recovery here -- work-stealing already drains its
- * fresh fibers to idle hubs.  Gated so the per-resume instrumentation (two
- * stores + a clock read) is a predicted-not-taken branch -- zero cost when the
- * watchdog is off. */
-/* PyThreadState->state values (cpython/pystate.h documents the field;
+ * PyThreadState->state values (cpython/pystate.h documents the field;
  * the numeric values live in the internal pycore_pystate.h).  Mirrored here
  * so the watchdog can classify a wedge WITHOUT the Python C-API: it reads
  * h->tstate->state to tell a DETACHED stall (the running g released the tstate
  * via Py_BEGIN_ALLOW_THREADS -> a well-behaved blocking-IO call) from an
- * ATTACHED one (CPU-bound bytecode or a raw tstate-holding syscall -> arm
- * preemption) and from a SUSPENDED one (a stop-the-world is in progress). */
+ * ATTACHED one (CPU-bound bytecode or a raw tstate-holding syscall) and from a
+ * SUSPENDED one (a stop-the-world is in progress). */
 #define RUNLOOM_TS_DETACHED  0
 #define RUNLOOM_TS_ATTACHED  1
 #define RUNLOOM_TS_SUSPENDED 2
@@ -514,45 +351,20 @@ RUNLOOM_INLINE int runloom_tstate_attach_state(PyThreadState *ts)
     return __atomic_load_n(&ts->state, __ATOMIC_ACQUIRE);
 }
 
-static int       runloom_sysmon_enabled = 0;
-static int       runloom_sysmon_quiet = 0;   /* RUNLOOM_SYSMON_QUIET: suppress
+static int       runloom_sysmon_quiet = 0;   /* STACKWEAVE_SYSMON_QUIET: suppress
                                               * the per-wedge WEDGED/RECOVERED
-                                              * diagnostic spam (detector +
-                                              * preempt stay fully on) */
+                                              * diagnostic spam */
 static long long runloom_sysmon_wedge_ns = 50LL * 1000000LL;   /* 50 ms default */
-/* ATTACHED-preempt threshold, split from the DETACHED/wedge detection threshold
- * above so a CPU-bound time-slice (fairness) tunes independently of the
- * blocking-call detection latency.  Defaults to wedge_ns (backward compatible);
- * RUNLOOM_PREEMPT_MS overrides.  (Go uses forcePreemptNS=10 ms for the CPU
- * time-slice, much larger than its ~20 us syscall retake.) */
+/* ATTACHED-wedge preempt threshold (the CPU time-slice); defaults to the wedge
+ * budget, STACKWEAVE_PREEMPT_MS tunes it independently. */
 static long long runloom_sysmon_preempt_ns = 50LL * 1000000LL;
+/* Preemption has no opt-out.  The one writer besides init is the fatal-signal
+ * crash handler (runloom_sched_freeze_for_crash), which clears it so the
+ * faulting g stays put while the handler chains out. */
+static int       runloom_preempt_enabled = 1;
 static long long runloom_sysmon_tick_ns  = 10LL * 1000000LL;   /* scan every 10 ms (base) */
 static long long runloom_sysmon_tick_base_ns = 10LL * 1000000LL; /* unbacked-off tick */
 static runloom_thread_t runloom_sysmon_thread;
 static int       runloom_sysmon_running = 0;   /* 1 once the thread is spawned */
 static volatile int runloom_sysmon_stop = 0;
 
-/* ---- ATTACHED/CPU preemption (RUNLOOM_PREEMPT, default OFF) ----
- *
- * An ATTACHED wedge is a CPU-bound or raw-tstate-holding fiber -- it never
- * releases its hub's tstate, so a sibling g on that hub starves.  The answer is
- * preemption: make the offending g yield so the hub round-robins its other gs,
- * exactly as Go time-slices a long-running fiber.  (A DETACHED wedge needs no
- * such recovery -- work-stealing already drains its fresh fibers to idle hubs.)
- *
- * Mechanism = a chained eval-frame function (the only exported, build-stable
- * hook; `_PyEval_AddPendingCall` can't target a specific thread, and runloom
- * avoids internal headers).  On every Python frame boundary the wrapper checks
- * THIS hub's `preempt_requested` (set by the sysmon watchdog on an ATTACHED
- * wedge) and, if set, `runloom_coro_yield()`s the running g back to the hub before
- * entering the frame -- a clean safe point identical to a recv-park.  This is
- * Go pre-1.14 cooperative preemption: prompt for call-bearing CPU code; a tight
- * single-frame / C-extension loop makes no Python calls and so is NOT preempted
- * (the single-frame liveness backstop's eval-breaker pending call covers it).
- *
- * Cost: installing a custom eval-frame func disables CPython's
- * `eval_frame == _PyEval_EvalFrameDefault` fast path, so EVERY frame goes
- * indirect.  We therefore install it ONLY when RUNLOOM_PREEMPT is set -- default
- * mode keeps the fast path and never reads `preempt_requested`.  The wrapper
- * itself is defined below runloom_tls_hub/runloom_tls_current_g (it reads them). */
-static int          runloom_preempt_enabled = 0;

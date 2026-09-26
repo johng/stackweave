@@ -201,9 +201,8 @@ every other fiber uses, and there is no completion protocol left to get wrong.
 
 Two consequences worth knowing:
 
-- It needs **no patched CPython**. Nothing migrates between hubs -- the offload
-  fiber is born and dies on its hub, the caller never leaves its own -- so the
-  cross-hub tstate problem (`stackweave.migration_available()`) does not arise.
+- The offload fiber is born and dies on its hub; the caller just parks on a
+  normal channel.
 - It does **not** raise blocking concurrency. A blocked hub cannot run its
   scheduler loop, so K offload hubs carry K concurrent blocking calls, the same
   arithmetic as the thread pool. The gain is correctness and maintainability,
@@ -212,7 +211,7 @@ Two consequences worth knowing:
 `monkey.offload()` routes through offload hubs automatically whenever any are
 reserved, and falls back to the thread pool when none are -- so the default
 build behaves exactly as before. Reserve them with
-`stackweave.run(n, main, offload_hubs=K)` (or `STACKWEAVE_OFFLOAD_HUBS=K`).
+`stackweave.run(n, main, offload_hubs=K)`.
 
 The pool is not going away: it is still the only route for a caller outside any
 fiber (foreign OS threads must never park a non-existent fiber), for a

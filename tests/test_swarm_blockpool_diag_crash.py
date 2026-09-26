@@ -96,8 +96,6 @@ def run_child(body, extra_env=None, timeout=60, panic_silent=True):
     env = dict(os.environ)
     env["PYTHON_GIL"] = "0"
     env["PYTHONPATH"] = _SRC + os.pathsep + env.get("PYTHONPATH", "")
-    env.pop("STACKWEAVE_CRASH", None)
-    env.pop("STACKWEAVE_CRASH_FILE", None)
     if panic_silent:
         # Keep fiber-panic noise off stderr unless a test wants it.
         env.setdefault("STACKWEAVE_GOROUTINE_PANIC", "silent")
@@ -1350,24 +1348,6 @@ class TestEnvGatedModes:
             timeout=40)
         assert rc2 == 0, out
         assert "DONE 12" in out and "OK" in out, out
-
-    def test_unsafe_migration_gated_off_warns_not_crash(self):
-        # STACKWEAVE_PER_G_TSTATE without STACKWEAVE_ALLOW_UNSAFE_MIGRATION must warn to
-        # stderr and run the DEFAULT scheduler (KNOWN-CRASH if actually enabled --
-        # we never set ALLOW_UNSAFE_MIGRATION).  The workload must complete.
-        rc2, out = run_child("""
-            done = []
-            def main():
-                def w():
-                    done.append(1)
-                for _ in range(20):
-                    stackweave.fiber(w)
-                stackweave.sleep(0.02)
-            stackweave.run(4, main)
-            print("DONE", len(done))
-        """, extra_env={"STACKWEAVE_PER_G_TSTATE": "1"}, timeout=40)
-        assert rc2 == 0, out
-        assert "DONE 20" in out, out
 
 
 # ===========================================================================

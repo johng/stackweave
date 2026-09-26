@@ -122,14 +122,15 @@ controls (`-DBUG_CLOSE_NULL`, `-DBUG_ABORT_NOCASE`, `-DBUG_ABORT_DROP`,
 `-DBUG_SPURIOUS`) each reintroduce a bug and make the model fail, so the
 properties demonstrably have teeth.
 
-### 6. Default M:N wake path -- `spin/hub_submit.pml`
+### 6. M:N hub submission list -- `spin/hub_submit.pml`
 
-The wake path that actually runs by default on Linux free-threaded 3.13t:
-`STACKWEAVE_PER_G_TSTATE` and `STACKWEAVE_STEAL_WOKEN` are both off, so `runloom_mn_wake_g`
-routes through `runloom_mn_hub_submit` (the per-hub-tstate MPSC submission
-list), **not** the global-runq `wake_state` machine of #2. A parker can be
-`wake_g`'d more than once (a netpoll-pump unlink + a stale safety-unlink
-wake); two defenses keep that safe and are modelled here:
+`runloom_mn_hub_submit` pushes a g onto a hub's MPSC submission list. It was
+the default M:N wake path while cross-hub migration was opt-in; migration is
+now always on, so every M:N wake goes through the global-runq `wake_state`
+machine of #2, and `hub_submit` carries spawn placement
+(`runloom_mn_fiber_core`) and wakes outside a run. A g can be submitted more
+than once (historically a netpoll-pump unlink + a stale safety-unlink wake);
+two defenses keep that safe and are modelled here:
 
 * **No resume-after-done** -- the hub never resumes a g that already ran to
   completion (the second resume would touch a coro freed by the
@@ -272,31 +273,12 @@ Negative control `-DBUG_LOCK_ORDER` makes the contender take its locks in the
 could introduce -- and Spin finds the deadlock: a pump holds pool 1 waiting for
 sub 1 while the contender holds sub 1 waiting for pool 1.
 
-### 11. io_uring multishot handle lifetime -- `spin/iouring_msclose.pml`
+### 11. (retired) io_uring multishot handle lifetime
 
-The one genuinely io_uring-specific lifetime question (an audit finding, not a
-guessed property): `runloom_iouring_ms_recv` parks with the handle's `waiter_g`
-set and, on wake, **re-locks the handle** (`runloom_iouring_ms_recv`); `on_cqe` on the
-closing CQE wakes that waiter and then frees the handle *outside* `h->lock`
-(`runloom_loop_ms_on_cqe`), and `ms_close`'s `!armed` branch frees immediately
-(:1018-1032). `RunloomTCPConn` holds no lock around `self->ms`/`self->closed`
-(runloom_tcp.c), so `recv` and `close` are unsynchronised.
-
-This is memory-safe **only under the single-owner convention**: a `TCPConn` is
-driven by one goroutine, so `close()` runs after `recv()` returns and no
-consumer is parked in `ms_recv` when the closing CQE frees the handle.
-(`RunloomTCPConn` is a standalone primitive -- *not* used by `stackweave.aio` -- and its
-benches/tests are one-goroutine-per-conn.) The model proves **no use-after-free
-under that convention**: the consumer never re-locks the handle after it is
-freed (`assert(freed == 0)` at the re-lock).
-
-Negative control `-DBUG_CONCURRENT_CLOSE` lifts the convention (a second task
-closes the conn while the first is parked in `recv` -- a shared `TCPConn` under
-`STACKWEAVE_TCPCONN_IOURING=1` on M:N free-threaded) and Spin finds the UAF: the
-closing CQE wakes the parked consumer *and* frees the handle, and the woken
-consumer re-locks freed memory. So the single-owner convention is load-bearing
-for memory safety; making `TCPConn` shareable would require refcounting the
-handle or freeing it under coordination with a parked `recv`.
+`spin/iouring_msclose.pml` modelled the multishot recv handle (`ms_recv` vs the
+closing CQE's free). The multishot recv was removed with the TCPConn io_uring
+mode, so the model was deleted with it; the section number is kept so the
+references below stay stable.
 
 ### 12. Phase C per-thread-scheduler wake routing -- `spin/cross_thread_wake.pml`
 
@@ -520,10 +502,9 @@ Two negative controls, each making Spin find the lost wake:
   and the drain **wakes the goroutine before decrementing `inflight_count`**
   (the io_uring drain wakes the g BEFORE the `runloom_iouring_inflight_count` decrement), the exact ordering `blockpool.pml`
   proves keeps the single-thread drain from exiting early. The one genuinely
-  io_uring-specific surface is **multishot** (`runloom_iouring_ms_*`): its handle
-  lifetime (the `on_cqe`/`ms_close` free vs a parked `ms_recv`) is now modelled
-  by `iouring_msclose.pml` (§11) -- memory-safe under the single-owner
-  convention, a use-after-free without it.
+  io_uring-specific surface was **multishot** recv (`runloom_iouring_ms_*`,
+  modelled by `iouring_msclose.pml`, §11); it has been removed along with the
+  TCPConn io_uring mode, and only the single-op path remains.
 * **Every event backend's arm is now modelled, not just epoll's.**
   The shared parker-claim commit (#8) and pending-wake bitmap are
   backend-independent C; the per-backend surface is the arm. epoll's
@@ -546,12 +527,11 @@ verify/
     parked_safe.pml        park_safe/wake_safe handshake
     select_claim.pml       select fired_case CAS
     select_close.pml       select Phase-2 vs send/close (+ 4 bug controls)
-    hub_submit.pml         default M:N wake dedup (+ BUG_NO_DEDUP control)
+    hub_submit.pml         M:N hub submission-list dedup (+ BUG_NO_DEDUP control)
     blockpool.pml          blocking-offload wake order (+ BUG_DEC_BEFORE_REQUEUE)
     netpoll_commit.pml     netpoll park/wake commit protocol (+ BUG_NO_COMMIT)
     netpoll_rearm.pml      netpoll LEVEL register-once arm vs not-yet-linked window (+ BUG_EDGE_TRIGGERED)
     netpoll_multipool.pml  netpoll multi-pool dispatch pool->sub lock hierarchy (+ BUG_LOCK_ORDER)
-    iouring_msclose.pml    io_uring multishot handle lifetime, recv vs close (+ BUG_CONCURRENT_CLOSE)
     netpoll_deadline.pml   netpoll fd-dispatch vs timeout vs cancel claim race (+ BUG_SWEEP_NO_COMMIT, BUG_CANCEL_NO_COMMIT)
     netpoll_forceunlink.pml netpoll force_unlink vs pump, exactly-once release / no UAF (+ BUG_NO_RECHECK)
     netpoll_kqueue.pml     netpoll kqueue arm (BSD/macOS): EV_ADD|EV_ONESHOT re-add (+ BUG_EV_CLEAR, BUG_REENABLE_NOT_READD)

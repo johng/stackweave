@@ -89,8 +89,7 @@ class TestFencesRaise:
             "    rc.mn_init(2)\n"
             "    print('FENCE_MISSING')\n"
             "except RuntimeError as e:\n"
-            "    print('PERG_FENCED' if 'UNSAFE_MIGRATION' in str(e) else 'WRONG')\n",
-            extra={"STACKWEAVE_ALLOW_UNSAFE_MIGRATION": "1"})
+            "    print('PERG_FENCED' if 'UNSAFE_MIGRATION' in str(e) else 'WRONG')\n")
         assert "PERG_FENCED" in p.stdout, (p.stdout, p.stderr[-800:])
         assert p.returncode == 0, (p.stdout, p.stderr[-800:])
 
@@ -214,23 +213,6 @@ class TestForeignWakeTripwire:
             "rc.mn_fini()\n")
         assert "CLEAN 0" in p.stdout, (p.stdout, p.stderr[-800:])
         assert p.returncode == 0, (p.stdout, p.stderr[-800:])
-
-
-class TestIoUringGate:
-    def test_rings_off_and_digest_stable_under_loop_env(self):
-        """gate [2] + I3 acceptance: STACKWEAVE_IOURING_LOOP=1 under sim must
-        neither create hub rings (no blocking loop_wait -- bounded wall time)
-        nor perturb the digest -- proving the GATE, not the default."""
-        extra = {"STACKWEAVE_IOURING_LOOP": "1"}
-        base = [mn_digest.run_digest("cpu_yield", 2, 12345,
-                                     extra_env=dict(SIM_ENV))
-                for i in range(2)]
-        withloop = [mn_digest.run_digest("cpu_yield", 2, 12345,
-                                         extra_env=dict(SIM_ENV, **extra))
-                    for i in range(2)]
-        assert len(set(base)) == 1 and len(set(withloop)) == 1
-        assert base[0] == withloop[0], \
-            "STACKWEAVE_IOURING_LOOP=1 changed the seeded schedule under sim"
 
 
 class TestFinalizerTorture:

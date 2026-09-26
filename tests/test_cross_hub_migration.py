@@ -6,11 +6,8 @@ not cost much more than a fiber that never moved.  Each test here states
 one such invariant; the failing ones are the known gaps of migration mode,
 left red on purpose until each is closed.
 
-Under STACKWEAVE_MIGRATION=1 (set for every subprocess here) a woken fiber
-carries its own PyThreadState and may resume on any hub.  On an interpreter
-without both migration patches the runtime gates the mode off and runs the
-per-hub scheduler, and every scenario then skips as NOMIG (below) rather
-than passing.  The rest of the suite rarely exercises migration --
+Every M:N fiber carries its own PyThreadState and a woken fiber may resume
+on any hub.  The rest of the suite rarely exercises that --
 ``stackweave.sleep()`` always resumes on the owning hub, and a wake performed
 by another fiber lands on the WAKER's own deque (Go-style local wake), so a
 channel hand-off between fibers stays on one hub -- so these tests FORCE a
@@ -23,11 +20,14 @@ Each scenario runs in a fresh subprocess so a lost fiber or a wedged hub is a
 clean timeout rather than a hung pytest, and so one scenario's leak cannot
 leak into the next.
 
-Ten gaps are closed (their docstrings start "Was a gap").  The six that
-remain are strict xfails under TODO_MIGRATION_FAIL: three OS-thread-identity
-checks that live in C or in importlib and need a pin or a monkey patch, and
-three costs of one PyThreadState per fiber.  A strict xfail still runs, and
-flips to a hard XPASS failure the moment its gap is closed.
+Ten gaps are closed (their docstrings start "Was a gap").  The three that
+remain are strict xfails under TODO_MIGRATION_FAIL: OS-thread-identity checks
+that live in C or in importlib and need a pin or a monkey patch.  A strict
+xfail still runs, and flips to a hard XPASS failure the moment its gap is
+closed.  The cost of one PyThreadState per fiber (gc.collect() per parked
+fiber, RSS per parked fiber, spawn) was bounded against the per-hub
+scheduler while that scheduler existed; with migration the only mode there
+is no in-tree baseline, so those three comparisons are not carried here.
 
 Names are ``test_<area>_<invariant>``.  The area is the subsystem a fix
 lands in, so ``-k memory`` (or identity, sched, preempt, cost, harness)
@@ -133,11 +133,10 @@ def require_migration(moved):
 ''' % os.path.join(REPO, "src")
 
 
-def run_scenario(code, timeout=60, migration=True):
+def run_scenario(code, timeout=60):
     env = dict(os.environ)
     env["PYTHON_GIL"] = "0"
     env["STACKWEAVE_GIL"] = "0"
-    env["STACKWEAVE_MIGRATION"] = "1" if migration else "0"   # read once at the first mn_init
     try:
         p = subprocess.run(
             [sys.executable, "-c", PRELUDE + code],
@@ -735,140 +734,6 @@ stackweave.run(GEN, main, offload_hubs=1)
 ''')
 
 
-# ---------------------------------------------------------------------------
-# Cost: one PyThreadState per fiber.  (PR #23 review, 7.5)
-# ---------------------------------------------------------------------------
-
-def _cost(code, timeout=90):
-    """Run a cost scenario twice, migration on then off, and return the two
-    COST= values.  The bound is a RATIO, so it means the same thing on a
-    laptop and on a 3-core CI runner; the on-run must observe a migration
-    or the pair says nothing and the test skips."""
-    pair = []
-    for migration in (True, False):
-        rc, out, err = run_scenario(code, timeout=timeout, migration=migration)
-        if migration and "NOMIG" in out:
-            pytest.skip("no cross-hub migration observed on this machine")
-        m = re.search(r"COST=([0-9.eE+-]+)", out)
-        if rc != 0 or m is None:
-            print("--- scenario stdout (migration=stackweave) ---\nstackweave\n--- stderr ---\nstackweave"
-                  % (migration, out, err))
-            pytest.fail("migration=stackweave rc=stackweave: stackweave" % (migration, rc, _key_line(out, err)),
-                        pytrace=False)
-        pair.append(float(m.group(1)))
-    return pair[0], pair[1]
-
-
-# Each cost scenario prints COST=<number>.  Under migration it first proves a
-# migration is possible (else NOMIG); with migration off that probe is skipped.
-_PROBE = '''
-if os.environ.get("STACKWEAVE_MIGRATION") == "1":
-    def _probe():
-        require_migration(force_migrate())
-    stackweave.run(4, _probe)
-'''
-
-GC_COLLECT_COST = _PROBE + r'''
-import gc
-_watchdog(120)
-# 10k parked fibers, best of 7: on 3.13 the per-fiber cost is ~0.13 us on
-# Linux, so 5k gave a 0.65 ms signal that a loaded 3-core runner's noise in
-# the empty-collection baseline could swallow.
-N = 10000
-def best_collect(k=7):
-    best = 1e9
-    for _ in range(k):
-        t0 = time.perf_counter(); gc.collect(); best = min(best, time.perf_counter() - t0)
-    return best
-def main():
-    empty = best_collect()
-    ch = stackweave.Chan(0)
-    for _ in range(N):
-        stackweave.fiber(ch.recv)
-    stackweave.sleep(0.5)
-    full = best_collect()
-    per = (full - empty) / N * 1e6
-    print("gc.collect(): %.2f ms empty, %.2f ms with %d parked" % (empty * 1e3, full * 1e3, N), flush=True)
-    print("COST=%.4f" % per, flush=True)
-    for _ in range(N):
-        ch.send(None)
-stackweave.run(4, main)
-'''
-
-PARKED_FIBER_RSS = _PROBE + r'''
-import resource
-_watchdog(80)
-N = 4000
-def rss_kib():
-    r = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    return r / 1024.0 if sys.platform == "darwin" else float(r)
-def main():
-    ch = stackweave.Chan(0)
-    for _ in range(200):               # warm the slabs and the stack pool
-        stackweave.fiber(ch.recv)
-    stackweave.sleep(0.2)
-    base = rss_kib()
-    for _ in range(N):
-        stackweave.fiber(ch.recv)
-    stackweave.sleep(0.5)
-    per = (rss_kib() - base) / N
-    print("COST=%.3f" % per, flush=True)
-    for _ in range(N + 200):
-        ch.send(None)
-stackweave.run(4, main)
-'''
-
-SPAWN_COST = _PROBE + r'''
-_watchdog(80)
-N = 20000
-def main():
-    ch = stackweave.Chan(N)
-    def w(): ch.send(1)
-    best = 1e9
-    for _ in range(3):
-        t0 = time.perf_counter()
-        for _ in range(N): stackweave.fiber(w)
-        for _ in range(N): ch.recv()
-        best = min(best, time.perf_counter() - t0)
-    print("COST=%.4f" % (best / N * 1e6), flush=True)
-stackweave.run(4, main)
-'''
-
-
-@TODO_MIGRATION_FAIL(
-    "gc.collect() visits every parked fiber's own PyThreadState; inherent to one tstate per fiber")
-def test_cost_gc_collect_per_parked_fiber_within_2x_of_migration_off():
-    """Known gap: gc.collect() visits every parked fiber's own tstate (about
-    0.45 us each on macOS, 4x the per-hub scheduler at 20k parked).
-    """
-    on, off = _cost(GC_COLLECT_COST)
-    print("gc.collect() per parked fiber: %.3f us with migration, %.3f us without" % (on, off))
-    assert on < 2 * off, "gc.collect() %.3f us per parked fiber vs %.3f us without migration (%.1fx)" % (on, off, on / off)
-
-
-@TODO_MIGRATION_FAIL(
-    "each fiber's PyThreadState carries a 16 KiB datastack chunk (CPython's minimum); inherent to one tstate per fiber")
-def test_cost_parked_fiber_rss_within_1_5x_of_migration_off():
-    """Known gap: a parked fiber carries its own PyThreadState and its 16 KiB
-    datastack chunk (33 KiB RSS against 17 KiB without migration on macOS;
-    19 KiB with on Linux).
-    """
-    on, off = _cost(PARKED_FIBER_RSS)
-    print("RSS per parked fiber: %.1f KiB with migration, %.1f KiB without" % (on, off))
-    assert on < 1.5 * off, "%.1f KiB per parked fiber vs %.1f KiB without migration (%.2fx)" % (on, off, on / off)
-
-
-@TODO_MIGRATION_FAIL(
-    "PyThreadState_New/Delete per spawn; a thread-state pool that rebinds a finished fiber's state to the next spawn would close it")
-def test_cost_spawn_and_complete_within_2x_of_migration_off():
-    """Known gap: PyThreadState_New per spawn (2.6 us per spawn+complete at
-    H=4 on macOS against 0.4 us on the per-hub scheduler).
-    """
-    on, off = _cost(SPAWN_COST)
-    print("spawn+complete: %.2f us with migration, %.2f us without" % (on, off))
-    assert on < 2 * off, "spawn+complete %.2f us vs %.2f us without migration (%.1fx)" % (on, off, on / off)
-
-
 def test_sched_foreign_thread_wake_reaches_a_shallow_idle_hub_promptly():
     """Was a gap (fixed: a global run-queue push kicks one waiting hub, with a
     Dekker re-check on the hub side): a foreign-thread wake reached a parked
@@ -877,20 +742,30 @@ def test_sched_foreign_thread_wake_reaches_a_shallow_idle_hub_promptly():
     380-600 us on a laptop, 4.5-6.8 ms on a 3-core CI runner, against
     11-38 us on the per-hub scheduler).
 
-    Bounded as a ratio against the same scenario with migration off, like
-    the cost tests, plus a 100 us allowance for scheduler noise: a fixed
-    microsecond bound was either too tight for a slow runner (252 us there
-    after the fix) or too loose to catch the 1 ms pump (495 us on Linux).
+    Without the kick the median wake waits for the 1 ms idle pump (about
+    500 us, and several ms on a loaded runner), so the median is what is
+    bounded; the p99 gets only a loose cap, since a slow runner's scheduling
+    noise lands there (252 us after the fix on a 3-core runner).
     """
-    on, off = _cost(WAKE_LATENCY_P99)
-    print("foreign-thread wake p99: %.0f us with migration, %.0f us without" % (on, off))
-    assert on < 2 * off + 100, (
-        "p99 wake latency %.0f us vs %.0f us without migration" % (on, off))
+    rc, out, err = run_scenario(WAKE_LATENCY, timeout=90)
+    if "NOMIG" in out:
+        pytest.skip("no cross-hub migration observed on this machine")
+    m = re.search(r"P50=([0-9.]+) P99=([0-9.]+)", out)
+    if rc != 0 or m is None:
+        print("--- scenario stdout ---\n%s\n--- scenario stderr ---\n%s" % (out, err))
+        pytest.fail("rc=%s: %s" % (rc, _key_line(out, err)), pytrace=False)
+    p50, p99 = float(m.group(1)), float(m.group(2))
+    print("foreign-thread wake latency p50=%.0f us p99=%.0f us" % (p50, p99))
+    assert p50 < 250 and p99 < 2000, (
+        "foreign-thread wake latency p50=%.0f us p99=%.0f us" % (p50, p99))
 
 
-WAKE_LATENCY_P99 = _PROBE + r'''
+WAKE_LATENCY = r'''
 _watchdog(60)
 N = 1500
+def _probe():
+    require_migration(force_migrate())
+stackweave.run(4, _probe)
 def main():
     ch = stackweave.Chan(0)
     def feeder():
@@ -908,8 +783,7 @@ def main():
         lat.append((time.perf_counter_ns() - sent) / 1000.0)
     lat.sort()
     p50, p99 = lat[len(lat) // 2], lat[int(len(lat) * 0.99)]
-    print("foreign-thread wake latency p50=%.0f us p99=%.0f us" % (p50, p99), flush=True)
-    print("COST=%.1f" % p99, flush=True)
+    print("P50=%.1f P99=%.1f" % (p50, p99), flush=True)
 stackweave.run(4, main)
 '''
 

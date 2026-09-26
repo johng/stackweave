@@ -1,8 +1,8 @@
 /*
  * tstate_attach_detach.pml -- Promela model of the per-g PyThreadState
- * attach/detach BALANCE in the RUNLOOM_PER_G_TSTATE resume block
- * (mn_sched_hub_main.c.inc, the `if (runloom_get_per_g_tstate_mode())` branch,
- * ~lines 614-735).
+ * attach/detach BALANCE in the per-g-tstate resume block
+ * (mn_sched_hub_main.c.inc, the `if (runloom_get_per_g_tstate_mode())` branch --
+ * the only M:N resume path now that migration is always on).
  *
  * Life-cycle invariant (NOT a memory-ordering property -- a control-flow
  * ownership balance across the ~6 exit paths of one hub-loop iteration):

@@ -76,9 +76,9 @@ branch and validated (6/6 faults now core+die; `test_crash_handler`,
 `test_mn`, `test_sysmon_oracle`, `test_sched_fairness` all green):
 
 1. **`runloom_crash_install` was not idempotent** (`runloom_crash.c`). When
-   the handler is installed twice — stackweave's package `__init__` auto-installs
-   from `$STACKWEAVE_CRASH`, then app code calls `install_crash_handler()` to set
-   a level/file — the second install saved *its own* `crash_handler` as the
+   the handler was installed twice — stackweave's package `__init__` then
+   auto-installed from an env var, and app code called `install_crash_handler()`
+   to set a level/file — the second install saved *its own* `crash_handler` as the
    "previous" disposition. On a real fault the chain-out then restored
    `crash_handler` and re-faulted straight into its own re-entrancy `pause()`
    guard → permanent wedge. Fix: a re-install preserves the dispositions

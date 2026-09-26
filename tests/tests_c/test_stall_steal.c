@@ -4,17 +4,16 @@
  * non-yielding blocking C call (here: usleep) must not strand OTHER
  * goroutines whose work could run on an idle hub.
  *
- * Today even RUNLOOM_PER_G_TSTATE=1 strands them: a woken g is submitted to
- * its ORIGIN hub's owner-drained submission list, so if that hub never
- * loops (stuck in the C call) the woken g never reaches a stealable
- * deque -- no other hub can pick it up.
+ * If a woken g is submitted to its ORIGIN hub's owner-drained submission
+ * list and that hub never loops (stuck in the C call), the woken g never
+ * reaches a stealable deque -- no other hub can pick it up.
  *
  * Setup: park N worker goroutines (each on its own eventfd) across H
  * hubs so their origins spread over both hubs.  Then wake a "staller"
  * goroutine that occupies its hub with usleep(STALL_MS), and immediately
  * wake every worker.  Count how many respond within WINDOW_MS.
  *
- *   RED  (today, both modes)  : ~N*(H-1)/H respond -- the workers whose
+ *   RED  (origin-hub wakes)   : ~N*(H-1)/H respond -- the workers whose
  *                               origin is the stalled hub wait out the
  *                               whole usleep.
  *   GREEN (global wake queue) : N/N respond -- an idle hub drains the

@@ -58,15 +58,6 @@ long long runloom_next_goid(void)
     return runloom_tls_goid_next++;
 }
 
-/* Reserve a contiguous block of n goids in ONE atomic; returns the first.
- * The bulk-spawn loop then assigns base+0..base+n-1 inline (no per-g call). */
-long long runloom_next_goid_block(long n)
-{
-    long long base = __atomic_fetch_add(&runloom_fiberid_global,
-                                        (long long)n, __ATOMIC_RELAXED);
-    return base;
-}
-
 /* ---------------------------------------------------------------- *
  *  State name tables                                               *
  * ---------------------------------------------------------------- */
@@ -170,15 +161,6 @@ void runloom_introspect_init(void)
     if (runloom_greg_inited) return;
     runloom_mutex_init(&runloom_greg_lock);
     runloom_greg_inited = 1;
-    env = getenv("STACKWEAVE_INTROSPECT_TIME");
-    if (env != NULL && env[0] && env[0] != '0')
-        runloom_introspect_set_timestamps(1);
-    env = getenv("STACKWEAVE_DEADLOCK");   /* off | warn | raise (default warn) */
-    if (env != NULL && env[0]) {
-        if (strcmp(env, "off") == 0 || env[0] == '0')      runloom_set_deadlock_mode(0);
-        else if (strcmp(env, "raise") == 0 || env[0] == '2') runloom_set_deadlock_mode(2);
-        else                                                 runloom_set_deadlock_mode(1);
-    }
     env = getenv("STACKWEAVE_MAX_GOROUTINES");
     if (env != NULL && env[0]) {
         long n = atol(env);
@@ -200,24 +182,9 @@ void runloom_introspect_fini(void)
     RUNLOOM_RUNLOCK(&runloom_greg_lock, RUNLOOM_RANK_GREG);
 }
 
-/* TEMP ablation gate (RUNLOOM_GREG_OFF=1): skip the global registry to measure
- * its lock-contention cost on spawn-heavy workloads.  Remove after diagnosis. */
-static int runloom_greg_off(void)
-{
-    static int v = -1;
-    int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
-    if (cur < 0) {
-        const char *e = getenv("STACKWEAVE_GREG_OFF");
-        cur = (e != NULL && *e != '0' && *e != '\0') ? 1 : 0;
-        __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
-    }
-    return cur;
-}
-
 void runloom_greg_link(runloom_g_t *g)
 {
     if (g == NULL || !runloom_greg_inited) return;
-    if (runloom_greg_off()) return;
     RUNLOOM_RLOCK(&runloom_greg_lock, RUNLOOM_RANK_GREG);
     g->reg_prev = NULL;
     g->reg_next = runloom_greg_head;
@@ -233,7 +200,6 @@ void runloom_greg_link(runloom_g_t *g)
 void runloom_greg_unlink(runloom_g_t *g)
 {
     if (g == NULL || !runloom_greg_inited) return;
-    if (runloom_greg_off()) return;
     RUNLOOM_RLOCK(&runloom_greg_lock, RUNLOOM_RANK_GREG);
     /* Defensive: only unlink a g that is actually linked.  A g whose
      * reg_next/reg_prev are both NULL AND is not the head was never
@@ -267,8 +233,7 @@ void runloom_introspect_reset_after_fork(void)
  * taken from the OS and not yet freed.  Per the "a freed g never returns to
  * the OS" invariant this only falls at mn_fini reclaim, so within a run it is
  * a high-water of peak concurrency; a value that CLIMBS across soak iterations
- * is leaked g structs.  Reads 0 when the registry is disabled
- * (RUNLOOM_GREG_OFF).  Safe from m_stats: a bare relaxed atomic load, no
+ * is leaked g structs.  Safe from m_stats: a bare relaxed atomic load, no
  * runloom_greg_lock (which the spawn cold-path holds). */
 long runloom_greg_total_count(void)
 {
@@ -299,11 +264,6 @@ runloom_g_t *runloom_greg_head_for_gc(void)
 {
     if (!runloom_greg_inited) return NULL;
     return runloom_greg_head;
-}
-
-int runloom_greg_is_linked(void)
-{
-    return runloom_greg_inited && !runloom_greg_off();
 }
 
 /* ---- base-snap registry (single-thread drain's caller frames) ----

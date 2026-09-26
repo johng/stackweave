@@ -1,15 +1,13 @@
 """Coverage-driven unit tests for the M:N scheduler (src/runloom_c/mn_sched.c
 and its mn_sched_*.c.inc fragments).
 
-Half the M:N scheduler's lines live behind env-gated modes the normal corpus
-never enables: the controlled-replay / PCT barrier, fiber_n bulk spawn, the sysmon
-stalled-hub detector, the DETACHED-tstate handoff rescue, ATTACHED preemption,
-the idle-condvar-vs-nanosleep wake, the stack-park idle sweep, world-yield,
-hub-affinity, the io_uring-as-loop backend, and the gated-off migratable-mode
-warn path.  Each `test_mn_mode_*` runs the shared diverse workload
-(tests/cov_workload.py) in a subprocess with that mode's env set, driving its C
-paths; the in-process tests cover the default-scheduler surfaces (varied hub
-counts, fiber_n bulk, serve(), deadlock-raise, and the hubinfo/diag introspection).
+Some of the M:N scheduler's lines live behind env knobs the normal corpus
+never sets: the sysmon stalled-hub detector's logging and budget, and the
+stack-park idle sweep threshold.  Each `test_mn_mode_*` runs the shared diverse
+workload (tests/cov_workload.py) in a subprocess with that mode's env set,
+driving its C paths; the in-process tests cover the default-scheduler surfaces
+(varied hub counts, fiber_n, serve(), deadlock-raise, and the hubinfo/diag
+introspection).
 
 The subprocess assertion is "the mode ran the workload to completion (exit 0,
 WORKLOAD_OK) without crashing or hanging" -- the coverage benefit is the C lines
@@ -34,18 +32,9 @@ _DEVNULL = os.open(os.devnull, os.O_WRONLY)
 # (label, extra-env) -- each drives a distinct gated path through mn_sched.c.
 MODES = [
     ("default",      {}),
-    ("barrier_pct",  {"STACKWEAVE_MN_BARRIER": "1", "STACKWEAVE_MN_SEED": "7", "STACKWEAVE_MN_PCT": "8"}),
-    ("gon_bulk",     {"STACKWEAVE_GON_BULK": "1"}),
     ("sysmon",       {"STACKWEAVE_SYSMON": "1", "STACKWEAVE_SYSMON_QUIET": "1",
                       "STACKWEAVE_SYSMON_MS": "8", "STACKWEAVE_COV_CPU": "40000000"}),
-    ("preempt",      {"STACKWEAVE_PREEMPT": "1", "STACKWEAVE_SYSMON": "1", "STACKWEAVE_SYSMON_QUIET": "1",
-                      "STACKWEAVE_PREEMPT_MS": "8", "STACKWEAVE_COV_CPU": "40000000"}),
-    ("idle_wake_off", {"STACKWEAVE_HUB_IDLE_WAKE": "0"}),
-    ("stack_park_sweep", {"STACKWEAVE_STACK_PARK_SWEEP": "1", "STACKWEAVE_STACK_PARK_SWEEP_MS": "1"}),
-    ("world_yield",  {"STACKWEAVE_WORLD_YIELD_NS": "2000"}),
-    ("hub_affinity", {"STACKWEAVE_HUB_AFFINITY": "1"}),
-    ("perg_tstate_warn", {"STACKWEAVE_PER_G_TSTATE": "1"}),   # gated off -> warn + default sched
-    ("iouring_loop", {"STACKWEAVE_IOURING_LOOP": "1"}),
+    ("stack_park_sweep", {"STACKWEAVE_STACK_PARK_SWEEP_MS": "1"}),
     ("deadlock_ms",  {"STACKWEAVE_DEADLOCK_MS": "50"}),
     ("ready_starve", {"STACKWEAVE_READY_STARVE_BOUND": "2"}),
     ("dbg_migrate",  {"STACKWEAVE_DBG_MIGRATE": "1"}),

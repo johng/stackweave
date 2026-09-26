@@ -1,18 +1,13 @@
-"""Verify: copy-on-grow munmaps a hole out of the STACKWEAVE_STACK_ARENA arena.
+"""Verify: copy-on-grow does not punch a hole into a surrounding mapping.
 
-Env (set before import): STACKWEAVE_STACK_ARENA=1, STACKWEAVE_STACK_ARENA_N=256.
-A fiber on a SMALL arena-carved stack recurses through a C boundary (map)
-with a yield at every level, so maybe_grow sees a deep saved sp at a resume
-boundary and copy-grows the stack; runloom_coro_grow then munmaps the OLD
-stack, which is a slice of the shared arena mapping -> a hole.
+A fiber on a SMALL stack recurses through a C boundary (map) with a yield at
+every level, so maybe_grow sees a deep saved sp at a resume boundary and
+copy-grows the stack; runloom_coro_grow then munmaps the OLD stack, which must
+be a standalone guarded mapping (never a slice of a larger one).
 
 Detection: snapshot /proc/self/maps anonymous rw regions before and after;
-a hole splits a previously-contiguous arena mapping into two pieces.
+a hole splits a previously-contiguous mapping into two pieces.
 """
-import os
-os.environ["STACKWEAVE_STACK_ARENA"] = "0"
-os.environ["STACKWEAVE_STACK_ARENA_N"] = "256"
-
 import sys
 sys.setrecursionlimit(200000)
 

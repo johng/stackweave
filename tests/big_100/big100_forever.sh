@@ -8,7 +8,7 @@
 #     -- no single 1M run can OOM / fork-bomb / swap-thrash the box.
 #   * timeout -k 10 $TMO -- a hung run is SIGTERM'd, then SIGKILL'd 10s later.
 #   * prlimit --nofile=8388608 -- tens of thousands of sockets fit.
-#   * RUNLOOM_GON_* -- the 1M bulk/fresh goroutine + stack-arena config.
+#   * STACKWEAVE_HARNESS_GON -- spawn each 1M worker pool with one fiber_n call.
 #   * pkill straggler reap after each run.
 # Classification: PASS / VFAIL(<verdict>) / CRASH(rc) / TIMEOUT.
 #
@@ -26,7 +26,7 @@ sudo -n prlimit --pid $$ --nofile=8388608:8388608 2>/dev/null
 PY="$HOME/.pyenv/versions/3.14.4t/bin/python3"
 FUNCS="${BIG100_FUNCS:-1000000}"
 TMO="${BIG100_TMO:-300}"
-GON="STACKWEAVE_HARNESS_GON=1 STACKWEAVE_GON_BULK=1 STACKWEAVE_GON_FRESH=1 STACKWEAVE_STACK_ARENA_N=1300000"
+GON="STACKWEAVE_HARNESS_GON=1"
 # TLBC now stays ON: the GC frames anchor makes parked-fiber frames visible to
 # the free-threaded collector, so the p565/p524 crash is fixed at the source and
 # the soak should run TLBC-on (matching production).  Export PYTHON_TLBC=0 to

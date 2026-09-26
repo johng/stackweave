@@ -6,10 +6,9 @@ fiber (producers + workers) has run AND completed -- so this measures the full
 spawn -> run -> destroy cycle, which is where the per-fiber stack mmap/mprotect
 (creation) AND the CPython mimalloc QSBR purge madvise (completion) both land.
 
-The experiments toggle behaviour purely through env (STACKWEAVE_STACK_ARENA,
-STACKWEAVE_STACK_ARENA_HUGE, STACKWEAVE_STACK_POPULATE, ...) + LD_PRELOAD; this harness
+The experiments toggle behaviour purely through env + LD_PRELOAD; this harness
 sets none of them, so a sweep is honest A/B.  Pin cores + GIL-off in the launcher
-(see run_baseline.sh) -- NOT here.
+(see sweep.sh) -- NOT here.
 
 Reports best-of-reps aggregate spawn/s = n / whole-run-seconds (Go's bench front-
 loads the same way).  Prints one JSON line per invocation (last line)."""
@@ -64,9 +63,6 @@ def main():
     rec = {"label": args.label, "hubs": args.hubs, "issuers": args.issuers,
            "n": args.n, "stack_size": args.stack_size, "reps": args.reps,
            "seconds": best, "spawn_per_s": rate,
-           "arena": os.environ.get("STACKWEAVE_STACK_ARENA", ""),
-           "arena_huge": os.environ.get("STACKWEAVE_STACK_ARENA_HUGE", ""),
-           "populate": os.environ.get("STACKWEAVE_STACK_POPULATE", ""),
            "ld_preload": "keep_resident" if "keep_resident" in os.environ.get("LD_PRELOAD", "") else ""}
     print("%-22s issuers=%d  %8.0f spawn/s  (%.3fs / %d)" %
           (args.label or "run", args.issuers, rate, best, args.n), file=sys.stderr)

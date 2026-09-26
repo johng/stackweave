@@ -29,7 +29,7 @@ export PYTHON_GIL=0
 export PYTHONPATH="$SRC"
 # goroutine dump + native backtrace, then chain to SIG_DFL -> core + die.
 # (Including 'py'/'wait'/'gdb' makes a fault wedge instead of coring under M:N.)
-export STACKWEAVE_CRASH="${STACKWEAVE_CRASH:-goroutine,backtrace}"
+export DEMO_CRASH_LEVEL="${DEMO_CRASH_LEVEL:-goroutine,backtrace}"
 
 SERVER_PORT="${SERVER_PORT:-8080}"
 SERVER_HUBS="${SERVER_HUBS:-4}"

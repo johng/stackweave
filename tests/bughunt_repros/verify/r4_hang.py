@@ -1,4 +1,4 @@
-# run: STACKWEAVE_TCPCONN_IOURING=1 timeout 25 .venv/bin/python r4_close_during_recv.py flags
+# run: timeout 25 .venv/bin/python r4_close_during_recv.py flags
 import socket, sys, time
 import stackweave, stackweave_c as rc
 SCEN = sys.argv[1] if len(sys.argv) > 1 else "plain"

@@ -227,7 +227,7 @@ def _wl_cserve_echo(ctx):
     # "stackweave_c": 624K rps peak, above Go): stackweave_c.serve's C scaffold
     # (SO_REUSEPORT listeners + C accept loops) spawning a plain-Python handler
     # fiber per connection that echoes via the C-level TCPConn recv_into/
-    # send_all -- on the DEFAULT epoll backend (no io_uring env), under
+    # send_all -- on the epoll backend, under
     # stackweave.run(hubs) M:N.  In-process client fibers provide the load:
     # connect, a burst of echo round-trips, close, reconnect -- so both the
     # steady path (recv/send parkers) and the lifecycle path (accept/spawn/
@@ -300,18 +300,16 @@ def _wl_cserve_echo(ctx):
     stackweave.run(hubs, main_fn=root)
 
 
-def _wl_iouring_churn(ctx):
+def _wl_tcpconn_churn(ctx):
     # R7 item 1 aging: connect / echo / close churn on stackweave_c.TCPConn under
-    # M:N with the io_uring backend, so the soak ages the per-hub cancel-by-fd /
-    # dup-fd close path just landed (docs/dev/DESIGN_mn_iouring_cancel_fd.md).
-    # Every 3rd unit closes a connection WHILE a recv is parked on the hub ring
-    # -- the exact cancel-by-fd path -- so the dup-fd lifecycle is exercised, not
-    # only happy-path echo.  Watches fds / iouring_inflight / netpoll_fd_armed for
-    # a leak over hours.  REQUIRES --env STACKWEAVE_TCPCONN_IOURING=1 to hit the
-    # io_uring path (else it ages the epoll TCPConn path, still useful).  Each
-    # worker owns ONE listener reused across units (no ephemeral-port churn) and
-    # every unit fully joins its server+client fibers via a Chan (race-free under
-    # M:N) -- no stranded fiber, per the module contract.
+    # M:N.  Every 3rd unit closes a connection WHILE a recv is parked on it, so
+    # close-cancels-a-parked-recv is aged, not only happy-path echo.  Watches
+    # fds / netpoll_fd_armed for a leak over hours.  (It was written for the
+    # since-removed TCPConn io_uring mode's cancel-by-fd path; it now ages the
+    # epoll TCPConn path.)  Each worker owns ONE listener reused across units (no
+    # ephemeral-port churn) and every unit fully joins its server+client fibers
+    # via a Chan (race-free under M:N) -- no stranded fiber, per the module
+    # contract.
     hubs = int(os.environ.get("STACKWEAVE_SOAK_HUBS", "2"))
     conc = int(os.environ.get("STACKWEAVE_SOAK_CONC", "4"))
 
@@ -338,8 +336,8 @@ def _wl_iouring_churn(ctx):
             try:
                 c = stackweave_c.TCPConn.connect("127.0.0.1", port)
                 if cancel_variant:
-                    # Park a recv on the hub ring, then close it -> the cancel-by-
-                    # fd broadcast wakes it -ECANCELED (server sees EOF + closes).
+                    # Park a recv, then close the conn -> the close cancels the
+                    # parked recv (server sees EOF + closes).
                     # Join rd via a Chan (a cooperative PARK); never a sched_yield
                     # spin -- a busy-spin waiting on a sibling fiber starves the hub
                     # it runs on under M:N, a livelock (not a leak) that wedges the
@@ -446,7 +444,7 @@ WORKLOADS = {
     "keepalive": _wl_keepalive,
     "offload": _wl_offload,
     "cserve_echo": _wl_cserve_echo,
-    "iouring_churn": _wl_iouring_churn,
+    "tcpconn_churn": _wl_tcpconn_churn,
     "mixed": _wl_mixed,
     "leak_control": _wl_leak_control,
     "leak_on_error": _wl_leak_on_error,

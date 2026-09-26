@@ -14,7 +14,6 @@
 #   - RunloomMNControl (controlled baton)  via STACKWEAVE_MN_EVENTS
 #   - RunloomWake (foreign-wake backstop)  via STACKWEAVE_WAKE_TRACE
 #   - RunloomMNWake (M:N hub-submit wake)  via STACKWEAVE_MNWAKE_TRACE
-#   - RunloomIouringWake (io_uring CQE wake / CQ-overflow heal) via STACKWEAVE_IOUWAKE_TRACE
 #
 # SKIPS CLEANLY (prints a skip line, "0 passed, 0 failed", exits 0 -> contributes
 # nothing) when a prerequisite is absent: java, the TLA jar, a free-threaded
@@ -66,7 +65,6 @@ run_demo "gilstate (M4/C6)"  tools/trace_conform_demo.sh
 run_demo "MNControl baton"   tools/mn_trace_conform_demo.sh
 run_demo "Wake backstop"     tools/wake_trace_conform_demo.sh
 run_demo "MN hub-submit wake" tools/mnwake_trace_conform_demo.sh
-run_demo "io_uring CQE wake" tools/iouwake_trace_conform_demo.sh
 
 echo "  $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

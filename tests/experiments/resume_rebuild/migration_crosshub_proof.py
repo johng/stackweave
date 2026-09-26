@@ -3,12 +3,9 @@
 Each fiber records the OS thread (= hub) it runs on BEFORE parking on a channel
 and AFTER being woken; a different thread id == it migrated to another hub.
 
-  PRODUCTION (patched CPython, the flag is all you need):
-      STACKWEAVE_MIGRATION=1 PYTHON_GIL=0 PYTHONPATH=src <patched-python> migration_crosshub_proof.py
+  PRODUCTION (patched CPython):
+      PYTHON_GIL=0 PYTHONPATH=src <patched-python> migration_crosshub_proof.py
       -> ~50/60 MIGRATED, 0 crash
-
-  STOCK CPython (no patch): STACKWEAVE_MIGRATION=1 warns + falls back -> 0 migrated, no crash.
-  Default mode (no flag): woken fibers pin to origin -> 0 migrated.
 """
 import stackweave_c, threading
 N = 60

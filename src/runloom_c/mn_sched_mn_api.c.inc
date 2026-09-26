@@ -100,12 +100,6 @@ runloom_sched_t *runloom_mn_current_sched(void)
     return h ? &h->sched : NULL;
 }
 
-struct runloom_iouring_ring *runloom_mn_current_iouring_ring(void)
-{
-    runloom_hub_t *h = runloom_tls_hub;
-    return h ? h->iouring_ring : NULL;
-}
-
 /* Push g onto a hub's submission list.  Called by netpoll pump to
  * route an I/O-woken g back to whichever hub it was running on.
  * (Also used internally by mn_fiber.)  Hub_main drains submissions every
@@ -223,18 +217,6 @@ static void runloom_mn_hub_submit(runloom_hub_t *h, runloom_g_t *g)
      * hub entering/leaving the wait is harmless -- the wait is TIMED, so a
      * (rare) missed signal just falls back to the idle_ns poll, never a hang. */
     __atomic_add_fetch(&h->sub_gen, 1, __ATOMIC_RELEASE);
-    /* io_uring-as-loop: if the target hub is blocked in its ring (not the idle
-     * condvar), interrupt that wait by writing its per-hub wake eventfd.  The
-     * SEQ_CST fence pairs with the hub's ring_waiting store + sub_head re-check
-     * (a Dekker handshake): we pushed to sub_head above, so either the hub sees
-     * it on its re-check and skips the wait, or it is blocked and we wake it
-     * here.  ring_waiting is 0 unless the loop backend is on, so the default
-     * path skips straight to the idle_cond signal below. */
-    if (__atomic_load_n(&h->ring_waiting, __ATOMIC_RELAXED)) {
-        __atomic_thread_fence(__ATOMIC_SEQ_CST);
-        if (__atomic_load_n(&h->ring_waiting, __ATOMIC_ACQUIRE))
-            runloom_iouring_loop_wake(h->loop_wake_fd);
-    }
     if (__atomic_load_n(&h->idle_waiting, __ATOMIC_ACQUIRE)) {
         RUNLOOM_RLOCK(&h->idle_lock, RUNLOOM_RANK_HUB_IDLE);
         runloom_cond_signal(&h->idle_cond);
@@ -266,8 +248,6 @@ static void runloom_mn_hub_submit(runloom_hub_t *h, runloom_g_t *g)
  * mn_sched.h and the pin_hub1 field comment in runloom_sched.h. */
 int runloom_mn_pin_for_wake(runloom_g_t *g, int hub_id)
 {
-    void *park_hub;
-    int home;
     if (g == NULL) {
         PyErr_SetString(PyExc_RuntimeError, "pin(): dead fiber handle");
         return -1;
@@ -289,24 +269,6 @@ int runloom_mn_pin_for_wake(runloom_g_t *g, int hub_id)
     if (hub_id < 0) {                    /* clear the pin */
         runloom_mn_global_runq_repin(g, 0);
         return 0;
-    }
-
-    park_hub = (void *)__atomic_load_n(&g->park_hub, __ATOMIC_ACQUIRE);
-    home = runloom_mn_hub_id_of(park_hub);
-    if (home < 0 && g == runloom_tls_current_g && runloom_tls_hub != NULL)
-        home = runloom_tls_hub->id;
-
-    // Fail if cross hub migrations are not enabled
-    if (!runloom_use_global_runq() && home != hub_id) {
-        PyErr_Format(PyExc_RuntimeError,
-            "pin(%d): the default scheduler cannot resume a fiber on a hub "
-            "other than its own (%d) -- a woken fiber is hub-pinned by design, "
-            "so this pin would be silently ignored rather than honoured.  Start "
-            "the runtime with stackweave.enable_migration() on an interpreter "
-            "carrying both CPython patches (see stackweave.migration_status()) to "
-            "target another hub.",
-            hub_id, home);
-        return -1;
     }
 
     runloom_mn_global_runq_repin(g, hub_id + 1);
@@ -440,103 +402,7 @@ void runloom_mn_wake_g(void *hub_opaque, runloom_g_t *g)
     runloom_mn_hub_submit((runloom_hub_t *)hub_opaque, g);
 }
 
-int runloom_mn_hub_request_iouring_cancel(void *hub_opaque, void *op)
-{
-    runloom_hub_t *h = (runloom_hub_t *)hub_opaque;
-    intptr_t expected = 0;
-    intptr_t cop = (intptr_t)op;
-    if (h == NULL || op == NULL) return 0;
-    if (!__atomic_compare_exchange_n((intptr_t *)&h->iouring_cancel_op, &expected, cop, 0,
-                                     __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
-        return 0;   /* a cancel is already pending for this hub (best-effort) */
-    /* Wake the hub if idle-parked so it drains the mailbox promptly. */
-    if (__atomic_load_n(&h->idle_waiting, __ATOMIC_ACQUIRE)) {
-        RUNLOOM_RLOCK(&h->idle_lock, RUNLOOM_RANK_HUB_IDLE);
-        runloom_cond_signal(&h->idle_cond);
-        RUNLOOM_RUNLOCK(&h->idle_lock, RUNLOOM_RANK_HUB_IDLE);
-    }
-    return 1;
-}
-
-/* Kick a hub out of EVERY wait mode (pump epoll_wait / its own io_uring ring
- * wait under IOURING_LOOP / the idle condvar) so it drains a freshly-deposited
- * mailbox promptly.  Mirrors runloom_mn_kick_all_hubs' per-hub trio -- a
- * cond_signal alone strands a ring-blocked or pump-blocked hub. */
-static void runloom_mn_kick_hub_all_modes(runloom_hub_t *h)
-{
-    if (h->loop_wake_fd >= 0) runloom_iouring_loop_wake(h->loop_wake_fd);
-    if (__atomic_load_n(&h->idle_waiting, __ATOMIC_ACQUIRE)) {
-        RUNLOOM_RLOCK(&h->idle_lock, RUNLOOM_RANK_HUB_IDLE);
-        runloom_cond_signal(&h->idle_cond);
-        RUNLOOM_RUNLOCK(&h->idle_lock, RUNLOOM_RANK_HUB_IDLE);
-    }
-    runloom_netpoll_wake_pump((void *)h);
-}
-
-#if defined(IORING_ASYNC_CANCEL_FD)
-/* Broadcast a cancel-by-fd to every live hub's ring (R7 item 1 /
- * DESIGN_mn_iouring_cancel_fd.md).  Called by TCPConn.close() BEFORE close()
- * (so `fd` is still open): dup() it once per hub -- a dup shares the same
- * struct file, so an ASYNC_CANCEL_FD on the dup matches the recv op (keyed by
- * that file) even after the original fd closes -- and deposit each dup in the
- * owning hub's cancel-by-fd mailbox.  The hub (its ring's SINGLE issuer)
- * submits the cancel at its loop top and closes the dup when the cancel CQE
- * drains.  A hub with no matching op cancels nothing (-ENOENT) but still closes
- * its dup.  No-op when M:N isn't running / a hub has no ring.
- *
- * Teardown safety: the hub-thread gate below makes walking runloom_hubs race-free
- * against mn_fini's free (see the gate comment).  Any node a stopped hub never
- * claims is drained + its dup closed by mn_fini's per-hub cleanup (and the
- * mn_init failure path); a submitted-but-undrained cancel op's dup is reaped by
- * the owning hub's final ring drain at exit (mn_sched_hub_main.c.inc). */
-void runloom_iouring_cancel_fd_all_hubs(int fd)
-{
-    int n, i;
-    if (fd < 0) return;
-    /* Only walk runloom_hubs when we are running ON a hub thread -- i.e. this is a
-     * close() from a goroutine, the case the cancel actually exists for.  Then the
-     * M:N runtime is provably live and mn_fini CANNOT free runloom_hubs from under
-     * us: mn_fini joins EVERY hub thread (init_fini) before it destroys the per-hub
-     * cancel_fd_lock / PyMem_Free's the array, and THIS thread is one of those hubs
-     * still inside its loop running our goroutine -- so that join is blocked on us,
-     * and every other hub is likewise alive.  A foreign (non-hub) OS thread has no
-     * such guarantee and would race that free -- a TOCTOU use-after-free on the hub
-     * array + a lock-after-destroy on cancel_fd_lock (the RunloomG.wake dekker
-     * hazard class, module_g.c.inc) -- and it has nothing to cancel here anyway (a
-     * hub-ring recv only exists within a live session).  So it bails; close()'s
-     * GLOBAL-ring cancel (runloom_iouring_cancel_fd) still runs for it. */
-    if (runloom_mn_current_hub_opaque() == NULL) return;
-    n = runloom_hub_count;
-    if (n <= 0 || runloom_hubs == NULL) return;
-    for (i = 0; i < n; i++) {
-        runloom_hub_t *h = &runloom_hubs[i];
-        runloom_cancel_fd_node_t *node;
-        int d;
-        if (h->iouring_ring == NULL)
-            continue;   /* no ring -> no single-shot recv parked on this hub */
-        d = dup(fd);
-        if (d < 0) continue;
-        node = (runloom_cancel_fd_node_t *)malloc(sizeof(*node));
-        if (node == NULL) { close(d); continue; }
-        node->dup_fd = d;
-        runloom_mutex_lock(&h->cancel_fd_lock);
-        node->next = h->cancel_fd_head;
-        /* RELAXED-atomic publish: the owning hub PEEKs cancel_fd_head lock-free at
-         * its loop top (mn_sched_hub_main.c.inc), so a plain store here would be a
-         * C11 data race vs that load.  Matches the sub_head lock-free-reader fix
-         * and the sibling iouring_cancel_op mailbox (atomic on both sides). The
-         * authoritative read is still under the lock; the post-store kick barrier
-         * makes a stale-NULL peek self-correct on the next bounded loop turn. */
-        __atomic_store_n(&h->cancel_fd_head, node, __ATOMIC_RELAXED);
-        runloom_mutex_unlock(&h->cancel_fd_lock);
-        runloom_mn_kick_hub_all_modes(h);
-    }
-}
-#else
-void runloom_iouring_cancel_fd_all_hubs(int fd) { (void)fd; }
-#endif
-
-/* Idle-stack-sweep handshake (RUNLOOM_PER_G_TSTATE).  An idle hub about to
+/* Idle-stack-sweep handshake.  An idle hub about to
  * MADV_DONTNEED a long-parked g's below-SP stack pages must hold the g
  * un-resumable for the madvise's duration, or another hub could pull a wake and
  * resume the g into pages the kernel is concurrently zeroing.  try_claim CASes

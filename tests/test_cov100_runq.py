@@ -2,55 +2,25 @@
 
 WHAT THIS FRAGMENT IS
 ---------------------
-mn_sched_runq.c.inc holds the *global stealable run-queue* (push/pull) plus the
-migratable-mode interlock that decides whether that queue is used at all:
+mn_sched_runq.c.inc holds the *global stealable run-queue* (push/pull) plus
+runloom_use_global_runq(), which says whether that queue is in use:
 
-  * runloom_mn_global_runq_push  (L108-122)  -- uncovered
-  * runloom_mn_global_runq_pull  (L127-148, body L137-148) -- uncovered
-  * runloom_per_g_tstate_flag / runloom_steal_woken_flag /
-    runloom_unsafe_migration_acked / runloom_resolve_migratable_mode /
-    runloom_use_global_runq  (the interlock)
+  * runloom_mn_global_runq_push
+  * runloom_mn_global_runq_pull
+  * runloom_use_global_runq  (== runloom_get_per_g_tstate_mode(): set by mn_init,
+    cleared by mn_fini)
 
-REACHABILITY OF THE UNCOVERED LINES (push/pull)
------------------------------------------------
-Every call site of runloom_mn_global_runq_push (mn_api.c.inc:224, the
-sweep-release at mn_api.c.inc:310, hub_main.c.inc:926/1166) and the sole call
-site of runloom_mn_global_runq_pull (hub_main.c.inc:478) is gated behind
-`runloom_use_global_runq()`, which returns `runloom_get_per_g_tstate_mode()`.
+Cross-hub migration is always on, so every M:N run routes woken gs through the
+global run-queue: wake_g pushes (mn_api.c.inc), and idle hubs pull in
+hub_main's empty-local / empty-deque path.
 
-That mode is set in exactly ONE place -- mn_sched_init_fini.c.inc:66:
-    runloom_set_per_g_tstate_mode(runloom_resolve_migratable_mode());
-and runloom_resolve_migratable_mode() (this fragment, L232-244) returns 1 ONLY
-when a migratable flag is requested AND runloom_unsafe_migration_acked() is true,
-i.e. ONLY when STACKWEAVE_ALLOW_UNSAFE_MIGRATION=1 is in the environment.
-
-STACKWEAVE_ALLOW_UNSAFE_MIGRATION is a hard-forbidden knob for this QA work: per-g
-tstate / steal-woken are KNOWN-CRASH migration modes (a per-g PyThreadState's
-mimalloc heap migrates across hub OS threads -> SEGV under churn at H>=2). A
-crashing subprocess does NOT flush gcov counters anyway, so even setting it would
-not legitimately *cover* the lines. There is no safe trigger: STACKWEAVE_PER_G_TSTATE
-(or STACKWEAVE_STEAL_WOKEN) WITHOUT the ack is gated OFF -- the runtime warns and
-runs the default per-hub-tstate scheduler, which routes woken gs through
-runloom_mn_hub_submit and NEVER touches push/pull. (Confirmed empirically below:
-the warn fires and a cross-hub channel wake is still delivered correctly.)
-
-So the push/pull bodies (L108-122, L137-148) are classified UNREACHABLE for this
-suite -- see the structured `unreachable` report.
-
-WHAT THIS SUITE *DOES* ASSERT (real behavior, this fragment's interlock)
-------------------------------------------------------------------------
-The load-bearing safety property of this file is the interlock: a migratable-mode
-request that lacks the unsafe ack must (a) warn once and (b) fall back to the
-default scheduler so that runloom_use_global_runq() stays FALSE and the global
-runq is bypassed entirely -- woken gs go via hub_submit, not push/pull. These
-tests drive runloom_resolve_migratable_mode()'s gated-off branch (L237-243) for
-BOTH flags and assert the resulting default-scheduler behavior is correct,
-proving the global runq is NOT engaged.
-
-Each subprocess sets the mode env (read once at C import/init time), runs a real
-cross-hub channel + cross-hub fd-park workload to completion, exits 0, and prints
-a marker -- so gcov counters flush and we assert on stdout + returncode + the
-warn line, never on a crash.
+WHAT THIS SUITE ASSERTS
+-----------------------
+A subprocess runs a real cross-hub channel + cross-hub fd-park workload to
+completion under M:N, exits 0, and prints a marker -- so gcov counters flush and
+we assert on stdout + returncode, never on a crash.  Every woken g in it travels
+push -> pull, so a lost, duplicated or stranded runq entry shows up as a missing
+value/byte or a hang.
 """
 import os
 import subprocess
@@ -58,41 +28,20 @@ import sys
 
 import pytest
 
-import stackweave
-
 from adv_util import hang_guard, needs_free_threading
 
 FT = needs_free_threading()
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PY = sys.executable
 
-# The exact, stable substring the gated-off warn prints (mn_sched_runq.c.inc
-# L237-243). If the interlock ever silently flipped to ON, this line would
-# vanish AND the workload would crash -- either way the test fails loudly.
-_WARN_NEEDLE = "GATED OFF"
-_ACK_HINT = "STACKWEAVE_ALLOW_UNSAFE_MIGRATION=1 to enable anyway"
-
-# Whether the interpreter carries BOTH migration patches (src/patches/).  When it
-# does, requesting migration is a SUPPORTED configuration: the interlock enables
-# it and prints nothing, so the gated-off warn must NOT be asserted.  The
-# invariants that hold either way -- no crash, and every cross-hub wake delivered
-# -- are asserted unconditionally.
-_MIGRATION_OK = stackweave.migration_available()
-_GATE_REASON = ("interpreter has both migration patches (%r); the gated-off warn "
-                "branch is unreachable here" % (stackweave.migration_status(),))
-
-
-# A self-contained child program. It runs a workload that, under the *default*
-# scheduler, exercises the very wakeups that WOULD route through the global runq
-# push/pull if per-g-tstate were active:
+# A self-contained child program. It runs a workload whose wakeups route through
+# the global runq push/pull:
 #   * a cross-hub unbuffered channel rendezvous (consumer parks on hub A, sender
 #     on hub B wakes it -> runloom_mn_wake_g),
 #   * a cross-hub socketpair fd park (reader parks in netpoll on one hub, writer
 #     on another wakes it).
 # It asserts every value/byte arrived (no lost/dup/stranded wake) and prints
-# CHILD_OK. The parent asserts the warn fired (gated-off branch taken) AND the
-# work completed -- i.e. the default path carried the wakes, the global runq did
-# not. NEVER sets STACKWEAVE_ALLOW_UNSAFE_MIGRATION.
+# CHILD_OK.
 _CHILD = r'''
 import os, sys, socket
 sys.path.insert(0, "src")
@@ -172,115 +121,27 @@ print("CHILD_OK", sum(recv_ok), sum(fd_got))
 '''
 
 
-def _run_child(env_extra, hubs, timeout=60):
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src", **env_extra)
+def _run_child(hubs, timeout=60):
+    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
     return subprocess.run(
         [PY, "-c", _CHILD, str(hubs)],
         cwd=REPO, env=env, capture_output=True, text=True, timeout=timeout)
 
 
 # --------------------------------------------------------------------------
-# 1. STACKWEAVE_PER_G_TSTATE requested WITHOUT the unsafe ack.
-#    Drives runloom_resolve_migratable_mode()'s gated-off branch (L234-243):
-#    runloom_per_g_tstate_flag()==1, runloom_unsafe_migration_acked()==0 ->
-#    warn + return 0 -> per_g_tstate_mode stays 0 -> runloom_use_global_runq()
-#    FALSE -> the wakes route through hub_submit, not the global runq.
-#    Asserts: warn fired AND the cross-hub workload completed (default path
-#    carried every wake). Multi-hub so cross-hub wake_g is genuinely exercised.
+# Cross-hub channel + fd wakes all delivered through the global run-queue.
+# Multi-hub so cross-hub wake_g is genuinely exercised.
 # --------------------------------------------------------------------------
 @pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
-def test_per_g_tstate_gated_off_uses_default_sched():
-    with hang_guard(70, "per_g_tstate gated-off"):
-        p = _run_child({"STACKWEAVE_PER_G_TSTATE": "1"}, hubs=4)
+def test_cross_hub_wakes_via_global_runq():
+    with hang_guard(70, "global runq cross-hub wakes"):
+        p = _run_child(hubs=4)
     assert p.returncode == 0, (
-        "gated-off per-g-tstate child crashed (rc=%d) -- the interlock must run "
-        "the DEFAULT scheduler, never the known-crash migration mode.\nstderr=%s"
+        "cross-hub wake child crashed (rc=%d).\nstderr=%s"
         % (p.returncode, p.stderr[-2000:]))
-    if not _MIGRATION_OK:
-        assert _WARN_NEEDLE in p.stderr and _ACK_HINT in p.stderr, (
-            "resolve_migratable_mode did NOT take the gated-off warn branch "
-            "(L237-243); a silent flip to per-g-tstate would engage the global runq."
-            "\nstderr=%s" % p.stderr[-2000:])
     assert "CHILD_OK" in p.stdout, (
-        "default scheduler did not deliver every cross-hub wake "
+        "the global runq did not deliver every cross-hub wake "
         "(channel + fd) -> work stranded.\nout=%s\nerr=%s"
-        % (p.stdout, p.stderr[-1200:]))
-
-
-# --------------------------------------------------------------------------
-# 2. STACKWEAVE_STEAL_WOKEN requested WITHOUT the unsafe ack.
-#    Same gated-off branch via the OTHER flag: runloom_steal_woken_flag()==1
-#    feeds the `want` in runloom_resolve_migratable_mode (L234). Proves the
-#    redirect (steal-woken -> per-g-tstate) is ALSO gated, so STACKWEAVE_STEAL_WOKEN
-#    never reaches the unsound snap branch and never engages push/pull.
-# --------------------------------------------------------------------------
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
-def test_steal_woken_gated_off_uses_default_sched():
-    with hang_guard(70, "steal_woken gated-off"):
-        p = _run_child({"STACKWEAVE_STEAL_WOKEN": "1"}, hubs=4)
-    assert p.returncode == 0, (
-        "gated-off steal-woken child crashed (rc=%d).\nstderr=%s"
-        % (p.returncode, p.stderr[-2000:]))
-    if not _MIGRATION_OK:
-        assert _WARN_NEEDLE in p.stderr and _ACK_HINT in p.stderr, (
-            "resolve_migratable_mode did NOT warn for STACKWEAVE_STEAL_WOKEN "
-            "(its flag must feed the same gated-off branch).\nstderr=%s"
-            % p.stderr[-2000:])
-    assert "CHILD_OK" in p.stdout, (
-        "default scheduler did not deliver every cross-hub wake under "
-        "steal-woken.\nout=%s\nerr=%s" % (p.stdout, p.stderr[-1200:]))
-
-
-# --------------------------------------------------------------------------
-# 3. BOTH migratable flags + a benign falsy STACKWEAVE_ALLOW_UNSAFE_MIGRATION="0".
-#    runloom_unsafe_migration_acked (L213-223) treats e[0]=='0' as NOT acked, so
-#    the interlock STILL gates off. This asserts the ack parser rejects "0"
-#    (a real adversarial input: a user who set the var to "0" must NOT trip the
-#    known-crash mode) -> warn fires, default sched runs.
-# --------------------------------------------------------------------------
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
-def test_unsafe_ack_zero_is_not_acked():
-    with hang_guard(70, " unsafe-ack=0 gated-off"):
-        p = _run_child(
-            {"STACKWEAVE_PER_G_TSTATE": "1", "STACKWEAVE_ALLOW_UNSAFE_MIGRATION": "0"},
-            hubs=4)
-    assert p.returncode == 0, (
-        "ack='0' child crashed (rc=%d) -- '0' must be read as NOT acked, "
-        "keeping the default scheduler.\nstderr=%s"
-        % (p.returncode, p.stderr[-2000:]))
-    if not _MIGRATION_OK:
-        # Reachable only on an under-patched interpreter: with both patches the
-        # interlock returns 1 before it ever consults the ack, so the parser is
-        # not exercised here.  See _GATE_REASON.
-        assert _WARN_NEEDLE in p.stderr, (
-            "STACKWEAVE_ALLOW_UNSAFE_MIGRATION='0' was wrongly treated as acked: the "
-            "gated-off warn did not fire -> the known-crash migration mode would "
-            "have engaged.\nstderr=%s" % p.stderr[-2000:])
-    assert "CHILD_OK" in p.stdout, (
-        "default sched did not finish the workload with ack='0'.\nout=%s\nerr=%s"
-        % (p.stdout, p.stderr[-1200:]))
-
-
-# --------------------------------------------------------------------------
-# 4. Neither flag set: no warn, default scheduler, work completes.
-#    Negative control -- runloom_resolve_migratable_mode returns 0 at L235
-#    (`if (!want) return 0;`) WITHOUT printing the warn. Confirms the warn is
-#    specifically the gated-off-request signal, not unconditional noise, and
-#    that the same cross-hub workload is correct on the plain default path.
-# --------------------------------------------------------------------------
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
-def test_no_flag_no_warn_default_sched():
-    with hang_guard(70, "no-flag default"):
-        p = _run_child({}, hubs=4)
-    assert p.returncode == 0, (
-        "plain default child crashed (rc=%d).\nstderr=%s"
-        % (p.returncode, p.stderr[-2000:]))
-    assert _WARN_NEEDLE not in p.stderr, (
-        "the gated-off warn fired with NO migratable flag set -- the `!want` "
-        "early-return (L235) must precede the warn.\nstderr=%s"
-        % p.stderr[-2000:])
-    assert "CHILD_OK" in p.stdout, (
-        "plain default sched did not finish the workload.\nout=%s\nerr=%s"
         % (p.stdout, p.stderr[-1200:]))
 
 

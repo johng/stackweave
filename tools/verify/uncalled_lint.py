@@ -57,17 +57,10 @@ ALLOWED = {
     # tests/test_cov95_blockpool_gstate.py carries it in its exclusions[]).
     "runloom_blockpool_fini":       "pool persists across cycles; never torn down",
 
-    # Superseded accessor.  Its comment still says "for the io_uring-as-loop
-    # backend to poll-add into a hub ring", but the hub calls the PER-HUB
-    # runloom_netpoll_hub_epoll_fd() instead (mn_sched_hub_main.c.inc:425).
-    # Left as ALLOWED rather than deleted because it is a plain accessor with
-    # nothing to rot; delete it if the shared-fd path is confirmed dead.
-    "runloom_netpoll_epoll_fd":     "superseded by runloom_netpoll_hub_epoll_fd",
-
     # ---- FOUND BY THIS LINT, NOT YET TRIAGED -------------------------------
-    # These three are genuinely uncalled: a definition and a prototype, and
-    # nothing else in the tree.  They are listed so the gate is green and the
-    # ratchet works from today; they are NOT blessed.  Each needs a decision:
+    # This one is genuinely uncalled: a definition and a prototype, and
+    # nothing else in the tree.  It is listed so the gate is green and the
+    # ratchet works from today; it is NOT blessed.  It needs a decision:
     # wire it up, or delete it.
     #
     # runloom_park_until is the most interesting, and it is the same shape as
@@ -85,8 +78,6 @@ ALLOWED = {
     # credit fix inside) or delete it.  The stale claim that it was a live
     # park_safe consumer has been removed from runloom_sched_parkwake.c.inc.
     "runloom_park_until":           "TRIAGE: migration paused, zero adopters since 6a733b74",
-    "runloom_coro_init_at":         "TRIAGE: uncalled; placement-new coro ctor",
-    "runloom_coro_arena_stack":     "TRIAGE: uncalled; arena stack allocator",
 }
 
 # A non-static definition: a line at column 0 that is not a declaration (no

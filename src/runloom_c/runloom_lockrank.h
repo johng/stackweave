@@ -36,7 +36,6 @@ typedef enum runloom_lock_rank {
                                        * claim under pool, wake with neither held). */
     RUNLOOM_RANK_GREG         = 20,   /* runloom_greg_lock (global fiber registry) */
     RUNLOOM_RANK_HUB_TSTATE   = 30,   /* runloom_hub_tstate_lock */
-    RUNLOOM_RANK_ARENA_INIT   = 35,   /* runloom_arena_init_lock */
     RUNLOOM_RANK_GLOBAL_RUNQ  = 40,   /* runloom_global_runq_lock */
     RUNLOOM_RANK_CHAN         = 50,   /* per-channel ch->lock */
     RUNLOOM_RANK_HUB_IDLE     = 55,   /* per-hub h->idle_lock -- OUTER to sub_lock:
@@ -62,7 +61,6 @@ typedef enum runloom_lock_rank {
                                        * around link/unlink/walk, with the wake
                                        * issued after it is dropped, so it nests
                                        * under nothing. */
-    RUNLOOM_RANK_IOURING_BRING= 88,   /* s->bring_lock (io_uring provided-buffer ring) */
     RUNLOOM_RANK_BLOCKPOOL    = 90,   /* bp_lock (offload blockpool) */
     RUNLOOM_RANK_RING_LIST    = 100,  /* runloom_ring_list_lock (io_uring rings) */
     RUNLOOM_RANK_GLOBAL_STACK = 110,  /* runloom_global_stack_lock (stack depot) */

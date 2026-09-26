@@ -761,7 +761,7 @@ int runloom_netpoll_wait_fd(int fd, int events, long long timeout_ns)
     }
 
     /* Committed to parking: stamp the dwell clock for the hub-idle
-     * stack-reclaim sweep (RUNLOOM_STACK_PARK_SWEEP).  Plain store -- only
+     * stack-reclaim sweep.  Plain store -- only
      * the sweep on this g's owning hub reads it, after this point. */
     park->park_ts = monotonic_ns();
 
@@ -779,8 +779,8 @@ int runloom_netpoll_wait_fd(int fd, int events, long long timeout_ns)
      * Hold pool->lock across the ENTIRE check, not just the unlink: the
      * by_fd probe reads pool->by_fd / pool->by_fd_cap, which the pool's
      * owning hub grows via realloc (freeing the old base) under this lock
-     * in runloom_parker_fd_index_ensure.  In migratable mode
-     * (RUNLOOM_MIGRATION / PER_G_TSTATE / STEAL_WOKEN) a woken g may resume
+     * in runloom_parker_fd_index_ensure.  Under migration
+     * a woken g may resume
      * on a DIFFERENT hub than `pool`'s owner, so an unlocked read here could
      * race that realloc -- loading the freed old base paired with the new
      * cap (an OOB / use-after-free read).  Taking the lock first makes the

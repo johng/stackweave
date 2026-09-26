@@ -101,10 +101,9 @@ VMAs and fds run out before RAM, but size memory too:
   ~4 M VMAs.**
 - **RSS per fiber (Python handler):** add ~26 KB/fiber for the Python frame /
   datastack — so a Python-per-connection design is RAM-bound well before a C one.
-- With the default **`MADV_FREE`** stack reclaim, freed/pooled stack pages stay
-  *counted* in RSS until the kernel reclaims them under pressure — so RSS can look
-  higher than the live set. Set `STACKWEAVE_STACK_MADV=dontneed` for eager reclaim if
-  your RSS metrics matter more than spawn/complete CPU.
+- Freed/pooled stacks keep their touched pages **resident** (no per-release
+  `madvise`, so no TLB-shootdown IPI and no re-fault on reuse) — RSS can sit above
+  the live set by up to the depot cap × each pooled stack's touched depth.
 
 ---
 
@@ -116,7 +115,6 @@ These environment variables interact with the limits above:
 |---|---|---|
 | `RUNLOOM_DEFAULT_STACK_SIZE` | `524288` (512 KiB) | bigger stacks → more virtual space + RSS per fiber |
 | `STACKWEAVE_STACK_DEPOT_CAP` | `1024` | retained pooled stacks → **VMAs held when idle**; raise it (near your peak) only alongside `vm.max_map_count` |
-| `STACKWEAVE_STACK_MADV` | `free` | `free` = lazy RSS (cheaper CPU); `dontneed` = eager RSS reclaim; `off` = keep resident |
 | `prewarm(n, ...)` / `prewarm_keep(target, ...)` | — | pre-maps `n`/`target` stacks → consumes `~2n` VMAs; needs `vm.max_map_count` + `STACKWEAVE_STACK_DEPOT_CAP` budgeted for it (see [stack-sizing.md](stack-sizing.md#prewarming-the-stack-pool-burst-servers)) |
 
 ---

@@ -1,9 +1,9 @@
 /*
  * iouring_waitcommit.c -- GenMC oracle for runloom's io_uring SINGLE-op park/wake
  * commit handshake (src/runloom_c/io_uring.c: the `op->wait` word shared by
- * runloom_iouring_do's hub park path and runloom_iouring_drain's SINGLE-op case; the
- * recv/send per-hub-ring path runloom_iouring_ring_do / runloom_iouring_ring_drain is
- * byte-identical), in REAL C (pthreads + C11 atomics) under GenMC's RC11
+ * runloom_iouring_do's hub park path and runloom_iouring_drain's SINGLE-op case; a
+ * byte-identical per-hub-ring recv/send path went with the TCPConn io_uring
+ * mode), in REAL C (pthreads + C11 atomics) under GenMC's RC11
  * weak-memory model.
  *
  * FAITHFUL SLICE (not byte-shared).  io_uring.c can't be compiled under GenMC

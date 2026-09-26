@@ -71,44 +71,12 @@ void runloom_immortalize(PyObject *op)
  * the per-g cross-hub migration fix.  With the optional CPython patch
  * (Py_TSTATE_ALLOC_HOME, see patches/) a per-g tstate carries no live heap and
  * allocates on whichever hub is running it, so no per-fiber heap ever migrates
- * OS threads -- removing the _mi_page_retire teardown corruption that gates the
- * per-g-tstate mode.  Compiled as a no-op when built against stock CPython. */
-/* True iff this build can run per-g cross-hub migration SAFELY: it was compiled
- * against the alloc-home CPython patch (Py_TSTATE_ALLOC_HOME) AND the borrow is
- * not disabled at runtime (RUNLOOM_NO_ALLOC_HOME=1).  When true, a per-g tstate
- * borrows the running hub's heap, so no per-fiber heap migrates OS threads --
- * this is the PRODUCTION safety gate the scheduler checks before enabling
- * RUNLOOM_MIGRATION without the unsafe-override.  Returns 0 against stock
- * CPython, so on an unpatched interpreter migration stays gated behind the
- * explicit RUNLOOM_ALLOW_UNSAFE_MIGRATION dev escape hatch. */
-int runloom_alloc_home_active(void)
-{
-#if defined(Py_TSTATE_ALLOC_HOME)
-    /* RUNLOOM_NO_ALLOC_HOME=1 disables the borrow (A/B baseline: reproduces the
-     * pre-patch per-g-tstate _mi_page_retire crash).  Default = borrow ON. */
-    static int off = -1;
-    if (off < 0) { const char *e = getenv("STACKWEAVE_NO_ALLOC_HOME"); off = (e && e[0] == '1'); }
-    return !off;
-#else
-    return 0;
-#endif
-}
-
-int runloom_exec_home_active(void)
-{
-#if defined(Py_TSTATE_EXEC_HOME) && defined(_Py_TID_ASM)
-    return 1;
-#else
-    return 0;
-#endif
-}
-
+ * OS threads -- removing the _mi_page_retire teardown corruption.  Compiled as
+ * a no-op when built against stock CPython. */
 void runloom_iframe_borrow_alloc_home(PyThreadState *exec, PyThreadState *home)
 {
 #if defined(Py_TSTATE_ALLOC_HOME)
-    if (runloom_alloc_home_active()) {
-        _PyThreadState_SetAllocHome(exec, home);
-    }
+    _PyThreadState_SetAllocHome(exec, home);
 #else
     (void)exec; (void)home;
 #endif

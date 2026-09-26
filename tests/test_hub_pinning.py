@@ -9,11 +9,7 @@ stayed-put control.  A pin degraded to a no-op fails three of the four.
 
 Run directly:  PYTHON_GIL=0 PYTHONPATH=src python tests/test_hub_pinning.py
 """
-import os
 import time
-
-# Read once at the first mn_init, so it has to be set before the runtime starts.
-os.environ.setdefault("STACKWEAVE_MIGRATION", "1")
 
 import pytest
 
@@ -55,8 +51,6 @@ def spawn_on_0_resume_on(hub):
 
 
 @pytest.mark.skipif(not needs_free_threading(), reason="needs a free-threaded build")
-@pytest.mark.skipif(not stackweave.migration_available(),
-                    reason="needs both CPython migration patches (src/patches/)")
 @pytest.mark.parametrize("hub", range(HUBS))   # 0 stays put; 1-3 must move
 def test_fiber_resumes_on_the_hub_it_pinned_itself_to(hub):
     assert spawn_on_0_resume_on(hub) == (0, hub)
@@ -105,8 +99,6 @@ def test_pin_on_a_handle_from_a_torn_down_session_is_refused():
 
 
 @pytest.mark.skipif(not needs_free_threading(), reason="needs a free-threaded build")
-@pytest.mark.skipif(not stackweave.migration_available(),
-                    reason="needs both CPython migration patches (src/patches/)")
 def test_pinned_runq_entry_does_not_spin_the_other_hubs():
     """A pinned global-runq entry is work for its target hub only; the idle scan
     must not keep the other hubs awake for it.  process_time() is per-process,
@@ -152,8 +144,6 @@ def test_pinned_runq_entry_does_not_spin_the_other_hubs():
 
 
 @pytest.mark.skipif(not needs_free_threading(), reason="needs a free-threaded build")
-@pytest.mark.skipif(not stackweave.migration_available(),
-                    reason="needs both CPython migration patches (src/patches/)")
 def test_repinning_a_queued_fiber_keeps_the_runq_counters_consistent():
     """pin() must not change pin_hub1 behind the runq lock's back: the fiber is
     woken while its target hub is busy (so the entry sits queued), then
@@ -199,9 +189,6 @@ def test_repinning_a_queued_fiber_keeps_the_runq_counters_consistent():
 
 
 if __name__ == "__main__":
-    if stackweave.migration_available():
-        for hub in range(HUBS):
-            print("pin(%d) -> ran on hub %d, then hub %d"
-                  % ((hub,) + spawn_on_0_resume_on(hub)))
-    else:
-        print("skipped --", stackweave.migration_status())
+    for hub in range(HUBS):
+        print("pin(%d) -> ran on hub %d, then hub %d"
+              % ((hub,) + spawn_on_0_resume_on(hub)))

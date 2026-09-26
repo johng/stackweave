@@ -115,117 +115,12 @@ import os as _os
 if hasattr(_os, "register_at_fork"):
     _os.register_at_fork(after_in_child=_core.reset_after_fork)
 
-# Opt-in crash reporter: set STACKWEAVE_CRASH (on/all/wait/gdb/backtrace/pystack)
-# to install a fatal-signal handler at import, so a SIGSEGV (e.g. a fiber
-# stack overflow) prints a classified fiber dump instead of dying silently.
-# Off by default -- we don't hijack process-wide signal handlers unless asked.
-# Installed here, before the runtime starts, so the scheduler hubs are armed as
-# they spawn.  See stackweave.inspect.install_crash_handler() to install in code.
-if _os.environ.get("STACKWEAVE_CRASH", "").strip().lower() not in ("", "0", "off"):
-    try:
-        _core.install_crash_handler(
-            _os.environ.get("STACKWEAVE_CRASH"),
-            _os.environ.get("STACKWEAVE_CRASH_FILE"),
-        )
-    except Exception:   # never let crash-reporter setup break import
-        pass
-
-# Opt-in adaptive stack auto-sizer: STACKWEAVE_STACK_AUTOSIZE=1 starts each
-# fiber kind large and learns its real size down over its first runs (in
-# memory only, never persisted).  Off by default -- it changes per-kind stack
-# sizes.  See stackweave.inspect.enable_stack_autosize().
-_autosize_env = _os.environ.get("STACKWEAVE_STACK_AUTOSIZE", "").strip().lower()
-if _autosize_env in ("1", "on", "true", "prescan"):
-    try:
-        _core.enable_stack_autosize(True, _autosize_env == "prescan")
-    except Exception:
-        pass
-
-# ---- Cross-hub fiber migration (opt-in, behind flags) -----------------------
-# A parked fiber normally resumes on the SAME hub it parked on.  With migration
-# enabled, a woken fiber is routed to a global run-queue and resumed on ANY idle
-# hub -- so work stranded behind a wedged hub gets rescued and load spreads to
-# free cores.  This needs each fiber to own a migratable PyThreadState (per-g
-# tstate), which is only HEAP-SAFE when CPython is built with the optional
-# alloc-home patch (src/patches/cpython31Xt-tstate-alloc-home.patch): the per-g
-# tstate then borrows the running hub's allocator, so no per-fiber heap migrates
-# OS threads.  Off by default; turn on with STACKWEAVE_MIGRATION=1 in the
-# environment, or stackweave.enable_migration(), BEFORE the runtime starts (the
-# flag is read once at mn_init).
-def migration_available():
-    """True iff this build can SAFELY migrate fibers across hubs -- i.e. it was
-    compiled against BOTH optional CPython patches (see src/patches/):
-
-      alloc-home (Py_TSTATE_ALLOC_HOME) -- a migrated fiber allocates on the hub
-        now running it, so no per-fiber heap migrates OS threads.
-      exec-home  (Py_TSTATE_EXEC_HOME)  -- _PyThreadState_GET() and _Py_ThreadId()
-        stay non-cacheable, so a resumed fiber can't keep using the origin hub's
-        thread state or resolve biased-refcount ownership against a stale thread
-        id (a use-after-free).
-
-    Either patch alone is insufficient.  When this is False, migration is only
-    reachable via the STACKWEAVE_ALLOW_UNSAFE_MIGRATION dev override (which can
-    crash under churn).  See migration_status() for which half is missing.
-
-    NOTE exec-home is a codegen property and _Py_ThreadId() inlines into
-    Py_INCREF/Py_DECREF via the public refcount.h, so this can only speak for
-    stackweave's own extension.  A fully sound migrating process also needs every
-    OTHER extension module rebuilt against the patched interpreter."""
-    return bool(getattr(_core, "alloc_home_available", 0)) and \
-           bool(getattr(_core, "exec_home_available", 0))
-
-def migration_status():
-    """Which halves of the migration safety gate this build has, as a dict:
-    {"alloc_home": bool, "exec_home": bool, "available": bool}.  Useful for
-    diagnosing a migration_available() of False."""
-    alloc = bool(getattr(_core, "alloc_home_available", 0))
-    exech = bool(getattr(_core, "exec_home_available", 0))
-    return {"alloc_home": alloc, "exec_home": exech, "available": alloc and exech}
-
-def migration_enabled():
-    """True iff cross-hub migration is REQUESTED for the next runtime start
-    (STACKWEAVE_MIGRATION / STACKWEAVE_PER_G_TSTATE / STACKWEAVE_STEAL_WOKEN set in the
-    environment).  Whether it actually activates also depends on
-    migration_available(); on stock CPython without the unsafe override the
-    scheduler warns and falls back to the default (non-migrating) mode."""
-    return any(
-        _os.environ.get(v, "").strip() not in ("", "0")
-        for v in ("STACKWEAVE_MIGRATION", "STACKWEAVE_PER_G_TSTATE", "STACKWEAVE_STEAL_WOKEN")
-    )
-
-def enable_migration(allow_unsafe=False):
-    """Opt into cross-hub fiber migration.  Must be called BEFORE the M:N runtime
-    starts (run() / mn_init); the flag is read once at init.  On a build WITHOUT
-    the alloc-home patch this raises RuntimeError unless allow_unsafe=True, which
-    also sets the STACKWEAVE_ALLOW_UNSAFE_MIGRATION dev escape hatch (per-g tstate
-    migration can then crash under churn at >1 hub -- dev/fuzzing only).
-    Idempotent."""
-    if not migration_available() and not allow_unsafe:
-        st = migration_status()
-        # The patches are version-specific: name the one for the running interpreter.
-        _tag = "cpython%d%dt" % _sys.version_info[:2]
-        missing = ", ".join(
-            name for name, have in (
-                ("alloc-home (src/patches/%s-tstate-alloc-home.patch)" % _tag,
-                 st["alloc_home"]),
-                ("exec-home (src/patches/%s-tstate-exec-home.patch)" % _tag,
-                 st["exec_home"]),
-            ) if not have
-        )
-        raise RuntimeError(
-            "stackweave: cross-hub migration needs CPython built with BOTH optional "
-            f"patches; missing: {missing}. Without alloc-home a per-g "
-            "PyThreadState's heap migrates across hub threads and crashes under "
-            "churn; without exec-home the compiler caches the thread-identity "
-            "reads across a park/resume, so a migrated fiber uses the origin "
-            "hub's thread state and mis-resolves biased-refcount ownership "
-            "(use-after-free). Rebuild CPython against the patches (and rebuild "
-            "extension modules against it), or pass allow_unsafe=True for "
-            "dev/fuzzing."
-        )
-    _os.environ["STACKWEAVE_MIGRATION"] = "1"
-    if allow_unsafe and not migration_available():
-        _os.environ["STACKWEAVE_ALLOW_UNSAFE_MIGRATION"] = "1"
+# ---- Cross-hub fiber migration (always on) ----------------------------------
+# Every fiber owns its own PyThreadState, so a woken fiber resumes on ANY idle
+# hub: work stranded behind a wedged hub gets rescued and load spreads to free
+# cores.  Soundness needs CPython built with both patches in src/patches/
+# (alloc-home + exec-home), and every other extension in the process rebuilt
+# against it; nothing checks for them at runtime.
 
 # Runtime introspection -- `stackweave.inspect.dump()`, fibers(), stack(), etc.
 # See stackweave/inspect.py.  Exposed as a submodule plus a couple of top-level
@@ -264,9 +159,6 @@ __all__ = [
     # M:N
     "mn_init", "mn_fiber", "mn_run", "mn_fini", "mn_hub_count", "mn_hub_states",
     "hubs",
-    # cross-hub migration (opt-in, needs the alloc-home CPython patch)
-    "migration_available", "migration_status", "migration_enabled",
-    "enable_migration",
     # low-level I/O primitives
     "TCPConn", "Coro", "G", "wait_fd", "WAIT_FD_CANCELLED",
     "tcp_recv", "tcp_send", "iouring_available",

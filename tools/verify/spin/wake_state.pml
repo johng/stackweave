@@ -1,7 +1,7 @@
 /*
  * wake_state.pml -- Promela model of the per-g wake_state machine.
  *
- * Models the RUNLOOM_PER_G_TSTATE protocol documented on `struct runloom_g`
+ * Models the per-g-tstate (migration) protocol documented on `struct runloom_g`
  * in src/runloom_c/runloom_sched.h (the `wake_state` field).  A single
  * atomic unifies the exactly-once-wake dedup with the exclusive-resume
  * claim.  History (see the project's stall-recovery / lost-wake arc):

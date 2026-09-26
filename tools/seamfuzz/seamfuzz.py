@@ -92,9 +92,6 @@ def worker_env(spec):
     env["SEAM_NHUB"] = str(spec["nhub"])
     env["SEAM_MOVES"] = ",".join(spec["moves"])
     env["SEAM_ITERS"] = str(spec["iters"])
-    # NB: deliberately does NOT set STACKWEAVE_ALLOW_UNSAFE_MIGRATION -- that forces
-    # the documented-impossible per-g live-frame tstate migration, whose mimalloc
-    # heap->thread_id abort is a KNOWN-dead-mode artifact, not a seam bug.
     return env
 
 

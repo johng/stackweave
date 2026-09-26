@@ -35,12 +35,11 @@ Driver: `verify/run_verify.sh` (Spin + CBMC + GenMC + herd7 + Coq + Iris + Alloy
 | park_safe/wake_safe | `runloom_sched_parkwake.c.inc` | `parked_safe.pml`, `park_generic_timed.pml`, `sched_parkwake.c` + `_seam.c`(GenMC; the SC fence was *discovered* here), `OneShotWake.v`(Iris) | **deep** |
 | Cross-thread wake routing | `mn_sched_mn_api.c.inc` | `cross_thread_wake.pml`, `wakelist_mpsc.litmus`, `WakeListHandoff.v`(iRC11) | **deep** |
 | select claim / close | `chan_select_main.c.inc`, `chan_waiters.c.inc` | `select_claim.pml`, `select_close.pml`(+4 controls), `Select.v`(Coq ∞) | **deep** |
-| Default M:N wake dedup | `mn_sched_mn_api.c.inc` (`hub_submit`) | `hub_submit.pml`, `sched_qref.c`(CBMC) | good |
+| M:N hub submission dedup | `mn_sched_mn_api.c.inc` (`hub_submit`) | `hub_submit.pml`, `sched_qref.c`(CBMC) | good |
 | Ready-ring FIFO | `runloom_sched_core.c.inc` | `sched_readyring_cbmc.c`(CBMC) | good |
 | netpoll commit + arm (epoll/kqueue) | `netpoll_*.c.inc` | `netpoll_commit`,`netpoll_rearm`,`netpoll_kqueue`,`netpoll_multipool`,`netpoll_deadline`,`netpoll_forceunlink`(Spin), `netpoll_claim.c`(GenMC), `commit_*.litmus` | **deep** (see drift note on `netpoll_rearm`) |
-| **io_uring-as-loop backend wake/re-arm** | `io_uring_l_loop.c.inc`, `netpoll_wake_iouring.c.inc`, `mn_sched_hub_main.c.inc` | **`netpoll_iouring_loop.pml`(Spin) — NEW 2026-06-17** | good (NEW) |
 | Blocking-offload pool | `runloom_blockpool.c` | `blockpool.pml`, `blockpool_job.c`(GenMC), `Blockpool.v`(Coq ∞) | **deep** |
-| io_uring single-op + multishot | `io_uring.c`, `io_uring_l_msclose.c.inc` | `iouring_waitcommit.c`(GenMC), `iouring_msclose.pml`(Spin) | good |
+| io_uring single-op | `io_uring.c` | `iouring_waitcommit.c`(GenMC) | good |
 | Preemption defer-in-destruction | `mn_sched_hub_resume_preempt.c.inc` | `preempt_defer_cbmc.c`(CBMC) | good |
 | Teardown / mn_fini | `mn_sched_init_fini.c.inc` | `RunloomMnFini.tla`(TLA) | good |
 | **mn_run deadlock-census + stall-kick** | `mn_sched_init_fini.c.inc` | **`RunloomMnRun.tla`(TLA) — NEW 2026-06-17**; census-idle wake-guard also in `RunloomComposite.tla` | good (NEW) |
@@ -49,7 +48,7 @@ Driver: `verify/run_verify.sh` (Spin + CBMC + GenMC + herd7 + Coq + Iris + Alloy
 | Controlled-replay baton | `mn_sched_runq.c.inc` | `RunloomMNControl.tla` | good |
 | CPython-runtime oracles | (external) | `brc_merge.c`,`qsbr_drain.c`,`mimalloc_page_free.c`(GenMC/RC11) | good |
 | Refcounts (g / chan / sent-obj / snap) | `chan.c`, `mn_sched.c` | `chan_refcount.c`(GenMC), `chan_refflow_cbmc.c`,`snap_refown_cbmc.c`(CBMC), `RunloomGRefcount.tla` | good |
-| Slab / datastack / admission | `coro.c`, `mn_sched.c` | `g_slab_recycle`,`chunk_pool_alias`,`fiber_admit`(CBMC), `stack_depot`,`pbuf_bid`(Spin) | good |
+| Slab / datastack / admission | `coro.c`, `mn_sched.c` | `g_slab_recycle`,`chunk_pool_alias`,`fiber_admit`(CBMC), `stack_depot`(Spin) | good |
 | Liveness (non-starvation, lock-free progress) | scheduler + deque | `live_wake`,`live_deque`(Spin, acceptance-cycle) | good |
 | netpoll bucket well-formedness | `netpoll_*.c.inc` | Alloy (`WellFormedImpliesOK`, `BucketsAlwaysOnGlobal`) | good |
 
@@ -68,7 +67,8 @@ of a hypothetical resizable deque (the production deque is fixed-capacity) and i
   kick), `BUG_NO_REARM` (un-polled wake source → parked consumer never woken),
   `BUG_DOUBLE_RESUME` (drain not gated on `prev==PARKED`). `BUG_NO_TIMEOUT`
   intentionally still passes — the `idle_ns` timeout is a latency backstop, not
-  the correctness mechanism.
+  the correctness mechanism. (Since retired: the loop backend and this model
+  were removed.)
 * **`tla/RunloomMnRun.tla`** — the `mn_run` deadlock-census + stall-kick liveness
   backstop (gap #2). SAFETY `NoFalseDeadlock` (never a deadlock verdict while a
   wake source exists), LIVENESS `EventuallyRun` (a stranded-runnable g is always
@@ -120,7 +120,7 @@ buffered-chan ring, foreign-thread fallback, timer min-heap, single-thread drain
 | Gap | Source | Risk | Suggested |
 |---|---|---|---|
 | `mn_run` *timed* detector tuning | `mn_sched_init_fini.c.inc` | LOW | `RunloomMnRun.tla` covers the census/stall-kick logic; the `STACKWEAVE_DEADLOCK_MS` / `STACKWEAVE_STALL_KICK_MS` timing thresholds are policy, not modeled. |
-| io_uring-loop F_EPOLL edge-drop root cause | `io_uring_l_loop.c.inc` | RESOLVED | **Root-caused + fixed at source.** The bridge polled the shared epoll fd with a STANDING MULTISHOT `IORING_POLL_ADD_MULTI`, which the kernel re-fires only on a fresh interior readiness *transition* and never re-samples for standing LEVEL between transitions -- so a socket left level-readable with no fresh transition (partial recv + re-park, >64-event pump truncation, a late-linked parker) was invisible → no `F_EPOLL` → the reader hung. Fixed: the epoll poll is now ONE-SHOT, re-armed every cycle; a one-shot `POLL_ADD`'s arm-time `vfs_poll` re-derives the fd's level exactly like plain `epoll_wait`. Verified by live repro: **0/25** loop-backend hangs with the fix vs **~45%** without (guard off). The old every-idle-tick `pump(0)` symptom-guard is kept behind `STACKWEAVE_IOURING_LOOP_PUMP_ALWAYS` for soak burn-in. Not a shared-memory FSM (kernel-semantics), so no CBMC/GenMC applies -- guarded dynamically. |
+| io_uring-loop F_EPOLL edge-drop root cause | `io_uring_l_loop.c.inc` | RESOLVED | **Root-caused + fixed at source.** The bridge polled the shared epoll fd with a STANDING MULTISHOT `IORING_POLL_ADD_MULTI`, which the kernel re-fires only on a fresh interior readiness *transition* and never re-samples for standing LEVEL between transitions -- so a socket left level-readable with no fresh transition (partial recv + re-park, >64-event pump truncation, a late-linked parker) was invisible → no `F_EPOLL` → the reader hung. Fixed: the epoll poll is now ONE-SHOT, re-armed every cycle; a one-shot `POLL_ADD`'s arm-time `vfs_poll` re-derives the fd's level exactly like plain `epoll_wait`. Verified by live repro: **0/25** loop-backend hangs with the fix vs **~45%** without (guard off). The loop backend has since been removed. Not a shared-memory FSM (kernel-semantics), so no CBMC/GenMC applies -- guarded dynamically. |
 | parker `pool->total` over-count after a missed unlink | `netpoll_parker_link.c.inc` | RESOLVED | The stack-address aliasing root cause is **gone**: parkers now come from a heap freelist (`netpoll_parkers.c.inc` `runloom_parker_pool_acquire`/`_release`, used at every `netpoll_wait_fd.c.inc` path) -- a freelisted parker has no global pointers to it, an in-flight one sits at a unique heap address, so a reissued coro stack can no longer alias a stale parker pointer. `netpoll_parker_link.pml` now models the *historical* stack hazard as a standing defense-in-depth proof of the link protocol; the remaining `pool->total` residual is a benign over-poll only. |
 
 Not gaps: `netpoll_diag_fd.c.inc` / `netpoll_init.c.inc` (introspection + setup, not a live wake protocol), `runloom_stackadvice.c` (benign racy size hints), the prewarm daemon in `coro.c` (pure-C, no PyThreadState → invisible to STW). The audit found **no** subsystem the map claims as covered but is actually bare — only uncredited *bonus* coverage (now folded into the index above).
@@ -167,16 +167,16 @@ number, so the reference survives the next file split.
 
 ## Complete model index
 
-Every model file, by engine (80 total: Spin 27, CBMC 13, GenMC 13, Coq 5,
+Every model file, by engine (77 total: Spin 24, CBMC 13, GenMC 13, Coq 5,
 Iris 6, TLA+ 10, herd7/litmus 5, Alloy 1). The subsystem-level grouping is the
 **Coverage map** above; this is the exhaustive file list.
 
-_New 2026-06-17 (this session, both batches):_ Spin `netpoll_iouring_loop`,
+_New 2026-06-17 (this session, both batches):_ Spin `netpoll_iouring_loop` (since retired),
 `netpoll_parker_link`, `chan_buffer`, `foreign_thread_fallback`, `sched_drain`
 (+ `netpoll_rearm` re-modeled); CBMC `timer_heap_cbmc`; Coq `ChanBuffer`;
 TLA+ `RunloomMnRun`.
 
-### Spin — `spin/*.pml` (23)
+### Spin — `spin/*.pml` (20)
 | file | what |
 |---|---|
 | `cldeque.pml` | Chase-Lev deque: no loss / dup / phantom |
@@ -185,7 +185,7 @@ TLA+ `RunloomMnRun`.
 | `park_generic_timed.pml` | fd-free TIMED in-memory park: enqueued exactly once |
 | `select_claim.pml` | select() cross-channel `fired_case` claim CAS |
 | `select_close.pml` | select() Phase-2 vs send/close (+4 controls) |
-| `hub_submit.pml` | default M:N wake: `in_sub_queue` dedup + done-check |
+| `hub_submit.pml` | M:N hub submission list: `in_sub_queue` dedup + done-check |
 | `blockpool.pml` | blocking-offload wake order: re-queue before dec inflight |
 | `netpoll_commit.pml` | netpoll park/wake commit (Go netpollblockcommit) |
 | `netpoll_rearm.pml` | netpoll LT re-arm vs not-yet-linked window (⚠ drift: models replaced EPOLLONESHOT scheme) |
@@ -193,12 +193,9 @@ TLA+ `RunloomMnRun`.
 | `netpoll_deadline.pml` | fd-dispatch vs timeout-drain vs cancel claim race |
 | `netpoll_forceunlink.pml` | force_unlink vs pump: exactly-once release / no UAF |
 | `netpoll_kqueue.pml` | kqueue `EV_ADD|EV_ONESHOT` re-add arm (BSD/macOS) |
-| `netpoll_iouring_loop.pml` | **NEW** io_uring-as-loop backend Dekker wake + re-arm |
-| `iouring_msclose.pml` | io_uring multishot handle lifetime, recv vs close: **refcount makes concurrent close-vs-parked-recv UAF-safe** (+ `BUG_NO_REFCOUNT` reproduces the old UAF) |
 | `cross_thread_wake.pml` | Phase C per-thread sched owner-routed wake_safe |
 | `tstate_attach_detach.pml` | per-g PyThreadState resume slice attach/detach balance |
 | `stack_depot.pml` | cross-hub coroutine stack-memory pool (size guard + cap) |
-| `pbuf_bid.pml` | io_uring provided-buffer-ring bid ownership |
 | `live_wake.pml` | LIVENESS: woken g eventually resumed (weak fairness) |
 | `live_deque.pml` | LIVENESS: lock-free steal progress under any schedule |
 

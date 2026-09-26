@@ -130,13 +130,14 @@ class TestCheckerTeeth:
 class TestLiveBattery:
     """A bounded seed sweep of the real recorder -- every history must linearize.
     (The full generative sweep is tools/lincheck/linz/battery.py + its forever
-    runner; here we keep it small so the suite stays fast.)"""
+    runner; here we keep it small so the suite stays fast.)  Recorded unseeded
+    (wall-clock timestamps): the seeded M:N scheduler is disabled."""
 
     def run_primitive(self, primitive):
         import battery
         fatal = []
         for seed in range(4):
-            status, detail = battery.check_seed(primitive, seed, True,
+            status, detail = battery.check_seed(primitive, seed, False,
                                                 None, None, None,
                                                 checker.DEFAULT_BUDGET, False)
             if status in battery.FATAL:

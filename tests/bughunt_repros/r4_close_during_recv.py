@@ -4,9 +4,7 @@ parked fiber so it sees the close and exits, instead of hanging forever.
 
 Scenarios:
   plain   : recv(64)            parked, then close
-  flags   : recv(64, MSG_PEEK)  parked, then close  (forces single-shot under iouring)
-
-Run under default (epoll) and STACKWEAVE_TCPCONN_IOURING=1.
+  flags   : recv(64, MSG_PEEK)  parked, then close
 """
 import socket
 import sys

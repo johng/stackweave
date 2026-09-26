@@ -30,10 +30,9 @@ makes false. 3.15 moved `_Py_ThreadId` from `Include/object.h` to
 series' patch with `-F3` can fuzz superseded hunks back in and yield a silently wrong
 interpreter — so don't.
 
-`stackweave.migration_available()` is True only with both; `stackweave.migration_status()`
-reports which half is missing. With either absent, migration stays behind the
-`STACKWEAVE_ALLOW_UNSAFE_MIGRATION` dev override and the scheduler falls back to the
-default non-migrating mode with a warning naming the gap.
+Every M:N run migrates, and nothing checks for the patches at runtime: run
+`run(n > 1)` on an interpreter missing either half and a migrated fiber can
+corrupt memory under churn.
 
 ## `cpython314t-tstate-alloc-home.patch` — per-tstate allocation home
 
@@ -52,14 +51,14 @@ ties execution to allocation (see `docs/dev/HUB_MIGRATION_VERDICT.md`).
 
 **stackweave wiring (when enabled):** call `_PyThreadState_SetAllocHome(g->tstate,
 hub->tstate)` at the per-g-tstate attach point (`mn_sched_hub_main.c.inc`); give
-the per-g tstate no live heap. That turns the gated `STACKWEAVE_PER_G_TSTATE` mode
-from "heavy + crashing" into "lightweight + sound".
+the per-g tstate no live heap. That turns per-g-tstate migration from
+"heavy + crashing" into "lightweight + sound".
 
 **Validation status: VALIDATED end-to-end.** Built CPython 3.14.4t with the flag
 (593 stdlib tests pass, zero regression). Wired `runloom_iframe_borrow_alloc_home`
 into the per-g-tstate attach (`mn_sched_hub_main.c.inc`). The previously-crashing
-`STACKWEAVE_PER_G_TSTATE` channel-churn repro now passes **24/24** with the borrow vs
-**8/8 abort** without it (`STACKWEAVE_NO_ALLOC_HOME=1`); default mode unaffected.
+per-g-tstate channel-churn repro now passes **24/24** with the borrow vs
+**8/8 abort** without it.
 Refined scope: only the alloc-heap + mimalloc page_list redirect to home; the QSBR
 reader stays the running tstate's (`_Py_qsbr_poll` asserts that). A direct migration
 proof (`tests/experiments/resume_rebuild/migration_crosshub_proof.py`) shows **50/60 fibers
@@ -151,7 +150,7 @@ passed / 1 skipped, and the two residual failures — `test_mn_sim_bytes` late-p
 `test_monkey_leak` subprocess — reproduce identically on the *unpatched*
 interpreter, so they are pre-existing). **Not** run against the CPython test suite.
 
-alloc-home is genuinely required alongside exec-home: with `STACKWEAVE_NO_ALLOC_HOME=1`
+alloc-home is genuinely required alongside exec-home: with the heap borrow off
 (exec-home on, alloc-home off) `mpmc_pergt_repro.py` still crashed **3/8** runs vs
 **0/8** with both.
 
@@ -211,8 +210,7 @@ LTO can inline it back into its callers and silently reintroduce the bug.
 **⚠ Rebuild everything.** `_Py_ThreadId()` is inlined into `Py_INCREF`/`Py_DECREF`
 through the *public* `refcount.h`, so the fix only reaches code compiled against
 the patched headers. Every extension module in a migrating process must be rebuilt
-— a prebuilt wheel keeps its cacheable reads. `stackweave_c.exec_home_available` can
-only speak for stackweave's own extension.
+— a prebuilt wheel keeps its cacheable reads.
 
 **Known gaps:** on MSVC the thread-id reads are intrinsics (`__readgsqword`,
 `__getReg`), not asm, and are left untouched — stackweave does not target
@@ -221,10 +219,10 @@ no fiber path reads them across a park: `pkgcontext` (`Python/import.c`) and
 mimalloc's `_mi_heap_default` (object allocation reaches the heap through the
 tstate — see alloc-home — not through it).
 
-## Using it (production, behind flags)
+## Using it
 
-Migration is **off by default**. To enable it you need two things: build CPython with
-**both** patches, and set the flag.
+Migration is **always on** under M:N (`run(n > 1)`); there is no switch. What it
+needs is an interpreter built with **both** patches:
 
 1. **Build CPython with both patches.** `tools/ci/build_patched_cpython.sh` does
    the whole thing — fetch the pinned release, verify its sha256, apply the pair
@@ -260,35 +258,8 @@ Migration is **off by default**. To enable it you need two things: build CPython
    unpatched headers keeps the cacheable reads.
 
    The same stackweave source builds against **stock** CPython too — both features
-   compile out to no-ops, so nothing about the default build changes.
+   compile out — but nothing stops an M:N run there, and it migrates fibers
+   without either fix.
 
-2. **Opt in at runtime** (before the runtime starts — the flag is read once at init):
-   ```python
-   import stackweave
-   if stackweave.migration_available():        # True only with BOTH patches
-       stackweave.enable_migration()           # or set STACKWEAVE_MIGRATION=1 in the env
-   else:
-       print(stackweave.migration_status())    # which half is missing
-   stackweave.run(n_hubs, main)
-   ```
-
-**Flags / API:**
-
-| flag / call | effect |
-|---|---|
-| `STACKWEAVE_MIGRATION=1` | production master switch — enables cross-hub migration |
-| `stackweave.migration_available()` | `True` iff built against **both** patches (safe to enable) |
-| `stackweave.migration_status()` | `{"alloc_home":…, "exec_home":…, "available":…}` — which half is missing |
-| `stackweave.enable_migration()` | set the flag; **raises** (naming the missing patch) on an under-patched build |
-| `stackweave.migration_enabled()` | whether migration was requested for the next run |
-| `stackweave_c.alloc_home_available` | raw C-level capability bit for the allocation half (`0`/`1`) |
-| `stackweave_c.exec_home_available` | raw C-level capability bit for the execution half (`0`/`1`) |
-| `STACKWEAVE_NO_ALLOC_HOME=1` | disable the heap-borrow (A/B baseline; reproduces the crash) |
-| `STACKWEAVE_ALLOW_UNSAFE_MIGRATION=1` | **dev/fuzz only** — force migration on an under-patched CPython (can crash / UAF under churn) |
-
-**Safety contract (validated):** on a build missing **either** patch,
-`STACKWEAVE_MIGRATION=1` prints a warning naming the missing half and **falls back to
-the default non-migrating scheduler — no crash**, and `enable_migration()` raises
-rather than risk a segfault. The unsafe override exists only for fuzzing the
-under-patched path. `STACKWEAVE_PER_G_TSTATE` and `STACKWEAVE_STEAL_WOKEN` remain as
-internal aliases of `STACKWEAVE_MIGRATION`.
+2. **Run it.** `stackweave.run(n_hubs, main)` with `n_hubs > 1` migrates woken
+   fibers to any idle hub.

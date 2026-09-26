@@ -1,8 +1,7 @@
 """R3: does a Python signal handler exception (SIGALRM -> raise) interrupt a
-fiber blocked in TCPConn.recv()?  Compare default epoll path vs
-STACKWEAVE_TCPCONN_IOURING=1.  On epoll the netpoll signal-wake path restores the
-exception; suspect the iouring park has no such path -> recv never returns
-until socket activity, so the alarm exception is delayed/lost.
+fiber blocked in TCPConn.recv()?  The netpoll signal-wake path restores the
+exception in-fiber; if it did not, recv would never return until socket
+activity, so the alarm exception would be delayed/lost.
 """
 import signal
 import socket

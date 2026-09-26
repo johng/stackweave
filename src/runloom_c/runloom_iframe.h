@@ -91,23 +91,24 @@ void runloom_immortalize(PyObject *op);
 /* Per-g cross-hub migration fix: make `exec` (a per-g tstate) borrow `home`'s
  * (the running hub's) allocator -- mimalloc heap + qsbr/page-reclaim -- so the
  * per-g tstate carries no live heap and nothing migrates OS threads (the
- * _mi_page_retire crash that gates RUNLOOM_PER_G_TSTATE).  Requires the optional
- * CPython patch (patches/cpython314t-tstate-alloc-home.patch); compiled as a
- * no-op against stock CPython, so the call site is unconditional. */
+ * _mi_page_retire teardown crash).  Requires the optional CPython patch
+ * (patches/cpython313t-tstate-alloc-home.patch); compiled as a no-op against
+ * stock CPython, so the call site is unconditional.
+ *
+ * Its partner, the exec-home patch (Py_TSTATE_EXEC_HOME), has no call site: it
+ * keeps _PyThreadState_GET()/_Py_ThreadId() uncacheable across a park/resume,
+ * a property of how the interpreter AND every extension (this one included)
+ * were compiled.  Without it a migrated fiber can keep using the origin hub's
+ * thread state and resolve biased-refcount ownership against a stale thread id
+ * (use-after-free). */
 void runloom_iframe_borrow_alloc_home(PyThreadState *exec, PyThreadState *home);
 
-/* True iff this build's ALLOCATION half is migration-safe: compiled against the
- * alloc-home CPython patch (Py_TSTATE_ALLOC_HOME) and not disabled at runtime
- * (RUNLOOM_NO_ALLOC_HOME).  Necessary but NOT sufficient on its own -- see
- * runloom_exec_home_active below.  Exposed as runloom_c.alloc_home_available. */
-int runloom_alloc_home_active(void);
-
 /* Drain the biased-refcount merge queue that free-threaded CPython attached to
- * THIS thread state, if any.  Under migration every object is allocated on the
- * running hub's thread id (alloc-home), so a last decref from another hub is
- * queued -- by thread id -- to the FIRST thread state in that id's bucket: the
- * hub's own, created first on its thread.  The queue is merged only when its
- * owner runs bytecode, is deleted, or a GC starts; a hub thread state never runs
+ * THIS thread state, if any.  Every object is allocated on the running hub's
+ * thread id (alloc-home), so a last decref from another hub is queued -- by
+ * thread id -- to the FIRST thread state in that id's bucket: the hub's own,
+ * created first on its thread.  The queue is merged only when its owner runs
+ * bytecode, is deleted, or a GC starts; a hub thread state never runs
  * bytecode, so without this call every cross-hub drop (a finished fiber's G
  * handle, a 1 MiB bytes) survives until the next GC.  Loops because a merged
  * container's tp_dealloc re-queues same-owner children to the same state.
@@ -132,28 +133,6 @@ int runloom_iframe_service_merge_queue(PyThreadState *ts);
  */
 void runloom_iframe_brc_adopt(PyThreadState *fiber, PyThreadState *hub);
 void runloom_iframe_brc_release(PyThreadState *fiber, PyThreadState *hub);
-
-/* True iff this build's EXECUTION half is migration-safe: compiled against the
- * exec-home CPython patch (Py_TSTATE_EXEC_HOME,
- * patches/cpython314t-tstate-exec-home.patch).
- *
- * Without it the compiler may hoist/CSE the two reads that identify the OS
- * thread a frame runs on -- _PyThreadState_GET() and _Py_ThreadId() -- across a
- * fiber's park/resume.  A migrated fiber then keeps using the ORIGIN hub's
- * thread state (possibly freed, if that hub exited) and, worse, resolves
- * _Py_IsOwnedByCurrentThread() against a stale thread id, sending decrefs down
- * the non-atomic ob_ref_local path from the wrong thread -> lost/duplicated
- * decrements -> use-after-free.  alloc-home does not help: it moves the HEAP to
- * the running hub but leaves both reads cacheable.
- *
- * NOTE this is a property of how THIS EXTENSION was compiled, not just of the
- * interpreter: _Py_ThreadId() is inlined into Py_INCREF/Py_DECREF via the public
- * refcount.h, so every extension module in the process must be rebuilt against
- * the patched headers for the guarantee to hold process-wide.  This probe can
- * only speak for runloom_c itself.
- *
- * Exposed to Python as runloom_c.exec_home_available. */
-int runloom_exec_home_active(void);
 
 /* 3.14: arm the SP-based C-stack overflow check at fiber c's private stack, with
  * extra reserved headroom above the guard so a deep-recursion RecursionError

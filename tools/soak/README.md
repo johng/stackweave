@@ -16,9 +16,9 @@ python3 tools/soak/soak.py --workload mixed --hours 2 --workers 4
 # the negative control — MUST report FAIL (proves the oracle has teeth):
 python3 tools/soak/soak.py --workload leak_control --minutes 5
 
-# accelerated-life + mode knobs:
+# accelerated-life + a tuning knob:
 python3 tools/soak/soak.py --workload mixed --hours 1 --compress \
-      --env STACKWEAVE_PERHUB_EPOLL=1 --env STACKWEAVE_IOURING_LOOP=1
+      --env STACKWEAVE_STACK_PARK_SWEEP_MS=10
 ```
 
 Each run writes `docs/dev/soak/soak_<workload>_<NNN>/` containing one
@@ -101,9 +101,9 @@ diagnosable.  A worker that exits non-zero is a crash.  Either fails the run.
 (Live gdb attach needs `kernel.yama.ptrace_scope=0` or root; it degrades to a
 note otherwise.)
 
-## Modes matrix
+## Knobs and the matrix
 
 Any `--env KEY=VAL` is passed to the workers, so the same workload can be soaked
-under each scheduler mode: `STACKWEAVE_PERHUB_EPOLL`, `STACKWEAVE_IOURING_LOOP`,
-`STACKWEAVE_STACK_PARK_SWEEP`, hub count via the workload's own env.  R2
-(`tools/soak/matrix.sh`) drives these presets across durations and sanitizers.
+under different tuning knobs: `STACKWEAVE_STACK_PARK_SWEEP_MS`,
+`STACKWEAVE_IDLE_BACKOFF_MS`, hub count via the workload's own env.  R2
+(`tools/soak/matrix.sh`) drives presets across durations and sanitizers.

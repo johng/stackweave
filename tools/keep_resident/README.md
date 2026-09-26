@@ -7,10 +7,10 @@
 > `strace -k` backtrace showed the per-fiber madvise is
 > **`runloom_coro_destroy → runloom_stack_scrub → madvise(MADV_DONTNEED)`** — stackweave's
 > own **security stack-scrub** (full-512KB wipe of each recycled stack). This shim was
-> silently **disabling that security feature**. The native equivalent is
-> **`STACKWEAVE_STACK_SCRUB=0`** (same speedup, no LD_PRELOAD); the *secure* fix that keeps
-> the wipe AND most of the speedup is **`STACKWEAVE_STACK_SCRUB_RESIDENT=1`** (mincore +
-> userspace memset of only the touched pages). Prefer those. This shim is kept only as
+> silently **disabling that security feature**. The scrub is now opt-in
+> (`stackweave_c.set_stack_scrub(True)`), so the default pays nothing, and when it is
+> on it uses the resident wipe (mincore + userspace memset of only the touched pages),
+> which keeps the wipe AND most of the speedup. Prefer that. This shim is kept only as
 > the blunt-instrument record of the investigation.
 
 A tiny `LD_PRELOAD` shim that no-ops `madvise(MADV_DONTNEED/MADV_FREE)`, so

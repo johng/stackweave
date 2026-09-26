@@ -1,5 +1,5 @@
 /*
- * netpoll_pump_kick.pml -- the cross-hub pump-wake DEDUP (RUNLOOM_WAKE_DEDUP).
+ * netpoll_pump_kick.pml -- the cross-hub pump-wake DEDUP (always on).
  *
  * runloom_netpoll_wake_pump kicks a target hub's wake eventfd to break its idle
  * epoll_wait so it re-drains its cross-hub submission list (sub_head).  Writing

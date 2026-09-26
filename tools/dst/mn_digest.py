@@ -195,8 +195,7 @@ def hermetic_env(extra_env=None):
     run at collection -- would trip the I0 mn_init fence inside every digest
     child; and inherited schedule knobs (STACKWEAVE_MN_PREEMPT_FRAMES,
     STACKWEAVE_LDFI_DROP, STACKWEAVE_MN_TRACE, ...) would silently change WHICH
-    schedule the suite freezes.  Deliberate knob-testing (e.g. I3's
-    "digests stay stable WITH STACKWEAVE_IOURING_LOOP=1" re-run) passes the knob
+    schedule the suite freezes.  Deliberate knob-testing passes the knob
     explicitly via extra_env."""
     env = {k: v for k, v in os.environ.items() if not k.startswith("STACKWEAVE_")}
     env["PYTHON_GIL"] = "0"

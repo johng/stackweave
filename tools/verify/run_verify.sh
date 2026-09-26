@@ -410,16 +410,12 @@ if have spin && have cc; then
     launch hub_submit     check_spin hub_submit   "default M:N wake (hub_submit in_sub_queue dedup + done-check): no resume-after-done, runs once"
     launch tstate_attach_detach check_spin tstate_attach_detach "per-g tstate resume slice: attach/detach balanced -- every loop top holds the hub tstate (depth 1); resume runs only with the g tstate attached"
     launch stack_depot    check_spin stack_depot  "cross-hub stack-memory magazine: PARTITION (every mapping in exactly one of live/TLS/depot/munmap'd) + SIZE-MATCH on handout + DEPOT-BOUND (VMA cap)"
-    launch pbuf_bid       check_spin pbuf_bid     "io_uring provided-buffer-ring bid ownership: PARTITION (ring+inflight==1 per bid) + NO-DUP (no double-return) + NO-LOSS (all returned at close)"
     launch blockpool      check_spin blockpool    "blocking-offload wake order: re-queue before dec inflight -> no lost wake"
     launch netpoll_commit check_spin netpoll_commit "netpoll park/wake commit (Go netpollblockcommit): no lost wake, resumed at most once"
     launch netpoll_rearm  check_spin netpoll_rearm  "netpoll register-once LEVEL arm (shipped scheme): LEVEL re-reports a still-ready fd so a late-linking parker is never edge-dropped -> no lost wake"
     launch netpoll_multipool check_spin netpoll_multipool "netpoll multi-pool dispatch: pool->sub lock hierarchy is deadlock-free, parker claimed once"
-    launch netpoll_pump_kick check_spin netpoll_pump_kick "cross-hub pump-wake DEDUP (STACKWEAVE_WAKE_DEDUP): coalesced kick never loses a wake (Dekker clear-then-recheck)"
-    launch hub_fanout     check_spin hub_fanout   "hub_submit 3-way waker-route fanout COMPOSITION: whichever wait mode (running/idle/ring/pump) the target hub is in, some route reaches it -- no lost wake"
-    launch iouring_msclose check_spin iouring_msclose "io_uring multishot handle lifetime: no use-after-free under single-owner recv/close"
-    launch iouring_msclose-cc check_spin_variant iouring_msclose BUG_CONCURRENT_CLOSE "handle refcount makes a CONCURRENT close-vs-parked-recv (shared conn) memory-safe -- no UAF"
-    launch netpoll_iouring_loop check_spin netpoll_iouring_loop "io_uring-as-loop backend wake/re-arm: Dekker ring_waiting handshake (no lost cross-hub wake) + multishot re-arm + at-most-once op resume"
+    launch netpoll_pump_kick check_spin netpoll_pump_kick "cross-hub pump-wake DEDUP: coalesced kick never loses a wake (Dekker clear-then-recheck)"
+    launch hub_fanout     check_spin hub_fanout   "hub_submit waker-route fanout COMPOSITION: whichever wait mode (running/idle/pump) the target hub is in, some route reaches it -- no lost wake"
     launch netpoll_deadline check_spin netpoll_deadline "netpoll fd-dispatch vs timeout-drain vs cancel: g resumed once with the winning claimer's value"
     launch netpoll_forceunlink check_spin netpoll_forceunlink "netpoll force_unlink vs pump: parker released exactly once, no use-after-free"
     launch cross_thread_wake check_spin cross_thread_wake "Phase C per-thread sched: wake_safe routes a woken g to its owner sched -> no lost wake"
@@ -436,8 +432,6 @@ if have spin && have cc; then
     launch tstate_attach_detach-neg check_spin_must_fail tstate_attach_detach BUG_EARLY_CONTINUE_AFTER_ATTACH "an early continue after attaching the g tstate -> the g tstate is left attached at the next loop top (the BUG-#2 cross-hub-tstate class)"
     launch stack_depot-neg check_spin_must_fail stack_depot BUG_NO_SIZE_GUARD "a pool pop ignores the size header -> a size-mismatched mapping is handed to a coro (the stack-alias/UAF surface)"
     launch stack_depot-neg2 check_spin_must_fail stack_depot BUG_NO_DEPOT_CAP  "flush skips the depot cap check -> the depot grows unbounded (the vm.max_map_count VMA-exhaustion surface)"
-    launch pbuf_bid-neg check_spin_must_fail pbuf_bid BUG_DOUBLE_RETURN "pbuf_return doesn't check inflight -> a buffer is placed in the kernel ring twice (handed out twice)"
-    launch pbuf_bid-neg2 check_spin_must_fail pbuf_bid BUG_LOSE_ON_CLOSE "handle close drops inflight buffers without returning them -> bids leak out of the ring"
     launch blockpool-neg check_spin_must_fail blockpool   BUG_DEC_BEFORE_REQUEUE "dec inflight before re-queue -> drain exits, goroutine stranded"
     launch netpoll_commit-neg check_spin_must_fail netpoll_commit BUG_NO_COMMIT     "no park-commit CAS -> pump's parked-check races the park -> lost wake"
     launch netpoll_rearm-neg check_spin_must_fail netpoll_rearm  BUG_EDGE_TRIGGERED "old EPOLLET register-once (no LEVEL re-report) -> a pre-link edge is dropped + never refires -> lost wake"
@@ -446,11 +440,6 @@ if have spin && have cc; then
     launch netpoll_pump_kick-neg check_spin_must_fail netpoll_pump_kick BUG_NO_RECHECK "pump parks WITHOUT re-checking sub_head after clearing wake_pending -> a coalesced kick is lost (hub blocks forever)"
     launch hub_fanout-neg-pump check_spin_must_fail hub_fanout BUG_NO_PUMP "drop the unconditional pump kick -> a PUMP-mode hub is stranded (the backstop route is load-bearing)"
     launch hub_fanout-neg-idle check_spin_must_fail hub_fanout BUG_NO_IDLE_SIG "never signal idle_cond -> an IDLE-mode hub is stranded (the pump kick can't reach a condvar wait)"
-    launch iouring_msclose-neg check_spin_must_fail iouring_msclose BUG_NO_REFCOUNT "drop the handle refcount (old code) -> the closing CQE frees while a recv is parked -> the woken recv re-locks freed memory (use-after-free)"
-    launch netpoll_iouring_loop-neg check_spin_must_fail netpoll_iouring_loop BUG_NO_FENCE      "drop the SEQ_CST Dekker fences -> StoreLoad reorder loses the cross-hub kick"
-    launch netpoll_iouring_loop-neg2 check_spin_must_fail netpoll_iouring_loop BUG_NO_RECHECK    "drop the sub_head re-check -> announce/submit race loses the wake even with the fence"
-    launch netpoll_iouring_loop-neg3 check_spin_must_fail netpoll_iouring_loop BUG_NO_REARM      "drop the terminal-CQE multishot re-arm -> a parked infra consumer is never woken"
-    launch netpoll_iouring_loop-neg4 check_spin_must_fail netpoll_iouring_loop BUG_DOUBLE_RESUME "op drainer wakes unconditionally (not gated on prev==PARKED) -> double-resume of a fiber that never parked"
     launch netpoll_deadline-neg check_spin_must_fail netpoll_deadline BUG_SWEEP_NO_COMMIT "naive timeout sweep (no commit claim) -> spurious timeout clobbers a delivered mask / double resume"
     launch netpoll_deadline-neg2 check_spin_must_fail netpoll_deadline BUG_CANCEL_NO_COMMIT "cancel wakes without the commit claim -> clobbers a delivered value / double resume"
     launch netpoll_forceunlink-neg check_spin_must_fail netpoll_forceunlink BUG_NO_RECHECK "force_unlink trusts the stale pre-lock token -> double-free of a parker the resumed g already released"
@@ -576,7 +565,7 @@ cbmc_sched() {
 }
 
 cbmc_wakestate() {
-    # per-g wake_state FSM (STACKWEAVE_PER_G_TSTATE global runq): totality (every
+    # per-g wake_state FSM (the global run-queue every M:N wake takes): totality (every
     # ENABLED event has a defined transition) + no-lost-wake (a remembered wake
     # is always enqueued, never returns to PARKED unenqueued).  Teeth: the
     # -DBUG_LOSE_WAKE config drops a remembered wake at release and MUST fail.

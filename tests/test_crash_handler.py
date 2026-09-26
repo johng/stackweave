@@ -33,22 +33,16 @@ requires_guard = pytest.mark.skipif(
 FAULT_RCS = {-signal.SIGSEGV} | ({-signal.SIGBUS} if hasattr(signal, "SIGBUS") else set())
 
 
-def run_child(body, extra_env=None, timeout=60):
+def run_child(body, timeout=60):
     """Run `body` as a fresh child Python process; return (returncode, output).
 
     The child inherits this run's interpreter + PYTHONPATH (so it imports the
-    same source tree) but starts with no STACKWEAVE_CRASH* env unless the test
-    sets it explicitly.
+    same source tree).
     """
     src = "import stackweave, stackweave_c, ctypes, sys\n" + textwrap.dedent(body)
-    env = dict(os.environ)
-    env.pop("STACKWEAVE_CRASH", None)
-    env.pop("STACKWEAVE_CRASH_FILE", None)
-    if extra_env:
-        env.update(extra_env)
     p = subprocess.run(
         [sys.executable, "-c", src],
-        capture_output=True, text=True, env=env, timeout=timeout,
+        capture_output=True, text=True, timeout=timeout,
     )
     return p.returncode, p.stdout + p.stderr
 
@@ -192,7 +186,7 @@ def test_pystack_chains_python_traceback():
 
 
 # --------------------------------------------------------------------------- #
-#  Report file (STACKWEAVE_CRASH_FILE / file=)
+#  Report file (file=)
 # --------------------------------------------------------------------------- #
 @requires_guard
 def test_report_written_to_file(tmp_path):
@@ -212,32 +206,50 @@ def test_report_written_to_file(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-#  Env auto-install at import (STACKWEAVE_CRASH=...)
+#  Import never installs it (process-wide signal handlers only when asked)
 # --------------------------------------------------------------------------- #
-def test_env_autoinstall():
-    rc, out = run_child("""
-        # No explicit install -- the env var should have armed it at import.
-        print("INSTALLED", stackweave_c.crash_handler_installed())
-    """, extra_env={"STACKWEAVE_CRASH": "on"})
-    assert rc == 0, out
-    assert "INSTALLED True" in out, out
-
-
-def test_env_off_does_not_install():
+def test_import_does_not_install():
     rc, out = run_child("""
         print("INSTALLED", stackweave_c.crash_handler_installed())
-    """, extra_env={"STACKWEAVE_CRASH": "off"})
+    """)
     assert rc == 0, out
     assert "INSTALLED False" in out, out
 
 
-@requires_guard
-def test_env_autoinstall_actually_catches_crash():
+# --------------------------------------------------------------------------- #
+#  Self-hang watchdog (start_watchdog)
+# --------------------------------------------------------------------------- #
+def test_start_watchdog_rejects_nonpositive_secs():
+    for bad in (0, -1):
+        with pytest.raises(ValueError):
+            stackweave.inspect.start_watchdog(bad)
+
+
+@pytest.mark.skipif(not (hasattr(sys, "_is_gil_enabled") and not sys._is_gil_enabled()),
+                    reason="the wedge is an M:N run, which needs the GIL off")
+def test_watchdog_reports_a_wedge(tmp_path):
+    report = tmp_path / "hang.txt"
     rc, out = run_child("""
-        def boom():
-            stackweave_c._crash_selftest_overflow()
-        stackweave_c.fiber(boom, 16384)
-        stackweave_c.run()
-    """, extra_env={"STACKWEAVE_CRASH": "on"})
-    assert rc in FAULT_RCS, (rc, out)
-    assert "GOROUTINE STACK OVERFLOW" in out, out
+        import time
+        stackweave.inspect.install_crash_handler("on", %r)
+        stackweave.inspect.start_watchdog(1)
+        def main():
+            ch = stackweave.Chan()
+            def waiter():
+                ch.recv()                 # outstanding, and nothing completes...
+            stackweave.fiber(waiter)
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:   # ...until the watchdog reports
+                stackweave.sleep(0.1)
+                with open(%r) as f:
+                    if "HANG (watchdog)" in f.read():
+                        break
+            ch.send(1)
+        stackweave.run(2, main)
+        print("SURVIVED")
+    """ % (str(report), str(report)))
+    assert rc == 0, out
+    assert "SURVIVED" in out, out                        # observed, never aborted
+    text = report.read_text()
+    assert "stackweave HANG (watchdog)" in text, text    # reached the crash file
+    assert "fiber dump" in text, text                    # with the fiber dump

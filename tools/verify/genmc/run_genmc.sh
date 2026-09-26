@@ -235,8 +235,8 @@ fi
 # The Dekker handshake (sched_parkwake.c) and the wake_state machine
 # (iouring/global-runq) are each proven in isolation; this checks their
 # COMPOSITION -- a park that commits via Dekker then the wake_state CAS, racing
-# wake_g -- holds no-lost-wake + enqueued-at-most-once under RC11.  Gate this
-# BEFORE promoting STACKWEAVE_STEAL_WOKEN / STACKWEAVE_PER_G_TSTATE toward default.
+# wake_g -- holds no-lost-wake + enqueued-at-most-once under RC11.  This was the
+# gate for making the migratable path the default; it now guards the only path.
 # Drift-guard: sched_parkwake_seam.c is a FAITHFUL SLICE (not byte-shared), so
 # its wake_state enum must track runloom_sched.h exactly -- names AND encodings.
 # This model already drifted once (a 4-state copy of the 6-state kernel: the
@@ -297,14 +297,15 @@ fi
 # fail loudly so iouring_waitcommit.c gets re-synced rather than silently
 # passing against a stale model.
 # The refactor split io_uring.c into io_uring*.c.inc modules (the op->wait
-# markers + exchanges now live in io_uring_l_{ring,buf,...}.c.inc), so check
-# the whole io_uring module set rather than one filename.
+# markers + the drain's exchange now live in io_uring_l_{buf,do,...}.c.inc), so
+# check the whole io_uring module set rather than one filename.  The per-hub
+# ring's second exchange went with the TCPConn io_uring path.
 IOU_SRCS=( "$HERE"/../../../src/runloom_c/io_uring.c "$HERE"/../../../src/runloom_c/io_uring*.c.inc )
 printf '  [genmc] %-30s ' "iouring wait-commit drift-guard"
 if grep -qh "RUNLOOM_IOURING_WAIT_PARKED" "${IOU_SRCS[@]}" 2>/dev/null \
    && grep -qh "RUNLOOM_IOURING_WAIT_DONE" "${IOU_SRCS[@]}" 2>/dev/null \
-   && [ "$(grep -h '__atomic_exchange_n(&op->wait' "${IOU_SRCS[@]}" 2>/dev/null | wc -l)" -ge 2 ]; then
-    green "PASS"; echo " -- io_uring* retains the op->wait commit handshake (drain + ring)"; pass=$((pass+1))
+   && [ "$(grep -h '__atomic_exchange_n(&op->wait' "${IOU_SRCS[@]}" 2>/dev/null | wc -l)" -ge 1 ]; then
+    green "PASS"; echo " -- io_uring* retains the op->wait commit handshake (drain)"; pass=$((pass+1))
 else
     red "FAIL"; echo " -- io_uring* changed the op->wait handshake; re-sync iouring_waitcommit.c"; fail=$((fail+1))
 fi
@@ -338,8 +339,8 @@ done
 #   mimalloc_page_free.c -- WHO may touch a page (per-page xthread_id abandon/adopt)
 #   qsbr_drain.c         -- WHEN a deferred free may run (QSBR grace period)
 #   brc_merge.c          -- WHO may merge a refcount (biased-refcount owner drain)
-# Each is gated off in the shipping runtime (STACKWEAVE_ALLOW_UNSAFE_MIGRATION); these
-# are the SPEC a candidate abandon/adopt handshake must satisfy before it is trusted.
+# Migration is always on now and the src/patches CPython patches supply the
+# handshake; these remain the SPEC that handshake must satisfy.
 genmc_model() {                 # name  correct-grep  "BUG1 BUG2 ..."  blurb
     local f="$1" posgrep="$2" bugs="$3" blurb="$4"
     printf '  [genmc] %-30s ' "$f"

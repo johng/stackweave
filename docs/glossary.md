@@ -49,14 +49,13 @@ uses Go's **randomOrder**: each hub starts at its own id and steps by a stride
 coprime with the hub count, so every victim is visited exactly once and K idle
 hubs don't all hammer hub 0's CAS in lockstep.
 
-**global runq** — a process-wide queue that any hub drains. Used only under
-`STACKWEAVE_PER_G_TSTATE`, to rescue fibers *woken* while their origin hub is
-blocked. Off by default.
+**global runq** — a process-wide queue that any hub drains. Every M:N run
+routes *woken* fibers here, so a fiber woken while its origin hub is blocked
+resumes on another hub instead of stranding.
 
-**submission list** (`runloom_mn_hub_submit`) — a hub's owner-drained inbox for
-woken fibers. In default mode a woken fiber routes here rather than to a
-stealable deque, which is why a blocked hub **strands** its woken work: nothing
-else drains this list.
+**submission list** (`runloom_mn_hub_submit`) — a hub's owner-drained inbox.
+Nothing else drains it, so work that lands here strands if its hub blocks;
+woken fibers bypass it for the global runq.
 
 **park / unpark** — a fiber suspending until some event (fd readiness, a
 channel, a timer), and being made runnable again. `wake_g` is the wake path.
@@ -90,14 +89,10 @@ hub tstate's attach state:
   work-stealing already drains its fresh fibers.
 - *SUSPENDED* — parked by a stop-the-world (GC).
 
-**preemption** — sysmon sets `preempt_requested`; the eval-frame wrapper yields
-the running fiber at its next Python frame boundary. A single-frame `while:
-pass` enters no frame, so an eval-breaker pending call is posted as a
-backstop.
-
-**monopoly yield** (`world_yield_if_monopolizing`) — a hub pauses ~100 µs when
-a sibling is SUSPENDED, or DETACHED with work owed, so a lone fiber can't
-monopolise the interpreter across a stop-the-world boundary.
+**preemption** — the explicit time-slicer, `preempt_init(quantum_us)`, posts a
+pending call every quantum that yields the running fiber. The M:N scheduler
+has no wall-clock preemption: migration mode stands it down, so a fiber that
+never yields keeps its hub until it does.
 
 **strand** — work that can never run because the only thing that would schedule
 it is itself blocked. The failure mode this codebase worries about most.
@@ -117,10 +112,9 @@ Lives in a **parker pool**, one per hub (up to
 `RUNLOOM_PARKER_POOL_HUBS`, 64), so registration and wake don't serialise
 across hubs on one kernel lock.
 
-**per-hub epoll** (`STACKWEAVE_PERHUB_EPOLL`, default **on**) — each hub polls its
-own epoll set plus a wake eventfd, instead of all hubs sharing one
-`runloom_epoll_fd`. Measured **+34–40 %** saturation throughput on a 64-core
-box versus the shared set; the shared path still exists at `=0`.
+**per-hub epoll** — each hub polls its own epoll set plus a wake eventfd,
+instead of all hubs sharing one `runloom_epoll_fd`. Measured **+34–40 %**
+saturation throughput on a 64-core box versus the old shared set.
 
 **arm / disarm** — adding or removing an fd's interest bits in the poller.
 Level-triggered, so a stale arm with no waiter makes `epoll_wait` return
@@ -157,11 +151,9 @@ syscalls); the inmem parker uses none (faster, but off the netpoll). Chosen
 adaptively by queue backlog.
 
 **offload hub** — a hub reserved to run blocking calls as *ordinary fibers*
-(`offload_hubs=K` / `STACKWEAVE_OFFLOAD_HUBS`). Excluded from general placement,
-work-stealing (both directions), sysmon preemption, and the monopoly-yield
-scan, so no general work can land on one and stall. Needs no patched CPython,
-because nothing migrates: the offload fiber is born and dies on its hub and the
-caller parks on a normal channel on its own hub.
+(`offload_hubs=K`). Excluded from general placement and work-stealing (both
+directions), so no general work can land on one and stall. The offload fiber is
+spawned on its hub and the caller parks on a normal channel.
 
 ---
 
@@ -181,8 +173,10 @@ collector cannot see frames living in `g->snap` and frees their referents early
 **TLBC** — CPython's thread-local bytecode. Interacts badly with stackful
 fibers; kept on only when the frames anchor is active.
 
-**migration** — resuming a suspended fiber on a *different* hub. Unsound on
-stock CPython for two independent reasons, either of which corrupts:
+**migration** — resuming a suspended fiber on a *different* hub. Always on
+under M:N: every fiber owns its own tstate, so a woken fiber resumes on any
+idle hub. Unsound on stock CPython for two independent reasons, either of which
+corrupts:
 - *allocation* — the fiber allocates on the origin hub's mimalloc heap
   (`heap->thread_id` mismatch → `_mi_page_retire` corruption). Fixed by
   `Py_TSTATE_ALLOC_HOME`.
@@ -190,12 +184,8 @@ stock CPython for two independent reasons, either of which corrupts:
   thread, so a resumed fiber keeps using the origin hub's tstate. Fixed by
   `Py_TSTATE_EXEC_HOME`.
 
-`stackweave.migration_available()` reports whether the running build has both
-patches; without them, migration modes stay gated off.
-
-**`STACKWEAVE_PER_G_TSTATE`** — give each fiber its own migratable tstate so woken
-work can be rescued from a blocked hub. Experimental, default off, with a known
-SEGV under churn at ≥2 hubs absent the patches.
+Both patches (`src/patches/`) are required for a sound M:N run; nothing checks
+for them at runtime.
 
 **slab** — the allocator for `runloom_g` structs. A freed g is **retained**,
 never returned to the OS: a stale dup-wake still dereferences it, so freeing

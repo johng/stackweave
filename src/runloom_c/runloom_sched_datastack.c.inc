@@ -56,31 +56,18 @@ static unsigned long long runloom_ds_resident_bytes(uintptr_t lo, uintptr_t hi,
 void runloom_sched_madvise_datastack_idle(runloom_g_t *g)
 {
 #if defined(MADV_DONTNEED)
-    static int on = -1;              /* read RUNLOOM_DATASTACK_SWEEP once */
     static int dbg = -1;             /* read RUNLOOM_DATASTACK_DEBUG once */
     runloom_pystate_snap_t *snap;
     uintptr_t top, limit, lo, hi;
     long ps;
     size_t page;
 
-    {
-        int v = __atomic_load_n(&on, __ATOMIC_RELAXED);
-        if (v < 0) {
-            /* Default-ON, mirroring the master RUNLOOM_STACK_PARK_SWEEP flip:
-             * unset -> on, "0" -> off.  The master sweep already gates
-             * whether this runs at all (it's called only from the sweep's
-             * batch loop) and supplies the churn throttle, so on a flat
-             * handler -- where the tail is unfaulted and we reclaim nothing
-             * -- this is just a cheap no-op madvise (measured: no throughput
-             * cost); on the common deep-then-park shape it reclaims real
-             * resident RAM.  Opt out with RUNLOOM_DATASTACK_SWEEP=0. */
-            const char *e = getenv("STACKWEAVE_DATASTACK_SWEEP");
-            v = (e != NULL && e[0] == '0') ? 0 : 1;
-            __atomic_store_n(&on, v, __ATOMIC_RELAXED);
-        }
-        if (!v) return;
-    }
-
+    /* Always on: the C-stack dwell sweep gates whether this runs at all (it's
+     * called only from the sweep's batch loop) and supplies the churn
+     * throttle, so on a flat handler -- where the tail is unfaulted and we
+     * reclaim nothing -- this is just a cheap no-op madvise (measured: no
+     * throughput cost); on the common deep-then-park shape it reclaims real
+     * resident RAM. */
     if (g == NULL) return;
     snap = &g->snap;
     if (!snap->valid || snap->datastack_chunk == NULL ||

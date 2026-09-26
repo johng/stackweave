@@ -11,7 +11,7 @@
 # NOTE on STACKWEAVE_DELAY: it is a numeric SEED, not a site selector -- setting it
 # enables the delay injector at EVERY wired site (runloom_diag.c: strtoull(seed)
 # + a global on-flag), which is even more thorough than perturbing one window.
-# The migration/resurrection sites fire alongside WORLD_YIELD/CORO_*; a
+# The migration/resurrection sites fire alongside the CORO_* sites; a
 # snap/load/adopt/resurrect reorder then surfaces as a failure/hang instead of a
 # 1-in-a-million production crash.  Pure runtime env vars (no rebuild).
 set -u

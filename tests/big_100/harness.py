@@ -464,16 +464,10 @@ class Harness(object):
         self.funcs = self.args.funcs
         self._max_funcs = None   # set by harness.main(max_funcs=) to cap H.funcs
 
-        # Fast bulk spawn via stackweave_c.fiber_n(indexed=True): one C call builds the
-        # whole worker pool (arena g/coro/stacks + deferred stack frames) instead
-        # of N Python-level stackweave.fiber() calls.  Opt-in (STACKWEAVE_HARNESS_GON=1)
-        # AND requires the bulk gates (STACKWEAVE_GON_BULK=1, usually +GON_FRESH=1).
-        # The deferred stack frames materialize on the hubs in parallel, so it
-        # NEEDS hubs >= 8 -- with fewer, 1M goroutines funnel through too few
-        # threads (materialization + cooperative I/O serialize) and it degrades
-        # badly.  Below 8 we refuse the fast path and fall back to per-g spawn.
-        self._use_gon = (os.environ.get("STACKWEAVE_HARNESS_GON") == "1"
-                         and os.environ.get("STACKWEAVE_GON_BULK") == "1")
+        # Fast bulk spawn via stackweave_c.fiber_n(indexed=True): one C call spawns
+        # the whole worker pool instead of N Python-level stackweave.fiber() calls.
+        # Opt-in (STACKWEAVE_HARNESS_GON=1).
+        self._use_gon = os.environ.get("STACKWEAVE_HARNESS_GON") == "1"
 
         # Global concurrent-goroutine cap per run_pool call.
         # Programs with hard resource limits may override with a lower value
@@ -869,11 +863,8 @@ class Harness(object):
         actual = n if (max_concurrent is None or max_concurrent >= n) else max_concurrent
         self.expected += actual
 
-        # Fast path: build the whole pool with ONE stackweave_c.fiber_n(indexed=True).
-        # Needs hubs >= 8 (deferred stack frames materialize across hubs in
-        # parallel); below that, fall back to per-g spawn so we never run the
-        # bulk path in a regime where it degrades.
-        if self._use_gon and self.hubs >= 8:
+        # Fast path: spawn the whole pool with ONE stackweave_c.fiber_n(indexed=True).
+        if self._use_gon:
             name = worker_fn.__name__
             captured = extra
 
@@ -883,11 +874,6 @@ class Harness(object):
 
             stackweave_c.fiber_n(spawn_one, actual, indexed=True)
             return
-        if self._use_gon and self.hubs < 8:
-            sys.stderr.write(
-                "[{0}] fiber_n fast spawn DISABLED: needs hubs>=8, have {1}; "
-                "using per-g spawn\n".format(self.name, self.hubs))
-            sys.stderr.flush()
 
         for wid in range(actual):
             rng = self.derive("pool", worker_fn.__name__, wid)
@@ -1221,10 +1207,7 @@ class Harness(object):
         # Diagnostic (STACKWEAVE_DUMP_STATES=path): write the goroutine state
         # histogram RIGHT NOW -- at the deadline, before we close anything --
         # so we can see WHERE goroutines are parked (connect / recv / sleep /
-        # accept).  Cheap structural dump, no Python.  CAVEAT: fiber_n bulk-arena
-        # workers skip the introspection registry (the hot spawn path takes no
-        # greg lock), so this shows only H.fiber()-spawned goroutines (servers,
-        # handlers, accept loops) -- not the bulk client pool.
+        # accept).  Cheap structural dump, no Python.
         _ds = os.environ.get("STACKWEAVE_DUMP_STATES")
         if _ds:
             try:

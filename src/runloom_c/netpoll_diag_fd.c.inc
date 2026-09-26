@@ -214,12 +214,12 @@ static size_t         runloom_fd_pending_wake_cap = 0;
  * Accessed only under runloom_pool.lock, like the registration bitmap. */
 static unsigned char *runloom_fd_armed = NULL;
 
-/* Per-fd owning parker-pool INDEX for the per-hub epoll backend
- * (RUNLOOM_PERHUB_EPOLL): which pool's epoll_fd this fd is registered in, so
- * release_if_idle DELs from the right epoll and a cross-hub re-park MODs the
- * OWNING epoll (where the fd physically lives), not the current hub's.  0xFF =
- * none.  Shares the pending-wake fd index space + cap; accessed under
- * runloom_pool.lock like runloom_fd_armed.  NULL/unused on the shared path. */
+/* Per-fd owning parker-pool INDEX for the per-hub epoll backend: which pool's
+ * epoll_fd this fd is registered in, so release_if_idle DELs from the right
+ * epoll and a cross-hub re-park MODs the OWNING epoll (where the fd physically
+ * lives), not the current hub's.  0xFF = none (the shared epoll).  Shares the
+ * pending-wake fd index space + cap; accessed under runloom_pool.lock like
+ * runloom_fd_armed. */
 static unsigned char *runloom_fd_epoll_pool = NULL;
 
 /* Upper/lower bounds on the preallocated fd capacity.  4M fds = 4MB
@@ -459,7 +459,7 @@ static int runloom_fd_armed_set(int fd, int mask)
     return 0;
 }
 
-/* Per-fd owning-pool accessors (RUNLOOM_PERHUB_EPOLL).  Caller MUST hold
+/* Per-fd owning-pool accessors (per-hub epoll).  Caller MUST hold
  * runloom_pool.lock, like the arm-mask accessors.  get returns -1 for "none". */
 static int runloom_fd_epoll_pool_get(int fd)
 {
@@ -491,20 +491,6 @@ static int runloom_iouring_eventfd_in_epoll = -1;
  * (unlike the busy-polling hubs) blocks in epoll_wait with no timeout.
  * On fire the pump just drains it -- it carries no parker. */
 static int runloom_pump_wake_fd = -1;
-
-/* Per-hub iouring rings registered via runloom_netpoll_add_iouring_ring.
- * The dispatch path matches epoll evs[i].data.fd against the eventfd
- * column and calls runloom_iouring_ring_drain on the corresponding ring.
- * Sized for typical CPU counts (one hub == one ring); 64 is comfortable
- * for any host we run on.  Protected by runloom_pool.lock.
- *
- * Parallel arrays instead of array-of-struct: small (one cache line each
- * at 64 entries) + lets us scan the fd column tightly.
- */
-#define RUNLOOM_IOURING_RINGS_MAX 64
-static int                       runloom_iouring_ring_efds[RUNLOOM_IOURING_RINGS_MAX];
-static struct runloom_iouring_ring *runloom_iouring_ring_ptrs[RUNLOOM_IOURING_RINGS_MAX];
-static int                       runloom_iouring_ring_count = 0;
 #elif defined(RUNLOOM_HAVE_KQUEUE)
 /* Per-hub kqueue: there is NO process-wide kqueue handle or self-pipe.  Each
  * parker pool owns its own kqueue + pump-wake self-pipe

@@ -23,8 +23,8 @@ mkdir -p "$OUT"
 LOG="$OUT/net_echo_srv.log"
 
 echo "=== net_echo_server_forever START $(date '+%F %T') bind=${STACKWEAVE_ECHO_BIND:-::}:${STACKWEAVE_ECHO_PORT:-7777} ===" >> "$LOG"
-# STACKWEAVE_TLBC=1: TLBC ON (safe via the GC frames anchor), no self-re-exec (stable pid).
-env PYTHON_GIL=0 STACKWEAVE_TLBC=1 PYTHONPATH="$ROOT/src" \
+# TLBC stays on (GC frames anchor always active on 3.14t): no self-re-exec (stable pid).
+env PYTHON_GIL=0 PYTHONPATH="$ROOT/src" \
     "$PY" "$ROOT/tools/soak/net_echo_server_forever.py" >> "$LOG" 2>&1 &
 child=$!
 echo "$child" > "$OUT/PID"

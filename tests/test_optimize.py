@@ -1,14 +1,35 @@
 """stackweave.optimize(*goals, max_fibers): one call, named trade-offs, that maps to
-the internal STACKWEAVE_* tuning knobs.  Pins the contract: valid goals, precedence
-(secure > memory > latency > throughput), shell-env wins, and that the runtime
-still runs after a call.
+the numeric tuning knobs and the live spawn/scrub/cap settings.  Pins the
+contract: valid goals, precedence (memory > throughput on the spawn path),
+shell-env wins, and that the runtime still runs after a call.
 """
 import os
 
 import pytest
 
 import stackweave
+import stackweave_c
 from stackweave._optimize import _GOAL_ENV, GOALS
+
+
+_ENV_KNOBS = sorted({k for env in _GOAL_ENV.values() for k in env})
+
+
+@pytest.fixture(autouse=True)
+def _restore_settings(monkeypatch):
+    # optimize() sets env knobs and flips process-wide live settings; start each
+    # test from an unset env and put the defaults back afterwards so a later
+    # test (and the conftest invariants) see an untouched runtime.
+    for k in _ENV_KNOBS:
+        monkeypatch.setenv(k, "")
+        monkeypatch.delenv(k)
+    scrub = stackweave_c.get_stack_scrub()
+    cap = stackweave_c.get_max_fibers()
+    yield
+    stackweave_c._fiber_set_speed(0)
+    stackweave.set_grow_down(True)
+    stackweave_c.set_stack_scrub(scrub)
+    stackweave_c.set_max_fibers(cap)
 
 
 def test_unknown_goal_raises():
@@ -20,36 +41,41 @@ def test_no_goals_applies_nothing():
     assert stackweave.optimize() == {}
 
 
-def test_memory_bundle():
+def test_memory_keeps_grow_down():
+    stackweave.set_grow_down(False)
     applied = stackweave.optimize("memory")
-    assert applied["STACKWEAVE_STACK_MADV"] == "dontneed"        # eager reclaim
-    assert applied["STACKWEAVE_STACK_PARK_DONTNEED"] == "1"      # drop idle parked pages
+    assert applied == {"spawn": "grow_down"}
+    assert stackweave.grow_down_enabled()
 
 
 def test_throughput_bundle():
     applied = stackweave.optimize("throughput")
-    assert applied["STACKWEAVE_TCPCONN_IOURING"] == "auto"
-    assert applied["STACKWEAVE_GON_BULK"] == "1"
-    # pool size is AUTO now (sizes to live high-water) -- throughput sets no static cap,
-    # and must NOT disable reclaim (the keep-alive OOM footgun)
-    assert "STACKWEAVE_STACK_DEPOT_CAP" not in applied
-    assert "STACKWEAVE_STACK_MADV" not in applied
+    assert applied["STACKWEAVE_BLOCKPOOL_WORKERS"] == "16"
+    assert applied["spawn"] == "fast"
 
 
-def test_compose_is_the_union_of_bundles():
+def test_latency_bundle():
+    applied = stackweave.optimize("latency")
+    assert applied == {"STACKWEAVE_SYSMON_MS": "25"}
+
+
+def test_memory_wins_the_spawn_path_over_throughput():
     applied = stackweave.optimize("throughput", "memory")
-    assert applied["STACKWEAVE_TCPCONN_IOURING"] == "auto"       # from throughput
-    assert applied["STACKWEAVE_STACK_MADV"] == "dontneed"        # from memory
+    assert applied["STACKWEAVE_BLOCKPOOL_WORKERS"] == "16"     # from throughput
+    assert applied["spawn"] == "grow_down"                     # memory wins
 
 
 def test_secure_scrub_lands_when_composed():
+    stackweave_c.set_stack_scrub(False)
     applied = stackweave.optimize("throughput", "secure")
-    assert applied["STACKWEAVE_STACK_SCRUB"] == "1"
+    assert applied["stack_scrub"] is True
+    assert stackweave_c.get_stack_scrub()
 
 
 def test_max_fibers():
     applied = stackweave.optimize(max_fibers=12345)
-    assert applied["STACKWEAVE_MAX_GOROUTINES"] == "12345"
+    assert applied == {"max_fibers": 12345}
+    assert stackweave_c.get_max_fibers() == 12345
 
 
 def test_all_goal_values_are_well_formed():
@@ -61,9 +87,10 @@ def test_all_goal_values_are_well_formed():
 
 
 def test_shell_env_wins(monkeypatch):
-    monkeypatch.setenv("STACKWEAVE_STACK_MADV", "free")
-    stackweave.optimize("memory")                 # wants dontneed
-    assert os.environ["STACKWEAVE_STACK_MADV"] == "free"   # explicit shell export wins
+    monkeypatch.setenv("STACKWEAVE_SYSMON_MS", "40")
+    applied = stackweave.optimize("latency")        # wants 25
+    assert os.environ["STACKWEAVE_SYSMON_MS"] == "40"   # explicit shell export wins
+    assert applied["STACKWEAVE_SYSMON_MS"] == "40"
 
 
 def test_runs_after_optimize():

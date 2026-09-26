@@ -32,7 +32,7 @@ typedef struct runloom_g runloom_g_t;
 typedef struct runloom_sched runloom_sched_t;
 typedef struct runloom_pystate_snap runloom_pystate_snap_t;
 
-/* Per-g wake state machine for the RUNLOOM_PER_G_TSTATE global run-queue.
+/* Per-g wake state machine for the global run-queue.
  * See the wake_state field on struct runloom_g for the protocol and the legal
  * edges.  PARKED is 0 so a slab-zeroed g is in a defined state; spawn lifts a
  * fresh g to RUNNING under per-g-tstate before it can be resumed. */
@@ -208,9 +208,9 @@ struct runloom_g {
     PyObject *result;
     PyObject *error;
     runloom_pystate_snap_t snap;     /* saved tstate; valid only when suspended */
-    PyThreadState *tstate;        /* per-g tstate, non-NULL only under
-                                   * RUNLOOM_PER_G_TSTATE; the g's own Python
-                                   * execution state, migratable across hubs */
+    PyThreadState *tstate;        /* per-g tstate, non-NULL under M:N;
+                                   * the g's own Python execution state,
+                                   * migratable across hubs */
     double wake_at;
     uint64_t sleep_seq;  /* FIFO tiebreak for equal wake_at (asyncio (when,seq) order) */
     runloom_g_t *next;
@@ -298,7 +298,7 @@ struct runloom_g {
      * isn't enqueued and later popped twice, which would resume a
      * freed coro on the second pop. */
     int in_sub_queue;
-    /* ---- RUNLOOM_PER_G_TSTATE global run-queue: per-g wake state machine ----
+    /* ---- global run-queue: per-g wake state machine ----
      * A single atomic that makes the woken-g global run-queue safe for ANY
      * idle hub to drain (so a hub wedged in a blocking C call can't strand its
      * woken work) WITHOUT duplicate entries, double-resume, or lost wakes.  The
@@ -308,8 +308,8 @@ struct runloom_g {
      * separate invariants that could disagree.  Here they are the SAME
      * invariant: a g holds at most one runq entry exactly when it is QUEUED,
      * and exactly one hub owns it exactly when it is RUNNING, so there is no
-     * re-push and no duplicate.  Untouched by the default (per-hub-tstate)
-     * scheduler; valid only under RUNLOOM_PER_G_TSTATE.
+     * re-push and no duplicate.  Untouched by the single-thread
+     * scheduler; valid only under M:N.
      *
      * States and the (only) legal edges, each a CAS by the named actor:
      *
@@ -399,22 +399,12 @@ struct runloom_g {
      * per transition. */
     unsigned char state;
 
-    /* ---- bulk-arena ownership (fiber_n) ----
-     * When `arena` is set, this g, its coro, and its stack are SLICES of a bulk
-     * arena (one calloc / one mmap for the whole batch), NOT individually
-     * malloc'd.  Its final decref must therefore NOT runloom_coro_destroy the coro
-     * nor runloom_g_slab_free the g (either would free()/pool a slice -> heap
-     * corruption).  Instead it decrements the owning batch's live count; the
-     * LAST fiber to finish tears the whole batch down (free the g/coro
-     * arenas, MADV_DONTNEED the stack block).  0 for every normal fiber.
-     * Both live BEFORE the id introspection block so slab reuse clears them. */
-    unsigned char arena;
-    struct runloom_fibern_batch *batch;
-
     /* fiber_n(indexed=True): call the entry as fn(index) rather than fn().  The
      * index is stashed in c_arg (a void*, unused on the Python-callable path
      * since c_entry is NULL there); g_entry builds the PyLong lazily on the hub.
-     * 0 = fn() (slab-cleared default). */
+     * 0 = fn() (slab-cleared default).  First field of the slab-cleared
+     * [pass_index,id) range: lives BEFORE the id introspection block so slab
+     * reuse clears it. */
     unsigned char pass_index;
 
     /* Wait-reason taxonomy (see runloom_wait_reason in runloom_gstate.h).  Both
@@ -432,7 +422,7 @@ struct runloom_g {
      * WITHOUT the mimalloc abandon/adopt re-bind handshake -- the precise, early
      * signature of the deferred _mi_page_retire corruption (RunloomTstateMigration.tla
      * proves the handshake necessary; this is its runtime fidelity oracle).  In the
-     * slab-cleared [arena,id) range so a recycled g starts unbound. */
+     * slab-cleared [pass_index,id) range so a recycled g starts unbound. */
     unsigned long tstate_owner_tid;
 
     /* ---- introspection block (runloom_introspect.c) ----
@@ -454,7 +444,7 @@ struct runloom_g {
     long long id;
     /* Monotonic-ns timestamp of the last state transition into a PARKED_*
      * state, stamped only when introspection timestamping is enabled
-     * (runloom_introspect_set_timestamps / RUNLOOM_INTROSPECT_TIME).  Lets the
+     * (runloom_introspect_set_timestamps).  Lets the
      * dump report "parked for 45.2s" to spot a wedged fiber.  -1 when
      * never stamped / tracking off. */
     long long state_since_ns;
@@ -515,13 +505,6 @@ void runloom_sched_wake_safe(runloom_g_t *g);
 /* Lifetime helpers. */
 void runloom_g_incref(runloom_g_t *g);
 void runloom_g_decref(runloom_g_t *g);
-
-/* fiber_n bulk-arena batch teardown: called by an arena g's final decref instead
- * of free()ing the g/coro/stack slices individually.  Decrements the batch's
- * live count; the LAST fiber to finish frees the g + coro arenas and
- * MADV_DONTNEEDs the stack block.  Defined in mn_sched_init_fini.c.inc. */
-struct runloom_fibern_batch;
-void runloom_fibern_batch_finish_one(struct runloom_fibern_batch *b);
 
 /* Acquire a reference ONLY if the g is still live (refcount > 0).  Returns
  * 1 on success (caller now owns a ref, must decref), 0 if the g is already
@@ -867,7 +850,7 @@ void runloom_pystate_snap(runloom_pystate_snap_t *snap);
 void runloom_pystate_load(runloom_pystate_snap_t *snap);
 void runloom_pystate_snap_clear(runloom_pystate_snap_t *snap);
 
-/* Per-fiber-tstate mode (RUNLOOM_PER_G_TSTATE).  When on, runloom_pystate_snap
+/* Per-fiber-tstate mode (on for the life of M:N).  When on, runloom_pystate_snap
  * no-ops so each g's own tstate is never swapped out; mn_sched runs the
  * tstate-attach/detach path instead.  Set by mn_init, cleared by mn_fini. */
 void runloom_set_per_g_tstate_mode(int on);
@@ -914,9 +897,8 @@ void runloom_first_run_install_datastack(void);
  * NULL), gs that never went deep enough to have a reclaimable tail, and
  * on platforms without MADV_DONTNEED.
  *
- * Default-ON (RUNLOOM_DATASTACK_SWEEP=0 opts out), mirroring the master
- * RUNLOOM_STACK_PARK_SWEEP switch that gates the dwell sweep this rides in;
- * the sweep calls this per batched parker right after the C-stack madvise. */
+ * Runs whenever the dwell sweep it rides in does: the sweep calls this per
+ * batched parker right after the C-stack madvise. */
 void runloom_sched_madvise_datastack_idle(runloom_g_t *g);
 
 /* Decompose instrumentation for the datastack sweep (RUNLOOM_DATASTACK_DEBUG).

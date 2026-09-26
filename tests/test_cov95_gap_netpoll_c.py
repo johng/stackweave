@@ -16,10 +16,10 @@ Mechanisms used (all from the project's existing harness toolbox):
       walk claims+unlinks+wakes the parked g with the CANCELLED sentinel.
       Hub parker (p->hub != NULL) -> the mn_wake_g branch (L283).
 
-  add_iouring_eventfd / add_iouring_ring / wake_pump_arm epoll_ctl failures
+  add_iouring_eventfd / wake_pump_arm epoll_ctl failures
       tools/faultinj/faultinj.so LD_PRELOAD (FAULTINJ_TARGET=epoll_ctl) forces
       the chosen epoll_ctl ADD to fail with a chosen errno so the clean
-      io_uring-disable / hub-ring-discard / pump-arm-degrade fallbacks run.
+      io_uring-disable / pump-arm-degrade fallbacks run.
       None of these touch the io_uring RECV path -> no backpressure deadlock.
 
   reset_after_fork memsets (netpoll_init.c.inc L409, L428)
@@ -38,11 +38,6 @@ Mechanisms used (all from the project's existing harness toolbox):
       to an unprivileged prlimit) reports rlim_max==RLIM_INFINITY + a finite
       rlim_cur, so fd_cap_target takes the rlim_cur branch.  Built at runtime;
       the test self-skips if no cc is present.
-
-NOT covered here (reported as BLOCKED, no bounded clean-exit driver):
-  add_iouring_ring idempotent re-register (L468-470) -- fires only if the
-  SAME hub eventfd is registered twice, which never happens in normal
-  operation and has no Python-reachable entry point.
 """
 import errno
 import os
@@ -290,61 +285,6 @@ def test_add_iouring_eventfd_retry_add_einval_returns_minus1():
     assert p.returncode == 0, p.stderr[-1500:]
     assert "AVAIL=0" in p.stdout, (p.stdout, p.stderr[-800:])
     assert "OK=True" in p.stdout, (p.stdout, p.stderr[-800:])
-
-
-# ---------------------------------------------------------------------------
-# Per-hub io_uring rings are created UNCONDITIONALLY on every M:N hub thread
-# (mn_sched_hub_main: ring_create -> add_iouring_ring), so a plain run(2)
-# already drives add_iouring_ring.  Each hub's ring-eventfd ADD is an
-# EPOLLEXCLUSIVE epoll_ctl; faultinj forces EINVAL on it to drive the
-# EPOLLEXCLUSIVE fallback / table-undo branches.  A hub that loses its ring
-# discards it and falls back to the epoll pump (mn_sched_hub_main L227-233) --
-# no recv, no deadlock, bounded sched_yield workload.
-# ---------------------------------------------------------------------------
-_MN_RING = r"""
-    import sys
-    import stackweave, stackweave_c as rc
-    def worker():
-        for _ in range(40):
-            rc.sched_yield()
-    def drv():
-        for _ in range(6):
-            rc.mn_fiber(worker)
-    stackweave.run(2, drv)
-    sys.stdout.write("MN_RING_OK\n")
-"""
-
-
-@faultinj_only
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
-@pytest.mark.skipif(not rc.iouring_available(), reason="needs io_uring")
-def test_add_iouring_ring_epollexclusive_einval_retry():
-    # netpoll_wake_iouring.c.inc L491-493: the EPOLLEXCLUSIVE ADD of a hub
-    # ring's eventfd fails EINVAL (epoll_ctl call #1) -> the non-exclusive
-    # retry ADD (call #2) succeeds and registration proceeds.  Only the FIRST
-    # epoll_ctl is injected (no FAULTINJ_ALL) so the retry succeeds.
-    p = _run_py(_MN_RING, preload=FAULTINJ_SO,
-                env_extra={"FAULTINJ_TARGET": "epoll_ctl",
-                           "FAULTINJ_NTH": "1", "FAULTINJ_ERRNO": "22"})
-    assert p.returncode == 0, p.stderr[-1500:]
-    assert "MN_RING_OK" in p.stdout, (p.stdout, p.stderr[-1200:])
-
-
-@faultinj_only
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
-@pytest.mark.skipif(not rc.iouring_available(), reason="needs io_uring")
-def test_add_iouring_ring_undo_table_insert_returns_minus1():
-    # netpoll_wake_iouring.c.inc L495-509: BOTH the EPOLLEXCLUSIVE ADD and the
-    # EINVAL-fallback retry ADD fail EINVAL (FAULTINJ_ALL=1) -> EINVAL!=EEXIST
-    # -> the undo block re-locks, swap-removes the just-inserted ring entry,
-    # decrements the count, unlocks, returns -1 (L497-509).  Each hub then
-    # discards its ring and falls back to the epoll pump.  The bounded
-    # sched_yield workload (no fd parking) exits cleanly.
-    p = _run_py(_MN_RING, preload=FAULTINJ_SO,
-                env_extra={"FAULTINJ_TARGET": "epoll_ctl", "FAULTINJ_NTH": "1",
-                           "FAULTINJ_ALL": "1", "FAULTINJ_ERRNO": "22"})
-    assert p.returncode == 0, p.stderr[-1500:]
-    assert "MN_RING_OK" in p.stdout, (p.stdout, p.stderr[-1200:])
 
 
 # ---------------------------------------------------------------------------

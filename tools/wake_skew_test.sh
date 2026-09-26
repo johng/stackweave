@@ -49,8 +49,7 @@ while [ "$rep" -le "$REPS" ]; do
     echo "-- rep $rep/$REPS --"
     for t in $TESTS; do
         [ -f "tests/$t.py" ] || continue
-        # STACKWEAVE_STEAL_WOKEN=1 exercises the global-runq wake_state path too.
-        if timeout "$TIMEOUT" env STACKWEAVE_WAKE_SKEW="$SKEW" STACKWEAVE_STEAL_WOKEN=1 \
+        if timeout "$TIMEOUT" env STACKWEAVE_WAKE_SKEW="$SKEW" \
                PYTHON_GIL=0 "$PY" tests/run_isolated.py "tests/$t.py" >/tmp/wake_skew_$t.log 2>&1; then
             : # passed
         else

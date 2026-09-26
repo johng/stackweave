@@ -10,7 +10,7 @@
 (***************************************************************************)
 (***************************************************************************)
 (* TLA+ model of Tier-1 #2 -- the per-g PyThreadState / mimalloc-heap        *)
-(* MIGRATION hazard (RUNLOOM_PER_G_TSTATE; the crash this session found and    *)
+(* MIGRATION hazard (per-g-tstate migration; the crash this session found and *)
 (* gated off in commit 70e6ddb).  Companion to RunloomGilstate.tla (per-      *)
 (* thread tstate binding) and RunloomCPythonSTW.tla (attach/STW): this module  *)
 (* adds the one atom those lack -- mimalloc's per-PAGE owner thread -- and      *)

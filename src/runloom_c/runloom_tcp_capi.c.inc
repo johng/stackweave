@@ -1,9 +1,9 @@
 /* Part of runloom_tcp.c -- #included into that translation unit, not compiled
  * standalone.  Implements the zero-PyObject C entry points declared in
  * runloom_tcp_capi.h.  Mirrors RunloomTCPConn_recv_into / _send_all exactly
- * (same FSM classification, same io_uring branch, same netpoll park), but
- * without Py_buffer / PyArg / PyLong / PyErr -- so a Cython handler that calls
- * these has an allocation-free, PyObject-free hot loop. */
+ * (same FSM classification, same netpoll park), but without Py_buffer / PyArg /
+ * PyLong / PyErr -- so a Cython handler that calls these has an
+ * allocation-free, PyObject-free hot loop. */
 
 #include "runloom_tcp_capi.h"
 
@@ -16,42 +16,6 @@ Py_ssize_t runloom_tcpconn_c_recv_into(PyObject *conn, void *buf, Py_ssize_t n)
     if (self->closed || self->fd < 0) { errno = EBADF; return -1; }
     if (n <= 0) return 0;
     fd = self->fd;
-
-#if defined(__linux__)
-    /* Stage-2 single-shot io_uring PROACTOR: when the loop backend is on, submit
-     * the recv as an SQE and inline-drain -- on a data-ready socket the CQE is
-     * already posted (FAST_POLL did the recv) so the fiber skips the park
-     * entirely.  This is the +20%-on-loopback path the all-C echo uses; without
-     * it a Cython handler on RUNLOOM_IOURING_LOOP would do a readiness recv() +
-     * an io_uring-bridged park (io_uring's cost, none of its win). */
-    if (runloom_iouring_loop_enabled()) {
-        runloom_iouring_ring_t *ring = runloom_mn_current_iouring_ring();
-        if (ring != NULL) {
-            runloom_iouring_ssize_t r =
-                runloom_iouring_loop_recv(ring, fd, buf, (size_t)n, 0);
-            return (r < 0) ? -1 : (Py_ssize_t)r;   /* errno set by loop_recv */
-        }
-    }
-    if (runloom_tcpconn_use_iouring(self)) {
-        runloom_iouring_ssize_t r;
-        if (runloom_iouring_pbuf_available()) {
-            if (self->ms == NULL) self->ms = runloom_iouring_ms_open(fd);
-            if (self->ms != NULL) {
-                r = runloom_iouring_ms_recv(self->ms, buf, (size_t)n);
-                return (r < 0) ? -1 : (Py_ssize_t)r;
-            }
-        }
-        /* NOTE (R7 item 1): unlike RunloomTCPConn_recv/_recv_into, this allocation-
-         * free C-API path deliberately takes NO conn critical section, so it does
-         * not hold one across this submit -- a concurrent close() can therefore
-         * race this single-shot recv (fd-reuse / cancel-misses-the-in-flight-SQE),
-         * the pre-existing gap the section-across-submit fix closes only for the
-         * PyObject-level recv paths.  Retrofitting locking here would regress the
-         * lock-free hot loop this entry point exists for; left as a separate item. */
-        r = runloom_iouring_recv(fd, buf, (size_t)n, 0);
-        return (r < 0) ? -1 : (Py_ssize_t)r;
-    }
-#endif
 
     for (;;) {
         long long r = (long long)recv(fd, buf, (size_t)n, 0);
@@ -89,35 +53,6 @@ Py_ssize_t runloom_tcpconn_c_send_all(PyObject *conn, const void *buf, Py_ssize_
     if (n <= 0) return 0;
     fd = self->fd;
 
-#if defined(__linux__)
-    /* Stage-2 single-shot io_uring proactor send (see recv_into above). */
-    if (runloom_iouring_loop_enabled()) {
-        runloom_iouring_ring_t *ring = runloom_mn_current_iouring_ring();
-        if (ring != NULL) {
-            while (sent < n) {
-                runloom_iouring_ssize_t r =
-                    runloom_iouring_loop_send(ring, fd, (const char *)buf + sent,
-                                              (size_t)(n - sent), 0);
-                if (r < 0) return -1;
-                sent += (Py_ssize_t)r;
-                if (r == 0) break;
-            }
-            return sent;
-        }
-    }
-    if (runloom_tcpconn_use_iouring(self)) {
-        while (sent < n) {
-            runloom_iouring_ssize_t r =
-                runloom_iouring_send(fd, (const char *)buf + sent,
-                                     (size_t)(n - sent), 0);
-            if (r < 0) return -1;
-            sent += (Py_ssize_t)r;
-            if (r == 0) break;            /* defensive */
-        }
-        return sent;
-    }
-#endif
-
     while (sent < n) {
         long long r = (long long)send(fd, (const char *)buf + sent,
                                       (size_t)(n - sent), 0);
@@ -148,24 +83,14 @@ Py_ssize_t runloom_tcpconn_c_send_all(PyObject *conn, const void *buf, Py_ssize_
 
 /* ============================================================================
  * Raw-fd, tstate-free I/O for c_entry handlers (no PyObject, no TCPConn, no
- * tstate).  Mirrors the all-C echo (module_io.c.inc runloom_io_c_echo): Stage-2
- * io_uring proactor when the loop backend + a hub ring are live, else readiness
- * recv/send + runloom_netpoll_wait_fd.  A Cython cdef handler cimports these (via
- * the __tcp_capi__ capsule) and runs the request loop with zero Python state.
+ * tstate).  Mirrors the all-C echo (module_io.c.inc runloom_io_c_echo):
+ * readiness recv/send + runloom_netpoll_wait_fd.  A Cython cdef handler cimports
+ * these (via the __tcp_capi__ capsule) and runs the request loop with zero
+ * Python state.
  * ============================================================================ */
 Py_ssize_t runloom_tcp_c_fd_recv(int fd, void *buf, Py_ssize_t n)
 {
     if (n <= 0) return 0;
-#if defined(__linux__)
-    if (runloom_iouring_loop_enabled()) {
-        runloom_iouring_ring_t *ring = runloom_mn_current_iouring_ring();
-        if (ring != NULL) {
-            runloom_iouring_ssize_t r =
-                runloom_iouring_loop_recv(ring, fd, buf, (size_t)n, 0);
-            return (r < 0) ? -1 : (Py_ssize_t)r;
-        }
-    }
-#endif
     for (;;) {
         long long r = (long long)recv(fd, buf, (size_t)n, 0);
         RUNLOOM_IO_SWITCH(runloom_io_classify(RUNLOOM_IO_RECV, r, errno)) {
@@ -199,21 +124,6 @@ Py_ssize_t runloom_tcp_c_fd_send_all(int fd, const void *buf, Py_ssize_t n)
 {
     Py_ssize_t sent = 0;
     if (n <= 0) return 0;
-#if defined(__linux__)
-    if (runloom_iouring_loop_enabled()) {
-        runloom_iouring_ring_t *ring = runloom_mn_current_iouring_ring();
-        if (ring != NULL) {
-            while (sent < n) {
-                runloom_iouring_ssize_t r = runloom_iouring_loop_send(
-                    ring, fd, (const char *)buf + sent, (size_t)(n - sent), 0);
-                if (r < 0) return -1;
-                sent += (Py_ssize_t)r;
-                if (r == 0) break;
-            }
-            return sent;
-        }
-    }
-#endif
     while (sent < n) {
         long long r = (long long)send(fd, (const char *)buf + sent,
                                       (size_t)(n - sent), 0);

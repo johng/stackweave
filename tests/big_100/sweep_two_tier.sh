@@ -38,7 +38,7 @@
 #
 # Usage:
 #   sweep_two_tier.sh [prog ...]           # default: all pNN_*.py, both tiers
-#   DESIGN=50000 SURVIVAL=1000000 sweep_two_tier.sh p223 p225 p36
+#   DESIGN=50000 SURVIVAL=1000000 sweep_two_tier.sh p224 p225 p36
 #   TIERS=survival sweep_two_tier.sh p01   # one tier only (survival|design|both)
 set +e
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -55,8 +55,8 @@ DESIGN_TMO="${DESIGN_TMO:-90}"
 SURVIVAL_TMO="${SURVIVAL_TMO:-180}"
 EXTRA="${EXTRA:-}"
 RES="${RES:-/tmp/sweep_two_tier_results.txt}"
-# 1M survival needs the fast bulk-arena spawn or it never fields the pool in time.
-GON_ENV="STACKWEAVE_HARNESS_GON=1 STACKWEAVE_GON_BULK=1 STACKWEAVE_GON_FRESH=1 STACKWEAVE_STACK_ARENA_N=1300000"
+# 1M survival needs the fast fiber_n spawn or it never fields the pool in time.
+GON_ENV="STACKWEAVE_HARNESS_GON=1"
 
 : > "$RES"
 

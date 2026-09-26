@@ -4,11 +4,11 @@
 
 
 #if defined(RUNLOOM_HAVE_EPOLL)
-/* Handle one ready epoll event: io_uring global/per-ring eventfds drain their
- * rings, the legacy generic pump-wake eventfd is drained, and a socket fd is
+/* Handle one ready epoll event: the io_uring global eventfd drains its ring,
+ * the legacy generic pump-wake eventfd is drained, and a socket fd is
  * dispatched to its parker (or stashed in the pending-wake bitmap if none is
- * linked yet).  Shared by the shared-epoll pump and, under RUNLOOM_PERHUB_EPOLL,
- * by each hub draining its NESTED shared epoll.  Bumps *woke per parker woken. */
+ * linked yet).  Shared by the shared-epoll pump and by each hub draining its
+ * NESTED shared epoll.  Bumps *woke per parker woken. */
 static void runloom_epoll_handle_event(int fd, unsigned int events, int *woke)
 {
     int mask = 0;
@@ -25,21 +25,6 @@ static void runloom_epoll_handle_event(int fd, unsigned int events, int *woke)
         ssize_t r = read(fd, &v, sizeof v);
         (void)r;
         return;
-    }
-    /* Per-hub iouring rings: dispatch to the matching ring's drain. */
-    {
-        int ri;
-        struct runloom_iouring_ring *match = NULL;
-        for (ri = 0; ri < runloom_iouring_ring_count; ri++) {
-            if (runloom_iouring_ring_efds[ri] == fd) {
-                match = runloom_iouring_ring_ptrs[ri];
-                break;
-            }
-        }
-        if (match != NULL) {
-            runloom_iouring_ring_drain(match);
-            return;
-        }
     }
     /* Fold error/hangup into BOTH directions (EPOLLERR/HUP/RDHUP can carry no
      * IN/OUT bit -- a bare RST / half-close); waking both makes every waiter
@@ -193,18 +178,16 @@ int runloom_netpoll_pump(long long timeout_ns)
         int ms = timeout_ns < 0 ? -1 :
                  (timeout_ns > 1000000000LL ? 1000 :
                   (int)((timeout_ns + 999999LL) / 1000000LL));
-        /* RUNLOOM_PERHUB_EPOLL: wait on THIS hub's own epoll (its socket fds +
-         * its targeted wake eventfd; the shared runloom_epoll_fd is NESTED for
-         * the io_uring set).  epool != NULL only on the per-hub path with a live
-         * pool epoll; otherwise wait on the shared epoll exactly as before. */
+        /* Wait on THIS hub's own epoll (its socket fds + its targeted wake
+         * eventfd; the shared runloom_epoll_fd is NESTED for the io_uring set).
+         * epool is NULL only if the pool epoll failed to come up; then wait on
+         * the shared epoll. */
         int wait_fd = runloom_epoll_fd;
-        runloom_parker_pool_t *epool = NULL;
-        if (runloom_perhub_epoll()) {
-            epool = runloom_parker_pool_for_hub(runloom_mn_current_hub_opaque());
-            runloom_parker_pool_lock_ensure_inited(epool);
-            if (epool->epoll_fd >= 0) wait_fd = epool->epoll_fd;
-            else epool = NULL;   /* pool epoll create failed -> shared fallback */
-        }
+        runloom_parker_pool_t *epool =
+            runloom_parker_pool_for_hub(runloom_mn_current_hub_opaque());
+        runloom_parker_pool_lock_ensure_inited(epool);
+        if (epool->epoll_fd >= 0) wait_fd = epool->epoll_fd;
+        else epool = NULL;   /* pool epoll create failed -> shared fallback */
         Py_BEGIN_ALLOW_THREADS
         n = epoll_wait(wait_fd, evs, 64, ms);
         Py_END_ALLOW_THREADS
@@ -225,11 +208,10 @@ int runloom_netpoll_pump(long long timeout_ns)
                          * waker writes; SEQ_CST pairs with wake_pump's exchange.
                          * The hub re-checks sub_head at the loop top after this,
                          * closing the Dekker race. */
-                        if (runloom_wake_dedup_enabled())
-                            __atomic_store_n(&epool->wake_pending, 0, __ATOMIC_SEQ_CST);
+                        __atomic_store_n(&epool->wake_pending, 0, __ATOMIC_SEQ_CST);
                         continue;
                     }
-                    /* The NESTED shared epoll fired (io_uring ring eventfds + the
+                    /* The NESTED shared epoll fired (the io_uring eventfd + the
                      * legacy generic wake live in runloom_epoll_fd).  Drain it
                      * NON-BLOCKING and run each event through the same handler;
                      * the shared set never contains itself, so no recursion. */

@@ -20,9 +20,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "sr
 import stackweave_c
 
 import os as _crashos
-if _crashos.environ.get("STACKWEAVE_CRASH"):
-    stackweave_c.install_crash_handler(_crashos.environ["STACKWEAVE_CRASH"],
-                                 _crashos.environ.get("STACKWEAVE_CRASH_FILE"))
+if _crashos.environ.get("HH_CRASH"):
+    stackweave_c.install_crash_handler(_crashos.environ["HH_CRASH"],
+                                       _crashos.environ.get("HH_CRASH_FILE"))
 
 from hypothesis import given, settings, seed as hseed, strategies as st, HealthCheck
 

@@ -11,7 +11,10 @@
  * stack at a GC-safe point; a concurrent stop-the-world GC / QSBR reclaim then
  * runs against partially-destroyed objects -> UAF SIGSEGV
  * (test_weakref.test_threaded_weak_key_dict_copy).  The gate defers the preempt
- * (leaving the watchdog flag / frame counter ARMED) until the destructor unwinds.
+ * (leaving the frame counter ARMED) until the destructor unwinds.  The hook is
+ * the seeded controller's frame-count trigger, compiled only with
+ * RUNLOOM_MN_CTRL (disabled pending its migration-aware rewrite); the
+ * wall-clock watchdog trigger it also used to take has been removed.
  *
  * Two properties, over an arbitrary sequence of frame entries -- each with a
  * nondeterministic preempt trigger and in_destruction flag:
@@ -41,7 +44,7 @@ int nondet_int(void);
 
 int main(void)
 {
-    int armed = 0;   /* a preempt trigger is pending (watchdog flag / frame ctr) */
+    int armed = 0;   /* a preempt trigger is pending (frame counter reached) */
     int owed  = 0;   /* a trigger fired and has not yet been honored by a yield  */
     int step;
 

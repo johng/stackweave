@@ -38,6 +38,25 @@ int runloom_mn_init(int n_threads, int offload_hubs)
     PyThreadState *main_ts;
     PyThreadState *saved;
 
+#if !RUNLOOM_MN_CTRL
+    /* The seeded controlled scheduler is disabled until it is re-implemented
+     * for migration (see TODO(migration) in mn_sched_hub_resume_preempt.c.inc).
+     * Refuse a seeded run outright: running it uncontrolled would hand back a
+     * schedule that merely looks reproducible. */
+    {
+        const char *mnseed = getenv("STACKWEAVE_MN_SEED");
+        const char *simmn = getenv("STACKWEAVE_SIM_MN");
+        if ((mnseed != NULL && mnseed[0] != '\0') ||
+            (simmn != NULL && simmn[0] != '\0' && simmn[0] != '0')) {
+            PyErr_SetString(PyExc_RuntimeError,
+                "mn_init: the seeded M:N scheduler (STACKWEAVE_MN_SEED / "
+                "STACKWEAVE_SIM_MN) is disabled in migration mode: woken fibers "
+                "run from the global run-queue, which the seeded baton does not "
+                "order, so replay would not be deterministic (TODO: re-implement)");
+            return -1;
+        }
+    }
+#endif
     /* MN_SIM_DST_PLAN.md I0: RUNLOOM_SIM with the M:N scheduler is NOT yet
      * natively supported, and the failure mode is SILENT corruption, not an
      * error: the legacy single-thread sim pump on a hub thread lazily allocates
@@ -95,20 +114,6 @@ int runloom_mn_init(int n_threads, int offload_hubs)
                     "preemption is nondeterministic)");
                 return -1;
             }
-            /* per-g-tstate / global-runq mode: its wake-state FSM + global
-             * runq wake path is UNTRACED by the mn-sim design (wake contract
-             * #22) -- fenced out until separately audited. */
-            {
-                const char *mig = getenv("STACKWEAVE_ALLOW_UNSAFE_MIGRATION");
-                if (mig != NULL && mig[0] != '\0' && mig[0] != '0') {
-                    PyErr_SetString(PyExc_RuntimeError,
-                        "mn_init: STACKWEAVE_ALLOW_UNSAFE_MIGRATION (per-g-tstate "
-                        "mode) is not supported under native mn-sim -- its wake "
-                        "path is unaudited (MN_SIM_DST_PLAN.md wake contract "
-                        "#22)");
-                    return -1;
-                }
-            }
         }
     }
 
@@ -130,17 +135,10 @@ int runloom_mn_init(int n_threads, int offload_hubs)
      * the caller (or the auto-sizing above) chose, and K extra hubs are
      * appended.  They occupy the TAIL of the array, which is what lets every
      * exclusion below be a bound rather than a per-hub test.  Resolved here,
-     * once, before any hub thread exists.
-     *
-     * An explicit `offload_hubs` argument wins over RUNLOOM_OFFLOAD_HUBS: the
-     * count is a property of what the CALLER's code does (does it make blocking
-     * calls?), not of how the process was launched, and a library cannot set
-     * environment variables for its host.  -1 means "no opinion" -> env.  The
-     * env read is also resolved-once per process, so the argument is the only
-     * way to vary K across mn_init cycles (which is what lets the tests run
-     * in-process instead of re-execing a subprocess per case). */
-    runloom_offload_hub_count = (offload_hubs >= 0) ? offload_hubs
-                                                    : runloom_offload_hubs_env();
+     * once, before any hub thread exists.  The count comes only from the
+     * caller: it is a property of what the CALLER's code does (does it make
+     * blocking calls?), not of how the process was launched.  Negative = 0. */
+    runloom_offload_hub_count = offload_hubs;
     if (runloom_offload_hub_count > RUNLOOM_OFFLOAD_HUBS_MAX)
         runloom_offload_hub_count = RUNLOOM_OFFLOAD_HUBS_MAX;
     if (runloom_offload_hub_count < 0)
@@ -167,36 +165,21 @@ int runloom_mn_init(int n_threads, int offload_hubs)
     runloom_hub_count = n_threads;
     main_ts = PyThreadState_Get();
     interp = main_ts->interp;
-    /* Per-g-tstate mode: capture the interp for PyThreadState_New and stand
-     * the snap down BEFORE any hub thread starts running fibers.
-     *
-     * RUNLOOM_STEAL_WOKEN REDIRECTS here: its original snap-migration mechanism
-     * is structurally unsound (a suspended fiber's eval frames bake in the origin
-     * hub's tstate pointer, which the snap cannot re-root, so a migrated fiber
-     * drives the origin hub's tstate from a foreign OS thread -- TSan-proven data
-     * race -> SEGV; see src/patches/README.md).  Per-g-tstate delivers
-     * the SAME goal (any idle hub may resume a wedged hub's woken fiber, closing
-     * the wedged-hub strand) CORRECTLY -- each fiber owns a migratable tstate that
-     * is valid on any hub.  So RUNLOOM_STEAL_WOKEN now enables per-g-tstate and the
-     * broken snap-migration branch in hub_main is never taken (dead for both
-     * flags; removable in a follow-up). */
+    /* Migration mode: capture the interp for the per-g PyThreadState_New and
+     * stand the snap down BEFORE any hub thread starts running fibers.  Always
+     * on for an M:N run; mn_fini clears it again. */
     runloom_mn_interp = interp;
-    /* Through the safety interlock (runloom_resolve_migratable_mode): a migratable
-     * flag activates per-g-tstate ONLY with RUNLOOM_ALLOW_UNSAFE_MIGRATION=1; else
-     * it warns + stays off (default scheduler).  Gating here also keeps a flagged-
-     * but-gated RUNLOOM_STEAL_WOKEN out of the unsound snap branch -- see
-     * runloom_use_global_runq. */
-    runloom_set_per_g_tstate_mode(runloom_resolve_migratable_mode());
-    /* Configure the sysmon watchdog (enable + threshold) BEFORE the hubs
+    runloom_set_per_g_tstate_mode(1);
+    /* Configure the sysmon watchdog (threshold, logging) BEFORE the hubs
      * spawn so the per-resume progress instrumentation is live immediately. */
     runloom_sysmon_config();
-    /* Install the RUNLOOM_PREEMPT eval-frame wrapper (no-op unless enabled) while
-     * we still hold the main tstate and before any hub runs Python. */
-    runloom_preempt_install(interp);
     /* controlled M:N (RUNLOOM_MN_SEED): set up the execution baton before any hub
-     * runs; keeps preempt on (see runloom_mn_ctrl_init).
-     * No-op when RUNLOOM_MN_SEED is unset. */
+     * runs.  No-op when RUNLOOM_MN_SEED is unset, and always while the
+     * controller is disabled (RUNLOOM_MN_CTRL). */
     runloom_mn_ctrl_init(n_threads);
+    /* Its frame-count preemption hook, installed while we still hold the main
+     * tstate and before any hub runs Python (no-op unless controlled). */
+    runloom_preempt_install(interp);
     /* Native mn-sim EFFECTIVE-state check (I2 review): ctrl_init silently
      * self-disables on OOM -- the env fence above cannot see that, and an
      * un-controlled sim+mn run re-opens the probe-P4 corruption.  Verified
@@ -237,13 +220,6 @@ int runloom_mn_init(int n_threads, int offload_hubs)
         runloom_mutex_init(&h->idle_lock);
         runloom_cond_init(&h->idle_cond);
         h->idle_waiting = 0;
-        /* Cancel-by-fd mailbox (R7 item 1). */
-        runloom_mutex_init(&h->cancel_fd_lock);
-        h->cancel_fd_head = NULL;
-        /* io_uring-as-loop: the wake eventfd is created by the hub thread in
-         * runloom_hub_main only when the loop backend is on; -1 = absent. */
-        h->loop_wake_fd = -1;
-        h->ring_waiting = 0;
         /* Controlled-replay deferred-publish staging (barrier mode only): one
          * per-target list so a segment's cross-hub submits flush atomically at
          * release.  PyMem_Calloc zeroes; OOM -> NULL -> hub_submit falls back to
@@ -308,22 +284,6 @@ int runloom_mn_init(int n_threads, int offload_hubs)
                 runloom_mutex_destroy(&runloom_hubs[j].sub_lock);
                 runloom_mutex_destroy(&runloom_hubs[j].idle_lock);
                 runloom_cond_destroy(&runloom_hubs[j].idle_cond);
-                /* Drain any cancel-by-fd nodes a concurrent foreign close()
-                 * deposited on this spawned hub before destroying its lock --
-                 * mirror mn_fini's per-hub cleanup so this failure path upholds
-                 * the same "every mailbox node is drained + its dup closed"
-                 * invariant (the hub joined above, so no concurrent depositor). */
-                {
-                    runloom_cancel_fd_node_t *cn = runloom_hubs[j].cancel_fd_head;
-                    runloom_hubs[j].cancel_fd_head = NULL;
-                    while (cn != NULL) {
-                        runloom_cancel_fd_node_t *nx = cn->next;
-                        if (cn->dup_fd >= 0) close(cn->dup_fd);
-                        free(cn);
-                        cn = nx;
-                    }
-                }
-                runloom_mutex_destroy(&runloom_hubs[j].cancel_fd_lock);
             }
             PyMem_Free(runloom_hubs);
             runloom_hubs = NULL;
@@ -337,8 +297,7 @@ int runloom_mn_init(int n_threads, int offload_hubs)
     /* Resolve the depot auto-cap's SAFE_MAX (reads /proc once) before the watchdog,
      * whose tick will recompute the cap from the live-stack watermark. */
     runloom_stack_autocap_init();
-    /* Hubs are up; start the watchdog (no-op unless RUNLOOM_SYSMON / RUNLOOM_PREEMPT
-     * is set). */
+    /* Hubs are up; start the sysmon watchdog. */
     runloom_sysmon_spawn();
     return n_threads;
 }
@@ -358,24 +317,12 @@ static void runloom_mn_hub_drain_leftovers(runloom_hub_t *h)
 {
     runloom_g_t *sub;
     runloom_g_t *g;
-    /* A still-queued g (in_sub_queue==1) in the default path also holds the
-     * queue ref hub_submit took; drop it in addition to the spawn ref the
-     * existing single decref releases.  Self-gated by the 1->0 exchange; skipped
-     * in per-g-tstate mode (no queue ref there).  RUNLOOM_DROP_QREF is a no-op
-     * for sleep-heap / raw-yield gs (in_sub_queue==0). */
-    int per_g_qref = !runloom_get_per_g_tstate_mode();
-#define RUNLOOM_DROP_QREF(gp) do {                                            \
-        if (per_g_qref &&                                                     \
-            __atomic_exchange_n(&(gp)->in_sub_queue, 0, __ATOMIC_ACQ_REL) == 1) \
-            runloom_g_decref(gp);                                             \
-    } while (0)
     sub = h->sub_head;
     h->sub_tail = NULL;
     __atomic_store_n(&h->sub_head, (runloom_g_t *)NULL, __ATOMIC_RELAXED);  /* census x-thread read */
     while (sub != NULL) {
         runloom_g_t *next = sub->next;
         sub->next = NULL;
-        RUNLOOM_DROP_QREF(sub);
         runloom_g_decref(sub);
         sub = next;
     }
@@ -390,24 +337,19 @@ static void runloom_mn_hub_drain_leftovers(runloom_hub_t *h)
             while (s != NULL) {
                 runloom_g_t *next = s->next;
                 s->next = NULL;
-                RUNLOOM_DROP_QREF(s);
                 runloom_g_decref(s);
                 s = next;
             }
         }
         h->stage_pending = 0;
     }
-    while ((g = runloom_sched_ready_pop(&h->sched)) != NULL) {
-        RUNLOOM_DROP_QREF(g);
+    while ((g = runloom_sched_ready_pop(&h->sched)) != NULL)
         runloom_g_decref(g);
-    }
-    while ((g = (runloom_g_t *)runloom_cldeque_pop(&h->deque)) != NULL) {
-        RUNLOOM_DROP_QREF(g);
+    while ((g = (runloom_g_t *)runloom_cldeque_pop(&h->deque)) != NULL)
         runloom_g_decref(g);
-    }
     while (h->sched.sleep_size > 0) {
         g = runloom_sched_sleep_pop(&h->sched);
-        if (g != NULL) { RUNLOOM_DROP_QREF(g); runloom_g_decref(g); }
+        if (g != NULL) runloom_g_decref(g);
     }
     /* A signal committed to a fiber on this hub that never resumed to take it
      * (the run was torn down first, or the g completed).  Drop it rather than
@@ -420,10 +362,7 @@ static void runloom_mn_hub_drain_leftovers(runloom_hub_t *h)
         Py_XDECREF(stale);
         h->sched.signal_target = NULL;
     }
-#undef RUNLOOM_DROP_QREF
 }
-
-void runloom_garena_quar_drain(void);   /* defined with the bulk-arena path below */
 
 void runloom_mn_fini(void)
 {
@@ -449,10 +388,8 @@ void runloom_mn_fini(void)
          * so it can't slip between the hub's stopping re-check and its wait.
          * With the idle backoff the wait can be a deep one in ANY mode, so kick
          * every mode (mirrors runloom_mn_kick_all_hubs) -- else a hub deep in its
-         * io_uring loop_wait / epoll pump would stall the join below up to the
-         * full cap (seconds at a large RUNLOOM_IDLE_BACKOFF_MS). */
-        if (runloom_hubs[i].loop_wake_fd >= 0)
-            runloom_iouring_loop_wake(runloom_hubs[i].loop_wake_fd);
+         * epoll pump would stall the join below up to the full cap (seconds at a
+         * large RUNLOOM_IDLE_BACKOFF_MS). */
         runloom_mutex_lock(&runloom_hubs[i].idle_lock);
         runloom_cond_signal(&runloom_hubs[i].idle_cond);
         runloom_mutex_unlock(&runloom_hubs[i].idle_lock);
@@ -467,16 +404,6 @@ void runloom_mn_fini(void)
     }
     /* controlled-mode baton: all hubs joined, nobody can acquire/release now */
     runloom_mn_ctrl_fini();
-    /* Free the retired bulk-arena g-struct arenas.  Every hub thread is joined,
-     * so no wake_g can be in flight and no try_incref can read a garena g -- the
-     * grace period that makes returning these structs to the OS sound.  The
-     * helper is defined with the bulk-arena path below (after the batch struct).
-     * See runloom_garena_quar / runloom_fibern_batch_finish_one. */
-    runloom_garena_quar_drain();
-    /* Uninstall the preempt wrapper now that every hub thread is joined (no one
-     * can call it) and the main tstate is held -- restores the original
-     * eval-frame func so a later mn_init re-captures it cleanly. */
-    runloom_preempt_uninstall(runloom_mn_interp);
     /* Drain leftover gs BEFORE tearing down per-hub tstates: g->snap
      * may reference per-tstate state (exc_info, datastack chunks) that
      * pystate_snap_clear needs to release while the tstate is still
@@ -526,26 +453,9 @@ void runloom_mn_fini(void)
             PyThreadState_Clear(hts);
             PyThreadState_Delete(hts);
         }
-        /* Drain any cancel-by-fd nodes never claimed by the (now stopped) hub;
-         * close their dup'd fds so they don't leak.  Runs after the hub joined,
-         * so no concurrent depositor -- but hold the lock for TSan cleanliness. */
-        {
-            runloom_cancel_fd_node_t *cn;
-            runloom_mutex_lock(&runloom_hubs[i].cancel_fd_lock);
-            cn = runloom_hubs[i].cancel_fd_head;
-            runloom_hubs[i].cancel_fd_head = NULL;
-            runloom_mutex_unlock(&runloom_hubs[i].cancel_fd_lock);
-            while (cn != NULL) {
-                runloom_cancel_fd_node_t *nx = cn->next;
-                if (cn->dup_fd >= 0) close(cn->dup_fd);
-                free(cn);
-                cn = nx;
-            }
-        }
         runloom_mutex_destroy(&runloom_hubs[i].sub_lock);
         runloom_mutex_destroy(&runloom_hubs[i].idle_lock);
         runloom_cond_destroy(&runloom_hubs[i].idle_cond);
-        runloom_mutex_destroy(&runloom_hubs[i].cancel_fd_lock);
         /* Release the g-refs held by this hub's still-pending timer entries
          * (future-deadline timed parks that never fired) so they don't leak,
          * then free the timer-heap buffer (otherwise leaked -- it was never
@@ -654,24 +564,6 @@ void runloom_mn_reset_after_fork(void)
     __atomic_add_fetch(&runloom_mn_gen, 1, __ATOMIC_RELEASE);
 }
 
-/* EXPERIMENT (docs/dev/HUB_SCALING.md, A1a): pair-affinity placement.  When
- * RUNLOOM_PAIR_AFFINITY is set, fiber index i is placed on hub (i>>1)%H instead
- * of i%H, so an adjacent (2k, 2k+1) goroutine pair co-locates on ONE hub.  This
- * is the probe for "is the profile's _Py_DecRefShared cost cross-hub object
- * sharing?": co-locating a producer/consumer pair keeps the handoff object
- * brc-local (no shared-refcount path).  Forced OFF under RUNLOOM_MN_SEED, whose
- * controlled-replay barrier relies on the deterministic spawn_counter%H map. */
-static int runloom_pair_affinity_mode(void)
-{
-    static int v = -1;
-    if (v < 0) {
-        const char *e = getenv("STACKWEAVE_PAIR_AFFINITY");
-        v = (e && *e && *e != '0') ? 1 : 0;
-        if (v && getenv("STACKWEAVE_MN_SEED")) v = 0;
-    }
-    return v;
-}
-
 /* Internal core: pick hub, alloc g, set up coro, submit, bump counters.
  * Either callable (Python path) or c_fn+c_arg (C-only path) must be set,
  * not both.  Returns 0 on success, -1 on failure (errno set).  Python
@@ -701,13 +593,13 @@ static long runloom_spawn_pace(void)
 
 /* force_hub: -1 = normal placement (general hubs only).  >=0 pins the spawn to
  * that hub index, which is how offload work reaches a reserved offload hub --
- * see the RUNLOOM_OFFLOAD_HUBS block in mn_sched.c.  Routed through THIS
+ * see the offload-hubs block in mn_sched.c.  Routed through THIS
  * function rather than a second spawn path on purpose: a path that bypassed
  * runloom_greg_link would reopen the parked-frame GC blind spot (CLAUDE.md,
  * "Parked-fiber frames are made GC-visible by the frames anchor"). */
 static int runloom_mn_fiber_core(PyObject *callable, runloom_c_entry_fn c_fn,
                            void *c_arg, size_t stack_size, long py_index,
-                           int defer_sized, int force_hub)
+                           int force_hub)
 {
     long n;
     int hub_idx;
@@ -746,12 +638,7 @@ static int runloom_mn_fiber_core(PyObject *callable, runloom_c_entry_fn c_fn,
          * off, so all three branches below are bit-for-bit their previous
          * behaviour in the default build. */
         int gen = runloom_general_hub_count();
-        if (runloom_pair_affinity_mode()) {
-            /* stride pairs together: prefer the explicit fiber index when present
-             * (fiber_n indexed / the bulk-path fallback), else the spawn counter. */
-            long key = (py_index >= 0) ? py_index : n;
-            hub_idx = (int)((key >> 1) % gen);
-        } else if (gen > 1 && runloom_sched_random_on()) {
+        if (gen > 1 && runloom_sched_random_on()) {
             /* Sanitizer/debug: randomize placement too (Go's raceenabled), so a
              * goroutine can land on any hub rather than the round-robin one --
              * diversifies cross-hub interleavings the sanitizer lane explores. */
@@ -823,14 +710,10 @@ static int runloom_mn_fiber_core(PyObject *callable, runloom_c_entry_fn c_fn,
      *  2. otherwise the adaptive autosizer -- this fiber-kind's learned
      *     size (start-large default for an unseen kind), which itself falls
      *     back to the hub default when autosize is off. */
-    /* Resolve the stack size now (cheap, no alloc).  In the DEFAULT scheduler we
-     * DEFER the coro + guarded-stack creation to first resume on the hub that
-     * RUNS the fiber: a tight spawn loop monopolizes the producer hub, whose
-     * per-thread stack pool never refills (it allocs, never completes), so eager
-     * alloc cold-mmaps a guarded stack PER spawn -- the front-load mmap storm
-     * that wedges hubs.  Deferring puts the alloc on the consumer hub, where the
-     * pool recycles.  The global-runq resume paths (per-g-tstate / steal-woken)
-     * assume g->coro is set at claim time, so those modes stay eager. */
+    /* Resolve the stack size, then create the coro + guarded stack eagerly: the
+     * resume path claims a g with its coro already set (a g with no coro or no
+     * tstate is skipped as dead), and an oversize ask fails here, at spawn,
+     * where the caller can handle the MemoryError. */
     g->req_stack_size = (stack_size > 0)
                           ? stack_size
                           : runloom_advice_size_for(g->advice_key, callable,
@@ -838,46 +721,29 @@ static int runloom_mn_fiber_core(PyObject *callable, runloom_c_entry_fn c_fn,
     /* Floor the resolved size for the FT-3.14 SP-guard headroom (p226).  Covers
      * both an explicit pin and an advice-learned auto size; no-op elsewhere. */
     g->req_stack_size = runloom_fiber_stack_floor(g->req_stack_size);
-    if (runloom_use_global_runq() || (stack_size > 0 && !defer_sized)) {
-        /* Eager when: a global-runq mode (its resume path assumes coro set), OR
-         * the caller PINNED an explicit stack_size -- an explicit oversize ask
-         * should fail at spawn (MemoryError) where the caller can handle it, not
-         * silently later at resume.  The default/auto-sized common path (the
-         * spawn-freely front-load) is the one that defers.  defer_sized carries a
-         * specific size (the grow-down learned size) down the DEFERRED path: it is
-         * an internal right-sizing, not a user pin, so it defers like the default
-         * (no front-load mmap storm) yet installs at req_stack_size, not advice. */
-        g->coro = runloom_coro_new(g->req_stack_size, runloom_g_entry, g);
-        if (g->coro == NULL) {
-            if (callable != NULL) {
-                Py_DECREF(callable);
-                g->callable = NULL;         /* don't leave a dangling ref on the slab */
-                PyErr_NoMemory();
-            }
-            if (g->limit_counted) {         /* release the admission slot we took */
-                runloom_fiber_release();
-                g->limit_counted = 0;
-            }
-            runloom_g_slab_free(g);         /* return to slab (handles greg + free) */
-            errno = ENOMEM;
-            return -1;
+    g->coro = runloom_coro_new(g->req_stack_size, runloom_g_entry, g);
+    if (g->coro == NULL) {
+        if (callable != NULL) {
+            Py_DECREF(callable);
+            g->callable = NULL;             /* don't leave a dangling ref on the slab */
+            PyErr_NoMemory();
         }
-    } else {
-        g->coro = NULL;                     /* deferred: installed at first resume */
+        if (g->limit_counted) {             /* release the admission slot we took */
+            runloom_fiber_release();
+            g->limit_counted = 0;
+        }
+        runloom_g_slab_free(g);             /* return to slab (handles greg + free) */
+        errno = ENOMEM;
+        return -1;
     }
-    /* Wake-state machine init.  Any global-runq mode (per-g-tstate OR
-     * steal-woken) reads wake_state: a fresh g has never parked, so it is
+    /* Wake-state machine init: a fresh g has never parked, so it is
      * conceptually owned/running from the moment a hub first resumes it
      * (slab-zeroed wake_state would be PARKED, which the QUEUED->RUNNING claim
      * and the park CAS both mis-handle).  Lift it to RUNNING up front. */
-    if (runloom_use_global_runq()) {
-        __atomic_store_n(&g->wake_state, RUNLOOM_WS_RUNNING, __ATOMIC_RELEASE);
-    }
-    /* RUNLOOM_PER_G_TSTATE only: give the g its own migratable PyThreadState.
-     * g->tstate was zeroed by the slab alloc, so every other path leaves it
-     * NULL (and runloom_g_decref's teardown is a no-op).  Steal-woken migrates via
-     * the snap instead, so it allocates no tstate here. */
-    if (runloom_get_per_g_tstate_mode() && runloom_mn_interp != NULL) {
+    __atomic_store_n(&g->wake_state, RUNLOOM_WS_RUNNING, __ATOMIC_RELEASE);
+    /* Give the g its own migratable PyThreadState (runloom_mn_interp is set by
+     * mn_init for the whole life of the hubs). */
+    if (runloom_mn_interp != NULL) {
         g->tstate = PyThreadState_New(runloom_mn_interp);
         if (g->tstate == NULL) {
             runloom_coro_destroy(g->coro);
@@ -918,19 +784,19 @@ static int runloom_mn_fiber_core(PyObject *callable, runloom_c_entry_fn c_fn,
 int runloom_mn_fiber_c(runloom_c_entry_fn fn, void *arg)
 {
     if (fn == NULL) { errno = EINVAL; return -1; }
-    return runloom_mn_fiber_core(NULL, fn, arg, 0, -1, 0, -1);
+    return runloom_mn_fiber_core(NULL, fn, arg, 0, -1, -1);
 }
 
 PyObject *runloom_mn_fiber(PyObject *callable, size_t stack_size)
 {
-    if (runloom_mn_fiber_core(callable, NULL, NULL, stack_size, -1, 0, -1) < 0) {
+    if (runloom_mn_fiber_core(callable, NULL, NULL, stack_size, -1, -1) < 0) {
         return NULL;
     }
     Py_RETURN_NONE;
 }
 
 /* Spawn `callable` on a RESERVED OFFLOAD HUB -- the entry point for running a
- * blocking call as an ordinary fiber (RUNLOOM_OFFLOAD_HUBS; see the block in
+ * blocking call as an ordinary fiber (offload hubs; see the block in
  * mn_sched.c for why a dedicated hub rather than a general one).
  *
  * Round-robins across the K offload hubs, so K of them carry K concurrent
@@ -954,12 +820,12 @@ PyObject *runloom_mn_offload_fiber(PyObject *callable, size_t stack_size)
     if (k <= 0) {
         PyErr_SetString(PyExc_RuntimeError,
                         "stackweave: no offload hubs reserved "
-                        "(set STACKWEAVE_OFFLOAD_HUBS before runloom_mn_init)");
+                        "(pass offload_hubs=K to mn_init / stackweave.run)");
         return NULL;
     }
     slot = (unsigned long)__atomic_fetch_add(&runloom_mn_offload_rr, 1, __ATOMIC_RELAXED);
     hub  = runloom_general_hub_count() + (int)(slot % (unsigned long)k);
-    if (runloom_mn_fiber_core(callable, NULL, NULL, stack_size, -1, 0, hub) < 0) {
+    if (runloom_mn_fiber_core(callable, NULL, NULL, stack_size, -1, hub) < 0) {
         return NULL;
     }
     Py_RETURN_NONE;
@@ -996,22 +862,8 @@ PyObject *runloom_mn_fiber_pinned(PyObject *callable, size_t stack_size,
                      runloom_hub_count - 1);
         return NULL;
     }
-    if (runloom_mn_fiber_core(callable, NULL, NULL, stack_size, -1, 0,
+    if (runloom_mn_fiber_core(callable, NULL, NULL, stack_size, -1,
                               hub_id) < 0) {
-        return NULL;
-    }
-    Py_RETURN_NONE;
-}
-
-/* Like runloom_mn_fiber, but `size` is the grow-down LEARNED size: spawn it down
- * the DEFERRED stack-alloc path (coro+stack installed at first resume on the
- * consumer hub) instead of eager at spawn.  An explicit user pin stays eager so
- * an oversize ask fails at spawn; a learned size is an internal right-sizing, so
- * it defers like the auto-sized default -- no cold-mmap front-load storm -- while
- * still installing exactly `size`, not the advice size. */
-PyObject *runloom_mn_fiber_grown(PyObject *callable, size_t size)
-{
-    if (runloom_mn_fiber_core(callable, NULL, NULL, size, -1, 1, -1) < 0) {
         return NULL;
     }
     Py_RETURN_NONE;
@@ -1025,395 +877,6 @@ PyObject *runloom_mn_fiber_grown(PyObject *callable, size_t size)
  * Python error set if a spawn fails partway (the already-created fibers are
  * live and will run; the caller decides whether to treat a partial as fatal).
  * Must be called from inside the M:N runtime (root or a fiber). */
-/* Read RUNLOOM_GON_BULK once: 1 = fiber_n uses the bulk-arena fast path. */
-static int runloom_fibern_bulk_enabled(void)
-{
-    static int v = -1;
-    int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
-    if (cur < 0) {
-        const char *e = getenv("STACKWEAVE_GON_BULK");
-        cur = (e != NULL && *e != '0' && *e != '\0') ? 1 : 0;
-        __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
-    }
-    return cur;
-}
-
-/* ---- fiber_n bulk-arena batch lifecycle ----
- * One descriptor per fiber_n() call.  Owns the two contiguous arenas (g + coro)
- * and the reserved stack block; `live` starts at N and is decremented by each
- * fiber's final decref.  The decrement that reaches 0 is the last finisher,
- * which reclaims everything wholesale -- the safe answer to "you can't free a
- * slice of a calloc/mmap individually".  No per-slot freelist yet: a batch is
- * reclaimed all-or-nothing, which is exact for fiber_n's "spawn N, they all run"
- * shape; partial slot reuse is a later refinement. */
-struct runloom_fibern_batch {
-    void  *garena;       /* calloc'd g-struct arena   (one free) */
-    void  *carena;       /* calloc'd coro-struct arena (one free) */
-    size_t start_slot;   /* first stack-arena slot of this batch's block */
-    long   nslots;       /* slots in the block (== N) -- for MADV + slot return */
-    size_t stack_size;   /* the batch's carve size -> identifies its arena class */
-    int    node;         /* NUMA node the block was carved on (per-node arena free) */
-    long   live;         /* fibers not yet finished; atomic */
-    struct runloom_fibern_batch *quar_next;  /* garena-quarantine link (mn_fini) */
-};
-
-/* Garena quarantine -- a lock-free Treiber stack of completed batches whose
- * g-struct arena must NOT be freed at completion.
- *
- * A stale/dup wake_g (a netpoll dup-wake, a chan/iouring waiter, a cancel/drain
- * path) can still be mid-flight to runloom_mn_hub_submit -> runloom_g_try_incref,
- * which reads g->refcount to decide whether to re-queue.  That read is only sound
- * while g is a VALID g struct (refcount 0 -> try_incref bails).  The per-thread
- * g-slab upholds exactly this by NEVER returning a g struct to the OS
- * (runloom_sched_core.c.inc:700).  The bulk-arena path used to free(b->garena) at
- * the last finish, returning every g struct in the batch to the OS -- inverting
- * that contract: a freed, malloc-reused g yields a garbage refcount>0, so
- * try_incref spuriously resurrects a non-g, re-submits it, and resumes a
- * destroyed coro (the arm64 reused-g SIGSEGV the slab retention prevents).
- *
- * Fix: at the last finish, release the coro arena + stack slots (no wake reads
- * those -- try_incref bails before any coro_resume), but RETAIN the g-struct
- * arena by pushing the whole batch here, and free the lot at mn_fini, when every
- * hub thread is joined and no wake_g can be in flight.  garena stays valid
- * (refcount 0) the entire time, so a stale try_incref always bails -- the slab's
- * contract, applied to the arena.  (A bounded per-quiescence reclaim is a future
- * memory refinement, mirroring the slab's own QSBR TODO.) */
-static struct runloom_fibern_batch *runloom_garena_quar = NULL;  /* quarantine head */
-/* A tiny test-and-set int spinlock guards the head push; the push under it is
- * a plain two-pointer splice. */
-static int runloom_garena_quar_lock = 0;
-
-/* Free every retired garena.  Called from mn_fini with all hub threads joined,
- * so no wake_g is in flight and no try_incref can read a garena g; single-
- * threaded there (no concurrent push), so the read + walk needs no lock. */
-void runloom_garena_quar_drain(void)
-{
-    struct runloom_fibern_batch *q = runloom_garena_quar;
-    runloom_garena_quar = NULL;
-    while (q != NULL) {
-        struct runloom_fibern_batch *next = q->quar_next;
-        free(q->garena);
-        free(q);
-        q = next;
-    }
-}
-
-void runloom_fibern_batch_finish_one(struct runloom_fibern_batch *b)
-{
-    if (b == NULL) return;
-    if (__atomic_sub_fetch(&b->live, 1, __ATOMIC_ACQ_REL) == 0) {
-        /* Last finisher: every g that lived in this batch has completed.  The
-         * coro arena + stack slots are reclaimed now (no wake touches them); the
-         * g-struct arena (garena) is RETAINED -- a stale wake_g may still read a
-         * garena g's refcount.  Quarantine the batch (it carries garena) and free
-         * it at mn_fini.  See runloom_garena_quar. */
-        free(b->carena);
-        runloom_coro_arena_release(b->start_slot, b->nslots, b->stack_size, b->node);
-        /* Push under the int spinlock (see runloom_garena_quar_lock): a plain
-         * pointer splice. */
-        while (__atomic_exchange_n(&runloom_garena_quar_lock, 1, __ATOMIC_ACQUIRE))
-            ; /* spin until we own the lock */
-        b->quar_next = runloom_garena_quar;
-        runloom_garena_quar = b;
-        (void)__atomic_exchange_n(&runloom_garena_quar_lock, 0, __ATOMIC_RELEASE);
-    }
-}
-
-/* Bulk-arena spawn (the "ultra-fast alloc path"): allocate the N g-structs and
- * N coro-structs as TWO contiguous calloc'd arenas (one allocation each, no
- * per-g malloc), carve each stack from the stack arena (lock-free), build each
- * fiber with a straight line of stores (the calloc-zeroed arena IS the
- * template; only the few non-zero fields are written) + a placement coro init,
- * then SPLICE each hub's whole batch onto its sub-list under ONE lock and bump
- * pending once.  Zero function-call depth in the hot loop, no per-g lock, no
- * per-g mmap.  PROTOTYPE: arena g/coro/stacks are never individually freed
- * (the free path is not yet taught about arena memory), so this is only valid
- * for workloads whose fibers do NOT complete during the measured window
- * (e.g. long-parked workers) -- guarded by RUNLOOM_GON_BULK so the default
- * fiber_n (loop) stays the safe path. */
-/* Create-pass timing (RUNLOOM_GON_TIMING=1): isolate which of the 3 serial create
- * passes dominates the ~1.32M/s create wall -- see docs/dev/spawn_above_1m.md. */
-static long long runloom_create_now_ns(void)
-{
-    /* CLOCK_MONOTONIC via the plat_compat shim. */
-    return runloom_monotonic_ns();
-}
-static int runloom_create_timing_on(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("STACKWEAVE_GON_TIMING");
-                 v = (e && *e && *e != '0') ? 1 : 0; }
-    return v;
-}
-
-/* EXPERIMENT (docs/dev/spawn_above_1m.md, lever #1): parallelize the dominant create
- * pass.  The g-template loop (pass A, ~70% of create) is cold-write/cache-latency
- * bound writing the fresh g-arena -- embarrassingly parallel across disjoint slices.
- * RUNLOOM_GON_PCREATE=P spawns P builder threads, each filling a contiguous slice
- * [b*n/P,(b+1)*n/P) into its OWN per-hub partial lists; the issuer merges the lists
- * (concatenation) after join.  P>1 only for n above a threshold (thread-spawn cost).
- * Prototype: fresh pthreads per call (overhead negligible at large N); a persistent
- * builder pool is the productionization. */
-static int runloom_pcreate_threads(void)
-{
-    /* mode: -2 unread; -1 = "auto" (resolve to hub_count, capped); >=0 = fixed P. */
-    static int mode = -2;
-    int m = __atomic_load_n(&mode, __ATOMIC_RELAXED);
-    if (m == -2) {
-        const char *e = getenv("STACKWEAVE_GON_PCREATE");
-        if (e == NULL || !*e || e[0] == '0') m = 0;
-        else if (strcmp(e, "auto") == 0)     m = -1;
-        else { m = atoi(e); if (m < 0) m = 0; if (m > 64) m = 64; }
-        __atomic_store_n(&mode, m, __ATOMIC_RELAXED);
-    }
-    if (m == -1) {                            /* auto: one builder per hub, capped */
-        int p = runloom_hub_count;            /* memory-bandwidth bound past ~16 */
-        if (p > 16) p = 16;
-        if (p < 1)  p = 1;
-        return p;
-    }
-    return m;
-}
-typedef struct {
-    char *garena; size_t gsz; const runloom_g_t *tmpl;
-    long long goid_base; int H; int pair_aff; long lo, hi;
-    runloom_g_t *heads[64], *tails[64];
-    long counts[64];
-} runloom_pcreate_arg_t;
-static RUNLOOM_THREAD_RET runloom_pcreate_worker(void *p)
-{
-    runloom_pcreate_arg_t *a = (runloom_pcreate_arg_t *)p;
-    long i; int h;
-    for (h = 0; h < a->H; h++) { a->heads[h] = a->tails[h] = NULL; a->counts[h] = 0; }
-    for (i = a->lo; i < a->hi; i++) {
-        runloom_g_t *g = (runloom_g_t *)(a->garena + (size_t)i * a->gsz);
-        int hub = a->pair_aff ? (int)((i >> 1) % a->H) : (int)(i % a->H);
-        memcpy(g, a->tmpl, a->gsz);
-        g->owner = &runloom_hubs[hub].sched;
-        g->id    = a->goid_base + (long long)i;
-        g->c_arg = (void *)(intptr_t)i;
-        g->next  = NULL;
-        if (a->tails[hub] != NULL) a->tails[hub]->next = g; else a->heads[hub] = g;
-        a->tails[hub] = g;
-        a->counts[hub]++;
-    }
-    RUNLOOM_THREAD_RETURN(NULL);
-}
-
-static int runloom_mn_fiber_n_bulk(PyObject *callable, long n, size_t stack_size,
-                                int indexed)
-{
-    int H = runloom_hub_count;
-    size_t gsz = sizeof(runloom_g_t);
-    size_t csz = runloom_coro_struct_size();
-    size_t hub_stack;
-    int use_grunq = runloom_use_global_runq();
-    char *garena, *carena;
-    runloom_g_t *heads[64], *tails[64];
-    long counts[64];
-    int hub;
-    long i;
-    long long goid_base;
-    int tmg = runloom_create_timing_on();
-    long long t0 = 0, t1 = 0, t2 = 0, t3 = 0;
-    struct runloom_fibern_batch *batch = NULL;       /* arena lifecycle, real path only */
-    size_t start_slot = 0;                         /* this batch's stack-arena block start */
-    int    batch_node = 0;                         /* NUMA node the block was carved on */
-
-    if (H > 64) return -1;                       /* fixed per-hub list cap */
-    garena = (char *)calloc((size_t)n, gsz);
-    carena = (char *)calloc((size_t)n, csz);
-    if (garena == NULL || carena == NULL) { free(garena); free(carena);
-                                            PyErr_NoMemory(); return -1; }
-    hub_stack = (stack_size > 0) ? stack_size
-                                 : (size_t)runloom_hubs[0].sched.stack_size;
-    /* FT-3.14 SP-guard headroom (p226): floor the whole batch's carve class so the
-     * arena slot size, the live coro and the teardown release class all agree. */
-    hub_stack = runloom_fiber_stack_floor(hub_stack);
-
-    goid_base = runloom_next_goid_block(n);       /* reserve N ids in one atomic */
-    for (hub = 0; hub < H; hub++) { heads[hub] = tails[hub] = NULL; counts[hub] = 0; }
-
-    /* TEMPLATE: bake the common g fields ONCE; the loop memcpy's this whole
-     * struct per slot, then sets the few per-g fields (owner, id, link).  This
-     * is the "one buffer, memcpy in a loop" form.  RUNLOOM_GON_NOFIELDS=1 skips
-     * the g build entirely (isolates the coro/asm/fault cost); NOSUBMIT=1 builds
-     * but never publishes (isolates build from submit + run). */
-    {
-        static int nofields = -1, nosub = -1;
-        const char *e;
-        runloom_g_t tmpl;
-        if (nofields < 0) { e = getenv("STACKWEAVE_GON_NOFIELDS"); nofields = (e && *e!='0' && *e)?1:0; }
-        if (nosub < 0)    { e = getenv("STACKWEAVE_GON_NOSUBMIT"); nosub    = (e && *e!='0' && *e)?1:0; }
-
-        /* Real (submitting) path: allocate the batch descriptor so each g can
-         * carry an arena-ownership marker + back-pointer.  Skipped for the
-         * nofields/nosub benchmark gates (they never run, so never tear down). */
-        if (!nofields && !nosub) {
-            batch = (struct runloom_fibern_batch *)calloc(1, sizeof *batch);
-            if (batch == NULL) { free(garena); free(carena); PyErr_NoMemory(); return -1; }
-        }
-
-        memset(&tmpl, 0, sizeof tmpl);
-        tmpl.callable     = callable;             /* refs batched below */
-        /* refcount = spawn ref (+ the default queue ref implied by
-         * in_sub_queue=1, which hub_main drops when it consumes the entry --
-         * mirrors the runloom_g_incref in hub_submit).  Per-g-tstate mode uses
-         * the global-runq from_runq ref instead, so it needs only the spawn ref. */
-        tmpl.refcount     = runloom_get_per_g_tstate_mode() ? 1 : 2;
-        tmpl.park_fd      = -1;
-        tmpl.in_sub_queue = 1;
-        tmpl.state        = (unsigned char)RUNLOOM_GST_SUBMITTED;
-        tmpl.arena        = (batch != NULL);      /* arena-owned: skip individual free */
-        tmpl.batch        = batch;                /* final decref -> batch_finish_one */
-        tmpl.pass_index   = (unsigned char)(indexed != 0);  /* fiber_n(indexed=True): fn(i) */
-        if (use_grunq) tmpl.wake_state = RUNLOOM_WS_RUNNING;
-
-        if (tmg) t0 = runloom_create_now_ns();
-        if (!nofields) {
-            int pair_aff = runloom_pair_affinity_mode();
-            int P = runloom_pcreate_threads();
-            int did_parallel = 0;
-            if (P > 1 && n >= 4096) {            /* lever #1: parallel builders */
-                runloom_pcreate_arg_t *args =
-                    (runloom_pcreate_arg_t *)malloc((size_t)P * sizeof *args);
-                runloom_thread_t th[64];
-                int b, started = 0;
-                if (args != NULL) {
-                    for (b = 0; b < P; b++) {
-                        args[b].garena = garena; args[b].gsz = gsz; args[b].tmpl = &tmpl;
-                        args[b].goid_base = goid_base; args[b].H = H; args[b].pair_aff = pair_aff;
-                        args[b].lo = (long)((long long)b * n / P);
-                        args[b].hi = (long)((long long)(b + 1) * n / P);
-                        if (runloom_thread_create(&th[b], runloom_pcreate_worker, &args[b]) != 0)
-                            break;
-                        started++;
-                    }
-                    for (b = 0; b < started; b++) runloom_thread_join(th[b]);
-                    if (started == P) {          /* merge per-hub partial lists in slice order */
-                        int hh;
-                        for (hub = 0; hub < H; hub++) { heads[hub] = tails[hub] = NULL; counts[hub] = 0; }
-                        for (b = 0; b < P; b++) {
-                            for (hh = 0; hh < H; hh++) {
-                                if (args[b].heads[hh] == NULL) continue;
-                                if (tails[hh] != NULL) tails[hh]->next = args[b].heads[hh];
-                                else heads[hh] = args[b].heads[hh];
-                                tails[hh] = args[b].tails[hh];
-                                counts[hh] += args[b].counts[hh];
-                            }
-                        }
-                        did_parallel = 1;
-                    }
-                    free(args);
-                }
-                /* started<P (pthread_create failed): the joined slices wrote their gs,
-                 * but heads/tails are still NULL (builders use local lists) -> the serial
-                 * pass below re-writes every g + rebuilds the lists, which is correct. */
-            }
-            if (!did_parallel) {
-                for (i = 0; i < n; i++) {
-                    runloom_g_t *g = (runloom_g_t *)(garena + (size_t)i * gsz);
-                    hub = pair_aff ? (int)((i >> 1) % H) : (int)(i % H);
-                    memcpy(g, &tmpl, gsz);        /* <-- template memcpy */
-                    g->owner = &runloom_hubs[hub].sched;
-                    g->id    = goid_base + (long long)i;
-                    g->c_arg = (void *)(intptr_t)i; /* fiber_n index (read iff pass_index) */
-                    g->next  = NULL;
-                    if (tails[hub] != NULL) tails[hub]->next = g; else heads[hub] = g;
-                    tails[hub] = g;
-                    counts[hub]++;
-                }
-            }
-        }
-        if (tmg) t1 = runloom_create_now_ns();   /* pass A (g template loop) done */
-
-        /* Fill the coro arena + set each g->coro.  MUST run after the memcpy
-         * (which would otherwise clobber g->coro).  On arena failure, fall back
-         * to the per-g path. */
-        if (runloom_coro_bulk_init(carena, csz, garena, gsz,
-                                   offsetof(runloom_g_t, coro),
-                                   hub_stack, n, runloom_g_entry,
-                                   &start_slot, &batch_node) != 0) {
-            free(garena); free(carena); free(batch);
-            for (i = 0; i < n; i++)
-                if (runloom_mn_fiber_core(callable, NULL, NULL, stack_size,
-                                       indexed ? i : -1, 0, -1) < 0) return -1;
-            return 0;
-        }
-        if (tmg) t2 = runloom_create_now_ns();   /* pass B (coro_bulk_init) done */
-
-        if (nofields || nosub) { free(garena); free(carena); free(batch); return 0; }
-    }
-
-    /* Hand the arenas + reserved stack block to the batch; arm its live count.
-     * From here, each fiber's final decref calls runloom_fibern_batch_finish_one,
-     * and the Nth reclaims all three allocations. */
-    batch->garena     = garena;
-    batch->carena     = carena;
-    batch->start_slot = start_slot;
-    batch->nslots     = n;
-    batch->stack_size = hub_stack;
-    batch->node       = batch_node;
-    __atomic_store_n(&batch->live, n, __ATOMIC_RELEASE);
-
-    /* ===== bookkeeping, LAST ===== */
-    /* All N callable references taken here, in one place (the new gs hold them). */
-    {
-        static int norefcnt = -1;
-        if (norefcnt < 0) { const char *e = getenv("STACKWEAVE_GON_NOREFCNT");
-                            norefcnt = (e && *e != '0' && *e) ? 1 : 0; }
-        if (!norefcnt) for (i = 0; i < n; i++) Py_INCREF(callable);
-    }
-    if (tmg) {
-        t3 = runloom_create_now_ns();            /* pass C (Py_INCREF loop) done */
-        fprintf(stderr, "[GON_TIMING] n=%ld  A(g-template)=%.3fms  B(coro_bulk)=%.3fms  "
-                "C(incref)=%.3fms  create=%.3fms (%.0f/s)\n", n,
-                (t1 - t0) / 1e6, (t2 - t1) / 1e6, (t3 - t2) / 1e6,
-                (t3 - t0) / 1e6, n / ((t3 - t0) / 1e9));
-    }
-
-    /* Splice each hub's whole batch onto its sub-list under ONE lock. */
-    for (hub = 0; hub < H; hub++) {
-        runloom_hub_t *h;
-        if (heads[hub] == NULL) continue;
-        h = &runloom_hubs[hub];
-        /* Count this whole batch on THIS hub's pending BEFORE publishing the gs
-         * to its sub-list (runloom_mn_run sums the per-hub fields).  fiber_n may
-         * be called from inside a live fiber, so the consumer hubs run
-         * concurrently: were the batch spliced first, a consumer could drain,
-         * run, and complete a g -- decrementing pending -- before the matching
-         * increment landed, so its net contribution would transiently read -1
-         * and runloom_mn_run could observe a false sum of 0 while the spawner is
-         * still live.  Over-count-never-under-count, like runloom_mn_pending_steal. */
-        __atomic_add_fetch(&h->pending, counts[hub], __ATOMIC_ACQ_REL);
-        RUNLOOM_RLOCK(&h->sub_lock, RUNLOOM_RANK_HUB_SUB);
-        if (h->sub_tail != NULL) h->sub_tail->next = heads[hub];
-        else /* RELEASE: publishes to the census ACQUIRE read (Finding D #4) */
-            __atomic_store_n(&h->sub_head, heads[hub], __ATOMIC_RELEASE);
-        h->sub_tail = tails[hub];
-        RUNLOOM_RUNLOCK(&h->sub_lock, RUNLOOM_RANK_HUB_SUB);
-        __atomic_add_fetch(&h->sub_gen, 1, __ATOMIC_RELEASE);
-        /* Wake the target hub in WHATEVER wait mode it is in -- this MUST mirror
-         * runloom_mn_hub_submit's full routing, not just the idle_cond signal.  A
-         * bulk batch landing on a hub blocked in its io_uring ring (loop backend)
-         * or in netpoll_pump/epoll_wait (any fiber parked on I/O anywhere makes an
-         * idle hub pump instead of waiting on idle_cond) would otherwise sit un-run
-         * until that wait's idle_ns/pump timeout expires.  (audit lost-wake #5.) */
-        if (__atomic_load_n(&h->ring_waiting, __ATOMIC_RELAXED)) {
-            __atomic_thread_fence(__ATOMIC_SEQ_CST);   /* Dekker vs the hub's re-check */
-            if (__atomic_load_n(&h->ring_waiting, __ATOMIC_ACQUIRE))
-                runloom_iouring_loop_wake(h->loop_wake_fd);
-        }
-        if (__atomic_load_n(&h->idle_waiting, __ATOMIC_ACQUIRE)) {
-            RUNLOOM_RLOCK(&h->idle_lock, RUNLOOM_RANK_HUB_IDLE);
-            runloom_cond_signal(&h->idle_cond);
-            RUNLOOM_RUNLOCK(&h->idle_lock, RUNLOOM_RANK_HUB_IDLE);
-        }
-        runloom_netpoll_wake_pump((void *)h);   /* pump/epoll-blocked hub */
-    }
-    return 0;
-}
-
 int runloom_mn_fiber_n(PyObject *callable, long n, size_t stack_size, int indexed)
 {
     long i;
@@ -1422,12 +885,9 @@ int runloom_mn_fiber_n(PyObject *callable, long n, size_t stack_size, int indexe
                         "runloom_mn_init() must be called first");
         return -1;
     }
-    if (n > 0 && runloom_fibern_bulk_enabled()) {
-        return runloom_mn_fiber_n_bulk(callable, n, stack_size, indexed);
-    }
     for (i = 0; i < n; i++) {
         if (runloom_mn_fiber_core(callable, NULL, NULL, stack_size,
-                               indexed ? i : -1, 0, -1) < 0) {
+                               indexed ? i : -1, -1) < 0) {
             return -1;
         }
     }
@@ -1454,21 +914,6 @@ int runloom_mn_fiber_n(PyObject *callable, long n, size_t stack_size, int indexe
 static int runloom_mn_has_wakeable_work(void)
 {
     int i;
-    /* The "a hub is running a fiber right now" signal below (h->resume_start_ns)
-     * is written ONLY by runloom_hub_resume_begin when runloom_sysmon_enabled.
-     * With the instrumentation off (RUNLOOM_PREEMPT=0 and no RUNLOOM_SYSMON)
-     * resume_start_ns is never set, so a
-     * CPU-bound fiber that is ACTIVELY EXECUTING -- in no queue, with all queues
-     * empty -- looks identical to a genuinely deadlocked one.  Without a
-     * trustworthy running-fiber signal the census cannot distinguish a healthy
-     * long-running fiber from a real deadlock, and would spuriously declare one
-     * (a scary DEADLOCK/STALL dump, or under RUNLOOM_DEADLOCK=raise a
-     * RuntimeError that returns from mn_run mid-execution and tears the hubs
-     * down under live work).  So gate the whole census on the instrumentation
-     * being live: report wakeable work when it is off, so mn_run keeps polling.
-     * A genuine deadlock in this opt-out config then hangs (the pre-census
-     * behavior) rather than mis-firing on a healthy run. */
-    if (!runloom_sysmon_enabled) return 1;
     /* Cross-thread / external wake sources: an fd that may become readable, an
      * executor or io_uring completion, or a foreign (non-fiber) thread parked
      * on a runloom primitive that another thread will release.  Any of these
@@ -1495,8 +940,7 @@ static int runloom_mn_has_wakeable_work(void)
     if (runloom_blockpool_inflight()    != 0) return 1;
     if (runloom_iouring_inflight()      != 0) return 1;
     if (runloom_foreign_park_inflight() != 0) return 1;
-    if (runloom_use_global_runq() &&
-        __atomic_load_n(&runloom_global_runq_len, __ATOMIC_ACQUIRE) != 0) return 1;
+    if (__atomic_load_n(&runloom_global_runq_len, __ATOMIC_ACQUIRE) != 0) return 1;
     for (i = 0; i < runloom_hub_count; i++) {
         runloom_hub_t *h = &runloom_hubs[i];
         /* Mid-resume: the hub is running a fiber right now. */
@@ -1541,7 +985,7 @@ static int runloom_mn_stalled_with_runnable(void)
              __atomic_load_n(&h->sub_head, __ATOMIC_ACQUIRE) != NULL))
             runnable = 1;
     }
-    if (!runnable && runloom_use_global_runq())
+    if (!runnable)
         runnable = (__atomic_load_n(&runloom_global_runq_len, __ATOMIC_ACQUIRE) != 0);
     return runnable;
 }
@@ -1550,21 +994,14 @@ static int runloom_mn_stalled_with_runnable(void)
  * + neighbours.  A recovery nudge for a fiber made runnable whose hub missed the
  * wakeup; harmless when there is nothing to find (the hub re-checks and re-parks).
  * It MUST mirror the full wake routing in runloom_mn_hub_submit, because a hub can
- * be blocked three different ways and the idle condvar reaches only one: the
- * iouring-loop backend blocks in its RING (woken by the per-hub loop_wake_fd
- * eventfd), a netpoll hub blocks in epoll_wait / the pump (woken by the pump
- * eventfd), and only a bare idle hub waits on idle_cond.  The old version signalled
- * idle_cond ONLY -- so a hub stranded in its ring (RUNLOOM_IOURING_LOOP) could not
- * be recovered at all, and a runnable fiber pinned to it hung forever (the
- * cov_workload --hubs 4 loop-backend hang; the deadlock census never even fired
- * because the I/O-parked fibers keep has_wakeable_work() true). */
+ * be blocked two different ways and the idle condvar reaches only one: a netpoll
+ * hub blocks in epoll_wait / the pump (woken by the pump eventfd), and only a bare
+ * idle hub waits on idle_cond. */
 static void runloom_mn_kick_all_hubs(void)
 {
     int i;
     for (i = 0; i < runloom_hub_count; i++) {
         runloom_hub_t *h = &runloom_hubs[i];
-        if (h->loop_wake_fd >= 0)
-            runloom_iouring_loop_wake(h->loop_wake_fd);   /* ring-blocked hub */
         RUNLOOM_RLOCK(&h->idle_lock, RUNLOOM_RANK_HUB_IDLE);
         runloom_cond_signal(&h->idle_cond);               /* idle-condvar hub */
         RUNLOOM_RUNLOCK(&h->idle_lock, RUNLOOM_RANK_HUB_IDLE);
@@ -1622,7 +1059,7 @@ Py_ssize_t runloom_mn_run(void)
         long quiet    = 0;                          /* consecutive quiescent polls */
         int  kicked   = 0;                          /* lost-wakeup re-kick fired? */
         int  reported = 0;                          /* diagnostic already dumped? */
-        int  raise    = 0;                          /* RUNLOOM_DEADLOCK=raise verdict */
+        int  raise    = 0;                          /* deadlock mode 2 (raise) verdict */
         int  sig_raised = 0;                        /* a Python signal handler raised */
         unsigned sigpoll = 0;                       /* throttle the signal service */
         long last_total  = -1;                      /* stall watchdog: last pending seen */
@@ -1762,7 +1199,7 @@ Py_ssize_t runloom_mn_run(void)
              * tests/test_signal_recipient.py asserts all three.
              *
              * The still-running hubs are stopped by the caller's mn_fini, the
-             * same as the RUNLOOM_DEADLOCK=raise early-return path below. */
+             * same as the deadlock-raise early-return path below. */
             if ((++sigpoll & 0xfu) == 0) {
                 PyEval_RestoreThread(saved);
                 if (PyErr_CheckSignals() < 0) {
@@ -1801,7 +1238,7 @@ Py_ssize_t runloom_mn_run(void)
             long ndead = runloom_count_deadlockable_fibers(NULL);
             PyErr_Format(PyExc_RuntimeError,
                 "stackweave: deadlock -- %ld fiber(s) blocked on a channel/lock/await "
-                "with no way to wake (STACKWEAVE_DEADLOCK=raise)",
+                "with no way to wake (deadlock mode: raise)",
                 ndead > 0 ? ndead : 0);
             return -1;
         }

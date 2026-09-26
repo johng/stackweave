@@ -382,11 +382,11 @@ def _mn_sockpair_recv_gc_snippet(hubs, n):
     recv path) recv'd by fibers across `hubs` M:N hubs, with a FEEDER
     thread writing the peer ends STAGGERED (so each recv genuinely BLOCKS until
     data arrives) and a concurrent thread hammering gc.collect().  This is the
-    socket analogue of the forced-async file_read+feeder test: it reproduces
-    the multishot-recv (runloom_iouring_ms_recv, the DEFAULT TCPConn.recv) STW
-    deadlock -- the hub recv spin-drained holding its tstate, so a GC stop-the-
-    world whose unblocking needs the (frozen) feeder could never complete.
-    Fixed by parking instead of spin-draining."""
+    socket analogue of the forced-async file_read+feeder test: it reproduced
+    the (since removed) io_uring multishot-recv STW deadlock -- the hub recv
+    spin-drained holding its tstate, so a GC stop-the-world whose unblocking
+    needs the (frozen) feeder could never complete.  TCPConn.recv now always
+    parks on the netpoll; the workload stays as a guard on that park."""
     code = r'''
 import sys; sys.path.insert(0, __SRCPATH__)
 import os, socket, threading, time, gc
@@ -445,17 +445,10 @@ print("PASS" if not bad else ("FAIL missed: %d/%d %r" % (len(bad), N, bad[:8])))
 def test_mn_iouring_sockpair_recv_under_gc():
     """GUARD: multi-hub blocking socket recv under a concurrent GC
     stop-the-world, on pre-connected socketpairs fed by a staggered writer
-    thread (isolates recv from listen/accept/connect).  Exercises the socket
-    io_uring recv paths -- multishot (runloom_iouring_ms_recv) and single-shot
-    per-hub-ring (runloom_iouring_ring_recv) -- which were hardened to PARK (and
-    a per-op wait handshake) instead of spin-draining holding the tstate /
-    inline-waking a not-yet-parked submitter, mirroring the file_read fix.
-
-    NOTE: unlike file_read, the socket spin-drain was NOT reproducibly
-    deadlock-prone on pristine here -- TCPConn recv is threshold-gated with a
-    netpoll-park fallback, and the io_uring sub-paths either already park or get
-    enough CQE traffic to keep tstate-holds short.  So this is a regression
-    GUARD on the parked socket recv path (catches a wake/park regression =
+    thread (isolates recv from listen/accept/connect).  The socket io_uring
+    recv paths this was written for (multishot + per-hub-ring single-shot) are
+    gone; TCPConn.recv parks on the netpoll, so this is a regression GUARD on
+    that parked socket recv path under STW (catches a wake/park regression =
     subprocess timeout), not a pristine-fails teeth-proof like the file_read
     tests above."""
     for _ in range(6):

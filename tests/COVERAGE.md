@@ -14,6 +14,13 @@ free-threaded CPython 3.13t build, driven by the whole isolated test corpus.
 Gate: **every C file ≥ 95%**; highest-bug files (netpoll, mn_sched, sched) → ~100%.
 **Result: all 17 TUs ≥ 95%; whole extension 98.2%.**
 
+> These figures predate the migration-only tree. That work deleted the
+> per-hub-tstate M:N path, the io_uring loop backend / per-hub rings / multishot
+> recv, the stack arena and the feature toggles, and made the per-g-tstate path
+> (formerly excluded as MIGRATION) the only M:N path. The exclusion manifest has
+> dropped the entries for deleted code, but its remaining line ranges have not
+> been re-anchored. Re-run `tools/cov_measure.sh` before quoting a number.
+
 | Translation unit | coverable | covered | %  | excl |
 |------------------|----------:|--------:|---:|-----:|
 | coro.c — coroutine/stack engine            | 514  | 514  | 100.0% | 24 |
@@ -46,8 +53,7 @@ gcov.
    subprocess, serially (clean per-process `.gcda` flush + merge; parallel would
    race the shared `.gcda`), plus `tools/mn_stress.py` for contended
    scheduler/netpoll paths. (`test_soak.py` skipped — pure repetition, no new
-   lines. A global `STACKWEAVE_TCPCONN_IOURING`/`STACKWEAVE_IOURING_LOOP` re-drive was
-   tried and reverted — see *io_uring*.)
+   lines.)
 3. **Aggregate** — `tools/cov_subsystem.py` sums gcov across each `.c` TU **and
    its `.c.inc` fragments** (gcov emits one report per source file; the real code
    lives in the fragments), subtracts the exclusion manifest from both numerator
@@ -58,7 +64,7 @@ tools/cov_measure.sh                            # build + drive + gcov + report 
 python tools/cov_subsystem.py build/coverage    # re-report from existing gcov
 ```
 
-## Exclusion categories (`tools/coverage_exclusions.txt`, 211 entries)
+## Exclusion categories (`tools/coverage_exclusions.txt`, 151 entries)
 
 A line is excluded only if a clean-exiting test cannot reach it (gcov flushes
 only on clean process exit). Each entry carries fragment, line range, category,
@@ -66,15 +72,14 @@ and a concrete reason.
 
 | Category | n | meaning |
 |----------|--:|---------|
-| DEFENSIVE | 60 | "can't happen" corruption/invariant guards with no forge path |
-| OOM | 51 | alloc-failure cleanup unreachable even via the `faultinj` LD_PRELOAD / `strace -e inject` harnesses (the failure path then crashes/aborts before gcov flushes) |
-| RACE | 32 | a free-threaded interleaving with no deterministic trigger; a `for(;;)` commit-CAS retry latch gcov counts only under contention (enclosing function fully covered); or a non-atomic `-O0` gcov line-counter race on a line **proven to execute** (cldeque steal/pop tails; crash disarm body) |
-| DEAD | 19 | defined/exported but zero callers (proven by grep + `nm`) |
-| MIGRATION | 17 | gated on `STACKWEAVE_ALLOW_UNSAFE_MIGRATION` / `per_g_tstate` mode — a known-crash mode this project forbids enabling |
+| DEFENSIVE | 44 | "can't happen" corruption/invariant guards with no forge path |
+| OOM | 38 | alloc-failure cleanup unreachable even via the `faultinj` LD_PRELOAD / `strace -e inject` harnesses (the failure path then crashes/aborts before gcov flushes) |
+| RACE | 28 | a free-threaded interleaving with no deterministic trigger; a `for(;;)` commit-CAS retry latch gcov counts only under contention (enclosing function fully covered); or a non-atomic `-O0` gcov line-counter race on a line **proven to execute** (cldeque steal/pop tails; crash disarm body) |
+| DEAD | 15 | defined/exported but zero callers (proven by grep + `nm`) |
 | CRASHONLY | 12 | runs only in the fatal-signal handler, which re-raises and dies before gcov flushes |
-| PLATFORM | 11 | `#ifdef`-out on Linux epoll, or needs an absent kernel/rlimit feature (pre-4.5 EPOLLEXCLUSIVE / MADV_FREE) |
-| SPAWNFAIL | 8 | OS-thread / `PyThreadState_New` failure cleanup; no fault hook |
-| BLOCKED | 1 | coverable in principle but blocked by the io_uring-recv deadlock (below) |
+| PLATFORM | 6 | `#ifdef`-out on Linux epoll, or needs an absent kernel/rlimit feature (pre-4.5 EPOLLEXCLUSIVE) |
+| SPAWNFAIL | 7 | OS-thread / `PyThreadState_New` failure cleanup; no fault hook |
+| BLOCKED | 1 | coverable in principle, but its only practical trigger (a multishot recv flood overflowing the CQ) was removed with the TCPConn io_uring mode (below) |
 
 **Verification.** The manifest was built in two adversarial passes: every entry
 (extracted from a test docstring, or classified from an uncovered line) was
@@ -87,21 +92,19 @@ the exclusion only when refutation failed. 12 originally-claimed exclusions were
 ## io_uring recv backpressure deadlock — FIXED
 
 While driving io_uring coverage we found a real bug: forcing recv through the
-opt-in io_uring backend (`STACKWEAVE_TCPCONN_IOURING=1`) **deadlocked a backpressured
+opt-in TCPConn io_uring backend (since removed) **deadlocked a backpressured
 loopback transfer**. Under backpressure the kernel CQ ring overflows; excess
 completions go to the kernel's overflow backlog and do NOT re-signal the
 registered eventfd, so the scheduler slept forever in `epoll_wait` waiting for an
 edge that never came (CQ empty + `IORING_SQ_CQ_OVERFLOW` set), stranding the
 receiver whose completion was in overflow. **Fixed**: the single-thread and M:N
 idle paths now drain io_uring (which flushes the CQ-overflow backlog) before
-blocking — `runloom_sched_drain.c.inc` + `mn_sched_hub_main.c.inc`. Regression
-guards: `tests/test_iouring_recv_backpressure.py` (single-thread + M:N) and the
-standalone repro `tests/regressions/iouring_recv_backpressure_deadlock.py`. The
+blocking — `runloom_sched_drain.c.inc` + `mn_sched_hub_main.c.inc`. The
 default epoll backend was never affected.
 
-Separate, still-open: io_uring multishot recv across MANY concurrent connections
-under M:N loses data (not a hang) — the shared global provided-buffer ring across
-hubs. The single-connection io_uring path (the common one) is correct.
+The opt-in TCPConn io_uring backend (and with it the multishot recv and its
+regression guards) has since been removed; the CQ-overflow drain stays because
+cooperative file I/O still runs on the global ring.
 
 ## Notes
 
@@ -111,6 +114,6 @@ hubs. The single-connection io_uring path (the common one) is correct.
   proven count) but whose non-atomic `-O0` gcov *line* counters race to `#####`.
   Excluded as RACE (execution proven); cldeque is additionally model/sanitizer-
   checked by `tests_c/test_cldeque.c` (ASan/TSan/UBSan).
-- **High-bug files** (netpoll 99.6%, mn_sched 99.3%, runloom_sched 98.8%) sit just
-  under 100%; the residual is genuine MIGRATION/DEFENSIVE/RACE that cannot be
-  driven without the forbidden migration mode or a deterministic race trigger.
+- **High-bug files** (netpoll 99.6%, mn_sched 99.3%, runloom_sched 98.8%) sat just
+  under 100%; the residual was genuine DEFENSIVE/RACE, plus the MIGRATION paths
+  that were then opt-in and are now the only M:N path (not yet re-measured).
