@@ -4,8 +4,8 @@ Everyday API -- `import stackweave` is all you need:
     stackweave.fiber(fn, *args, **kw)   spawn a fiber
     stackweave.run(n, main_fn)       THE entry point. run main_fn with n hubs:
                                   n=1 single-thread, n>1 M:N parallel across n
-                                  cores (needs 3.13t + GIL off; n>1 on a GIL
-                                  build raises).  Collapses mn_init/mn_fiber/
+                                  cores (needs the GIL off; n>1 with the GIL
+                                  re-enabled raises).  Collapses mn_init/mn_fiber/
                                   mn_run/mn_fini.  main_fn optional -> drain only.
     stackweave.sleep(seconds)        sleep without blocking the OS thread
     stackweave.yield_now()           cooperative yield (give other fibers a turn)
@@ -71,7 +71,7 @@ netpoll_backend = _core.netpoll_backend
 Chan = _core.Chan
 select = _core.select
 
-# M:N scheduler -- real multi-core parallelism on free-threaded 3.13t.
+# M:N scheduler -- real multi-core parallelism on free-threaded CPython.
 # Everyday code uses run(n, main_fn); these raw entry points stay exposed for
 # advanced use (custom spawn loops, benchmarks).  mn_hub_count() reports how
 # many hubs are live and is what the stackweave.fiber() wrapper dispatches on.
@@ -147,7 +147,7 @@ if _autosize_env in ("1", "on", "true", "prescan"):
 # hub -- so work stranded behind a wedged hub gets rescued and load spreads to
 # free cores.  This needs each fiber to own a migratable PyThreadState (per-g
 # tstate), which is only HEAP-SAFE when CPython is built with the optional
-# alloc-home patch (src/patches/cpython313t-tstate-alloc-home.patch): the per-g
+# alloc-home patch (src/patches/cpython31Xt-tstate-alloc-home.patch): the per-g
 # tstate then borrows the running hub's allocator, so no per-fiber heap migrates
 # OS threads.  Off by default; turn on with STACKWEAVE_MIGRATION=1 in the
 # environment, or stackweave.enable_migration(), BEFORE the runtime starts (the
@@ -261,7 +261,7 @@ __all__ = [
     "Chan", "select",
     # fan-in primitives
     "WaitGroup", "Future", "gather",
-    # M:N (free-threaded 3.13t)
+    # M:N
     "mn_init", "mn_fiber", "mn_run", "mn_fini", "mn_hub_count", "mn_hub_states",
     "hubs",
     # cross-hub migration (opt-in, needs the alloc-home CPython patch)

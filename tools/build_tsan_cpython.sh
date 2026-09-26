@@ -92,7 +92,7 @@ fi
 $SA make -j"$(nproc)"
 $SA make install
 
-PY="$PREFIX/bin/python3.13t"; [ -x "$PY" ] || PY="$PREFIX/bin/python3"
+PY="$PREFIX/bin/python${VER%.*}t"; [ -x "$PY" ] || PY="$PREFIX/bin/python3"
 $SA "$PY" -c 'import sys; print(sys.version); print("GIL on:", sys._is_gil_enabled())'
 $SA "$PY" -m ensurepip >/dev/null 2>&1 || true
 $SA "$PY" -m pip install -q pytest hypothesis 2>&1 | tail -1 || true

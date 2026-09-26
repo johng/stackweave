@@ -9,7 +9,7 @@ build-backend = "setuptools.build_meta"
 name = "stackweave"
 version = "0.2.0"
 description = "Go-style stackful coroutines in Python (transparent-blocking I/O via socket monkey-patch)."
-requires-python = ">=3.11"
+requires-python = ">=3.14"
 # Keep the table form for compatibility with setuptools < 77.
 # The newer SPDX-string `license = "MIT"` form requires setuptools 77+.
 license = {text = "MIT"}
@@ -31,9 +31,6 @@ classifiers = [
     "Operating System :: Android",
     "Programming Language :: C",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
     "Programming Language :: Python :: Implementation :: CPython",
     "Topic :: Software Development :: Libraries :: Python Modules",
@@ -82,11 +79,9 @@ Source = "https://github.com/johng/stackweave"
 # --------------------------------------------------------------------
 [tool.cibuildwheel]
 # CPython only (PyPy lacks the C-API surface we rely on).
-# Build the free-threaded (no-GIL) interpreters too: cp31Xt is a SEPARATE
-# ABI from cp31X, and 3.13t is stackweave's headline multi-core target -- without
-# its own wheels those users would have to compile the sdist.
+# Free-threaded (no-GIL) CPython 3.14+ only -- setup.py refuses anything else.
 enable = ["cpython-freethreading"]
-build = "cp311-* cp312-* cp313-* cp313t-* cp314-* cp314t-*"
+build = "cp314t-*"
 # Skip 32-bit and musl for now; the asm fcontext path needs musl-specific
 # testing that's not in CI yet.  Linux x86_64 + aarch64, glibc only.  Windows
 # is not supported.

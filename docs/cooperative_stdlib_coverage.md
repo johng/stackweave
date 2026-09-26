@@ -49,8 +49,8 @@ the hub goes DETACHED, a rescue thread adopts it (~50 ms), other fibers run.
 > **Note (corrected):** the figures in this section were measured when the
 > default fiber stack was **32 KB**.  The default is now **512 KB**
 > (`RUNLOOM_DEFAULT_STACK_SIZE`; see [stack-sizing.md](stack-sizing.md)), so these
-> overflow cases only bite a *small* stack today — a grown-down (16 KB under M:N)
-> or raw-`Coro`/`TCPConn` (128 KB) or explicitly-pinned stack.  The analysis
+> overflow cases only bite a *small* stack today — and on the free-threaded 3.14+
+> interpreters stackweave now requires, no fiber stack is below 256 KB.  The analysis
 > stands as a **conservative lower bound**: anything shown to fit 32 KB fits
 > 512 KB with room to spare.  The "32 KB" below should be read as "a small
 > fiber stack."
@@ -111,8 +111,9 @@ stackweave.mn_init(2); GO(worker); stackweave.mn_run(); stackweave.mn_fini()
 
 ### Deep C-recursion residual (`ast` / `compile`)
 
-A second, narrower stack class is *depth*, not a single frame.  A fiber's
-C-recursion guard is CPython 3.13's `c_recursion_remaining` counter, which **is
+A second, narrower stack class is *depth*, not a single frame.  (This section
+was measured on 3.13; see the end of it for what 3.14+ changed.)  A fiber's
+C-recursion guard was CPython 3.13's `c_recursion_remaining` counter, which **is
 reset to 200 per fiber at entry** (`runloom_g_entry`,
 `src/runloom_c/runloom_sched_core.c.inc`) — the counter has no stack-pointer
 check (that arrives in 3.14), so whether deeply-nested input gives a clean
@@ -135,11 +136,15 @@ degrades to a clean `RecursionError` like the main thread.  This covers
 It's a no-op off-fiber (where compiles normally happen), so import-time
 compilation is untouched.
 
-There is no clean shared-counter fix that would make this general (lowering the
-counter to make `ast` safe would force `json`/`pickle` to `RecursionError` at
-~14, breaking ordinary nested data); the general fix is CPython 3.14's
-stack-pointer-based recursion check, at which point stackweave can set each
-fiber's `c_stack_*` bounds and drop the offload.
+There was no clean shared-counter fix that would make this general (lowering
+the counter to make `ast` safe would force `json`/`pickle` to `RecursionError`
+at ~14, breaking ordinary nested data).  **3.14+ (the only supported versions)
+has that fix:** CPython's recursion check is stack-pointer based, and stackweave
+arms it at each fiber's own stack (`runloom_arm_fiber_stackprot`), so deep input
+raises `RecursionError` / `MemoryError` instead of crashing.  Fibers still accept
+less nesting than the main thread (nested-paren `ast.parse`, 3.14.4t: 34 at
+256 KB, 111 at the 512 KB default, 200 = the parser's own limit at 1 MB), so the
+`compile` offload stays.
 
 **Residual:** `eval(str)`/`exec(str)` compile *internally in C* (not via
 `builtins.compile`) and need the caller's namespace, so they are not offloaded.

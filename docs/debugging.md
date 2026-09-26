@@ -135,7 +135,7 @@ Each dict has:
 | `dwell_ms` | how long the **current resume** has run; a large value with `detached` is a hub wedged in a blocking call |
 | `pending` | fibers owned + queued on this hub |
 | `preempt_requested` | sysmon has asked this hub to yield (a CPU wedge) |
-| `instrumented` | whether sysmon resume-tracking is live (it is by default on free-threaded 3.13t; `running_g`/`dwell_ms`/`blocked_at` need it) |
+| `instrumented` | whether sysmon resume-tracking is live (it is by default; `running_g`/`dwell_ms`/`blocked_at` need it) |
 | `blocked_at` | best-effort Python call site of a **DETACHED-wedged** hub's blocking call, e.g. `cursor.execute (db.py:88)`, else `None` |
 | `stack_cmd` | a ready-to-run `py-spy dump --pid <PID>` for **this** process — the always-safe, out-of-process full C+Python stack of every thread |
 

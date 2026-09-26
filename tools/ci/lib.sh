@@ -166,8 +166,8 @@ python.org."
 # rl_apply_patches <srcdir> <patchdir> <version> <patch...>
 #
 # ZERO FUZZ, and that is the whole point.  Fuzzy application here is not a
-# convenience, it is a correctness hazard: the 3.13 alloc-home patch's two
-# llist_insert_tail hunks will fuzz into 3.14 against superficially-similar
+# convenience, it is a correctness hazard: the (removed) 3.13 alloc-home patch's
+# two llist_insert_tail hunks will fuzz into 3.14 against superficially-similar
 # context and introduce a double alloc-home hop that no test catches.  If a hunk
 # needs fuzz, the patch needs a port -- see the 'WHAT CHANGED' section in
 # src/patches/cpython314t-tstate-alloc-home.patch for the shape of one.

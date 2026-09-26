@@ -8,9 +8,9 @@
 #
 # Contract, in order of how badly each bites if wrong:
 #   1. THE PATCHES MUST APPLY CLEANLY.  -F0, --forward, zero .rej.  Fuzzy
-#      application is a correctness hazard: the 3.13 alloc-home patch's two
-#      llist_insert_tail hunks fuzz into 3.14 and introduce a double alloc-home
-#      hop no test catches.  A hunk that needs fuzz means the patch needs a port.
+#      application is a correctness hazard: the (removed) 3.13 alloc-home patch's
+#      two llist_insert_tail hunks fuzz into 3.14 and introduce a double
+#      alloc-home hop no test catches.  A hunk that needs fuzz means the patch needs a port.
 #   2. THE FEATURE MUST REACH EXTENSION MODULES.  CPPFLAGS covers only CPython's
 #      own build; extensions include the INSTALLED pyconfig.h.  alloc-home adds a
 #      field to _PyThreadStateImpl, so a mismatch shifts struct offsets SILENTLY.

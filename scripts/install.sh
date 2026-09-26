@@ -29,16 +29,17 @@ if ! have "$PYTHON"; then
     if have python; then
         PYTHON="python"
     else
-        log "no python interpreter on PATH; install Python 3.11+ first"
+        log "no python interpreter on PATH; install a free-threaded Python 3.14+ first"
         exit 1
     fi
 fi
 PY_VER="$("$PYTHON" -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
 log "using $PYTHON (Python $PY_VER)"
 
-# 2. Quick version check (matches requires-python = >=3.11 in pyproject.toml).
-"$PYTHON" -c 'import sys; sys.exit(0 if sys.version_info >= (3,11) else 1)' \
-    || { log "stackweave requires Python 3.11+; you have $PY_VER"; exit 1; }
+# 2. Quick version check (matches requires-python = >=3.14 in pyproject.toml, and
+#    setup.py's free-threaded-only check).
+"$PYTHON" -c 'import sys, sysconfig; sys.exit(0 if sys.version_info >= (3,14) and sysconfig.get_config_var("Py_GIL_DISABLED") else 1)' \
+    || { log "stackweave requires a free-threaded (--disable-gil) Python 3.14+; you have $PY_VER"; exit 1; }
 
 # 3. Bootstrap a compiler if none is present.
 if ! (have cc || have gcc || have clang); then

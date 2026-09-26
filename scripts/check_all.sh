@@ -46,7 +46,7 @@
 #
 # Env:
 #   PYTHON=...   interpreter for the Python suite + fuzzer
-#                (default: a free-threaded 3.13t if found, else python3)
+#                (default: a free-threaded 3.14t if found, else python3)
 #   VERIFY_JOBS=N  formal-verification worker pool size (default: nproc; 1=serial)
 set -u
 
@@ -64,13 +64,13 @@ fi
 
 # Prefer a free-threaded build -- that's where the M:N scheduler is real.
 if [ -z "${PYTHON:-}" ]; then
-    for cand in "$HOME/.pyenv/versions/3.14.4t/bin/python3" python3.13t python3; do
+    for cand in "$HOME/.pyenv/versions/3.14.4t/bin/python3" python3.14t python3; do
         if command -v "$cand" >/dev/null 2>&1; then PYTHON="$cand"; break; fi
     done
 fi
 # One clear message rather than N opaque "command not found"s per phase.
 if [ -z "${PYTHON:-}" ]; then
-    echo "check_all: no python interpreter found -- set PYTHON=/path/to/python3 (want a free-threaded 3.13t)"; exit 2
+    echo "check_all: no python interpreter found -- set PYTHON=/path/to/python3 (want a free-threaded 3.14t)"; exit 2
 fi
 
 phases=("$@")

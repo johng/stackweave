@@ -35,7 +35,7 @@ ROOT="$(cd "$ROOT" && pwd)"
 cd "$ROOT"
 PY="${STACKWEAVE_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
 NORMAL_PY="$PY"                          # the normal (non-gold) interp for the EXIT restore
-GOLD_PY="${STACKWEAVE_TSAN_PYTHON:-$HOME/cpython-tsan/bin/python3.13t}"   # TSan-instrumented CPython
+GOLD_PY="${STACKWEAVE_TSAN_PYTHON:-$HOME/cpython-tsan/bin/python3.14t}"   # TSan-instrumented CPython
 GOLD_SUPP="${STACKWEAVE_TSAN_CPYTHON_SUPP:-$HOME/projects/cpython-tsan/Tools/tsan/suppressions_free_threading.txt}"
 OUT="${STACKWEAVE_SOAK_DIR:-$HOME/runloom-soak}"
 LEDGER="$OUT/LEDGER.md"
@@ -109,7 +109,7 @@ case "$BUILD" in
     # LD_PRELOAD) whose tsan_suppressions.txt has to blind exactly that seam.  We
     # therefore load ONLY CPython's own free-threading suppressions, NOT ours,
     # and run under setarch -R ($SA) since every TSan binary aborts under ASLR.
-    [ -x "$PY" ] || { echo "tsan-gold interp $PY missing -- run tools/build_tsan_cpython.sh 3.13.13; SKIP"; exit 0; }
+    [ -x "$PY" ] || { echo "tsan-gold interp $PY missing -- run tools/build_tsan_cpython.sh 3.14.4; SKIP"; exit 0; }
     [ -f "$GOLD_SUPP" ] || { echo "gold suppressions $GOLD_SUPP missing -- SKIP"; exit 0; }
     # TSan binaries abort ("unexpected memory mapping") under high-entropy ASLR,
     # and the setarch -R personality does NOT reliably survive the soak's Popen

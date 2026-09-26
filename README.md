@@ -81,7 +81,7 @@ off stock CPython. **No runtime dependencies.**
 
 - **Hand-rolled asm context switch** (x86_64 SysV, aarch64) — ~80 ns/swap, no
   syscall; POSIX `ucontext` fallback.
-- **M:N work-stealing scheduler** (3.13t) — Chase-Lev deque per hub, per-hub MPSC
+- **M:N work-stealing scheduler** — Chase-Lev deque per hub, per-hub MPSC
   submission, woken goroutines routed back to their origin hub.
 - **Per-goroutine `PyThreadState` snapshot** — cframe, datastack, exc_info,
   contextvars, recursion; a million yielded goroutines share their hub threads
@@ -90,7 +90,7 @@ off stock CPython. **No runtime dependencies.**
   transparently on fd readiness, lost-wake-free 3-state park-commit.
 - **Go-style channels** — `Chan(capacity)`, `select`, `for v in ch`.
 - **Stall isolation + recovery** — one unanticipated blocking call stalls only
-  its hub, and the runtime detects + recovers it (default on, 3.13t).
+  its hub, and the runtime detects + recovers it (default on).
 - **`monkey.patch()`** makes blocking stdlib (`socket`, `time`, `threading`, …)
   cooperative, so existing blocking code runs unchanged.
 
@@ -101,9 +101,10 @@ zero-rewrite port path, not a multi-core speedup (use the sync API with
 
 ## Honest limitations
 
-- **The multi-core win needs free-threaded CPython 3.13t** (3.11+ for the frame
-  snapshot at all). On a GIL build stackweave still runs — cheap spawn, the
-  goroutine model, netpoll — but single-core like asyncio.
+- **Free-threaded CPython 3.14+ only.** `setup.py` refuses GIL builds and older
+  versions. With the GIL re-enabled at runtime (`PYTHON_GIL=1`) stackweave still
+  runs single-hub — cheap spawn, the goroutine model, netpoll — but single-core
+  like asyncio.
 - **stackweave doesn't make Python faster per core.** CPython's ~80 k pure-Python
   ops/s/core is a constant it can't raise; it lets one process hit that on every
   core at once with a blocking model. The scheduler itself is Go-class.
@@ -112,18 +113,19 @@ zero-rewrite port path, not a multi-core speedup (use the sync API with
 - **Preemption fires only at Python bytecode boundaries** — a goroutine inside a
   tight pure-C call (e.g. `numpy`) holds its hub until it returns (same as Go +
   cgo).
-- **Linux x86_64 / 3.13t is the primary, heavily-validated target** (2 M-conn
-  runs, fuzzing, sanitizers, formal models); other backends are maintained
+- **Linux x86_64 is the primary, heavily-validated target** (2 M-conn
+  runs, fuzzing, sanitizers, formal models — mostly on 3.13t, before 3.14t
+  became the only supported version); other backends are maintained
   in-step but less deeply exercised.
 
 ## Platform support
 
 | OS / arch | switch | netpoll | tested |
 | --- | --- | --- | --- |
-| Linux x86_64 | fcontext-asm | epoll | **yes — hw, 3.11 / 3.12 / 3.13t / 3.14t (primary)** |
+| Linux x86_64 | fcontext-asm | epoll | **yes — hw, 3.14t (primary)** |
 | Linux aarch64 | fcontext-asm | epoll | qemu |
 | macOS x86_64 / arm64 | fcontext-asm | kqueue | hw, 3.14t |
-| FreeBSD / GhostBSD | fcontext-asm | kqueue | hw, 3.12 |
+| FreeBSD / GhostBSD | fcontext-asm | kqueue | hw on 3.12 only — not yet re-validated on 3.14t |
 | Solaris / Android / other BSD | ucontext / asm | select / epoll / kqueue | review |
 
 ## Docs & layout

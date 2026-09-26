@@ -71,8 +71,8 @@ fibers.
 - You're CPU-bound on a single fiber -- that's threads, not
   coroutines.  stackweave can't preempt inside a long C call (same limitation
   Go has with cgo).
-- You need Python 3.10 or older -- stackweave requires 3.11+ for the
-  per-fiber `PyThreadState` snapshot.
+- You need a GIL build or a CPython older than 3.14 -- stackweave requires
+  free-threaded CPython 3.14+.
 
 ## How it works in 60 seconds
 

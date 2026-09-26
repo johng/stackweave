@@ -6,14 +6,12 @@ will be plain `pip install stackweave`; until then build from source.
 
 ## Requirements
 
-- **Python 3.11 or newer.**  The per-fiber `PyThreadState`
-  snapshot uses 3.11+ tstate fields (`cframe`, `datastack_chunk`,
-  `exc_state`).  Pre-3.11 used a different frame model that stackweave
-  doesn't cover.
+- **Free-threaded (`--disable-gil`) CPython 3.14 or newer.**  `setup.py`
+  refuses GIL builds and older versions: the fiber stack floor, the per-fiber
+  stack-overflow check and the parked-frame GC anchor all depend on it, and the
+  C sources have no other code paths.
 - A C compiler.  Anything reasonably modern works: GCC 4.7+ or Clang
   3.5+.
-- Free-threaded 3.14t (and 3.13t) are fully supported and add the M:N
-  work-stealing scheduler + time-sliced preemption features.
 
 ## Editable install
 
@@ -70,7 +68,6 @@ the tier-2 JIT **off**:
 
 | build | configure | JIT |
 | --- | --- | --- |
-| dev 3.13.13t | `--disable-gil` | off |
 | dev 3.14.4t | `--disable-gil` | off |
 | production (soupchan/ovh1) | `--disable-gil` | off |
 
@@ -108,8 +105,8 @@ p565/p524 crash).
 The resolution is an interlock rather than a blanket disable, in
 `stackweave/runtime.py` (`_tlbc_reexec_if_needed`): the GC-frames anchor makes
 parked fiber frames visible to the collector, and TLBC stays **on** whenever
-that anchor is active — the default on FT 3.14+. Only when the anchor is
-unavailable (e.g. 3.13t) does stackweave re-exec with `PYTHON_TLBC=0`, which
+that anchor is active — the default. Only when the anchor is
+unavailable (e.g. `STACKWEAVE_GC_FRAMES=0`) does stackweave re-exec with `PYTHON_TLBC=0`, which
 keeps the crashy combination unreachable. Opt out entirely with
 `PYTHON_TLBC=0` / `-X tlbc=0`; force it on regardless with `STACKWEAVE_TLBC=1`
 (dev/debug only).
@@ -148,8 +145,8 @@ Windows is not supported.
 
 ## Prebuilt wheels
 
-`pyproject.toml` ships a `[tool.cibuildwheel]` matrix covering CPython
-3.11–3.14 on:
+`pyproject.toml` ships a `[tool.cibuildwheel]` matrix covering free-threaded
+CPython 3.14+ (`cp314t`) on:
 
 - Linux x86_64 + aarch64 (manylinux\_2\_28)
 - macOS universal2 (arm64 + x86_64)

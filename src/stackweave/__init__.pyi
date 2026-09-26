@@ -55,7 +55,7 @@ def run(n: int, main_fn: Callable[[], Any] | None = ...) -> int:
 
         run(1, main)   single-thread (M:1).
         run(n, main)   M:N across n hubs, GIL off -> real multi-core
-                       parallelism.  Requires a free-threaded build (3.13t,
+                       parallelism.  Requires a free-threaded build (3.14t+,
                        PYTHON_GIL=0); n > 1 with the GIL on raises.
         run(n)         main_fn omitted -> drain already-go()'d goroutines.
 

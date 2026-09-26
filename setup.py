@@ -70,6 +70,13 @@ PLAT = sys.platform
 if os.name == "nt" or PLAT.startswith(("win", "cygwin")):
     sys.exit("stackweave does not support Windows (Linux, macOS, BSD, and "
              "Solaris/illumos are supported).")
+# Free-threaded CPython 3.14+ only: the C sources have no other code paths (the
+# #error in src/runloom_c/runloom_sched.h is the backstop for other build routes).
+if sys.version_info < (3, 14) or not sysconfig.get_config_var("Py_GIL_DISABLED"):
+    sys.exit("stackweave requires a free-threaded (--disable-gil) CPython 3.14 or "
+             "newer; this is Python %d.%d%s."
+             % (sys.version_info[0], sys.version_info[1],
+                "t" if sysconfig.get_config_var("Py_GIL_DISABLED") else " (GIL build)"))
 IS_DARWIN  = PLAT == "darwin"
 IS_LINUX   = PLAT.startswith("linux")
 IS_BSD     = PLAT.startswith(("freebsd", "openbsd", "netbsd",

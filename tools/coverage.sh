@@ -20,7 +20,7 @@
 # Usage:  tools/coverage.sh            # full corpus
 #         tools/coverage.sh quick      # pytest suite only (faster)
 #
-# Env:  PYTHON=...   interpreter (default: free-threaded 3.13t if present)
+# Env:  PYTHON=...   interpreter (default: free-threaded 3.14t if present)
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -28,7 +28,7 @@ cd "$ROOT"
 MODE="${1:-full}"
 
 if [ -z "${PYTHON:-}" ]; then
-    for cand in "$HOME/.pyenv/versions/3.14.4t/bin/python3" python3.13t python3; do
+    for cand in "$HOME/.pyenv/versions/3.14.4t/bin/python3" python3.14t python3; do
         command -v "$cand" >/dev/null 2>&1 && { PYTHON="$cand"; break; }
     done
 fi

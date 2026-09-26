@@ -317,10 +317,8 @@ class StreamWriter(object):
 # lowest-risk fix is to drop the lingering memoryview temporary: a plain
 # bytearray slice (`self._buffer[:n]`) yields a fresh bytes object and holds no
 # export over the buffer.  Same return semantics (at most n bytes,
-# _maybe_resume_transport()).  Installed only on >=3.14, so 3.13t is untouched.
+# _maybe_resume_transport()).
 def _pg_install_stdlib_streamreader_read_314():
-    if sys.version_info < (3, 14):
-        return
     import asyncio.streams as _streams
 
     _Reader = _streams.StreamReader
