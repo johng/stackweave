@@ -102,6 +102,37 @@ void runloom_iframe_borrow_alloc_home(PyThreadState *exec, PyThreadState *home);
  * runloom_exec_home_active below.  Exposed as runloom_c.alloc_home_available. */
 int runloom_alloc_home_active(void);
 
+/* Drain the biased-refcount merge queue that free-threaded CPython attached to
+ * THIS thread state, if any.  Under migration every object is allocated on the
+ * running hub's thread id (alloc-home), so a last decref from another hub is
+ * queued -- by thread id -- to the FIRST thread state in that id's bucket: the
+ * hub's own, created first on its thread.  The queue is merged only when its
+ * owner runs bytecode, is deleted, or a GC starts; a hub thread state never runs
+ * bytecode, so without this call every cross-hub drop (a finished fiber's G
+ * handle, a 1 MiB bytes) survives until the next GC.  Loops because a merged
+ * container's tp_dealloc re-queues same-owner children to the same state.
+ * Must be called with `ts` ATTACHED (it runs deallocators).  Returns the number
+ * of merge rounds; 0 when nothing was queued. */
+int runloom_iframe_service_merge_queue(PyThreadState *ts);
+
+/* Make the RUNNING fiber the receiver of this hub's cross-thread drops.
+ *
+ * Biased refcounting routes a non-owner last decref to the FIRST thread state
+ * in the owner thread id's bucket.  A hub's own thread state is created first
+ * on its thread, so every drop of an object allocated on that hub lands on the
+ * hub's state, which never runs bytecode while a fiber does -- a long-running
+ * fiber lets them pile up (300 x 1 MiB in one 100 ms resume).  adopt() gives
+ * the fiber's thread state the hub's thread id and puts it at the head of the
+ * hub's bucket, so drops during the resume go to the fiber, whose own eval
+ * loop merges them at its next eval-breaker check.  release() puts the hub's
+ * state back at the head and drains anything still queued on the fiber,
+ * while the fiber's state is still attached on this thread (the owner).
+ * Both take the bucket mutexes, so both must be called ATTACHED: adopt right
+ * after the fiber's state is attached, release right before it is detached.
+ */
+void runloom_iframe_brc_adopt(PyThreadState *fiber, PyThreadState *hub);
+void runloom_iframe_brc_release(PyThreadState *fiber, PyThreadState *hub);
+
 /* True iff this build's EXECUTION half is migration-safe: compiled against the
  * exec-home CPython patch (Py_TSTATE_EXEC_HOME,
  * patches/cpython314t-tstate-exec-home.patch).
