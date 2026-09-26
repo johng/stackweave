@@ -25,8 +25,7 @@
  * cannot be preempted mid-C between EAGAIN and its park), so a no-op is correct
  * -- and it avoids holding a critical section across a park on a build that
  * would NOT suspend it. */
-#if PY_VERSION_HEX >= 0x030D0000 && defined(Py_GIL_DISABLED) && \
-    !defined(RUNLOOM_NO_IFRAME)
+#if !defined(RUNLOOM_NO_IFRAME)
 #  define RUNLOOM_TCPCONN_LOCK_DECL   PyCriticalSection _conn_cs
 #  define RUNLOOM_TCPCONN_LOCK(self)  PyCriticalSection_Begin(&_conn_cs, (PyObject *)(self))
 #  define RUNLOOM_TCPCONN_UNLOCK()    PyCriticalSection_End(&_conn_cs)

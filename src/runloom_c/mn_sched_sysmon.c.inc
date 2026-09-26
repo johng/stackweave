@@ -160,27 +160,18 @@ static RUNLOOM_THREAD_RET runloom_sysmon_main(void *arg)
 }
 
 /* Interpret an OPT-OUT env flag for the stall-recovery features.  Explicit
- * "0" => off; explicit anything-else => on; UNSET => the build default.  The
- * default is ON only on free-threaded 3.13+ -- the one configuration where
- * RUNLOOM_PREEMPT is validated (it needs the free-threaded attach-state
- * protocol, and that is where runloom's M:N scheduler actually runs Python in
- * parallel).  On GIL / pre-3.13 builds the default is OFF so an untested config
- * never silently enables it; an explicit env var still forces the user's choice
- * (subject to the per-version / per-g gates below). */
+ * "0" => off; explicit anything-else => on; UNSET => on.  (Subject to the
+ * per-g gates below.) */
 static int runloom_flag_default_on(const char *v)
 {
     if (v != NULL) return (v[0] != '0') ? 1 : 0;
-#if defined(Py_GIL_DISABLED) && PY_VERSION_HEX >= 0x030D0000
     return 1;
-#else
-    return 0;
-#endif
 }
 
 /* Read RUNLOOM_SYSMON / RUNLOOM_SYSMON_MS once and set the enable flag + threshold.
  * Must run in mn_init BEFORE the hub threads start so the per-resume
- * instrumentation is live from the first resume.  RUNLOOM_PREEMPT defaults ON on
- * free-threaded 3.13+ (opt out with =0); it forces the sysmon thread on but NOT
+ * instrumentation is live from the first resume.  RUNLOOM_PREEMPT defaults ON
+ * (opt out with =0); it forces the sysmon thread on but NOT
  * its stderr logging -- WEDGED/RECOVERED lines print only when the user opts in
  * via RUNLOOM_SYSMON=1 (or RUNLOOM_SYSMON_QUIET=0). */
 static void runloom_sysmon_config(void)
@@ -194,19 +185,16 @@ static void runloom_sysmon_config(void)
     int sysmon_explicit = (e != NULL && e[0] != '0');
     runloom_sysmon_enabled = sysmon_explicit ? 1 : 0;
     /* Quiet by default: log only when sysmon was explicitly requested.  When it
-     * runs solely to service preemption (the common default on FT 3.13+), stay
+     * runs solely to service preemption (the common default), stay
      * silent.  RUNLOOM_SYSMON_QUIET still forces the choice either way
      * (=1 quiet, =0 verbose). */
     if (q != NULL) runloom_sysmon_quiet = (q[0] != '0') ? 1 : 0;
     else           runloom_sysmon_quiet = sysmon_explicit ? 0 : 1;
-    /* RUNLOOM_PREEMPT: ATTACHED/CPU preemption (3.13+ only -- needs the attach
+    /* RUNLOOM_PREEMPT: ATTACHED/CPU preemption (uses the free-threaded attach
      * states to classify the wedge).  It forces the sysmon instrumentation +
      * watchdog on (that is what detects the wedge and arms preempt_requested).
      * The eval-frame wrapper is installed in mn_init. */
     runloom_preempt_enabled = runloom_flag_default_on(getenv("STACKWEAVE_PREEMPT"));  /* default ON */
-#if PY_VERSION_HEX < 0x030D0000
-    runloom_preempt_enabled = 0;
-#endif
     /* Under per-g-tstate the hub's bound tstate is DETACHED every per-g resume,
      * so the ATTACHED-wedge arm never fires and the wrapper would only be dead
      * weight on the eval path -- stand it down. */

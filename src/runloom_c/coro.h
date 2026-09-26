@@ -64,9 +64,7 @@ void runloom_coro_resume(runloom_coro_t *c);
  * grow.  The Python layer registers this on free-threaded 3.14+ to re-arm the
  * live thread state's C-stack soft/hard limit at THIS fiber's stack -- 3.14's
  * overflow check is SP-vs-soft_limit, and the default shared-hub tstate's limit
- * is otherwise left pointing at whichever fiber entered last.  NULL = no-op
- * (3.13 and earlier need nothing: their integer recursion counter is restored
- * from the per-g snapshot). */
+ * is otherwise left pointing at whichever fiber entered last.  NULL = no-op. */
 extern void (*runloom_coro_pre_swap)(runloom_coro_t *c);
 
 /* Yield from inside a coroutine.  Returns control to whatever called

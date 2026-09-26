@@ -777,24 +777,14 @@ static PyObject *m_fiber_grow(PyObject *self, PyObject *const *args,
     return PyObject_Vectorcall(runloom_py_fiber_full, args, (size_t)nargs, kwnames);
 }
 
-/* Preemption: 3.13t only.  Refuse on other versions with a clear error
- * rather than silently failing -- the timer + Py_AddPendingCall path
- * has only been validated on free-threaded 3.13, and the M:N hub model
- * that needs preemption most only makes sense there. */
+/* Preemption: start the time-slice timer (Py_AddPendingCall path). */
 static PyObject *m_preempt_init(PyObject *self, PyObject *args)
 {
     long quantum_us = 10000;
     (void)self;
     if (!PyArg_ParseTuple(args, "|l", &quantum_us)) return NULL;
-#if !(defined(Py_GIL_DISABLED) && PY_VERSION_HEX >= 0x030D0000)
-    PyErr_SetString(PyExc_RuntimeError,
-                    "preempt_init: free-threaded Python 3.13t only "
-                    "(GIL builds and pre-3.13 not supported yet)");
-    return NULL;
-#else
     if (runloom_preempt_init(quantum_us) < 0) return NULL;
     Py_RETURN_NONE;
-#endif
 }
 
 static PyObject *m_preempt_fini(PyObject *self, PyObject *unused)

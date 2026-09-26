@@ -28,9 +28,7 @@
  * g->snap are frozen for the walk.  The traverse MUST NOT allocate or free (its
  * subtract-pass call site runs inside the collector's heap walk). */
 
-#if defined(Py_GIL_DISABLED) && PY_VERSION_HEX >= 0x030E0000
 #  define RUNLOOM_GCFRAMES_ANCHOR 1
-#endif
 
 static PyObject *runloom_gcframes_anchor = NULL;   /* the tracked sentinel; a hidden
                                                     * C reference keeps gc_refs >= 1 so it

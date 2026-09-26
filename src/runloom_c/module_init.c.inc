@@ -317,7 +317,7 @@ static PyMethodDef module_methods[] = {
      "reads; see stackweave.inspect.hubs() for the friendly view + a py-spy command."},
     {"preempt_init", m_preempt_init, METH_VARARGS,
      "preempt_init(quantum_us=10000): start the time-sliced preemption "
-     "timer.  3.13t only.  Goroutines without explicit sched_yield "
+     "timer.  Goroutines without explicit sched_yield "
      "calls will be preempted every quantum_us microseconds via a "
      "Py_AddPendingCall hook into CPython's eval_breaker."},
     {"preempt_fini", m_preempt_fini, METH_NOARGS,
@@ -481,13 +481,11 @@ static struct PyModuleDef runloom_c_module = {
     NULL, NULL, NULL, NULL
 };
 
-/* Declare the extension as safe under free-threaded Python (3.13t).
+/* Declare the extension as safe under free-threaded Python.
  * Our single-OS-thread scheduler doesn't have multi-thread races
  * today; the M:N work-stealing in Phase C will need actual atomic
  * work-queue ops to keep this declaration honest. */
-#ifdef Py_GIL_DISABLED
 #  define RUNLOOM_FT_OK 1
-#endif
 
 /* --------------------------------------------------------------------------
  * Goroutine-safe module attribute lookup.
@@ -582,9 +580,7 @@ PyMODINIT_FUNC PyInit_stackweave_c(void)
     const char *scrub_env;
     runloom_diag_init();          /* parses RUNLOOM_DEBUG once; cheap; idempotent */
     runloom_introspect_init();    /* fiber registry lock; reads RUNLOOM_INTROSPECT_TIME */
-#if PY_VERSION_HEX >= 0x030E0000
     runloom_coro_pre_swap = runloom_coro_rearm_stackprot;  /* 3.14: re-arm fiber C-stack limit on every resume */
-#endif
     scrub_env = getenv("STACKWEAVE_STACK_SCRUB");   /* opt-in recycled-stack wipe */
     if (scrub_env && scrub_env[0] && scrub_env[0] != '0') {
         runloom_coro_scrub_set(1);
@@ -768,11 +764,9 @@ PyMODINIT_FUNC PyInit_stackweave_c(void)
             return NULL;
         }
     }
-#ifdef Py_GIL_DISABLED
     /* Declare free-thread safety.  v0 scheduler is still single-OS-
      * thread, so this is trivially safe.  Phase C M:N needs to maintain
      * this when adding the work-stealing ring queue. */
     PyUnstable_Module_SetGIL(m, Py_MOD_GIL_NOT_USED);
-#endif
     return m;
 }

@@ -400,8 +400,8 @@ static int runloom_resolve_migratable_mode(void)
         "fiber uses the origin hub's thread state and mis-resolves biased-refcount "
         "ownership -> use-after-free.\n"
         "For PRODUCTION, build CPython against BOTH "
-        "patches/cpython313t-tstate-alloc-home.patch and "
-        "patches/cpython314t-tstate-exec-home.patch (and rebuild extension modules "
+        "patches/cpython31Xt-tstate-alloc-home.patch and "
+        "patches/cpython31Xt-tstate-exec-home.patch for your 3.1X (and rebuild extension modules "
         "against it -- _Py_ThreadId() inlines into Py_INCREF/Py_DECREF). For "
         "dev/fuzzing, set STACKWEAVE_ALLOW_UNSAFE_MIGRATION=1 to enable anyway. "
         "Running the default (per-hub-tstate) scheduler instead.\n",
@@ -449,25 +449,12 @@ static int runloom_use_global_runq(void)
 #define RUNLOOM_TS_ATTACHED  1
 #define RUNLOOM_TS_SUSPENDED 2
 
-/* Read a tstate's free-threaded attach state (DETACHED/ATTACHED/SUSPENDED).
- * The `state` field + this tri-state attach protocol are free-threading
- * infrastructure that only exists from 3.13 (3.12 has `_status` and no
- * attach/detach/stop-the-world concept).  Pre-3.13 returns -1 ("unknown"),
- * which makes the sysmon classifier print "?" and the preempt dispatch gate
- * (== RUNLOOM_TS_ATTACHED) fail closed -- preemption never fires there. */
-#if PY_VERSION_HEX >= 0x030D0000
+/* Read a tstate's free-threaded attach state (DETACHED/ATTACHED/SUSPENDED). */
 RUNLOOM_INLINE int runloom_tstate_attach_state(PyThreadState *ts)
 {
     if (ts == NULL) return -1;
     return __atomic_load_n(&ts->state, __ATOMIC_ACQUIRE);
 }
-#else
-RUNLOOM_INLINE int runloom_tstate_attach_state(PyThreadState *ts)
-{
-    (void)ts;
-    return -1;
-}
-#endif
 
 static int       runloom_sysmon_enabled = 0;
 static int       runloom_sysmon_quiet = 0;   /* RUNLOOM_SYSMON_QUIET: suppress

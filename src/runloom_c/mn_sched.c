@@ -25,10 +25,9 @@
  * snapshots the per-g PythonState, and asm-yields back to hub_main
  * which then loads its own hub_snap and loops to the next g.
  *
- * Free-threaded Python (3.13t) is required to get real parallelism
- * out of this: each hub thread has its own PyThreadState and runs
- * Python code without contending on a global lock.  On a GIL build
- * this still works correctly but serialises through the GIL.
+ * Free-threaded Python is what makes this parallel: each hub thread
+ * has its own PyThreadState and runs Python code without contending on
+ * a global lock.
  *
  * What's NOT in v2:
  *   - cross-hub netpoll: each hub has its own epoll fd; a g that

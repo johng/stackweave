@@ -1454,8 +1454,8 @@ static int runloom_mn_has_wakeable_work(void)
     int i;
     /* The "a hub is running a fiber right now" signal below (h->resume_start_ns)
      * is written ONLY by runloom_hub_resume_begin when runloom_sysmon_enabled.
-     * With the instrumentation off (RUNLOOM_PREEMPT=0 and no RUNLOOM_SYSMON, and
-     * default-off on GIL / pre-3.13 builds) resume_start_ns is never set, so a
+     * With the instrumentation off (RUNLOOM_PREEMPT=0 and no RUNLOOM_SYSMON)
+     * resume_start_ns is never set, so a
      * CPU-bound fiber that is ACTIVELY EXECUTING -- in no queue, with all queues
      * empty -- looks identical to a genuinely deadlocked one.  Without a
      * trustworthy running-fiber signal the census cannot distinguish a healthy

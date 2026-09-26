@@ -111,10 +111,8 @@ runloom_hub_info_t *runloom_mn_hub_snapshot(long *count_out)
                 ctx.buf = o->blocked_at;
                 ctx.cap = sizeof o->blocked_at;
                 ctx.got = 0;
-#if PY_VERSION_HEX >= 0x030D0000
                 runloom_iframe_walk((void *)hts->current_frame, 1,
                                     hubinfo_frame_cb, &ctx);
-#endif
             }
         }
     }

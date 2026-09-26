@@ -579,13 +579,10 @@ Py_ssize_t runloom_sched_drain(runloom_sched_t *s)
                  *     across all fibers (the original cliff).
                  *
                  * Install a chunk from the per-thread pool (or NULL the
-                 * datastack pointers so PyEval allocates fresh).  For
-                 * 3.13 also NULL current_frame so g's first frame
-                 * chains to nothing.  For 3.12, g_entry will install a
-                 * root cframe on g's own stack before any Python code
-                 * runs. */
+                 * datastack pointers so PyEval allocates fresh), and
+                 * NULL current_frame so g's first frame chains to
+                 * nothing. */
                 runloom_first_run_install_datastack();
-#if PY_VERSION_HEX >= 0x030B0000
                 /* Also reset exception state for first-run g.  Without
                  * this, the new g inherits whatever ts->exc_info /
                  * exc_state / current_exception was left by the
@@ -598,17 +595,12 @@ Py_ssize_t runloom_sched_drain(runloom_sched_t *s)
                     Py_CLEAR(ts->exc_state.exc_value);
                     ts->exc_state.previous_item = NULL;
                     ts->exc_info = &ts->exc_state;
-#  if PY_VERSION_HEX >= 0x030C0000
                     Py_CLEAR(ts->current_exception);
-#  endif
                 }
-#endif
-#if PY_VERSION_HEX >= 0x030D0000
                 {
                     PyThreadState *ts = PyThreadState_GET();
                     ts->current_frame = NULL;
                 }
-#endif
             }
 
             /* WAKE-TRACE: running a ready fiber (model DrainResume).  Emitted for

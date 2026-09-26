@@ -17,6 +17,14 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 
+/* Free-threaded CPython 3.14+ only.  The fiber stack floor, the stack-protection
+ * arming and the parked-frame GC anchor all assume it, and the older code paths
+ * are gone.  setup.py refuses other interpreters before compiling; this catches
+ * any other build route. */
+#if PY_VERSION_HEX < 0x030E0000 || !defined(Py_GIL_DISABLED)
+#  error "stackweave requires a free-threaded (--disable-gil) CPython 3.14 or newer"
+#endif
+
 #include "coro.h"
 #include "plat_compat.h"   /* runloom_mutex_t for cross-thread wake list */
 
@@ -47,7 +55,7 @@ typedef struct runloom_pystate_snap runloom_pystate_snap_t;
  * wild size would otherwise fail the mmap with MemoryError on the M:N spawn
  * path instead of clamping the way the single-thread path does.  Shared here so
  * both the runloom_sched.c and mn_sched.c translation units agree on one value. */
-#define RUNLOOM_MIN_STACK_SIZE       (16  * 1024)         /* 3.13t hard floor */
+#define RUNLOOM_MIN_STACK_SIZE       (16  * 1024)         /* raised to 256 KB below */
 #define RUNLOOM_MAX_STACK_SIZE       (8   * 1024 * 1024)  /* 8 MiB ceiling */
 
 /* Free-threaded 3.14+ minimum PHYSICAL fiber C-stack.
@@ -66,11 +74,8 @@ typedef struct runloom_pystate_snap runloom_pystate_snap_t;
  * Fix at fiber CREATION (a fresh empty stack -- NOT a live mid-recursion copy-grow,
  * which is the p212 SEGV hazard): floor the requested size at 256KB, where both the
  * chunk-alloc RESERVE (RUNLOOM_STACKPROT_RESERVE_MIN = 96KB) and a usable recursion
- * window fit (eff = 256 - 96 = 160KB usable).  Inert on 3.13 / non-free-threaded
- * (those keep the integer counter and the 16KB floor). */
-#if defined(Py_GIL_DISABLED) && PY_VERSION_HEX >= 0x030E0000
+ * window fit (eff = 256 - 96 = 160KB usable). */
 #  define RUNLOOM_FT314_MIN_STACK_SIZE  ((size_t)256 * 1024)
-#endif
 
 /* Clamp a requested per-fiber C-stack size up to the free-threaded-3.14 floor.
  * A no-op (returns the size unchanged) on every other build. */
@@ -91,20 +96,18 @@ static inline size_t runloom_fiber_stack_floor(size_t bytes)
  * empty after a load.  Save and load must be balanced.
  *
  * Layout matches greenlet's PythonState/ExceptionState, transcribed to
- * C99 with #if PY_VERSION_HEX gates for 3.12 vs 3.13 vs older.  See
+ * C99 (free-threaded CPython 3.14+ layout).  See
  * https://github.com/python-greenlet/greenlet src/greenlet/TPythonState.cpp.
  */
 struct runloom_pystate_snap {
     int valid;
     /* CPython per-object critical-section chain held by this g when it parked
-     * (free-threaded 3.13t only; 0 otherwise).  Saved + the mutexes released on
+     * (0 if none).  Saved + the mutexes released on
      * snap, restored + re-locked on load -- so a g that parks mid-critical-
      * section (e.g. inside a dict key __eq__) does not strand the dict's mutex
      * locked across the swap and deadlock every other hub.  See snap/load. */
     uintptr_t critical_section;
-#if PY_VERSION_HEX >= 0x030B0000
-    /* 3.11+ common fields.  All of: contextvars, datastack arena
-     * pointers, exc state, exist on 3.11/3.12/3.13. */
+    /* contextvars, datastack arena pointers, exc state. */
     PyObject *context;                       /* contextvars; owned ref */
     _PyStackChunk *datastack_chunk;
     PyObject **datastack_top;
@@ -137,21 +140,9 @@ struct runloom_pystate_snap {
      * owner unpinned only past the cap (vanishingly rare, see snap). */
     PyObject *exc_owners[8];
     int exc_owner_count;
-#endif
-#if PY_VERSION_HEX >= 0x030B0000 && PY_VERSION_HEX < 0x030C0000
-    /* 3.11: single recursion counter, named recursion_remaining. */
-    int recursion_remaining;
-#endif
-#if PY_VERSION_HEX >= 0x030E0000
     /* 3.14: unified counter (c_recursion_remaining removed; C-stack overflow is
      * an SP-based check, set per-fiber in runloom_coro_resume). */
     int py_recursion_remaining;
-#elif PY_VERSION_HEX >= 0x030C0000
-    /* 3.12-3.13: split into Python-level and C-level counters. */
-    int py_recursion_remaining;
-    int c_recursion_remaining;
-#endif
-#if PY_VERSION_HEX >= 0x030B0000
     /* Per-fiber sys.setprofile / sys.settrace hooks (BUG #11).  These are
      * tstate-global, so without snap/restore a hook one fiber installs
      * leaks onto every other fiber sharing the hub (and is cleared from
@@ -161,20 +152,9 @@ struct runloom_pystate_snap {
     PyObject *c_profileobj;                   /* owned ref while suspended */
     PyObject *c_traceobj;                     /* owned ref while suspended */
     int tracing;
-#endif
-#if PY_VERSION_HEX >= 0x030B0000 && PY_VERSION_HEX < 0x030D0000
-    /* 3.11 and 3.12: cframe lives on the C stack, threaded through
-     * the linked list.  3.13 removed cframe; current_frame lives
-     * directly on tstate instead. */
-    _PyCFrame *cframe;
-    int trash_delete_nesting;
-#endif
-#if PY_VERSION_HEX >= 0x030D0000
-    /* 3.13+ fields. */
+    /* Frame chain + trashcan deferred-dealloc chain. */
     struct _PyInterpreterFrame *current_frame;
     PyObject *delete_later;                  /* owned ref */
-#endif
-#if PY_VERSION_HEX >= 0x030E0000
     /* 3.14 free-threaded: head of this fiber's _PyThreadStateImpl.c_stack_refs
      * list (the per-thread-state chain of _PyCStackRef nodes the FT GC walks in
      * gc_visit_thread_stacks).  Those nodes live on the fiber's OWN C stack, so
@@ -187,7 +167,6 @@ struct runloom_pystate_snap {
      * void* because runloom_sched.c is non-core (the type is internal-only;
      * runloom_iframe.c does the typed access). */
     void *c_stack_refs;
-#endif
 };
 
 /* One fiber (the "G" in Go's M:P:G nomenclature).
@@ -933,7 +912,7 @@ void runloom_first_run_install_datastack(void);
  * be g's OWNING hub (so nothing resumes g while we madvise) and g must be
  * suspended with a stable snap.  No-op for C-only gs (datastack_chunk
  * NULL), gs that never went deep enough to have a reclaimable tail, and
- * on pre-3.11 Pythons / platforms without MADV_DONTNEED.
+ * on platforms without MADV_DONTNEED.
  *
  * Default-ON (RUNLOOM_DATASTACK_SWEEP=0 opts out), mirroring the master
  * RUNLOOM_STACK_PARK_SWEEP switch that gates the dwell sweep this rides in;
@@ -995,7 +974,7 @@ int runloom_sim_foreign_wake_ctx(void);
  * expiry compare) or -1 if nothing is pending.  See runloom_sched_drain.c.inc. */
 long long runloom_sched_sim_advance_clock(runloom_sched_t *s, long long netpoll_min_ns);
 
-/* Time-sliced cooperative preemption (3.13t only).
+/* Time-sliced cooperative preemption.
  *
  * Start a timer thread that posts a Py_AddPendingCall every quantum_us
  * microseconds.  CPython's eval loop checks the pending queue at
