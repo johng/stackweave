@@ -1230,6 +1230,18 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                             RUNLOOM_RLOCK(&h->sub_lock, RUNLOOM_RANK_HUB_SUB);
                             have_sub = (h->sub_head != NULL);
                             RUNLOOM_RUNLOCK(&h->sub_lock, RUNLOOM_RANK_HUB_SUB);
+                            /* Same handshake for the GLOBAL run-queue: a push
+                             * there kicks one announcing hub (runloom_mn_kick_for_
+                             * runq_entry) after its own SEQ_CST fence, so with this
+                             * fence between our announce and the re-check, either
+                             * we see the entry here or the pusher sees our announce. */
+                            __atomic_thread_fence(__ATOMIC_SEQ_CST);
+                            if (!have_sub &&
+                                ((!runloom_hub_is_offload(h->id) &&
+                                  __atomic_load_n(&runloom_global_runq_unpinned_len,
+                                                  __ATOMIC_ACQUIRE) > 0) ||
+                                 __atomic_load_n(&h->runq_pinned_n, __ATOMIC_ACQUIRE) > 0))
+                                have_sub = 1;
                             if (!have_sub) {
                                 /* Detach BEFORE the wait so a concurrent
                                  * stop-the-world sees this hub already stopped and

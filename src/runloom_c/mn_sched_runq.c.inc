@@ -118,6 +118,53 @@ static volatile long runloom_global_runq_len  = 0;
 /* Entries with pin_hub1 == 0: the part of the queue any hub may pull. */
 static volatile long runloom_global_runq_unpinned_len = 0;
 
+/* Kick hub `h` out of whichever idle wait it is in -- the same three deliveries
+ * runloom_mn_hub_submit makes for a sub_list push: the io_uring loop eventfd,
+ * the idle condvar (only when the hub announced idle_waiting; the SEQ_CST fence
+ * in the caller pairs with the hub's announce + re-check), and its netpoll
+ * pump self-pipe.  All three are edge-safe: a kick that finds nobody waiting
+ * is a wasted syscall, never a lost wake. */
+static void runloom_mn_kick_hub_waits(runloom_hub_t *h)
+{
+    if (__atomic_load_n(&h->ring_waiting, __ATOMIC_ACQUIRE) && h->loop_wake_fd >= 0)
+        runloom_iouring_loop_wake(h->loop_wake_fd);
+    if (__atomic_load_n(&h->idle_waiting, __ATOMIC_ACQUIRE)) {
+        RUNLOOM_RLOCK(&h->idle_lock, RUNLOOM_RANK_HUB_IDLE);
+        runloom_cond_signal(&h->idle_cond);
+        RUNLOOM_RUNLOCK(&h->idle_lock, RUNLOOM_RANK_HUB_IDLE);
+    }
+    runloom_netpoll_wake_pump((void *)h);
+}
+
+/* A global-runq push has no hub to hand its g to, so with the idle backoff off
+ * (the default) nothing woke anyone and the g waited for the next 1 ms idle
+ * pump of whichever hub pulled it: p99 380-600 us for a foreign-thread wake at
+ * a sub-2 ms cadence, against ~30 us for the per-hub scheduler.  Kick ONE hub:
+ * the pinned target, else the first general hub announcing an idle-condvar
+ * wait, else the g's owner hub (it has this g pending, so it is in a timed pump
+ * wait rather than a bare nap).  Not the hot path: local wakes never come here. */
+static void runloom_mn_kick_for_runq_entry(runloom_g_t *g, int pin1)
+{
+    runloom_hub_t *h = NULL;
+    int i;
+    if (runloom_hubs == NULL) return;
+    if (pin1 != 0) {
+        if (pin1 - 1 < runloom_hub_count) h = &runloom_hubs[pin1 - 1];
+    } else {
+        for (i = 0; i < runloom_general_hub_count(); i++) {
+            if (__atomic_load_n(&runloom_hubs[i].idle_waiting, __ATOMIC_ACQUIRE)) {
+                h = &runloom_hubs[i];
+                break;
+            }
+        }
+        if (h == NULL && g->owner != NULL) {
+            h = (runloom_hub_t *)((char *)g->owner - offsetof(runloom_hub_t, sched));
+            if (h < runloom_hubs || h >= runloom_hubs + runloom_hub_count) h = NULL;
+        }
+    }
+    if (h != NULL) runloom_mn_kick_hub_waits(h);
+}
+
 /* Link g onto the tail of the global run-queue.  Each entry holds one queue
  * ref (incref'd by the caller -- wake_g, or the RUNNING_WOKEN release) so it
  * keeps the g alive until a hub consumes it.  Enqueue is exactly-once: only the
@@ -152,6 +199,12 @@ static void runloom_mn_global_runq_push(runloom_g_t *g)
      * past it. */
     if (pin1 != 0) runloom_mn_wakep_pinned(pin1 - 1);
     else           runloom_mn_wakep_one();
+    /* Dekker with the hub's idle announce (hub_main: idle_waiting=1, fence,
+     * re-check the runq counters): the push above is published, so either the
+     * hub sees the entry on its re-check and skips the wait, or it announced
+     * first and this kick reaches it. */
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    runloom_mn_kick_for_runq_entry(g, pin1);
 }
 
 /* Pop one g for hub `hub_id` from the global run-queue (NULL if it holds
