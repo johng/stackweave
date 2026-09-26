@@ -708,39 +708,6 @@ runloom.run(GEN, main, offload_hubs=1)
 ''')
 
 
-def test_sched_foreign_thread_wake_reaches_a_shallow_idle_hub_promptly():
-    """Was a gap (fixed: a global run-queue push kicks one waiting hub, with a Dekker re-check on the hub side): a foreign-thread wake reaches a parked hub only through
-    wakep_one, which fires once the idle wait exceeds 2 ms; at a faster
-    cadence the fiber waits for the next 1 ms idle pump (p99 380-600 us vs
-    11-38 us on the per-hub scheduler).
-    """
-    assert_pass(r'''
-_watchdog(40)
-N = 1500
-def main():
-    ch = runloom.Chan(0)
-    def feeder():
-        for i in range(N):
-            time.sleep(0.001)
-            while True:                 # stamp each attempt: a retry is a new send
-                try:
-                    ch.send(time.perf_counter_ns()); break
-                except RuntimeError:    # receiver not parked yet; a thread cannot block
-                    time.sleep(0.0002)
-    threading.Thread(target=feeder, daemon=True).start()
-    lat = []
-    for _ in range(N):
-        sent, _ = ch.recv()
-        lat.append((time.perf_counter_ns() - sent) / 1000.0)
-    lat.sort()
-    p50, p99 = lat[len(lat) // 2], lat[int(len(lat) * 0.99)]
-    print("foreign-thread wake latency p50=%.0f us p99=%.0f us" % (p50, p99), flush=True)
-    assert p99 < 200, "p99 wake latency %.0f us" % p99
-    print("PASS", flush=True)
-runloom.run(4, main)
-''')
-
-
 # ---------------------------------------------------------------------------
 # Cost: one PyThreadState per fiber.  (PR #23 review, 7.5)
 # ---------------------------------------------------------------------------
@@ -873,6 +840,51 @@ def test_cost_spawn_and_complete_within_2x_of_migration_off():
     on, off = _cost(SPAWN_COST)
     print("spawn+complete: %.2f us with migration, %.2f us without" % (on, off))
     assert on < 2 * off, "spawn+complete %.2f us vs %.2f us without migration (%.1fx)" % (on, off, on / off)
+
+
+def test_sched_foreign_thread_wake_reaches_a_shallow_idle_hub_promptly():
+    """Was a gap (fixed: a global run-queue push kicks one waiting hub, with a
+    Dekker re-check on the hub side): a foreign-thread wake reached a parked
+    hub only through wakep_one, which fires once the idle wait exceeds 2 ms;
+    at a faster cadence the fiber waited for the next 1 ms idle pump (p99
+    380-600 us on a laptop, 4.5-6.8 ms on a 3-core CI runner, against
+    11-38 us on the per-hub scheduler).
+
+    Bounded as a ratio against the same scenario with migration off, like
+    the cost tests, plus a 100 us allowance for scheduler noise: a fixed
+    microsecond bound was either too tight for a slow runner (252 us there
+    after the fix) or too loose to catch the 1 ms pump (495 us on Linux).
+    """
+    on, off = _cost(WAKE_LATENCY_P99)
+    print("foreign-thread wake p99: %.0f us with migration, %.0f us without" % (on, off))
+    assert on < 2 * off + 100, (
+        "p99 wake latency %.0f us vs %.0f us without migration" % (on, off))
+
+
+WAKE_LATENCY_P99 = _PROBE + r'''
+_watchdog(60)
+N = 1500
+def main():
+    ch = runloom.Chan(0)
+    def feeder():
+        for i in range(N):
+            time.sleep(0.001)
+            while True:                 # stamp each attempt: a retry is a new send
+                try:
+                    ch.send(time.perf_counter_ns()); break
+                except RuntimeError:    # receiver not parked yet; a thread cannot block
+                    time.sleep(0.0002)
+    threading.Thread(target=feeder, daemon=True).start()
+    lat = []
+    for _ in range(N):
+        sent, _ = ch.recv()
+        lat.append((time.perf_counter_ns() - sent) / 1000.0)
+    lat.sort()
+    p50, p99 = lat[len(lat) // 2], lat[int(len(lat) * 0.99)]
+    print("foreign-thread wake latency p50=%.0f us p99=%.0f us" % (p50, p99), flush=True)
+    print("COST=%.1f" % p99, flush=True)
+runloom.run(4, main)
+'''
 
 
 # ---------------------------------------------------------------------------
