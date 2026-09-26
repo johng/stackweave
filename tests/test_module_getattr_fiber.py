@@ -200,5 +200,89 @@ class TestModuleMissNearStackLimit(unittest.TestCase):
         self._run("mn")
 
 
+
+@unittest.skipUnless(sys.version_info >= (3, 15), "PEP 810 lazy imports are 3.15+")
+class TestModuleGetattrLazyImports(unittest.TestCase):
+    """3.15 resolves PEP 810 lazy imports inside CPython's module getattr.  While
+    stackweave replaced that slot, `mod.name` for a `lazy from` binding came back
+    as the raw lazy_import proxy -- e.g. concurrent.futures.ThreadPoolExecutor was
+    not callable -- from the moment stackweave_c was imported.  Pin that lazy
+    bindings and pending lazy submodules resolve, in and out of fibers.
+
+    The `lazy` statements live in generated modules so this file still parses on
+    3.14."""
+
+    _seq = 0
+
+    def setUp(self):
+        TestModuleGetattrLazyImports._seq += 1
+        self.tag = "sw_lazy_%d_%d" % (os.getpid(), self._seq)
+        self.dir = tempfile.mkdtemp(prefix="sw_lazy_")
+        sys.path.insert(0, self.dir)
+
+    def tearDown(self):
+        sys.path.remove(self.dir)
+        for name in [n for n in sys.modules if n.startswith(self.tag)]:
+            del sys.modules[name]
+
+    def _write(self, relpath, src):
+        path = os.path.join(self.dir, relpath)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(src)
+
+    def _lazy_from_module(self):
+        # The target must not be imported yet, or `lazy from` binds eagerly.
+        target = self.tag + "_target"
+        self._write(target + ".py", "def fn():\n    return 'real'\n")
+        name = self.tag + "_host"
+        self._write(name + ".py", "lazy from %s import fn\n" % target)
+        mod = __import__(name)
+        # Precondition: the binding really is still lazy before we look.
+        self.assertEqual(type(mod.__dict__["fn"]).__name__, "lazy_import")
+        return mod
+
+    def test_lazy_binding_resolves_off_fiber(self):
+        mod = self._lazy_from_module()
+        self.assertEqual(mod.fn(), "real")
+        self.assertEqual(type(mod.__dict__["fn"]).__name__, "function")  # stored
+
+    def test_lazy_binding_resolves_in_fiber(self):
+        mod = self._lazy_from_module()
+        self.assertEqual(_drive(lambda: mod.fn()), "real")
+        self.assertEqual(type(mod.__dict__["fn"]).__name__, "function")
+
+    def test_lazy_binding_resolves_via_getattribute_descriptor(self):
+        mod = self._lazy_from_module()
+        got = _drive(lambda: type(mod).__getattribute__(mod, "fn"))
+        self.assertEqual(got(), "real")
+
+    def test_pending_lazy_submodule_loads_in_fiber(self):
+        # `lazy import pkg.sub` leaves `sub` pending on pkg: stock getattr loads
+        # it on first access even through a separately imported `pkg`.  In a
+        # fiber that access is a miss, which the slot used to turn straight into
+        # an AttributeError.
+        pkg = self.tag + "_pkg"
+        self._write(os.path.join(pkg, "__init__.py"), "")
+        self._write(os.path.join(pkg, "sub.py"), "VALUE = 42\n")
+        self._write(self.tag + "_subhost.py", "lazy import %s.sub\n" % pkg)
+        __import__(self.tag + "_subhost")
+        self.assertNotIn(pkg + ".sub", sys.modules)
+
+        def body():
+            p = __import__(pkg)
+            return p.sub.VALUE
+        self.assertEqual(_drive(body), 42)
+
+    def test_miss_on_lazy_module_in_fiber_raises_attributeerror(self):
+        mod = self._lazy_from_module()
+
+        def body():
+            with self.assertRaises(AttributeError):
+                mod.definitely_missing
+            return "ok"
+        self.assertEqual(_drive(body), "ok")
+
+
 if __name__ == "__main__":
     unittest.main()
