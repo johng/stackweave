@@ -258,7 +258,7 @@ stackweave.run(4, main)
 # ---------------------------------------------------------------------------
 
 def test_memory_cross_hub_g_handle_drop_frees_the_fiber_without_gc():
-    """Known gap: a G handle dropped on another hub is brc-queued to that
+    """Was a gap (fixed: the hub services its brc merge queue and the running fiber receives the hub's drops): a G handle dropped on another hub is brc-queued to that
     hub's tstate and its finished fiber (g + tstate + stack) survives until
     a GC; the hub loop must service its own merge queue.
     """
@@ -301,7 +301,7 @@ stackweave.run(4, main)
 
 
 def test_memory_waitgroup_fanout_frees_finished_fibers_without_gc():
-    """Known gap: WaitGroup's contended CoFMutex parker holds a current_g()
+    """Was a gap (fixed: the hub services its brc merge queue and the running fiber receives the hub's drops): WaitGroup's contended CoFMutex parker holds a current_g()
     handle that another hub drops; each drop pins ~33 KiB of finished fiber
     until a GC (the 210 -> 977 MB observation).
     """
@@ -345,7 +345,7 @@ stackweave.run(4, main)
 # ---------------------------------------------------------------------------
 
 def test_preempt_cpu_bound_fiber_does_not_starve_its_hubs_timers():
-    """Known gap: sysmon wall-clock preemption (default on in main) was
+    """Was a gap (fixed: sysmon classifies the RUNNING fiber's tstate, read through a hazard pointer): sysmon wall-clock preemption (default on in main) was
     deleted; a CPU-bound fiber monopolises its hub and every sleeper whose
     timer is on that hub stalls for the whole spin (main recovered in ~180
     ms).
@@ -381,7 +381,7 @@ stackweave.run(2, main)
 
 
 def test_sched_timer_pop_survives_a_concurrent_introspection_sweep():
-    """Known gap: the timer pop CASes PARKED->RUNNING and drops the fiber when
+    """Was a gap (fixed: the timer pop hands a SWEEPING sleeper to the sweeper (SWEEPING -> SWEEPING_WOKEN)): the timer pop CASes PARKED->RUNNING and drops the fiber when
     introspection holds it SWEEPING; the sleeper is then off the heap and
     on no queue for good.
     """
@@ -419,7 +419,7 @@ stackweave.run(4, main)
 
 
 def test_sched_single_thread_fibers_stay_isolated_while_mn_is_live():
-    """Known gap: runloom_per_g_tstate_mode is process-global, so while an M:N
+    """Was a gap (fixed: the per-g gates apply only inside an M:N hub (runloom_mn_current_sched)): runloom_per_g_tstate_mode is process-global, so while an M:N
     run is live a single-thread scheduler on another OS thread skips the
     snap and context copy and its fibers share ContextVars and exc_info.
     """
@@ -462,7 +462,7 @@ print("PASS", flush=True)
 
 
 def test_sched_mn_fini_frees_a_fiber_left_on_the_global_runq():
-    """Known gap: mn_fini drains the global run-queue with one decref per
+    """Was a gap (fixed: the fini drain drops the queue ref as well as the scheduler ref): mn_fini drains the global run-queue with one decref per
     entry but a queued g holds two refs, so a fiber woken just before an
     early run() exit leaks with its PyThreadState.
     """
@@ -565,7 +565,7 @@ def test_memory_cross_hub_bytes_drop_frees_them_without_gc():
     hub 0's thread id); a consumer pinned to hub 1 drops them.  Every drop is
     a non-owner last decref.  Peak RSS must stay near a handful of buffers.
 
-    Known gap: a large bytes object allocated on one hub and dropped on
+    Was a gap (fixed: drops during a resume are routed to the running fiber's tstate, which merges them at its next eval-breaker check): a large bytes object allocated on one hub and dropped on
     another is brc-queued to the allocating hub's tstate; bytes never
     advance the GC counters, so nothing frees it and RSS grows without
     bound.
@@ -653,7 +653,7 @@ stackweave.run(4, main)
 
 
 def test_identity_current_frames_lists_the_running_fiber_under_get_ident():
-    """Known gap: a fiber's tstate->thread_id is its SPAWNER's thread while
+    """Was a gap (fixed: a running fiber's tstate carries the hub's thread id, a parked one an id that is no thread's): a fiber's tstate->thread_id is its SPAWNER's thread while
     get_ident() is the current hub, so sys._current_frames() never lists
     the running fiber under the ident it reports (debuggers and
     faulthandler tooling look it up there).
@@ -682,7 +682,7 @@ def test_sched_offload_hub_never_pulls_unpinned_general_work():
     general fiber: the entry sits in the global run-queue and the only idle
     puller is the reserved offload hub.
 
-    Known gap: CLAUDE.md known gap: the global run-queue pull accepts any
+    Was a gap (fixed: an offload hub pulls only entries pinned to it and its idle scan ignores unpinned work): CLAUDE.md known gap: the global run-queue pull accepts any
     unpinned entry (p1 == 0 || p1 == want), so an idle OFFLOAD hub takes
     general work and strands it behind its next blocking call.
     """
@@ -720,7 +720,7 @@ stackweave.run(GEN, main, offload_hubs=1)
 
 
 def test_sched_foreign_thread_wake_reaches_a_shallow_idle_hub_promptly():
-    """Known gap: a foreign-thread wake reaches a parked hub only through
+    """Was a gap (fixed: a global run-queue push kicks one waiting hub, with a Dekker re-check on the hub side): a foreign-thread wake reaches a parked hub only through
     wakep_one, which fires once the idle wait exceeds 2 ms; at a faster
     cadence the fiber waits for the next 1 ms idle pump (p99 380-600 us vs
     11-38 us on the per-hub scheduler).
