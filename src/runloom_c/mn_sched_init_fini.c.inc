@@ -500,11 +500,11 @@ void runloom_mn_fini(void)
         runloom_mn_hub_drain_leftovers(&runloom_hubs[i]);
     }
     /* Drain the global run-queue too.  Exactly-once-wake means an entry here
-     * is a single, live, yet-to-run woken g holding its one scheduler ref (no
-     * per-entry ref; no stale duplicates).  A single decref mirrors the
-     * completion path and frees it -- exactly like runloom_mn_hub_drain_leftovers
-     * does for the sub_list / deque / FIFO.  Hubs are joined, so this is
-     * single-threaded -- no lock needed. */
+     * is a single, live, yet-to-run woken g (no stale duplicates) -- but it
+     * holds TWO refs: its scheduler ref and the entry's queue ref that wake_g
+     * took on PARKED->QUEUED (the resume path drops both at completion).
+     * Dropping only one leaked the g and its PyThreadState past run().  Hubs
+     * are joined, so this is single-threaded -- no lock needed. */
     {
         runloom_g_t *g = runloom_global_runq_head;
         runloom_global_runq_head = runloom_global_runq_tail = NULL;
@@ -512,7 +512,9 @@ void runloom_mn_fini(void)
         while (g != NULL) {
             runloom_g_t *next = g->next;
             g->next = NULL;
-            runloom_g_decref(g);
+            if (__atomic_load_n(&g->wake_state, __ATOMIC_ACQUIRE) == RUNLOOM_WS_QUEUED)
+                runloom_g_decref(g);   /* queue ref */
+            runloom_g_decref(g);       /* scheduler ref */
             g = next;
         }
     }
