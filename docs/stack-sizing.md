@@ -340,12 +340,14 @@ protection the main thread gets, scaled to the fiber's smaller stack:
   is turned into a classified message that *names the overflowing fiber and
   its stack size* instead of a bare segfault -- see
   [Crash reporting](debugging.md#crash-reporting-sigsegv--sigbus).
-- **CPython's stack-hungry error paths are neutralised.** A missing-attribute
-  lookup on a module makes CPython 3.13 reserve a 32 KB path buffer just to
-  build a "did you shadow a stdlib module?" hint -- on its own larger than a
-  default fiber stack. stackweave skips that hint while on a fiber (the
-  `AttributeError` is otherwise unchanged), so `getattr`/`hasattr` misses on a
-  module can't blow the stack, by any lookup path.
+- **CPython's stack-hungry error paths fit.** A missing-attribute lookup on a
+  module makes CPython reserve two path buffers (~32 KB on Linux, ~8 KB on
+  macOS) to build a "did you shadow a stdlib module?" hint.  That used to
+  overflow small 3.13 fiber stacks, so stackweave replaced the module lookup to
+  skip it; with the 256 KB minimum and 96 KB held back for the overflow check
+  it fits, and CPython's own lookup is used unchanged.  Guard:
+  `tests/test_module_getattr_fiber.py` (a miss at the deepest point a
+  minimum-size fiber reaches).
 
 Between them those cover everything that's actually come up in practice. The
 residual is a **single native/FFI C frame larger than the whole fiber

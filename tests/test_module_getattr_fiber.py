@@ -1,18 +1,21 @@
 """Regression: a module attribute MISS inside a fiber must raise a clean
 AttributeError, never crash.
 
-CPython 3.13's module getattr, on a miss, calls _PyModule_IsPossiblyShadowing to
+On a miss, CPython's module getattr calls _PyModule_IsPossiblyShadowing to
 append a "did you shadow a stdlib module?" hint to the AttributeError.  That
-helper reserves ~32 KB of C stack (two wchar_t[MAXPATHLEN] path buffers) -- more
-than a whole default fiber stack -- so an ordinary attribute miss
-(hasattr / getattr feature-detection, a namespace __getattr__ proxy) inside a
-fiber used to overflow the stack and SIGSEGV.
+helper reserves two wchar_t[MAXPATHLEN] path buffers on the C stack (~32 KB on
+Linux, ~8 KB on macOS).  When fibers ran 3.13 on stacks of 32 KB or less, an
+ordinary miss (hasattr / getattr feature-detection, a namespace __getattr__
+proxy) overflowed and SIGSEGV'd, so stackweave replaced PyModule_Type's getattr
+slot to skip the hint on a fiber.
 
-stackweave replaces PyModule_Type's getattr slot to skip that hint while running on a
-fiber's small stack (the AttributeError itself -- type, .name/.obj, message
-core -- is unchanged).  See src/runloom_c/module_init.c.inc.
+stackweave now requires free-threaded CPython 3.14+, where every fiber stack is
+at least 256 KB and CPython's stack-overflow check is armed 96 KB short of its
+end, so the replacement is gone and these tests pin that CPython's own lookup
+is fiber-safe -- including at the deepest point a minimum-size fiber reaches.
 """
 import os
+import subprocess
 import sys
 import tempfile
 import types
@@ -130,6 +133,71 @@ class TestModuleGetattrGoroutine(unittest.TestCase):
                 type(self.mod).__getattribute__(self.mod, "definitely_missing")
             return "ok"
         self.assertEqual(_drive(body), "ok")
+
+
+_NEAR_LIMIT_CHILD = r"""
+import os, sys, tempfile
+import stackweave_c as s
+d = tempfile.mkdtemp()
+sys.path.insert(0, d)
+with open(os.path.join(d, "sw_nearlimit_target.py"), "w") as f:
+    f.write("X = 1\n")
+import sw_nearlimit_target as mod    # file-backed: a miss runs the shadowing check
+out = {}
+
+def rec(n):
+    out["depth"] = n
+    try:
+        mod.definitely_missing           # LOAD_ATTR -> the unsuppressed miss path
+    except AttributeError as e:
+        out["msg"] = str(e)
+    return sorted([0], key=lambda _: rec(n + 1))   # C-level recursion per level
+
+def body():
+    try:
+        rec(0)
+    except RecursionError:
+        out["end"] = "RecursionError"
+
+if sys.argv[1] == "single":
+    s.fiber(body, MIN_STACK)
+    s.run()
+else:
+    s.mn_init(2)
+    try:
+        s.mn_fiber(body, MIN_STACK)
+        s.mn_run()
+    finally:
+        s.mn_fini()
+print("END", out.get("end"), out["depth"], out["msg"])
+""".replace("MIN_STACK", str(256 * 1024))
+
+
+class TestModuleMissNearStackLimit(unittest.TestCase):
+    """A miss at the deepest point a minimum-size (256 KB) fiber can reach,
+    i.e. with CPython's overflow check just short of firing: the hint's
+    buffers must still fit.  In a subprocess, so a crash fails the test
+    instead of killing the runner."""
+
+    def _run(self, mode):
+        repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        env = dict(os.environ, PYTHON_GIL="0",
+                   PYTHONPATH=os.path.join(repo, "src"))
+        p = subprocess.run([sys.executable, "-c", _NEAR_LIMIT_CHILD, mode],
+                           env=env, capture_output=True, text=True, timeout=120)
+        self.assertEqual(p.returncode, 0,
+                         "child died (rc=%d)\n%s" % (p.returncode, p.stderr[-2000:]))
+        end, depth, msg = p.stdout.split(None, 3)[1:]
+        self.assertEqual(end, "RecursionError")
+        self.assertGreater(int(depth), 5)
+        # CPython's own message, i.e. the stock lookup (with its hint check) ran.
+        self.assertIn("module 'sw_nearlimit_target' has no attribute", msg)
+
+    def test_single_thread(self):
+        self._run("single")
+
+    def test_mn(self):
+        self._run("mn")
 
 
 if __name__ == "__main__":
