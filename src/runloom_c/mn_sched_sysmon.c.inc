@@ -15,6 +15,56 @@ void runloom_sched_freeze_for_crash(void)
     runloom_preempt_enabled = 0;
 }
 
+/* ---- Reading the RUNNING tstate's attach state from the sysmon thread ----
+ *
+ * Under migration each fiber runs on its OWN PyThreadState, and the hub's
+ * tstate is detached for the whole resume, so the hub's attach state says
+ * nothing about the fiber (it is what stood preemption down: "DETACHED" for
+ * every CPU-bound fiber).  The hub publishes the tstate its resume runs on in
+ * h->resume_tstate; but a per-g tstate is FREED when its fiber completes, so
+ * sysmon cannot simply dereference a pointer it loaded a moment ago.
+ *
+ * Hazard pointer (one reader, the sysmon thread): sysmon stores the pointer
+ * it is about to read into runloom_sysmon_hazard_ts, fences, and re-checks
+ * that the hub still publishes it; the deleter (runloom_g_decref, any thread)
+ * fences and spins while the hazard names its tstate.  Store/fence/load on
+ * both sides is the Dekker pair: if sysmon still sees the tstate published,
+ * the deleter sees the hazard and waits; if the deleter saw no hazard, sysmon
+ * sees the cleared slot and does not touch the tstate. */
+static void *volatile runloom_sysmon_hazard_ts = NULL;
+/* Serialises the hazard's WRITERS: the sysmon thread and any hubs() caller
+ * (mn_sched_hubinfo.c.inc).  The deleter only reads it. */
+static runloom_mutex_t runloom_sysmon_hazard_lock;
+static int             runloom_sysmon_hazard_lock_ready = 0;  /* init in runloom_sysmon_config */
+
+void runloom_sysmon_tstate_retire_wait(PyThreadState *ts)
+{
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    while (__atomic_load_n(&runloom_sysmon_hazard_ts, __ATOMIC_ACQUIRE) == (void *)ts)
+        runloom_sleep_ns(1000);          /* sysmon holds it for a few loads */
+}
+
+/* Attach state of what hub `h` is running right now: the fiber's tstate under
+ * migration, the hub's own otherwise; falls back to the hub's tstate when the
+ * hub is idle.  -1 when nothing could be read safely. */
+int runloom_sysmon_hub_attach_state(runloom_hub_t *h, PyThreadState *hts)
+{
+    void *ts = __atomic_load_n((void **)&h->resume_tstate, __ATOMIC_ACQUIRE);
+    int tss;
+    if (ts == NULL) return runloom_tstate_attach_state(hts);
+    runloom_mutex_lock(&runloom_sysmon_hazard_lock);
+    __atomic_store_n(&runloom_sysmon_hazard_ts, ts, __ATOMIC_RELEASE);
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    if (__atomic_load_n((void **)&h->resume_tstate, __ATOMIC_ACQUIRE) != ts) {
+        tss = -1;                        /* resume ended under us; try next tick */
+    } else {
+        tss = runloom_tstate_attach_state((PyThreadState *)ts);
+    }
+    __atomic_store_n(&runloom_sysmon_hazard_ts, (void *)NULL, __ATOMIC_RELEASE);
+    runloom_mutex_unlock(&runloom_sysmon_hazard_lock);
+    return tss;
+}
+
 /* sysmon watchdog thread.  Holds NO GIL and NO tstate -- it only reads
  * per-hub atomics and writes to stderr, never touching the Python C-API.
  * Scans every runloom_sysmon_tick_ns; logs a hub whose current runloom_coro_resume
@@ -50,7 +100,7 @@ static RUNLOOM_THREAD_RET runloom_sysmon_main(void *arg)
              * racy/NULL read here is fine -- attach-state -1 classifies as "?"
              * and gates the preempt dispatch closed. */
             PyThreadState *hts = (PyThreadState *)__atomic_load_n((void **)&h->tstate, __ATOMIC_ACQUIRE);
-            int tss = runloom_tstate_attach_state(hts);
+            int tss = runloom_sysmon_hub_attach_state(h, hts);
             /* End of a previously-reported episode: the hub moved to a new
              * resume (seq changed) or finished resuming (start cleared). */
             if (w_seq[i] != 0 && (seq != w_seq[i] || start == 0)) {
@@ -183,6 +233,10 @@ static void runloom_sysmon_config(void)
      * WATCH sysmon.  Preemption (below) may also force the sysmon thread on, but
      * that alone must not produce the WEDGED/RECOVERED chatter on stderr. */
     int sysmon_explicit = (e != NULL && e[0] != '0');
+    if (!runloom_sysmon_hazard_lock_ready) {      /* mn_init, single-threaded */
+        runloom_mutex_init(&runloom_sysmon_hazard_lock);
+        runloom_sysmon_hazard_lock_ready = 1;
+    }
     runloom_sysmon_enabled = sysmon_explicit ? 1 : 0;
     /* Quiet by default: log only when sysmon was explicitly requested.  When it
      * runs solely to service preemption (the common default), stay
@@ -195,10 +249,10 @@ static void runloom_sysmon_config(void)
      * watchdog on (that is what detects the wedge and arms preempt_requested).
      * The eval-frame wrapper is installed in mn_init. */
     runloom_preempt_enabled = runloom_flag_default_on(getenv("STACKWEAVE_PREEMPT"));  /* default ON */
-    /* Under per-g-tstate the hub's bound tstate is DETACHED every per-g resume,
-     * so the ATTACHED-wedge arm never fires and the wrapper would only be dead
-     * weight on the eval path -- stand it down. */
-    if (runloom_get_per_g_tstate_mode()) runloom_preempt_enabled = 0;
+    /* Under per-g-tstate (migration) the wedge test reads the RUNNING fiber's
+     * tstate through h->resume_tstate (runloom_sysmon_hub_attach_state), so a
+     * CPU-bound fiber is ATTACHED-wedged exactly as on the per-hub scheduler
+     * and preemption stays on. */
     if (runloom_preempt_enabled) runloom_sysmon_enabled = 1;
     if (!runloom_sysmon_enabled) return;
     ms = getenv("STACKWEAVE_SYSMON_MS");
