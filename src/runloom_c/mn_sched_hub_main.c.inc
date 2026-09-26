@@ -251,10 +251,17 @@ static volatile int runloom_mn_nidle = 0;   /* # hubs with idle_parked=1 (hint) 
 static int runloom_mn_any_stealable_work(const runloom_hub_t *self)
 {
     int i;
-    if (__atomic_load_n(&runloom_global_runq_unpinned_len, __ATOMIC_ACQUIRE) > 0)
+    /* An offload hub only ever runs work pinned to it (exclusion 2 from the
+     * puller's side, mirrored in runloom_mn_global_runq_pull): unpinned
+     * run-queue entries and other hubs' deques are not its work, so they
+     * must not keep it awake either. */
+    int self_offload = (self != NULL && runloom_hub_is_offload(self->id));
+    if (!self_offload &&
+        __atomic_load_n(&runloom_global_runq_unpinned_len, __ATOMIC_ACQUIRE) > 0)
         return 1;
     if (self != NULL &&
         __atomic_load_n(&self->runq_pinned_n, __ATOMIC_ACQUIRE) > 0) return 1;
+    if (self_offload) return 0;
     /* General hubs only: work sitting on an offload hub is NOT stealable by
      * anyone (exclusion 2), so counting it here would wake general hubs to
      * hunt for work they are forbidden to take. */
@@ -531,6 +538,9 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
      * this hub -- never shared, so a plain int is fine. */
     unsigned int idle_streak = 0;
     while (!__atomic_load_n(&h->stopping, __ATOMIC_ACQUIRE)) {
+        /* Idle turns too: a hub with nothing to run still owns the merge queue
+         * for every object it allocated that another hub dropped. */
+        runloom_iframe_service_merge_queue(PyThreadState_GetUnchecked());
         runloom_g_t *g;
         /* WAKEP: a fresh loop turn -- if we registered as a deep idle sleeper last
          * turn, unregister now (whether we woke on a kick, a real event, or the
@@ -751,16 +761,36 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                      * (a g sleeping AND wakeable, e.g. a select-with-timeout)
                      * already drove PARKED->QUEUED and enqueued it on the global
                      * runq -- do NOT also push it here, or it would be scheduled
-                     * twice. */
+                     * twice.  If introspection holds it SWEEPING (a stack dump
+                     * or an idle-stack madvise), hand the wake to the sweeper
+                     * exactly as wake_g does: SWEEPING -> SWEEPING_WOKEN, and
+                     * runloom_mn_sweep_claim_release enqueues it.  Dropping the
+                     * pop there lost the sleeper for good -- off the heap, on
+                     * no queue (fibers(stacks=True) under load lost 90 of 128). */
                     int pexp = RUNLOOM_WS_PARKED;
-                    if (__atomic_compare_exchange_n(&woke->wake_state, &pexp,
-                                                    RUNLOOM_WS_RUNNING, 0,
-                                                    __ATOMIC_ACQ_REL,
-                                                    __ATOMIC_ACQUIRE)) {
-                        /* TIMER_CLAIM won: PARKED -> RUNNING (the sole edge into
-                         * RUNNING that does not pass through QUEUED). */
-                        RUNLOOM_WS_NOTE(RUNLOOM_WS_PARKED, RUNLOOM_WS_RUNNING);
-                        runloom_sched_ready_push(&h->sched, woke);
+                    for (;;) {
+                        if (pexp == RUNLOOM_WS_PARKED) {
+                            if (__atomic_compare_exchange_n(&woke->wake_state, &pexp,
+                                                            RUNLOOM_WS_RUNNING, 0,
+                                                            __ATOMIC_ACQ_REL,
+                                                            __ATOMIC_ACQUIRE)) {
+                                /* TIMER_CLAIM won: PARKED -> RUNNING (the sole edge
+                                 * into RUNNING that does not pass through QUEUED). */
+                                RUNLOOM_WS_NOTE(RUNLOOM_WS_PARKED, RUNLOOM_WS_RUNNING);
+                                runloom_sched_ready_push(&h->sched, woke);
+                                break;
+                            }
+                        } else if (pexp == RUNLOOM_WS_SWEEPING) {
+                            if (__atomic_compare_exchange_n(&woke->wake_state, &pexp,
+                                                            RUNLOOM_WS_SWEEPING_WOKEN, 0,
+                                                            __ATOMIC_ACQ_REL,
+                                                            __ATOMIC_ACQUIRE)) {
+                                RUNLOOM_WS_NOTE(RUNLOOM_WS_SWEEPING, RUNLOOM_WS_SWEEPING_WOKEN);
+                                break;   /* sweeper enqueues at release */
+                            }
+                        } else {
+                            break;   /* QUEUED / RUNNING* / SWEEPING_WOKEN: a waker owns it */
+                        }
                     }
                 } else {
                     runloom_sched_ready_push(&h->sched, woke);
@@ -1200,6 +1230,18 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                             RUNLOOM_RLOCK(&h->sub_lock, RUNLOOM_RANK_HUB_SUB);
                             have_sub = (h->sub_head != NULL);
                             RUNLOOM_RUNLOCK(&h->sub_lock, RUNLOOM_RANK_HUB_SUB);
+                            /* Same handshake for the GLOBAL run-queue: a push
+                             * there kicks one announcing hub (runloom_mn_kick_for_
+                             * runq_entry) after its own SEQ_CST fence, so with this
+                             * fence between our announce and the re-check, either
+                             * we see the entry here or the pusher sees our announce. */
+                            __atomic_thread_fence(__ATOMIC_SEQ_CST);
+                            if (!have_sub &&
+                                ((!runloom_hub_is_offload(h->id) &&
+                                  __atomic_load_n(&runloom_global_runq_unpinned_len,
+                                                  __ATOMIC_ACQUIRE) > 0) ||
+                                 __atomic_load_n(&h->runq_pinned_n, __ATOMIC_ACQUIRE) > 0))
+                                have_sub = 1;
                             if (!have_sub) {
                                 /* Detach BEFORE the wait so a concurrent
                                  * stop-the-world sees this hub already stopped and
@@ -1342,6 +1384,9 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                  * introduce.  No-op unless RUNLOOM_DELAY names this site. */
                 runloom_delay_inject(RUNLOOM_DLY_HANDOFF_ADOPT);
                 PyEval_RestoreThread(g->tstate);      /* attach g's own tstate */
+                /* Drops of this hub's objects now land on the FIBER's tstate,
+                 * whose eval loop merges them as it runs (runloom_iframe_brc_adopt). */
+                runloom_iframe_brc_adopt(g->tstate, hub_ts);
                 /* Deep-surface migration oracle (RUNLOOM_DBG_MIGRATE; zero-cost
                  * otherwise).  The per-g tstate's mimalloc heap / brc / QSBR are
                  * bound to the OS thread that first used them; running it on a
@@ -1404,8 +1449,17 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                 runloom_tls_parked_offqueue = 0;
                 runloom_tls_current_g = NULL;
                 h->sched.current = NULL;
+                /* Hub tstate back to the head of its bucket; drain what was
+                 * queued to the fiber while it ran.  Before the detach: the
+                 * bucket mutex and the merge need an attached tstate, and the
+                 * fiber's is the owner of what it holds. */
+                runloom_iframe_brc_release(g->tstate, hub_ts);
                 PyEval_SaveThread();                  /* detach g's tstate */
                 PyEval_RestoreThread(hub_ts);          /* reattach hub tstate */
+                /* Free what other hubs dropped on us while the fiber ran: the
+                 * brc merge queue is keyed to THIS hub's thread state, which
+                 * never runs bytecode (see runloom_iframe_service_merge_queue). */
+                runloom_iframe_service_merge_queue(hub_ts);
                 if (runloom_coro_done(g->coro)) {
                     /* Done: the g did not park this resume (a resume ends in a
                      * park OR completion, never both), so no parker is live and
