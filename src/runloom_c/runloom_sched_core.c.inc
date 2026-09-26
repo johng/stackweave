@@ -344,7 +344,10 @@ void runloom_g_entry(void *user)
         cc = (e && *e == '1') ? 0 : 1;
         __atomic_store_n(&ctx_copy, cc, __ATOMIC_RELAXED);
     }
-    if (cc && !runloom_get_per_g_tstate_mode()) {
+    /* Skip only for a fiber with its OWN tstate (an M:N hub fiber under
+     * migration); a single-thread fiber on any other thread still needs the
+     * private context even while an M:N run is live (the flag is global). */
+    if (cc && !(runloom_get_per_g_tstate_mode() && runloom_mn_current_sched() != NULL)) {
         PyThreadState *cts = PyThreadState_GET();
         /* Give this fiber a PRIVATE, EMPTY context as its baseline (p460).
          *
