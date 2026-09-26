@@ -80,7 +80,13 @@ void runloom_pystate_snap(runloom_pystate_snap_t *snap)
 {
     PyThreadState *ts;
 
-    if (__builtin_expect(runloom_per_g_tstate_mode, 0)) {
+    /* Per-g tstate: nothing to swap out -- but only for a fiber that HAS one,
+     * i.e. one running on an M:N hub.  The mode flag is process-wide, and a
+     * single-thread scheduler on another OS thread (its fibers share that
+     * thread's tstate) must still snap while an M:N run is live, or its
+     * fibers share ContextVars and lose exc_info across a park. */
+    if (__builtin_expect(runloom_per_g_tstate_mode, 0) &&
+        runloom_mn_current_sched() != NULL) {
         snap->valid = 0;   /* per-g tstate owns the state; nothing to swap out */
         return;
     }
