@@ -116,9 +116,6 @@ class TestStates(unittest.TestCase):
 
 
 class TestStackReconstruction(unittest.TestCase):
-    @pytest.mark.skipif(sys.version_info < (3, 13),
-                        reason="interpreter-frame stack reconstruction needs "
-                               "3.13+ (the PyUnstable frame API / internal walk)")
     def test_full_stack_of_parked_fiber(self):
         cap = {}
 

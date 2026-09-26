@@ -14,8 +14,8 @@
 #   * The instrumentation is env-gated (STACKWEAVE_STW_TRACE): an instrumented interp
 #     behaves IDENTICALLY to a pristine one for every other pydebug use, so we
 #     instrument once and leave it (no rebuild churn each run).
-#   * The pydebug-ABI ext (...-313td...so) coexists with the stock ext
-#     (...-313t...so) by ABI tag, so building it does NOT disturb the normal build.
+#   * The pydebug-ABI ext (...-314td...so) coexists with the stock ext
+#     (...-314t...so) by ABI tag, so building it does NOT disturb the normal build.
 #
 # Usage:  tools/stw_conform_ci.sh
 # Env:    STACKWEAVE_PYDEBUG_PYTHON  the --with-pydebug free-threaded interp

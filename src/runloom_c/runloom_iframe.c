@@ -3,9 +3,6 @@
  * (and the internal headers it unlocks) never leak into the rest of the
  * build.  See runloom_iframe.h. */
 
-#if PY_VERSION_HEX == 0   /* never true; just to silence "no PY_VERSION_HEX yet" */
-#endif
-
 /* internal/pycore_frame.h requires the core-build macro. */
 #ifndef Py_BUILD_CORE_MODULE
 #  define Py_BUILD_CORE_MODULE 1
@@ -14,27 +11,28 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 
+/* Same requirement as runloom_sched.h (this TU does not include it). */
+#if PY_VERSION_HEX < 0x030E0000 || !defined(Py_GIL_DISABLED)
+#  error "stackweave requires a free-threaded (--disable-gil) CPython 3.14 or newer"
+#endif
+
 #include "runloom_iframe.h"
 #include "coro.h"    /* runloom_coro_stack_base/size (fiber C-stack geometry) */
 
-#if PY_VERSION_HEX >= 0x030D0000 && !defined(RUNLOOM_NO_IFRAME)
+#if !defined(RUNLOOM_NO_IFRAME)
 #  include "internal/pycore_frame.h"
-#  if PY_VERSION_HEX >= 0x030E0000
 /* 3.14 moved the complete _PyInterpreterFrame struct + FRAME_OWNED_BY_CSTACK out
  * of pycore_frame.h (now only a forward declaration) into pycore_interpframe.h. */
-#    include "internal/pycore_interpframe.h"
-#  endif
+#  include "internal/pycore_interpframe.h"
 #  define RUNLOOM_IFRAME_HAVE 1
 #endif
 
-#if PY_VERSION_HEX >= 0x030D0000 && !defined(RUNLOOM_NO_IFRAME)
+#if !defined(RUNLOOM_NO_IFRAME)
 #  include "internal/pycore_pystate.h"     /* _PyThreadStateImpl */
-#  ifdef Py_GIL_DISABLED
-#    include "internal/pycore_brc.h"        /* struct _brc_thread_state */
-#    include "internal/pycore_critical_section.h"  /* _PyCriticalSection_* */
-#    include "internal/pycore_tstate.h"   /* _PyThreadState_SetAllocHome (Py_TSTATE_ALLOC_HOME) */
-#    define RUNLOOM_CRITSEC_HAVE 1
-#  endif
+#  include "internal/pycore_brc.h"        /* struct _brc_thread_state */
+#  include "internal/pycore_critical_section.h"  /* _PyCriticalSection_* */
+#  include "internal/pycore_tstate.h"   /* _PyThreadState_SetAllocHome (Py_TSTATE_ALLOC_HOME) */
+#  define RUNLOOM_CRITSEC_HAVE 1
 #  define RUNLOOM_DESTRUCT_HAVE 1
 #endif
 
@@ -42,7 +40,7 @@
  * bit + stackref predicates + the stop-the-world state on the interpreter.  Only
  * available where the internal frame layout is (RUNLOOM_IFRAME_HAVE) and the
  * free-threaded GC exists (Py_GIL_DISABLED, 3.14+). */
-#if defined(Py_GIL_DISABLED) && PY_VERSION_HEX >= 0x030E0000 && defined(RUNLOOM_IFRAME_HAVE)
+#if defined(RUNLOOM_IFRAME_HAVE)
 #  include "internal/pycore_gc.h"          /* _PyGC_BITS_UNREACHABLE; ob_gc_bits */
 #  include "internal/pycore_stackref.h"    /* PyStackRef_IsNullOrInt / IsDeferred / Borrow */
 #  include "internal/pycore_interp.h"      /* PyInterpreterState.stoptheworld.world_stopped */
@@ -61,13 +59,9 @@ void runloom_immortalize(PyObject *op)
     if (op == NULL) {
         return;
     }
-#if defined(Py_GIL_DISABLED)
     op->ob_tid       = _Py_UNOWNED_TID;
     op->ob_ref_local = _Py_IMMORTAL_REFCNT_LOCAL;
     op->ob_ref_shared = 0;
-#elif defined(_Py_IMMORTAL_REFCNT)
-    op->ob_refcnt    = _Py_IMMORTAL_REFCNT;
-#endif
 }
 
 /* Borrow `home`'s allocator (mimalloc heap + qsbr/page-reclaim) for `exec` --
@@ -86,7 +80,7 @@ void runloom_immortalize(PyObject *op)
  * explicit RUNLOOM_ALLOW_UNSAFE_MIGRATION dev escape hatch. */
 int runloom_alloc_home_active(void)
 {
-#if defined(Py_GIL_DISABLED) && defined(Py_TSTATE_ALLOC_HOME)
+#if defined(Py_TSTATE_ALLOC_HOME)
     /* RUNLOOM_NO_ALLOC_HOME=1 disables the borrow (A/B baseline: reproduces the
      * pre-patch per-g-tstate _mi_page_retire crash).  Default = borrow ON. */
     static int off = -1;
@@ -99,7 +93,7 @@ int runloom_alloc_home_active(void)
 
 int runloom_exec_home_active(void)
 {
-#if defined(Py_GIL_DISABLED) && defined(Py_TSTATE_EXEC_HOME) && defined(_Py_TID_ASM)
+#if defined(Py_TSTATE_EXEC_HOME) && defined(_Py_TID_ASM)
     return 1;
 #else
     return 0;
@@ -108,7 +102,7 @@ int runloom_exec_home_active(void)
 
 void runloom_iframe_borrow_alloc_home(PyThreadState *exec, PyThreadState *home)
 {
-#if defined(Py_GIL_DISABLED) && defined(Py_TSTATE_ALLOC_HOME)
+#if defined(Py_TSTATE_ALLOC_HOME)
     if (runloom_alloc_home_active()) {
         _PyThreadState_SetAllocHome(exec, home);
     }
@@ -129,7 +123,6 @@ int runloom_tstate_in_destruction(PyThreadState *ts)
     if (ts->delete_later != NULL) {
         return 1;
     }
-#  ifdef Py_GIL_DISABLED
     /* Biased-refcount cross-thread merge is draining: merge_queued_objects is
      * popping this per-thread stack and calling tp_dealloc (-> weakref
      * callbacks / finalizers) on each.  Non-empty => a destructor is in flight
@@ -140,7 +133,6 @@ int runloom_tstate_in_destruction(PyThreadState *ts)
     if (((_PyThreadStateImpl *)ts)->brc.local_objects_to_merge.head != NULL) {
         return 1;
     }
-#  endif
     return 0;
 #else
     (void)ts;
@@ -154,15 +146,20 @@ int runloom_iframe_walk(void *top, int max, runloom_iframe_cb cb, void *ctx)
     _PyInterpreterFrame *f = (_PyInterpreterFrame *)top;
     int n = 0;
     while (f != NULL && n < max) {
-        /* Skip the C-stack trampoline shim frames that bracket a real
-         * call; they carry no user code. */
-        if (f->owner != FRAME_OWNED_BY_CSTACK) {
-#if PY_VERSION_HEX >= 0x030E0000
-            /* 3.14: f_executable is a tagged _PyStackRef, not a PyObject*. */
-            PyObject *exec = PyStackRef_AsPyObjectBorrow(f->f_executable);
+        /* Skip the trampoline/shim frames that bracket a real call; they carry
+         * no user code. */
+#if PY_VERSION_HEX >= 0x030F0000
+        /* 3.15 removed FRAME_OWNED_BY_CSTACK.  _PyFrame_IsIncomplete is CPython's
+         * own "not a complete user frame" predicate (interpreter-entry sentinel +
+         * not-yet-traceable shims) -- exactly what a traceback skips.  It tests
+         * owner >= FRAME_OWNED_BY_INTERPRETER first, so _PyFrame_GetCode inside it
+         * is only reached for real code-bearing frames. */
+        if (!_PyFrame_IsIncomplete(f)) {
 #else
-            PyObject *exec = f->f_executable;
+        if (f->owner != FRAME_OWNED_BY_CSTACK) {
 #endif
+            /* f_executable is a tagged _PyStackRef, not a PyObject*. */
+            PyObject *exec = PyStackRef_AsPyObjectBorrow(f->f_executable);
             if (exec != NULL && PyCode_Check(exec)) {
                 int line = PyUnstable_InterpreterFrame_GetLine(f);
                 if (cb((PyCodeObject *)exec, line, ctx) != 0)
@@ -179,7 +176,6 @@ int runloom_iframe_walk(void *top, int max, runloom_iframe_cb cb, void *ctx)
 #endif
 }
 
-#if PY_VERSION_HEX >= 0x030E0000
 /* Arm the live tstate's SP-based C-stack overflow check (3.14) at THIS fiber's
  * private mmap stack, with EXTRA reserved headroom above the hardware guard.
  *
@@ -205,7 +201,7 @@ int runloom_iframe_walk(void *top, int max, runloom_iframe_cb cb, void *ctx)
  * chunk-alloc / frame-setup burst to complete above the guard.  RESERVE is a
  * fraction of the stack (so small fibers stay usable) with a floor sized to hold
  * the deepest single non-yielding CPython call burst, clamped so the window never
- * inverts on a tiny stack.  Inert on <3.14 (different recursion model). */
+ * inverts on a tiny stack. */
 #define RUNLOOM_STACKPROT_RESERVE_MIN ((size_t)96 * 1024)   /* >= one chunk-alloc burst */
 void runloom_arm_fiber_stackprot(PyThreadState *ts, runloom_coro_t *c)
 {
@@ -230,7 +226,6 @@ void runloom_arm_fiber_stackprot(PyThreadState *ts, runloom_coro_t *c)
     PyUnstable_ThreadState_SetStackProtection(ts,
         (void *)((char *)base + reserve), eff);
 }
-#endif
 
 /* offsetof(PyGenObject, gi_exc_state) -- computed in THIS Py_BUILD_CORE-isolated TU,
  * the only one that sees the complete _PyGenObject (on 3.14 the struct moved into
@@ -306,29 +301,19 @@ void runloom_critsec_restore(void *tstate_v, uintptr_t saved)
  * head and clears it so a sibling fiber starts with an empty, private list; set()
  * restores this fiber's own head on resume.  Each fiber's c_stack_refs list then
  * lives entirely on its own preserved stack, exactly like its frame chain.
- * Returned/passed as void* to keep the core/non-core ABI boundary clean.  No-op
- * on non-FT / pre-3.14 (the field does not exist there). */
+ * Returned/passed as void* to keep the core/non-core ABI boundary clean. */
 void *runloom_tstate_take_cstack_refs(void *tstate_v)
 {
-#if defined(Py_GIL_DISABLED) && PY_VERSION_HEX >= 0x030E0000
     _PyThreadStateImpl *ts = (_PyThreadStateImpl *)tstate_v;
     void *head = (void *)ts->c_stack_refs;
     ts->c_stack_refs = NULL;          /* hand the next fiber a clean list */
     return head;
-#else
-    (void)tstate_v;
-    return NULL;
-#endif
 }
 
 void runloom_tstate_set_cstack_refs(void *tstate_v, void *head)
 {
-#if defined(Py_GIL_DISABLED) && PY_VERSION_HEX >= 0x030E0000
     _PyThreadStateImpl *ts = (_PyThreadStateImpl *)tstate_v;
     ts->c_stack_refs = (_PyCStackRef *)head;
-#else
-    (void)tstate_v; (void)head;
-#endif
 }
 
 /* ---- GC visibility for parked-fiber frames (free-threaded 3.14+) ----
@@ -368,22 +353,35 @@ int runloom_gc_in_subtract_pass(PyObject *self)
  * reference is NOT part of the refcount (update_refs already stripped the
  * deferred bias), so the SUBTRACT pass must skip it -- visiting would
  * double-subtract and free a LIVE object -- while every other pass treats it as a
- * regular reference so propagation from the anchor keeps its referent alive. */
+ * regular reference so propagation from the anchor keeps its referent alive.
+ *
+ * 3.15 exports _PyGC_VisitStackRef, which performs exactly this discrimination
+ * itself -- keyed on the visitproc identity (visit_decref / visit_decref_unreachable
+ * ARE the subtract pass) rather than a caller-supplied flag.  So on 3.15+ we defer
+ * to it: the `subtract` argument is unused, and PyStackRef_IsDeferred (used by the
+ * 3.14 branch) was removed in favour of that self-discrimination.  We still guard
+ * NullOrInt here, exactly as the _Py_VISIT_STACKREF macro does before calling. */
 static int runloom_visit_stackref(_PyStackRef *ref, visitproc visit, void *arg,
                                   int subtract)
 {
-    PyObject *op;
     if (PyStackRef_IsNullOrInt(*ref)) {
         return 0;
     }
+#if PY_VERSION_HEX >= 0x030F0000
+    (void)subtract;
+    return _PyGC_VisitStackRef(ref, visit, arg);
+#else
     if (subtract && PyStackRef_IsDeferred(*ref)) {
         return 0;
     }
-    op = PyStackRef_AsPyObjectBorrow(*ref);
-    if (op != NULL) {
-        return visit(op, arg);
+    {
+        PyObject *op = PyStackRef_AsPyObjectBorrow(*ref);
+        if (op != NULL) {
+            return visit(op, arg);
+        }
     }
     return 0;
+#endif
 }
 
 int runloom_gcvisit_frame_chain(void *top, visitproc visit, void *arg, int subtract)
@@ -457,7 +455,7 @@ void runloom_gc_anchor_keep_thawed(PyObject *op)
     }
 }
 
-#else   /* non-FT / pre-3.14: safe stubs so callers stay unconditional */
+#else   /* RUNLOOM_NO_IFRAME: safe stubs so callers stay unconditional */
 
 int runloom_gc_world_stopped(void) { return 0; }
 int runloom_gc_in_subtract_pass(PyObject *self) { (void)self; return 0; }

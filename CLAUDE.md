@@ -3,12 +3,11 @@
 Full derivations for the invariants below: [docs/dev/RUNTIME_GOTCHAS.md](docs/dev/RUNTIME_GOTCHAS.md).
 
 ## Build & test
-- Target **free-threaded CPython 3.14t** (M:N is only real with the GIL off):
-  `~/.pyenv/versions/3.14.4t/bin/python3.14`, `PYTHON_GIL=0`. (Default as of 2026-07-07:
-  3.14 carries the gh-116738 stdlib-C-module free-threading audit — e.g. heapq
-  now holds the list critical section, fixing a 3.13t SIGSEGV on concurrent
-  shared-heap access that is NOT a stackweave bug. 3.13t builds remain available
-  for p488 reproduction.)
+- **Free-threaded CPython 3.14+ only** (M:N is only real with the GIL off):
+  `~/.pyenv/versions/3.14.4t/bin/python3.14`, `PYTHON_GIL=0`. `setup.py` refuses GIL
+  builds and anything older, and the C sources have no other code paths
+  (`#error` in `runloom_sched.h`). Every fiber stack is >= 256 KB there, with an
+  overflow raising `RecursionError`, not crashing.
 - Build `python setup.py build_ext --inplace`; run with `PYTHONPATH=src`.
 - `pip install` / `pip install -e` refuse any interpreter without both migration
   patches (setup.py install gate), so they refuse the stock 3.14t above.

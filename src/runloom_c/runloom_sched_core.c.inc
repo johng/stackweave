@@ -82,8 +82,8 @@ static void runloom_cal_record(runloom_g_t *g)
 void runloom_sched_set_default_stack_size(size_t bytes)
 {
     if (bytes < RUNLOOM_MIN_STACK_SIZE) bytes = RUNLOOM_MIN_STACK_SIZE;
-    /* On free-threaded 3.14 the SP-vs-soft_limit guard needs a roomier physical
-     * stack than the 16KB 3.13 floor (else a false RecursionError -- p226). */
+    /* The SP-vs-soft_limit guard needs a roomier physical stack than
+     * RUNLOOM_MIN_STACK_SIZE (else a false RecursionError -- p226). */
     bytes = runloom_fiber_stack_floor(bytes);
     if (bytes > RUNLOOM_MAX_STACK_SIZE) bytes = RUNLOOM_MAX_STACK_SIZE;
     RUNLOOM_RLOCK(&runloom_cal_lock, RUNLOOM_RANK_CAL);
@@ -252,9 +252,7 @@ runloom_g_t *runloom_sched_peek_current(void)
 /* ---- Coro entry shim ----
  *
  * Runs ON THE GOROUTINE'S STACK.  Local variables here live for the
- * lifetime of g.  We exploit that by allocating the initial _PyCFrame
- * here (3.12 only) so its address remains valid for as long as we
- * might switch back to g. */
+ * lifetime of g. */
 
 /* RUNLOOM_GOROUTINE_PANIC: how an unhandled exception that escapes a goroutine
  * body is surfaced.  Without it the exception is captured into g->error but
@@ -299,12 +297,7 @@ void runloom_g_entry(void *user)
         return;
     }
 
-#if PY_VERSION_HEX >= 0x030B0000 && PY_VERSION_HEX < 0x030D0000
-    _PyCFrame root_cframe_storage;
-    runloom_install_initial_root_frame(&root_cframe_storage);
-#elif PY_VERSION_HEX >= 0x030D0000
     runloom_install_initial_root_frame();
-#endif
 
     /* Reset recursion counters at g entry -- each g has its own
      * physical C stack, so the per-tstate counters don't reflect
@@ -312,7 +305,6 @@ void runloom_g_entry(void *user)
     {
         PyThreadState *ts = PyThreadState_GET();
         int py_limit = Py_GetRecursionLimit();
-#if PY_VERSION_HEX >= 0x030E0000
         /* 3.14: unified recursion counter + SP-based C-stack overflow check.  ts is
          * g->tstate here (current), so tell CPython this g runs on its OWN mmap'd C
          * stack -- _Py_MakeRecCheck then bounds against the fiber stack, not the hub
@@ -321,42 +313,8 @@ void runloom_g_entry(void *user)
         if (g->coro != NULL) {
             runloom_arm_fiber_stackprot(ts, g->coro);
         }
-#elif PY_VERSION_HEX >= 0x030C0000
-        ts->py_recursion_remaining = py_limit;
-        /* Scale the C-recursion budget to THIS fiber's actual C stack so a
-         * big-stack fiber can recurse as deep as it has room for (nested
-         * JSON, copy.deepcopy, recursive-descent parsers).  The old hard-coded
-         * 200 (sized for a 128KB stack) capped EVERY fiber at ~88 Python
-         * frames regardless of stack size (BUG #6).  Give the fiber the same
-         * per-byte budget CPython gives the 8MB main thread (Py_C_RECURSION_LIMIT
-         * already carries CPython's safety margin), floor 200, ceiling the
-         * platform limit.
-         *
-         * Raising this used to SIGSEGV ~30% under deep-recursion stress -- but
-         * the real cause was a snapshot bug, NOT the depth: the per-fiber
-         * snap Py_XINCREF'd tstate->delete_later (the trashcan's deferred-dealloc
-         * chain), and on free-threaded builds Py_INCREF reads op->ob_tid to pick
-         * the refcount path -- but delete_later repurposes ob_tid as its
-         * next-pointer, so the INCREF scrambled the dying objects -> UAF when the
-         * trashcan destroyed them.  That bit only deep recursion (the one case
-         * that leaves delete_later non-NULL at a yield).  With delete_later now
-         * carried as a raw pointer (see runloom_pystate_snap), the scaled budget
-         * is crash-free (p70 20/20 + freethread_stress). */
-        if (g->coro != NULL) {
-            size_t stk = runloom_coro_stack_size(g->coro);
-            long b = (long)Py_C_RECURSION_LIMIT * (long)stk / (8L*1024*1024);
-            if (b < 200) b = 200;
-            if (b > Py_C_RECURSION_LIMIT) b = Py_C_RECURSION_LIMIT;
-            ts->c_recursion_remaining = (int)b;
-        } else {
-            ts->c_recursion_remaining = 200;
-        }
-#else
-        ts->recursion_remaining = py_limit;
-#endif
     }
 
-#if PY_VERSION_HEX >= 0x030B0000
     /* Per-fiber contextvars context.  In the default shared-hub-tstate mode
      * every fiber starts on the SAME ts->context object, so one fiber's
      * ContextVar.set() mutates it for every sibling -- the per-g swap saves and
@@ -430,7 +388,6 @@ void runloom_g_entry(void *user)
         }
     }
     }
-#endif
 
     runloom_delay_inject(RUNLOOM_DLY_G_ENTRY);
     if (g->pass_index) {

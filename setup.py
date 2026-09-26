@@ -70,6 +70,13 @@ PLAT = sys.platform
 if os.name == "nt" or PLAT.startswith(("win", "cygwin")):
     sys.exit("stackweave does not support Windows (Linux, macOS, BSD, and "
              "Solaris/illumos are supported).")
+# Free-threaded CPython 3.14+ only: the C sources have no other code paths (the
+# #error in src/runloom_c/runloom_sched.h is the backstop for other build routes).
+if sys.version_info < (3, 14) or not sysconfig.get_config_var("Py_GIL_DISABLED"):
+    sys.exit("stackweave requires a free-threaded (--disable-gil) CPython 3.14 or "
+             "newer; this is Python %d.%d%s."
+             % (sys.version_info[0], sys.version_info[1],
+                "t" if sysconfig.get_config_var("Py_GIL_DISABLED") else " (GIL build)"))
 IS_DARWIN  = PLAT == "darwin"
 IS_LINUX   = PLAT.startswith("linux")
 IS_BSD     = PLAT.startswith(("freebsd", "openbsd", "netbsd",
@@ -311,10 +318,23 @@ STACKWEAVE_ALLOW_STOCK_CPYTHON = os.environ.get("STACKWEAVE_ALLOW_STOCK_CPYTHON"
 # has) -- the same witnesses tools/ci/lib.sh:rl_verify_witnesses greps for, so a
 # pyconfig.h armed on an unpatched tree doesn't pass.
 _PATCH_FEATURES = (
-    ("Py_TSTATE_ALLOC_HOME", os.path.join("internal", "pycore_tstate.h"),
+    ("Py_TSTATE_ALLOC_HOME", (os.path.join("internal", "pycore_tstate.h"),),
      "_PyThreadStateImpl_AllocHome"),
-    ("Py_TSTATE_EXEC_HOME", "object.h", "_Py_TID_ASM"),
+    # 3.15 moved _Py_ThreadId, and with it the witness, to cpython/object.h.
+    ("Py_TSTATE_EXEC_HOME", ("object.h", os.path.join("cpython", "object.h")),
+     "_Py_TID_ASM"),
 )
+
+
+def _has_witness(include, headers, witness):
+    for header in headers:
+        try:
+            with open(os.path.join(include, header), errors="replace") as f:
+                if witness in f.read():
+                    return True
+        except OSError:
+            pass
+    return False
 
 
 def _defined_macros(flags):
@@ -342,15 +362,10 @@ def patched_cpython_problems():
                                + os.environ.get("CFLAGS", "").split()
                                + os.environ.get("CPPFLAGS", "").split())
     problems = []
-    for flag, header, witness in _PATCH_FEATURES:
-        try:
-            with open(os.path.join(include, header), errors="replace") as f:
-                patched = witness in f.read()
-        except OSError:
-            patched = False
-        if not patched:
+    for flag, headers, witness in _PATCH_FEATURES:
+        if not _has_witness(include, headers, witness):
             problems.append("%s: %s has no %s -- the headers are not patched"
-                            % (flag, header, witness))
+                            % (flag, " or ".join(headers), witness))
         elif not (sysconfig.get_config_var(flag) or flag in interp_defs):
             problems.append("%s: the headers are patched but the interpreter was "
                             "not built with it" % flag)

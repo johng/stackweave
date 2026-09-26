@@ -9,21 +9,25 @@ one OS thread in two separate ways — and either alone still corrupts:
 | **allocation** | `Py_TSTATE_ALLOC_HOME` | which heap a migrated fiber allocates on |
 | **execution** | `Py_TSTATE_EXEC_HOME` | whether the compiler may cache *which OS thread we are* |
 
-Each half ships as a **version-specific** patch, and they are **not**
-interchangeable — take the pair matching your interpreter:
+Each half ships as a **version-specific** patch (stackweave supports only
+free-threaded CPython 3.14+), and they are **not** interchangeable across
+series — take the pair matching your interpreter:
 
 | target | allocation | execution |
 |---|---|---|
 | **CPython 3.14.4t** | `cpython314t-tstate-alloc-home.patch` | `cpython314t-tstate-exec-home.patch` |
-| **CPython 3.13.13t** | `cpython313t-tstate-alloc-home.patch` | `cpython313t-tstate-exec-home.patch` |
+| **CPython 3.15.0rc2t** | `cpython315t-tstate-alloc-home.patch` | `cpython315t-tstate-exec-home.patch` |
 
 All four apply at **zero fuzz** (`patch -p1 -F0`) to their pinned release, and
 `tools/ci/check_patches.sh` enforces that in seconds. The cross-version deltas
-are not cosmetic: 3.14 reordered `_PyThreadStateImpl` and rewrote the mimalloc
-page-reclaim path, so the 3.14 alloc-home patch **drops** two hunks upstream has
-since superseded and **adds** one relaxing an assert that alloc-home makes false.
-See each patch's `WHAT CHANGED` header. Applying the other series' patch with
-`-F3` can fuzz those superseded hunks back in and yield a silently wrong
+are not cosmetic: the patches were first written for 3.13 (removed with 3.13
+support; in git history), and 3.14 reordered `_PyThreadStateImpl` and rewrote the
+mimalloc page-reclaim path, so the 3.14 alloc-home patch **drops** two hunks
+upstream has since superseded and **adds** one relaxing an assert that alloc-home
+makes false. 3.15 moved `_Py_ThreadId` from `Include/object.h` to
+`Include/cpython/object.h`, so the 3.15 exec-home patch targets the new header
+(same asm transform). See each patch's `WHAT CHANGED` header. Applying another
+series' patch with `-F3` can fuzz superseded hunks back in and yield a silently wrong
 interpreter — so don't.
 
 `stackweave.migration_available()` is True only with both; `stackweave.migration_status()`
@@ -31,9 +35,9 @@ reports which half is missing. With either absent, migration stays behind the
 `STACKWEAVE_ALLOW_UNSAFE_MIGRATION` dev override and the scheduler falls back to the
 default non-migrating mode with a warning naming the gap.
 
-## `cpython313t-tstate-alloc-home.patch` — per-tstate allocation home
+## `cpython314t-tstate-alloc-home.patch` — per-tstate allocation home
 
-Optional CPython 3.13t feature (`-DPy_TSTATE_ALLOC_HOME`, **off by default**) that
+Optional free-threaded CPython feature (`-DPy_TSTATE_ALLOC_HOME`, **off by default**) that
 lets a thread state borrow another tstate's allocator. It is the minimal,
 upstream-shaped enabler for **transparent cross-hub migration of real stackful
 fibers** — the thing that is otherwise blocked because one `_PyThreadState_GET()`
@@ -226,9 +230,9 @@ Migration is **off by default**. To enable it you need two things: build CPython
    the whole thing — fetch the pinned release, verify its sha256, apply the pair
    at zero fuzz, configure, build, install, and assert both halves report present:
    ```sh
-   tools/ci/build_patched_cpython.sh 314      # or 313; pins live in tools/ci/versions.env
+   tools/ci/build_patched_cpython.sh 3.14.4   # pins live in tools/ci/versions.env
    ```
-   By hand, for 3.14 (use the `313` files on 3.13 — they are not interchangeable):
+   By hand, for 3.14 (use the `315` files on 3.15 — they are not interchangeable):
    ```sh
    cd cpython
    patch -p1 -F0 < .../patches/cpython314t-tstate-alloc-home.patch

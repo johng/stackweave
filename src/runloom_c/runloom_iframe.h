@@ -44,12 +44,12 @@ size_t runloom_gen_exc_state_offset(void);
  * freeze a half-finished destructor on its coro stack while the hub thread
  * reaches a GC-safe point, letting a concurrent stop-the-world GC / QSBR
  * reclaim corrupt the partially-destroyed objects.  Reaches into internal
- * tstate layout, so it lives in this Py_BUILD_CORE-isolated TU.  Returns 0 on
- * pre-3.13 / non-core builds. */
+ * tstate layout, so it lives in this Py_BUILD_CORE-isolated TU.  Returns 0
+ * when built with RUNLOOM_NO_IFRAME. */
 int runloom_tstate_in_destruction(PyThreadState *ts);
 
-/* Critical-section suspend/restore across a fiber swap (free-threaded
- * 3.13t only; no-op on GIL / pre-3.13 builds).  A fiber can park while
+/* Critical-section suspend/restore across a fiber swap (no-op when built
+ * with RUNLOOM_NO_IFRAME).  A fiber can park while
  * holding a CPython per-object critical section (e.g. a dict's ma_mutex held
  * during a key __eq__ that yields).  runloom runs many fibers on one hub
  * tstate and a cooperative park swaps the C stack WITHOUT detaching the
@@ -73,8 +73,7 @@ void      runloom_critsec_restore(void *tstate, uintptr_t saved);
  * walking it (gc_visit_thread_stacks; the p77_weakref_storm crash).
  *   take(): return the current head and clear it (hand the next fiber a clean,
  *           empty list).  set(): restore this fiber's saved head on resume.
- * void* head keeps the core/non-core ABI boundary clean.  No-op (returns
- * NULL / ignores) on non-FT or < 3.14, where the field does not exist.
+ * void* head keeps the core/non-core ABI boundary clean.
  * See runloom_iframe.c and runloom_sched_pystate.c.inc (snap/load). */
 void *runloom_tstate_take_cstack_refs(void *tstate);
 void  runloom_tstate_set_cstack_refs(void *tstate, void *head);
@@ -85,7 +84,7 @@ void  runloom_tstate_set_cstack_refs(void *tstate, void *head);
  * then become no-ops instead of _Py_TryIncRefShared / _Py_DecRefShared atomics
  * -- the dominant cross-hub cost the hub-scaling audit measured.  ONLY safe for
  * objects that live for the whole run (immortal objects are never freed).
- * No-op on pre-3.13 / non-core builds.  Lives in this Py_BUILD_CORE TU because
+ * Lives in this Py_BUILD_CORE TU because
  * _Py_SetImmortal is internal. */
 void runloom_immortalize(PyObject *op);
 
@@ -93,7 +92,7 @@ void runloom_immortalize(PyObject *op);
  * (the running hub's) allocator -- mimalloc heap + qsbr/page-reclaim -- so the
  * per-g tstate carries no live heap and nothing migrates OS threads (the
  * _mi_page_retire crash that gates RUNLOOM_PER_G_TSTATE).  Requires the optional
- * CPython patch (patches/cpython313t-tstate-alloc-home.patch); compiled as a
+ * CPython patch (patches/cpython314t-tstate-alloc-home.patch); compiled as a
  * no-op against stock CPython, so the call site is unconditional. */
 void runloom_iframe_borrow_alloc_home(PyThreadState *exec, PyThreadState *home);
 
@@ -125,7 +124,6 @@ int runloom_alloc_home_active(void);
  * Exposed to Python as runloom_c.exec_home_available. */
 int runloom_exec_home_active(void);
 
-#if PY_VERSION_HEX >= 0x030E0000
 /* 3.14: arm the SP-based C-stack overflow check at fiber c's private stack, with
  * extra reserved headroom above the guard so a deep-recursion RecursionError
  * fires before CPython's datastack-chunk-alloc burst can dip into the guard page.
@@ -133,7 +131,6 @@ int runloom_exec_home_active(void);
  * declares runloom_coro so callers need not include coro.h. */
 struct runloom_coro;
 void runloom_arm_fiber_stackprot(PyThreadState *ts, struct runloom_coro *c);
-#endif
 
 /* ---- GC visibility for parked-fiber frames (free-threaded 3.14+) ----
  *
@@ -151,7 +148,7 @@ void runloom_arm_fiber_stackprot(PyThreadState *ts, struct runloom_coro *c);
  * would for a live one.  These helpers do the layout-dependent visiting and so
  * live in this Py_BUILD_CORE-isolated TU; the anchor + registry iteration (which
  * needs no internal layout) lives in module_gcframes.c.inc.  All are compiled to
- * safe stubs (returning 0) on non-FT / pre-3.14 builds.  See greenlet PR #511,
+ * safe stubs (returning 0) when built with RUNLOOM_NO_IFRAME.  See greenlet PR #511,
  * from which the per-frame visit set is transcribed. */
 
 /* True iff a stop-the-world pause is in progress on this interpreter.  The
@@ -178,8 +175,7 @@ int runloom_gc_in_subtract_pass(PyObject *self);
  * f_locals (strong) and f_funcobj + f_executable + the localsplus..stackpointer
  * window (deferred-aware).  `subtract` is runloom_gc_in_subtract_pass()'s result.
  * MUST NOT allocate or free (the subtract-pass call site runs inside the GC's
- * heap walk).  Returns the first non-zero visit result (to abort), else 0.
- * No-op on non-FT / pre-3.14. */
+ * heap walk).  Returns the first non-zero visit result (to abort), else 0. */
 int runloom_gcvisit_frame_chain(void *top, visitproc visit, void *arg, int subtract);
 
 /* Visit a privatized _PyCStackRef chain (a parked fiber's snap->c_stack_refs).

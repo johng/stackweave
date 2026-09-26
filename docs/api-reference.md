@@ -75,7 +75,7 @@ Current per-fiber default stack size, in bytes.
 #### `set_stack_size(bytes)`
 
 Override the default and freeze calibration.  Clamped to
-`[16 KB, 8 MB]`.  Disables stack painting.
+`[256 KB, 8 MB]`.  Disables stack painting.
 
 #### `current_g_hwm() → int`
 
@@ -149,7 +149,7 @@ through io_uring.  Elsewhere dispatched through a worker thread.
 
 True if the kernel supports io_uring (Linux 5.1+).
 
-### M:N parallelism (3.13t only)
+### M:N parallelism
 
 See [Parallelism](parallelism.md).
 
@@ -201,7 +201,7 @@ Nothing migrates between hubs in this scheme, so unlike
 are reserved, and falls back to the thread pool otherwise -- see
 [Monkey-patching](monkey-patching.md).
 
-### Preemption (3.13t only)
+### Preemption
 
 See [Preemption](preemption.md).
 
@@ -378,7 +378,7 @@ stackweave.yield_now()       # cooperative yield (give other fibers a turn)
 stackweave.sleep(seconds)    # cooperative sleep
 stackweave.run(n, main_fn=None)  # THE entry point. run main_fn with n hubs:
                           #   n=1 single-thread, n>1 M:N parallel across n
-                          #   cores (needs 3.13t + GIL off; n>1 under the GIL
+                          #   cores (needs the GIL off; n>1 under the GIL
                           #   raises).  main_fn optional -> drain-only.
                           #   Collapses mn_init/mn_fiber/mn_run/mn_fini.
 stackweave.current() → Goroutine

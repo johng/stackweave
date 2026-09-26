@@ -6,8 +6,8 @@ advertise the cp3NNt wheel tag -- so setup.py gates the two commands pip drives
 migration-patch witnesses.  `setup.py build_ext --inplace` stays ungated; the
 rest of the suite runs on the extension it builds, so it covers that half.
 
-Skipped on a patched interpreter: there the gate passes and the command would go
-on to compile the whole extension.
+The refusal test is skipped on a patched interpreter: there the gate passes and
+the command would go on to compile the whole extension.
 """
 import os
 import pathlib
@@ -20,7 +20,7 @@ import stackweave
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
-pytestmark = pytest.mark.skipif(
+needs_unpatched = pytest.mark.skipif(
     stackweave.migration_available(),
     reason="patched interpreter: the gate passes and the build would compile")
 
@@ -33,9 +33,59 @@ def _setup(tmp_path, *args):
         cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
 
 
+@needs_unpatched
 @pytest.mark.parametrize("command", ["bdist_wheel", "editable_wheel"])
 def test_wheel_build_refused_on_unpatched_cpython(tmp_path, command):
     r = _setup(tmp_path, command)
     assert r.returncode != 0, r.stdout + r.stderr
     assert "installs only onto a free-threaded CPython" in r.stderr, r.stderr
     assert not (tmp_path / "dist").exists()
+
+
+def _gate(monkeypatch, tmp_path, headers):
+    """setup.py's patched_cpython_problems() against a fake patched interpreter
+    whose include dir holds `headers` ({relpath: text})."""
+    import contextlib
+    import io
+    import runpy
+    import sysconfig
+
+    include = tmp_path / "include"
+    for rel, text in headers.items():
+        (include / rel).parent.mkdir(parents=True, exist_ok=True)
+        (include / rel).write_text(text)
+    pyconfig = tmp_path / "pyconfig.h"
+    pyconfig.write_text("#define Py_TSTATE_ALLOC_HOME 1\n"
+                        "#define Py_TSTATE_EXEC_HOME 1\n")
+    config = {"Py_GIL_DISABLED": 1, "Py_TSTATE_ALLOC_HOME": 1,
+              "Py_TSTATE_EXEC_HOME": 1, "CONFIGURE_CPPFLAGS": ""}
+
+    monkeypatch.chdir(ROOT)
+    monkeypatch.setattr(sys, "argv", ["setup.py", "--name"])
+    with contextlib.redirect_stdout(io.StringIO()), \
+            contextlib.redirect_stderr(io.StringIO()):
+        ns = runpy.run_path(str(ROOT / "setup.py"), run_name="stackweave_setup")
+    monkeypatch.setattr(sysconfig, "get_config_var", config.get)
+    monkeypatch.setattr(sysconfig, "get_path", lambda *a, **k: str(include))
+    monkeypatch.setattr(sysconfig, "get_config_h_filename", lambda: str(pyconfig))
+    return ns["patched_cpython_problems"]()
+
+
+# 3.13/3.14 declare _Py_ThreadId -- and so the exec-home witness -- in object.h;
+# 3.15 moved it to cpython/object.h.  Either is a patched interpreter.
+@pytest.mark.parametrize("exec_header", ["object.h", "cpython/object.h"])
+def test_gate_accepts_exec_home_witness_in_either_header(monkeypatch, tmp_path,
+                                                         exec_header):
+    problems = _gate(monkeypatch, tmp_path, {
+        "internal/pycore_tstate.h": "_PyThreadStateImpl_AllocHome",
+        exec_header: "_Py_TID_ASM",
+    })
+    assert problems == []
+
+
+def test_gate_refuses_when_no_header_has_the_exec_home_witness(monkeypatch, tmp_path):
+    problems = _gate(monkeypatch, tmp_path, {
+        "internal/pycore_tstate.h": "_PyThreadStateImpl_AllocHome",
+        "object.h": "", "cpython/object.h": "",
+    })
+    assert len(problems) == 1 and "Py_TSTATE_EXEC_HOME" in problems[0], problems

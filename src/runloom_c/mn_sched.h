@@ -1,6 +1,6 @@
 /* mn_sched.h -- M:N scheduler skeleton for Phase C.
  *
- * Target: free-threaded Python 3.13t.  N OS threads, each owning a
+ * Target: free-threaded Python 3.14+.  N OS threads, each owning a
  * scheduler hub; fibers created on any thread go into a hub's
  * local ring queue.  When a hub's ready queue is empty, it tries to
  * steal from a neighbouring hub's queue tail (Chase-Lev work-stealing

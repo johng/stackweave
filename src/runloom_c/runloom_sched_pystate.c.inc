@@ -102,7 +102,6 @@ void runloom_pystate_snap(runloom_pystate_snap_t *snap)
     /* No memset: every field is assigned below.  Saves ~80B of
      * unnecessary writes on the hot per-yield path. */
 
-#if PY_VERSION_HEX >= 0x030B0000
     /* contextvars: hold a ref while suspended so g's saved context
      * can't be freed.  Optimisation: skip the atomic INCREF when the
      * context is immortal -- the empty default context is immortal
@@ -122,15 +121,7 @@ void runloom_pystate_snap(runloom_pystate_snap_t *snap)
     snap->context = ts->context;
 #  endif
 
-#  if PY_VERSION_HEX >= 0x030E0000
     snap->py_recursion_remaining = ts->py_recursion_remaining;
-#  elif PY_VERSION_HEX >= 0x030C0000
-    snap->py_recursion_remaining = ts->py_recursion_remaining;
-    snap->c_recursion_remaining = ts->c_recursion_remaining;
-#  else
-    /* 3.11: single counter named recursion_remaining. */
-    snap->recursion_remaining = ts->recursion_remaining;
-#  endif
 
     /* Per-fiber sys.setprofile/settrace hooks (BUG #11): tstate-global, so
      * without snap/restore one fiber's hook leaks onto siblings sharing the
@@ -252,25 +243,8 @@ void runloom_pystate_snap(runloom_pystate_snap_t *snap)
      * unchanged, the DECREF of ts's ref just moves from load-time to here. */
     Py_CLEAR(ts->exc_state.exc_value);
     Py_CLEAR(ts->current_exception);
-#endif
 
-#if PY_VERSION_HEX >= 0x030B0000 && PY_VERSION_HEX < 0x030D0000
-    /* 3.11 and 3.12: cframe lives on the C stack, threaded through
-     * the linked list.  We save the pointer; it remains valid
-     * because g's C stack is preserved across the swap.  The
-     * trashcan nesting depth lived directly on tstate in 3.11
-     * (trash_delete_nesting) and inside a nested `trash` struct in
-     * 3.12 (trash.delete_nesting). */
-    snap->cframe = ts->cframe;
-#  if PY_VERSION_HEX >= 0x030C0000
-    snap->trash_delete_nesting = ts->trash.delete_nesting;
-#  else
-    snap->trash_delete_nesting = ts->trash_delete_nesting;
-#  endif
-#endif
-
-#if PY_VERSION_HEX >= 0x030D0000
-    /* 3.13: cframe is gone; current_frame is directly on tstate. */
+    /* current_frame is directly on tstate. */
     snap->current_frame = ts->current_frame;
     /* delete_later is the trashcan's deferred-dealloc chain: objects that are
      * DYING (refcount 0) and linked through op->ob_tid (repurposed as the
@@ -287,17 +261,14 @@ void runloom_pystate_snap(runloom_pystate_snap_t *snap)
      * fiber's half-built destroy list. */
     snap->delete_later = ts->delete_later;
     ts->delete_later = NULL;
-#endif
 
-#if PY_VERSION_HEX >= 0x030E0000
     /* 3.14 free-threaded: privatise this fiber's c_stack_refs list (the
      * _PyCStackRef chain the FT GC walks).  Its nodes live on THIS fiber's C
      * stack; take the head into the snap and hand the next fiber a clean empty
      * list, so a sibling's stack reuse can't corrupt our nodes and the GC can't
      * follow a dangling next on collect (the p77_weakref_storm SIGSEGV in
-     * gc_visit_thread_stacks).  No-op (returns NULL) on non-FT builds. */
+     * gc_visit_thread_stacks). */
     snap->c_stack_refs = runloom_tstate_take_cstack_refs(ts);
-#endif
 
     /* SEAM INVARIANT L5 (GC-load-bearing since the GC frames anchor):
      * snap->valid = 1 is the LAST write and this whole function is safepoint-free
@@ -345,7 +316,6 @@ void runloom_pystate_load(runloom_pystate_snap_t *snap)
     runloom_critsec_restore(ts, snap->critical_section);
     snap->critical_section = 0;
 
-#if PY_VERSION_HEX >= 0x030B0000
     /* contextvars fast path: if g didn't touch ts->context, the snap's
      * pointer matches ts's.  Drop our extra ref and skip the swap +
      * context_ver bump.  The version stays stable because the content
@@ -361,15 +331,7 @@ void runloom_pystate_load(runloom_pystate_snap_t *snap)
         ts->context_ver++;
     }
 
-#  if PY_VERSION_HEX >= 0x030E0000
     ts->py_recursion_remaining = snap->py_recursion_remaining;
-#  elif PY_VERSION_HEX >= 0x030C0000
-    ts->py_recursion_remaining = snap->py_recursion_remaining;
-    ts->c_recursion_remaining = snap->c_recursion_remaining;
-#  else
-    /* 3.11: single counter. */
-    ts->recursion_remaining = snap->recursion_remaining;
-#  endif
 
     /* Restore this fiber's own profile/trace hooks (BUG #11).  Transfer the
      * refs the snap holds back onto ts and drop ts's previous ones.  All NULL
@@ -438,18 +400,8 @@ void runloom_pystate_load(runloom_pystate_snap_t *snap)
         snap->current_exception = NULL;
         Py_XDECREF(old);
     }
-#endif
 
-#if PY_VERSION_HEX >= 0x030B0000 && PY_VERSION_HEX < 0x030D0000
-    ts->cframe = snap->cframe;
-#  if PY_VERSION_HEX >= 0x030C0000
-    ts->trash.delete_nesting = snap->trash_delete_nesting;
-#  else
-    ts->trash_delete_nesting = snap->trash_delete_nesting;
-#  endif
-#endif
 
-#if PY_VERSION_HEX >= 0x030D0000
     ts->current_frame = snap->current_frame;
     /* Restore this fiber's deferred-dealloc chain as a RAW pointer (see the
      * snap side -- never refcount a delete_later chain).  ts->delete_later is
@@ -458,16 +410,13 @@ void runloom_pystate_load(runloom_pystate_snap_t *snap)
      * swaps -- so there is nothing to drop. */
     ts->delete_later = snap->delete_later;
     snap->delete_later = NULL;
-#endif
 
-#if PY_VERSION_HEX >= 0x030E0000
     /* Restore this fiber's own c_stack_refs head (see snap).  ts->c_stack_refs is
      * empty here: the fiber that ran before us took its own list out on its snap,
      * and hub_main runs no Python between swaps, so nothing was pushed onto the
      * shared tstate in the interim. */
     runloom_tstate_set_cstack_refs(ts, snap->c_stack_refs);
     snap->c_stack_refs = NULL;
-#endif
 
     /* SEAM INVARIANT L1/L2/L3 (GC-load-bearing since the GC frames anchor): the
      * ts->current_frame restore (:497 above) and the c_stack_refs restore (just
@@ -491,7 +440,6 @@ void runloom_pystate_snap_clear(runloom_pystate_snap_t *snap)
      * coro stack (freed with it), so there is nothing to unlock -- just drop
      * the saved chain. */
     snap->critical_section = 0;
-#if PY_VERSION_HEX >= 0x030B0000
     Py_CLEAR(snap->context);
     Py_CLEAR(snap->exc_state.exc_value);
     snap->exc_info = NULL;
@@ -502,21 +450,16 @@ void runloom_pystate_snap_clear(runloom_pystate_snap_t *snap)
     Py_CLEAR(snap->current_exception);
     Py_CLEAR(snap->c_profileobj);            /* BUG #11: drop held hook refs */
     Py_CLEAR(snap->c_traceobj);
-#endif
-#if PY_VERSION_HEX >= 0x030D0000
     /* delete_later is a raw chain of DYING objects linked via ob_tid, never
      * refcounted (see runloom_pystate_snap).  A fiber destroyed while parked
      * mid-trashcan-deferral is extremely rare; rather than risk corrupting those
      * dying objects with a DECREF, just drop the reference -- a small bounded
      * leak of a few already-dead objects beats a use-after-free. */
     snap->delete_later = NULL;
-#endif
-#if PY_VERSION_HEX >= 0x030E0000
     /* c_stack_refs nodes live on the dying g's own coro stack (freed with it) and
      * hold only borrowed eval-loop temporaries -- nothing to drop, just forget
      * the head.  The shared tstate already had its list cleared at snap time. */
     snap->c_stack_refs = NULL;
-#endif
     /* SEAM INVARIANT L4 (GC-load-bearing since the GC frames anchor): valid=0 is
      * the LAST write.  A g destroyed while parked runs the Py_CLEARs above (which
      * may dealloc -> __del__ -> a GC safepoint), but this function never touches
@@ -545,13 +488,11 @@ void runloom_pystate_snap_clear(runloom_pystate_snap_t *snap)
  * link.  Pool entries have top=0 (empty) which is the same state a
  * freshly arena-allocated chunk would be in.
  *
- * 3.13t has tstate->datastack_cached_chunk, an in-tstate one-slot
+ * CPython's tstate->datastack_cached_chunk is an in-tstate one-slot
  * cache.  That helps when one thread runs many gs serially, but
  * doesn't compose with our M:N hubs (each hub already has its own
- * tstate, so the slot would be cold across hub-to-hub g migration --
- * which we don't actually do, but the pool is also useful for the
- * single-thread sched on both 3.12 and 3.13). */
-#if PY_VERSION_HEX >= 0x030B0000
+ * tstate, so the slot would be cold across hub-to-hub g migration),
+ * and the pool is also useful for the single-thread sched. */
 /* 4096 chunks = ~16 MB / thread reserved when full, but matches
  * spawn-heavy peak working sets without falling back to the arena. */
 #define RUNLOOM_CHUNK_POOL_CAP 4096
@@ -645,7 +586,6 @@ static pthread_mutex_t runloom_chunk_graveyard_lock = PTHREAD_MUTEX_INITIALIZER;
  * tstate's datastack chain, so this never touches a live frame. */
 void runloom_chunk_pool_thread_flush(void)
 {
-#if PY_VERSION_HEX >= 0x030B0000
     _PyStackChunk *head = NULL, *tail = NULL, *c, *p;
     for (c = runloom_chunk_pool; c != NULL; c = p) {   /* reuse pool (LIFO) */
         p = c->previous; c->previous = head; head = c; if (tail == NULL) tail = c;
@@ -661,7 +601,6 @@ void runloom_chunk_pool_thread_flush(void)
     tail->previous = runloom_chunk_graveyard;
     runloom_chunk_graveyard = head;
     pthread_mutex_unlock(&runloom_chunk_graveyard_lock);
-#endif
 }
 
 /* Called by the MAIN thread at mn_fini AFTER every hub has joined: free the
@@ -669,7 +608,6 @@ void runloom_chunk_pool_thread_flush(void)
  * grace-window reader can remain), so returning the chunks to the OS is sound. */
 void runloom_chunk_pool_reclaim(void)
 {
-#if PY_VERSION_HEX >= 0x030B0000
     _PyStackChunk *c, *p;
     PyObjectArenaAllocator alloc;
     pthread_mutex_lock(&runloom_chunk_graveyard_lock);
@@ -683,7 +621,6 @@ void runloom_chunk_pool_reclaim(void)
         if (alloc.free != NULL) alloc.free(alloc.ctx, c, c->size);
         c = p;
     }
-#endif
 }
 
 /* Pop one chunk off the pool.  Returns NULL when empty; caller falls
@@ -768,4 +705,3 @@ static int runloom_chunk_pool_install(PyThreadState *ts)
     ts->datastack_limit = (PyObject **)((char *)c + c->size);
     return 1;
 }
-#endif

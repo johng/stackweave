@@ -12,7 +12,7 @@ long `numpy` matmul or a 10-million-iteration arithmetic loop will
 starve every other fiber.
 
 `stackweave.preempt_init(quantum_us=10_000)` solves this on
-**free-threaded Python 3.13t** (the GIL-disabled build).  A timer
+**free-threaded Python** (the GIL-disabled build).  A timer
 thread posts a `Py_AddPendingCall` every quantum; CPython's
 `eval_breaker` check -- already done between bytecodes -- invokes our
 callback, which calls `runloom_sched_yield()` on the running fiber.
@@ -88,17 +88,14 @@ This is the same limitation Go has with cgo: while you're in C, the
 scheduler can't preempt you.  Most stdlib functions release frequently
 enough that this isn't noticeable in practice.
 
-### 3.13t only
+### Free-threaded only
 
-`preempt_init` raises `RuntimeError` on GIL builds.  The preemption
+stackweave only builds on free-threaded CPython 3.14+.  The preemption
 path relies on the M:N hub model and `Py_AddPendingCall` having a
-fast path that's safe across hubs -- both of which are part of the
-3.13t support that doesn't exist on earlier or non-free-threaded
-Pythons.
-
-If you really want time-slicing on a GIL build, the workaround is to
-sprinkle `stackweave.sched_yield_classic()` calls into your hot loops.
-Crude but works.
+fast path that's safe across hubs.  If the GIL has been re-enabled at
+runtime (`PYTHON_GIL=1`) and you want time-slicing anyway, sprinkle
+`stackweave.sched_yield_classic()` calls into your hot loops.  Crude
+but works.
 
 ### Per-thread, not per-process
 
@@ -147,7 +144,6 @@ stackweave.preempt_init(quantum_us=1_000)
   sleeps) and you're confident none monopolise the CPU.
 - You're benchmarking the cooperative baseline and don't want the
   jitter from quantum-driven yields.
-- You're on a GIL build (it'll raise).
 
 The default for stackweave is *no preemption*, which matches Go's behaviour
 pre-1.14.  Opt into preemption when you actually need it.

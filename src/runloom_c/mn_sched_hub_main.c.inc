@@ -87,7 +87,7 @@ static uint64_t runloom_steal_rand(int hub_id)
     return x;
 }
 
-/* gc-stop-the-world fairness (free-threaded 3.13+ only).
+/* gc-stop-the-world fairness.
  *
  * A fiber that loops a stop-the-world operation -- a tight `gc.collect()`
  * loop is the canonical case -- while it is the SOLE runnable g on its hub gets
@@ -119,11 +119,9 @@ static uint64_t runloom_steal_rand(int hub_id)
  *
  * Precisely targeted -- a busy multi-g hub short-circuits on the ready-count test
  * (a couple of relaxed loads); a lone yielder whose siblings are idle (pending==0)
- * or running (ATTACHED) never pays the pause.  No-op before 3.13 (no attach-state /
- * stop-the-world protocol there). */
+ * or running (ATTACHED) never pays the pause. */
 static void runloom_mn_world_yield_if_monopolizing(runloom_hub_t *h)
 {
-#if PY_VERSION_HEX >= 0x030D0000
     int i;
     if (__atomic_load_n(&h->stopping, __ATOMIC_ACQUIRE)) return;
     /* An offload hub's next act is to detach for a blocking call, so the
@@ -171,9 +169,6 @@ static void runloom_mn_world_yield_if_monopolizing(runloom_hub_t *h)
             return;
         }
     }
-#else
-    (void)h;
-#endif
 }
 
 /* Hub thread main loop.  Phase C v2: runs the same snap/load dance
@@ -1339,7 +1334,7 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                  * allocation during/after attach would otherwise hit the prior
                  * hub's heap on this hub's thread (mimalloc heap->thread_id != tid
                  * abort).  No-op without the Py_TSTATE_ALLOC_HOME CPython patch
-                 * (patches/cpython313t-tstate-alloc-home.patch). */
+                 * (patches/cpython31Xt-tstate-alloc-home.patch). */
                 runloom_iframe_borrow_alloc_home(g->tstate, hub_ts);
                 /* Perturbation seam (RUNLOOM_DELAY): widen the cross-hub
                  * tstate-adopt window so a concurrent actor races the attach --
@@ -1489,12 +1484,10 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                 runloom_pystate_load(&g->snap);
             } else {
                 runloom_first_run_install_datastack();
-#if PY_VERSION_HEX >= 0x030D0000
                 {
                     PyThreadState *ts = PyThreadState_GET();
                     ts->current_frame = NULL;
                 }
-#endif
             }
 
             h->sched.current = g;

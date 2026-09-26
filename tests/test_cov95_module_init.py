@@ -1,7 +1,7 @@
 """Adversarial coverage suite for two small module fragments:
 
-  * src/runloom_c/module_init.c.inc -- the module method table, PyInit, the
-    fiber-safe module getattro slot, and the two env-gated PyInit branches
+  * src/runloom_c/module_init.c.inc -- the module method table, PyInit, and
+    the two env-gated PyInit branches
     (STACKWEAVE_STACK_SCRUB, STACKWEAVE_TRACEBACK).
   * src/runloom_c/module_g.c.inc    -- the RunloomG (fiber handle) type:
     RunloomG_stack() (the watchdog state probe) and RunloomG_richcompare's
@@ -71,9 +71,6 @@ report's `exclusions[]` for the precise category of each):
   * module_g L148 (d == NULL) and L151-152 (PyDict_SetItemString error cleanup)
     -- PyDict_New / PyDict_SetItemString fail only under allocator failure; no
     STACKWEAVE_FAULT_ hook covers these raw CPython calls.  OOM.
-  * module_init L436-437 (runloom_module_getattro: PyDict_GetItemRef < 0) --
-    the key is the interned "__getattr__" and the dict is the module dict;
-    the lookup fails only on a corrupt dict, with no fault hook.  DEFENSIVE.
   * module_init L520/525-527/530-532/535-536/540-541/545-546/555-556/
     561-563/566-567/573-574/588-589/596-597/602-603/607-609 (all the PyInit
     failure-cleanup arms after PyType_Ready / PyModule_Create /

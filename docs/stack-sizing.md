@@ -16,7 +16,11 @@ fibers' high-water marks and after 1 000 completions can adapt the default
 **up** to `next_pow2(max_hwm × 4)` (clamped at 8 MB) for stack-hungry programs --
 but it is **floored at 512 KB** and never auto-shrinks below it.  (Reclaiming
 the tail per function is the **grow-down**'s job -- on by default under M:N, see
-the next section; an explicit `set_stack_size()` can still go down to 16 KB.)
+the next section; an explicit `set_stack_size()` can still go down to the
+**256 KB minimum**.  stackweave requires free-threaded CPython 3.14+, and there
+every fiber stack is raised to at least 256 KB when it is created -- the room
+CPython's per-fiber overflow check needs, see below.  Smaller sizes elsewhere on
+this page are what the sizers *record*; the stack a fiber gets is never smaller.)
 When a fiber finishes, its stack returns to a
 per-thread pool with `MADV_DONTNEED` applied -- the kernel reclaims the
 physical pages while keeping the virtual mapping.  Net effect: 10 000
@@ -34,10 +38,12 @@ default stack (a "cold start" -- a size the function is known to complete on),
 measures its real C-stack high-water mark on return, and writes a derived size
 back onto the function itself (`fn.__dict__["runloom_stack"]` -- the function
 *is* the lookup row). The next spawn of that same function reserves only
-`next_pow2(measured_hwm × 4)`, floored at 16 KB. The stored size is the running
+`next_pow2(measured_hwm × 4)`, floored at 16 KB (and then raised to the 256 KB
+minimum when the fiber is created). The stored size is the running
 **max** over the first 64 spawns, then frozen -- after that, spawning is a single
-dict lookup with no measurement overhead. A trivial handler settles at 16 KB
-instead of 512 KB (a 32× cut); a `json.dumps`-heavy one at ~64 KB.
+dict lookup with no measurement overhead. A trivial handler records 16 KB and a
+`json.dumps`-heavy one ~64 KB; both then run on the 256 KB minimum instead of
+the 512 KB default (a 2× cut).
 
 It only ever shrinks *from* the cold start -- a size the function already ran on
 -- so it never reserves **more** than a known-safe amount. The one residual
@@ -114,7 +120,8 @@ print(s["stack_painting"])         # 0 once painting is disabled
 
 Typical numbers (these are the **per-function grow-down** sizes -- the default-on
 M:N auto-sizer that shrinks each function to its measured need; *calibration*
-itself never goes below the 512 KB floor, see above):
+itself never goes below the 512 KB floor, see above; the stack a fiber actually
+gets is never below the 256 KB minimum):
 
 | Workload | Grown-down size |
 | --- | --- |
@@ -240,15 +247,15 @@ the scheduler calibrated to.
 
 Running **millions** of shallow fibers and want to reclaim the 512 KB
 default's virtual footprint? Lock a smaller size up-front (an explicit size
-overrides the default and its floor, down to the 16 KB hard minimum):
+overrides the default and its floor, down to the 256 KB minimum):
 
 ```python
 import stackweave
 
 # Before any stackweave.fiber() call:
-stackweave.set_stack_size(32 * 1024)
+stackweave.set_stack_size(256 * 1024)
 
-# Subsequent fibers use exactly 32 KB:
+# Subsequent fibers use exactly 256 KB:
 stackweave.fiber(worker)
 ```
 
@@ -267,7 +274,7 @@ import stackweave
 print(stackweave.get_stack_size())   # current default
 ```
 
-Bounds: `[16 KB, 8 MB]`.  Below or above is silently clamped.
+Bounds: `[256 KB, 8 MB]`.  Below or above is silently clamped.
 
 ## What's a "safe" stack size?
 
@@ -279,15 +286,12 @@ code) push the usage up.
 
 Empirical rules of thumb:
 
-- **8 KB**: only for trivial computational loops with no I/O and no
-  deep Python recursion.  Below 16 KB you're flirting with `RuntimeError:
-  maximum recursion depth exceeded`.
-- **16 KB**: fine for typical server handlers (socket I/O, JSON
-  parsing of normal payloads, simple state machines).
-- **64 KB**: safe for most code including moderately deep call graphs
-  through stdlib code.
-- **256 KB+**: deep recursion, heavy C extensions (XML parsers, ORMs
-  with deep query trees).
+- **256 KB** (the minimum): typical server handlers (socket I/O, JSON
+  parsing of normal payloads, simple state machines) and most code with
+  moderately deep call graphs through stdlib code.  96 KB of it is held back
+  so CPython's overflow check fires early, leaving 160 KB of usable depth.
+- **512 KB** (the default): deep recursion, heavy C extensions (XML parsers,
+  ORMs with deep query trees), `_decimal`'s 256 KB frame.
 
 When in doubt, run with calibration on, look at the measured
 `stack_hwm`, and lock a value that gives you ≥ 4× headroom.
@@ -302,7 +306,7 @@ print(stackweave.stats())
 # {
 #   'ready': 0, 'sleeping': 0, 'netpoll_parked': 0,
 #   'completed': 1042, 'running': 0,
-#   'stack_size_default': 16384,
+#   'stack_size_default': 524288,
 #   'stack_hwm': 768,
 #   'stack_completed': 1000,
 #   'stack_calibrated': 1,
@@ -319,10 +323,12 @@ startup and the high-water mark periodically.
 A fiber running low on stack is defended in layers -- the same kind of
 protection the main thread gets, scaled to the fiber's smaller stack:
 
-- **Deep recursion raises `RecursionError`, not a crash.** CPython's
-  C-recursion counter is tracked per fiber (saved and restored across
-  yields), so unbounded Python *or* C recursion (`json`, `re`, deeply nested
-  calls) hits a catchable `RecursionError` well before the stack overflows.
+- **Deep recursion raises `RecursionError`, not a crash.** CPython 3.14's
+  overflow check compares the stack pointer against a limit, and stackweave
+  points it at each fiber's own stack on every resume, 96 KB short of the end
+  (`runloom_arm_fiber_stackprot`).  So unbounded Python *or* C recursion (`json`,
+  `re`, deeply nested calls) hits a catchable `RecursionError` (the parser raises
+  `MemoryError`) well before the stack overflows.
 - **Stacks grow on demand.** At each resume boundary a fiber whose headroom
   has dropped below a quarter of its stack is copied onto a stack twice as big
   (`STACKWEAVE_STACK_GROW`, default on; `STACKWEAVE_STACK_GROW=0` disables). A fiber
@@ -334,12 +340,14 @@ protection the main thread gets, scaled to the fiber's smaller stack:
   is turned into a classified message that *names the overflowing fiber and
   its stack size* instead of a bare segfault -- see
   [Crash reporting](debugging.md#crash-reporting-sigsegv--sigbus).
-- **CPython's stack-hungry error paths are neutralised.** A missing-attribute
-  lookup on a module makes CPython 3.13 reserve a 32 KB path buffer just to
-  build a "did you shadow a stdlib module?" hint -- on its own larger than a
-  default fiber stack. stackweave skips that hint while on a fiber (the
-  `AttributeError` is otherwise unchanged), so `getattr`/`hasattr` misses on a
-  module can't blow the stack, by any lookup path.
+- **CPython's stack-hungry error paths fit.** A missing-attribute lookup on a
+  module makes CPython reserve two path buffers (~32 KB on Linux, ~8 KB on
+  macOS) to build a "did you shadow a stdlib module?" hint.  That used to
+  overflow small 3.13 fiber stacks, so stackweave replaced the module lookup to
+  skip it; with the 256 KB minimum and 96 KB held back for the overflow check
+  it fits, and CPython's own lookup is used unchanged.  Guard:
+  `tests/test_module_getattr_fiber.py` (a miss at the deepest point a
+  minimum-size fiber reaches).
 
 Between them those cover everything that's actually come up in practice. The
 residual is a **single native/FFI C frame larger than the whole fiber
@@ -350,15 +358,14 @@ guard; a non-probing extension could corrupt. If you have such a fiber,
 give it a bigger stack up front:
 
 ```python
-stackweave.set_stack_size(128 * 1024)        # process-wide default floor
+stackweave.set_stack_size(1024 * 1024)       # process-wide default
 # or just the suspicious fiber:
 stackweave.fiber(work, stack_size=512 * 1024)
 ```
 
-So the 16 KB minimum is a *floor for the calibrator*, not a blanket "safe for
-anything" size: it works because recursion is bounded, stacks grow, and the one
-oversized CPython frame is handled -- not because 16 KB fits every possible C
-call.
+So the 256 KB minimum is not a blanket "safe for anything" size: it works
+because recursion is bounded and stacks grow -- not because 256 KB fits every
+possible C call.
 
 ## Right-sizing with the advisory profiler
 

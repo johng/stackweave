@@ -105,7 +105,7 @@ static PyObject *runloom_hub_info_to_dict(const runloom_hub_info_t *o)
     } while (0)
 
     /* attach_state mirrors RUNLOOM_TS_* (0 DETACHED / 1 ATTACHED / 2 SUSPENDED;
-     * -1 unknown, e.g. pre-3.13).  DETACHED with a long dwell == a blocking-IO
+     * -1 unknown).  DETACHED with a long dwell == a blocking-IO
      * wedge; ATTACHED == CPU-bound; the dwell tells idle from stuck. */
     switch (o->attach_state) {
         case 0:  state = "detached";  break;

@@ -20,7 +20,7 @@ Usage:
   python -m tools.hang_hunter.daemon --duration 3600     # hunt for an hour
   python -m tools.hang_hunter.daemon --daemon            # run until signalled
   (flags: --engines stress,hypo  --jobs N  --load-frac 0.7  --report-dir DIR
-          --python /path/to/python3.13t)
+          --python /path/to/python3.14t)
 
 Live attach needs ptrace: /proc/sys/kernel/yama/ptrace_scope = 0 (or run as root).
 For crash backtraces, point core_pattern at the report dir's cores/ (the daemon
@@ -46,7 +46,7 @@ REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 def default_python():
     for c in (os.path.expanduser("~/.pyenv/versions/3.14.4t/bin/python3"),
-              "python3.13t", "python3"):
+              "python3.14t", "python3"):
         if os.path.sep in c:
             if os.path.exists(c):
                 return c

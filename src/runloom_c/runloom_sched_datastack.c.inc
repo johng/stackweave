@@ -5,16 +5,12 @@
 
 void runloom_first_run_install_datastack(void)
 {
-#if PY_VERSION_HEX >= 0x030B0000
     PyThreadState *ts = PyThreadState_GET();
     if (!runloom_chunk_pool_install(ts)) {
         ts->datastack_chunk = NULL;
         ts->datastack_top = NULL;
         ts->datastack_limit = NULL;
     }
-#else
-    (void)0;
-#endif
 }
 
 /* ---- Datastack-tail idle reclaim (companion to the C-stack sweep) ----
@@ -32,7 +28,7 @@ void runloom_first_run_install_datastack(void)
  * We keep the partial page holding the live frontier and drop whole pages
  * strictly above it.  Refault on the next frame push is the (cheap, zero-
  * filled) cost, identical to the C-stack sweep's contract. */
-#if PY_VERSION_HEX >= 0x030B0000 && defined(MADV_DONTNEED)
+#if defined(MADV_DONTNEED)
 /* Decompose counters (RUNLOOM_DATASTACK_DEBUG only). */
 static unsigned long long runloom_ds_sweep_tail_bytes = 0;
 static unsigned long long runloom_ds_sweep_resident_bytes = 0;
@@ -59,7 +55,7 @@ static unsigned long long runloom_ds_resident_bytes(uintptr_t lo, uintptr_t hi,
 
 void runloom_sched_madvise_datastack_idle(runloom_g_t *g)
 {
-#if PY_VERSION_HEX >= 0x030B0000 && defined(MADV_DONTNEED)
+#if defined(MADV_DONTNEED)
     static int on = -1;              /* read RUNLOOM_DATASTACK_SWEEP once */
     static int dbg = -1;             /* read RUNLOOM_DATASTACK_DEBUG once */
     runloom_pystate_snap_t *snap;
@@ -129,7 +125,7 @@ void runloom_sched_datastack_sweep_stats(unsigned long long *tail_bytes,
                                       unsigned long long *resident_bytes,
                                       unsigned long long *chunks)
 {
-#if PY_VERSION_HEX >= 0x030B0000 && defined(MADV_DONTNEED)
+#if defined(MADV_DONTNEED)
     if (tail_bytes)
         *tail_bytes = __atomic_load_n(&runloom_ds_sweep_tail_bytes, __ATOMIC_RELAXED);
     if (resident_bytes)
@@ -158,7 +154,6 @@ void runloom_sched_datastack_sweep_stats(unsigned long long *tail_bytes,
  * Algorithm matches greenlet's PythonState::did_finish, plus pool reuse. */
 void runloom_drain_g_datastack(void)
 {
-#if PY_VERSION_HEX >= 0x030B0000
     PyThreadState *ts = PyThreadState_GET();
     _PyStackChunk *chunk = ts->datastack_chunk;
     PyObjectArenaAllocator alloc;
@@ -175,7 +170,6 @@ void runloom_drain_g_datastack(void)
         runloom_chunk_pool_put(chunk, &alloc);
         chunk = prev;
     }
-#endif
 }
 
 /* Install an initial root for the fiber's Python frame chain.  Run
@@ -189,39 +183,15 @@ void runloom_drain_g_datastack(void)
  * scheduler, or worse, another fiber.  Then traceback walks and
  * recursion checks pull in every frame across every fiber.
  *
- * On 3.12, we put a fresh _PyCFrame at the bottom of g's stack, point its
- * previous to tstate->root_cframe (the per-thread sentinel), AND null its
- * current_frame so g's first interpreter frame roots its own chain.
- * On 3.13, the cframe is gone; we just NULL out tstate->current_frame.
- * In both cases the chain starts here and walks back to a terminator,
- * not to the previous coroutine. */
-#if PY_VERSION_HEX >= 0x030B0000 && PY_VERSION_HEX < 0x030D0000
-static void runloom_install_initial_root_frame(_PyCFrame *frame_storage)
-{
-    PyThreadState *ts = PyThreadState_GET();
-    *frame_storage = *ts->cframe;
-    /* Sever BOTH chains, not just the cframe `previous`: current_frame is what
-     * interpreter-frame `previous` links to and what traceback/recursion walks
-     * follow.  Inheriting the scheduler's current_frame links g's frames onto
-     * whoever ran last on this thread -- usually harmless (that frame is live),
-     * but after a frame is torn down (e.g. a task aborted by a KeyboardInterrupt
-     * whose run is then re-entered) the inherited current_frame dangles, and g's
-     * first frame push roots onto freed memory.  Silent on glibc (still mapped),
-     * a hard access violation on Windows.  3.13 already nulls current_frame; do
-     * the same here. */
-    frame_storage->current_frame = NULL;
-    frame_storage->previous = &ts->root_cframe;
-    ts->cframe = frame_storage;
-}
-#endif
+ * So we NULL out tstate->current_frame: g's first interpreter frame roots
+ * its own chain, which walks back to a terminator, not to the previous
+ * coroutine. */
 
-#if PY_VERSION_HEX >= 0x030D0000
 static void runloom_install_initial_root_frame(void)
 {
     PyThreadState *ts = PyThreadState_GET();
     ts->current_frame = NULL;
 }
-#endif
 
 /* ---- Ready FIFO ops (ring buffer of g pointers) ----
  *

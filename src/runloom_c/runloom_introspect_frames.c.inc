@@ -106,9 +106,7 @@ PyObject *runloom_fiber_frames_by_id(long long id)
         if (runloom_mn_sweep_try_claim(g)) {
             PyObject *c = g->callable;            /* stable while claimed */
             if (c != NULL) { repr = PyObject_Repr(c); if (repr == NULL) PyErr_Clear(); }
-#if PY_VERSION_HEX >= 0x030D0000
             frames_walk((void *)g->tstate->current_frame, frames);
-#endif
             runloom_mn_sweep_claim_release(g);
         }
     } else if (runloom_mn_hub_count() == 0) {
@@ -116,10 +114,8 @@ PyObject *runloom_fiber_frames_by_id(long long id)
          * this (the one scheduler) thread for the duration of this call. */
         PyObject *c = g->callable;
         if (c != NULL) { repr = PyObject_Repr(c); if (repr == NULL) PyErr_Clear(); }
-#if PY_VERSION_HEX >= 0x030D0000
         if (g->snap.valid)
             frames_walk((void *)g->snap.current_frame, frames);
-#endif
     }
     /* else: default M:N, no safe claim -> leave (None, []). */
 

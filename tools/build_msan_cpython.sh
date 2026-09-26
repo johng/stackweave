@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# build_msan_cpython.sh -- build a --disable-gil free-threaded CPython 3.13t under
+# build_msan_cpython.sh -- build a --disable-gil free-threaded CPython 3.14t under
 # MemorySanitizer (clang -fsanitize=memory) so uninitialized-memory reads in
 # stackweave's C (recycled goroutine stacks, the intrusive free-list pool headers in
 # coro.c, structs handed across hubs before full init) are caught.  The MSan
@@ -25,7 +25,8 @@
 # intercepted.  Treat reports rooted in runloom_c/* frames as REAL; libc/_ssl/
 # _socket-rooted ones are the uninstrumented-lib floor (see tools/run_msan.sh).
 set -u
-VER=3.13.13
+# Usage: tools/build_msan_cpython.sh [VERSION]   (env PY_VER; default 3.14.4)
+VER="${1:-${PY_VER:-3.14.4}}"
 SRC="${SRC_DIR:-$HOME/projects/cpython-msan}"
 PREFIX="${PREFIX:-$HOME/cpython-msan}"
 RM="$(command -v safe-rm || echo rm)"
@@ -81,7 +82,7 @@ $SA make -j"$(nproc)" \
 echo "make_rc=$?"; tail -6 make.out
 $SA make install >install.out 2>&1; echo "install_rc=$?"; tail -2 install.out
 
-PY="$PREFIX/bin/python3.13t"; [ -x "$PY" ] || PY="$PREFIX/bin/python3"
+PY="$PREFIX/bin/python${VER%.*}t"; [ -x "$PY" ] || PY="$PREFIX/bin/python3"
 echo "=== smoke the MSan interpreter ==="
 [ -x "$PY" ] && MSAN_OPTIONS=halt_on_error=0:exitcode=0 $SA "$PY" -c \
    'import sys,sysconfig; print(sys.version); print("GIL_DISABLED", sysconfig.get_config_var("Py_GIL_DISABLED"))' 2>&1 | head -6

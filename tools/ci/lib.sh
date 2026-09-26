@@ -58,12 +58,26 @@ rl_ci_summary() {
 # the series, the patch pair, the sha256, the interpreter basename, the test
 # exclusions -- is DERIVED from it here, so callers only ever pass a version.
 
-# rl_validate_version 3.14.4 -> ok, else die.  Guards every downstream eval/awk.
+# rl_validate_version 3.14.4 / 3.15.0rc1 -> ok, else die.  Guards downstream awk.
+# Accepts major.minor.patch, optionally followed by a prerelease tag (a1/b2/rc1);
+# the tag is fine because series/majmin are derived from $1 and $2 only, and the
+# sha/patch lookup keys on the exact version string.
 rl_validate_version() {
-    case "$1" in
-        [0-9]*.[0-9]*.[0-9]*)
-            case "$1" in *[!0-9.]*) rl_die "bad version '$1' (non-numeric)";; esac ;;
-        *) rl_die "bad version '$1' -- expected major.minor.patch, e.g. 3.14.4" ;;
+    # Split off a trailing prerelease tag: everything from the first non-[0-9.] char.
+    _core="${1%%[!0-9.]*}"
+    _tag="${1#"$_core"}"
+    case "$_core" in
+        [0-9]*.[0-9]*.[0-9]*) : ;;
+        *) rl_die "bad version '$1' -- expected major.minor.patch[tag], e.g. 3.14.4 or 3.15.0rc1" ;;
+    esac
+    # The tag, if any, is a1 / b2 / rc1 -- letters then digits, nothing else.
+    case "$_tag" in
+        "") : ;;
+        a[0-9]*|b[0-9]*|rc[0-9]*)
+            case "${_tag#rc}" in
+                [ab]*[!0-9]*|[0-9]*[!0-9]*) rl_die "bad prerelease tag in '$1'" ;;
+            esac ;;
+        *) rl_die "bad prerelease tag in '$1' -- expected a<N>, b<N> or rc<N>" ;;
     esac
 }
 
@@ -148,11 +162,16 @@ rl_fetch_cpython() {
         return 0
     fi
     rl_rm -f "$_tar"
+    # python.org keeps PRERELEASE tarballs under the FINAL version's directory:
+    #   .../3.15.0/Python-3.15.0rc1.tgz   (dir 3.15.0, file Python-3.15.0rc1.tgz)
+    # so the directory is the version with any prerelease tag stripped, while the
+    # filename keeps the full version.
+    _dir="${_ver%%[!0-9.]*}"
     # The bytes ARE pinned: the sha256 from versions.env is checked immediately
     # below and a mismatch is fatal (the cache-hit path above re-checks too).
     # Not routed through rl_fetch_pinned only because this predates it.
-    _url="${RL_CI_PY_MIRROR}/${_ver}/Python-${_ver}.tgz"
-    curl -fsSL "$_url" -o "$_tar" || rl_die "download failed: Python-${_ver}.tgz"  # download-pin-lint: allow -- sha256 from versions.env verified below; mismatch is fatal
+    _url="${RL_CI_PY_MIRROR}/${_dir}/Python-${_ver}.tgz"
+    curl -fsSL "$_url" -o "$_tar" || rl_die "download failed: $_url"  # download-pin-lint: allow -- sha256 from versions.env verified below; mismatch is fatal
     _got="$(rl_sha256 "$_tar")"
     [ "$_got" = "$_sha" ] || rl_die "sha256 MISMATCH for Python-${_ver}.tgz
   pinned: $_sha
@@ -166,8 +185,8 @@ python.org."
 # rl_apply_patches <srcdir> <patchdir> <version> <patch...>
 #
 # ZERO FUZZ, and that is the whole point.  Fuzzy application here is not a
-# convenience, it is a correctness hazard: the 3.13 alloc-home patch's two
-# llist_insert_tail hunks will fuzz into 3.14 against superficially-similar
+# convenience, it is a correctness hazard: the (removed) 3.13 alloc-home patch's
+# two llist_insert_tail hunks will fuzz into 3.14 against superficially-similar
 # context and introduce a double alloc-home hop that no test catches.  If a hunk
 # needs fuzz, the patch needs a port -- see the 'WHAT CHANGED' section in
 # src/patches/cpython314t-tstate-alloc-home.patch for the shape of one.
@@ -195,8 +214,10 @@ $_rej"
 # thing standing between that and a released interpreter.
 rl_verify_witnesses() {
     _src="$1"
-    grep -q '_Py_TID_ASM' "$_src/Include/object.h" \
-        || rl_die "exec-home witness missing: _Py_TID_ASM not in Include/object.h"
+    # _Py_ThreadId lives in Include/object.h on 3.14 but moved to
+    # Include/cpython/object.h in 3.15, so accept the macro in either.
+    grep -qs '_Py_TID_ASM' "$_src/Include/object.h" "$_src/Include/cpython/object.h" \
+        || rl_die "exec-home witness missing: _Py_TID_ASM not in Include/object.h or Include/cpython/object.h"
     grep -q '_PyThreadStateImpl_AllocHome' "$_src/Include/internal/pycore_tstate.h" \
         || rl_die "alloc-home witness missing: _PyThreadStateImpl_AllocHome not in pycore_tstate.h"
     grep -q 'Py_NO_INLINE' "$_src/Python/pystate.c" \

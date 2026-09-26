@@ -26,7 +26,7 @@ Usage:
   tools/mutate/mutate.py src/runloom_c/chan.c [--max 25] [--seed 1] [--json out]
   tools/mutate/mutate.py src/runloom_c/chan.c --list      # just enumerate
 Env:
-  PYTHON     interpreter (default: free-threaded 3.13t if present)
+  PYTHON     interpreter (default: free-threaded 3.14t if present)
   TEST_CMD   shell command whose exit code decides kill/survive (default: a
              fast chan/sched pytest slice + a short fixed-seed mn_stress)
 """
@@ -45,7 +45,7 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 def find_python():
     for c in (os.path.join(os.path.expanduser("~"), ".pyenv/versions/3.14.4t/bin/python3"),
-              "python3.13t", "python3"):
+              "python3.14t", "python3"):
         if os.path.sep in c:
             if os.path.exists(c):
                 return c

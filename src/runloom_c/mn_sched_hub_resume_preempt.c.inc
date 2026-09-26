@@ -1173,7 +1173,6 @@ static RUNLOOM_TLS int runloom_tls_fastpath_streak = 0;
  * microseconds. */
 #define RUNLOOM_YIELD_FASTPATH_BOUND 64
 
-#if PY_VERSION_HEX >= 0x030D0000
 /* RUNLOOM_PREEMPT eval-frame wrapper (see the block near runloom_preempt_enabled).
  * Chains to the previous eval-frame func (normally _PyEval_EvalFrameDefault) so
  * it composes with any other installed wrapper; _PyInterpreterFrame is opaque
@@ -1261,7 +1260,6 @@ static PyObject *runloom_preempt_eval_frame(PyThreadState *ts,
         return prev(ts, frame, throwflag);
     }
 }
-#endif
 
 /* Controlled-scheduler liveness backstop (Feature 1, single-frame loops).
  * Frame-count preemption (lever 5) and the eval-frame wrapper both act only at a
@@ -1287,10 +1285,7 @@ static PyObject *runloom_preempt_eval_frame(PyThreadState *ts,
  * just the main thread's, which is what the public Py_AddPendingCall is pinned
  * to in 3.13 -- and the main thread is parked in mn_run, so it would never
  * reach the hub running the loop).  Private-but-stable, like the eval-frame-func
- * setters runloom already uses; declared here to avoid pulling in pycore headers.
- * The 4-arg form (with flags) is 3.12+; on older builds the backstop is absent
- * and single-frame loops stay the documented controlled-mode limitation. */
-#if PY_VERSION_HEX >= 0x030C0000
+ * setters runloom already uses; declared here to avoid pulling in pycore headers. */
 #define RUNLOOM_MN_LIVENESS_BACKSTOP 1
 extern int _PyEval_AddPendingCall(PyInterpreterState *interp,
                                   int (*func)(void *), void *arg, int flags);
@@ -1324,12 +1319,11 @@ static int runloom_mn_liveness_pending_cb(void *arg)
     }
     return 0;
 }
-#endif
 
 /* Install the preemption eval-frame wrapper on `interp` ONCE for the process
  * lifetime.  Install runs in mn_init after runloom_sysmon_config (so
  * runloom_preempt_enabled is set) and BEFORE any fiber runs Python.  No-op unless
- * RUNLOOM_PREEMPT (and 3.13+).  Capturing the previous func means we chain rather
+ * RUNLOOM_PREEMPT.  Capturing the previous func means we chain rather
  * than clobber a wrapper someone else installed.
  *
  * INSTALL-ONCE, NEVER-UNINSTALL.  Toggling interp->eval_frame on every
@@ -1361,7 +1355,6 @@ static int runloom_mn_liveness_pending_cb(void *arg)
  * prev), so leaving it installed between sessions is correct and cheap. */
 static void runloom_preempt_install(PyInterpreterState *interp)
 {
-#if PY_VERSION_HEX >= 0x030D0000
     if (!runloom_preempt_enabled) return;
     if (runloom_preempt_installed) return;   /* install once; never re-swap */
     /* Release-store so the eval hook's acquire-load sees a fully-published
@@ -1371,9 +1364,6 @@ static void runloom_preempt_install(PyInterpreterState *interp)
                      __ATOMIC_RELEASE);
     _PyInterpreterState_SetEvalFrameFunc(interp, runloom_preempt_eval_frame);
     runloom_preempt_installed = 1;
-#else
-    (void)interp;
-#endif
 }
 
 /* Intentionally a NO-OP.  The preempt eval-frame hook is installed once for the

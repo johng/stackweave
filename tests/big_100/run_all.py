@@ -4,7 +4,7 @@ Runs the 100 stress projects concurrently as subprocesses so the whole 64-core
 box is busy.  Each project itself uses --hubs M:N hub threads; the default
 packs the machine as jobs * hubs ~= cores (16 jobs * 4 hubs = 64).
 
-    PYTHON_GIL=0 python3.13t big_100/run_all.py --jobs 16 --hubs 4 --duration 3600
+    PYTHON_GIL=0 python3.14t big_100/run_all.py --jobs 16 --hubs 4 --duration 3600
     big_100/run_all.py --only 1,3,7 --duration 30 --hubs 4
     big_100/run_all.py --from 1 --to 20 --duration 600 --jobs 10 --hubs 6
 

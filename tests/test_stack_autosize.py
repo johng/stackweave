@@ -46,17 +46,12 @@ def light():
 
 START = 256 * 1024          # default STACKWEAVE_STACK_AUTOSIZE_START
 
-# Spawn-time stack floor: on free-threaded 3.14 every fiber stack is clamped up
-# to 256 KiB (RUNLOOM_FT314_MIN_STACK_SIZE, the p226 fix in 289ecb99 -- see
-# runloom_sched.h); elsewhere the auto-sizer's own 16 KiB floor is what shows.
+# Spawn-time stack floor: every fiber stack is clamped up to 256 KiB
+# (RUNLOOM_FT314_MIN_STACK_SIZE, the p226 fix in 289ecb99 -- see runloom_sched.h).
 # Since the FT-3.14 floor EQUALS the default start, the learn-down tests below
 # raise the start above the floor (STACKWEAVE_STACK_AUTOSIZE_START) so that
 # "start large, learn down" stays observable on the primary target.
-import sys as _floor_sys
-import sysconfig as _floor_sysconfig
-_FT314 = (bool(_floor_sysconfig.get_config_var("Py_GIL_DISABLED"))
-          and _floor_sys.version_info >= (3, 14))
-FLOOR = 256 * 1024 if _FT314 else 16 * 1024
+FLOOR = 256 * 1024
 BIG_START = 1024 * 1024     # a learn-down start comfortably above both floors
 
 

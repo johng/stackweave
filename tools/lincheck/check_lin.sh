@@ -12,13 +12,13 @@
 #      plus a genuine two-channel select rule).
 #
 # Usage:  tools/lincheck/check_lin.sh
-# Env:    PYTHON=...  interpreter (default: free-threaded 3.13t if present)
+# Env:    PYTHON=...  interpreter (default: free-threaded 3.14t if present)
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 
 if [ -z "${PYTHON:-}" ]; then
-    for cand in "$HOME/.pyenv/versions/3.14.4t/bin/python3" python3.13t python3; do
+    for cand in "$HOME/.pyenv/versions/3.14.4t/bin/python3" python3.14t python3; do
         command -v "$cand" >/dev/null 2>&1 && { PYTHON="$cand"; break; }
     done
 fi

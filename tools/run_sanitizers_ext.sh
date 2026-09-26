@@ -48,7 +48,7 @@
 # 6.x ("unexpected memory mapping"); every run is wrapped in `setarch -R`.
 #
 # Usage:  tools/run_sanitizers_ext.sh [MN_ITERS]
-# Env:    PYTHON=...       interpreter (default: free-threaded 3.13t if present)
+# Env:    PYTHON=...       interpreter (default: free-threaded 3.14t if present)
 #         TSAN_PYTEST=...  space-separated pytest targets (default: a focused
 #                          chan/select/sched subset); empty to skip pytest
 #         KEEP_TSAN_SO=1   leave the instrumented .so in place (default: rebuild
@@ -61,7 +61,7 @@ MN_ITERS="${1:-100}"
 SUPP="$ROOT/tools/tsan_suppressions.txt"
 
 if [ -z "${PYTHON:-}" ]; then
-    for cand in "$HOME/.pyenv/versions/3.14.4t/bin/python3" python3.13t python3; do
+    for cand in "$HOME/.pyenv/versions/3.14.4t/bin/python3" python3.14t python3; do
         command -v "$cand" >/dev/null 2>&1 && { PYTHON="$cand"; break; }
     done
 fi

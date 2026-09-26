@@ -153,12 +153,10 @@ def grow_down_prepare(real_fn, target):
 def gil_enabled():
     """True if the GIL is active in this interpreter.
 
-    Only a free-threaded ("t") build run with the GIL off (e.g. 3.13t under
-    PYTHON_GIL=0) returns False -- and that is the one configuration where
-    run(n > 1) gives real multi-core parallelism.  On every other build the
-    GIL is always on (pre-3.13 has no toggle), so we report True.  Checked
-    at run() time, not import time, because a C extension can re-enable the
-    GIL on a "t" build after start-up."""
+    False when the GIL is off (the default on the free-threaded builds stackweave
+    requires, and forced by PYTHON_GIL=0) -- the one configuration where
+    run(n > 1) gives real multi-core parallelism.  Checked at run() time, not
+    import time, because a C extension can re-enable the GIL after start-up."""
     is_enabled = getattr(sys, "_is_gil_enabled", None)
     if is_enabled is None:
         return True
@@ -188,8 +186,8 @@ def _tlbc_reexec_if_needed():
     Interlock: keep TLBC ON whenever the anchor is active (the default on FT 3.14+).
     Re-exec with PYTHON_TLBC=0 -- the pre-anchor workaround -- ONLY when the anchor
     is inactive: STACKWEAVE_GC_FRAMES=0, an anchor init failure, STACKWEAVE_GREG_OFF
-    (which would blind its registry walk), or a build where the fix compiled out
-    (e.g. 3.13t).  That keeps the crashy "TLBC on + no parked-frame visibility"
+    (which would blind its registry walk), or a build where the fix compiled out.
+    That keeps the crashy "TLBC on + no parked-frame visibility"
     combination unreachable.  Opt out of TLBC entirely with PYTHON_TLBC=0 / -X
     tlbc=0; force TLBC on regardless with STACKWEAVE_TLBC=1 (dev/debug only).
 
@@ -197,8 +195,6 @@ def _tlbc_reexec_if_needed():
     3.15-only, so a process mixing greenlet with stackweave on 3.14t STILL needs
     PYTHON_TLBC=0 (our anchor covers stackweave fibers, not greenlet's frames).  See
     tests/test_greenlet_interop.py, which pins PYTHON_TLBC=0 for that reason."""
-    if sys.version_info[:2] < (3, 14):
-        return                              # no TLBC before 3.14
     if gil_enabled():
         return                              # GIL on -> no free-threaded TLBC
     if os.environ.get("STACKWEAVE_TLBC") == "1":
@@ -482,7 +478,7 @@ def run(n, main_fn=None, offload_hubs=-1):
                        fibers run Python at once (asyncio / Go GOMAXPROCS=1).
         run(8, main)   M:N: fibers spread across 8 hub threads with the GIL
                        off -> real multi-core parallelism.  Needs a free-threaded
-                       build (CPython 3.13t, PYTHON_GIL=0); n > 1 with the GIL on
+                       build (CPython 3.14t, PYTHON_GIL=0); n > 1 with the GIL on
                        raises rather than silently running serial.
         run(n)         main_fn omitted -> just drain fibers you've already
                        fiber()'d (n == 1 is the common drain-only case).
@@ -561,10 +557,10 @@ def run(n, main_fn=None, offload_hubs=-1):
         if gil_enabled():
             raise RuntimeError(
                 "run(n={0}) needs free-threaded CPython with the GIL off "
-                "(3.13t + PYTHON_GIL=0) for M:N parallelism, but the GIL is "
+                "(PYTHON_GIL=0) for M:N parallelism, but the GIL is "
                 "enabled here.\n"
                 "  -> Use run(1, ...) to run single-threaded under the GIL.\n"
-                "  -> Or run on CPython 3.13t with PYTHON_GIL=0 for real "
+                "  -> Or run with PYTHON_GIL=0 for real "
                 "multi-core parallelism with n>1."
                 .format(n))
         prewarm_stdlib()

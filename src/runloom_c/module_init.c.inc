@@ -317,7 +317,7 @@ static PyMethodDef module_methods[] = {
      "reads; see stackweave.inspect.hubs() for the friendly view + a py-spy command."},
     {"preempt_init", m_preempt_init, METH_VARARGS,
      "preempt_init(quantum_us=10000): start the time-sliced preemption "
-     "timer.  3.13t only.  Goroutines without explicit sched_yield "
+     "timer.  Goroutines without explicit sched_yield "
      "calls will be preempted every quantum_us microseconds via a "
      "Py_AddPendingCall hook into CPython's eval_breaker."},
     {"preempt_fini", m_preempt_fini, METH_NOARGS,
@@ -481,100 +481,11 @@ static struct PyModuleDef runloom_c_module = {
     NULL, NULL, NULL, NULL
 };
 
-/* Declare the extension as safe under free-threaded Python (3.13t).
+/* Declare the extension as safe under free-threaded Python.
  * Our single-OS-thread scheduler doesn't have multi-thread races
  * today; the M:N work-stealing in Phase C will need actual atomic
  * work-queue ops to keep this declaration honest. */
-#ifdef Py_GIL_DISABLED
 #  define RUNLOOM_FT_OK 1
-#endif
-
-/* --------------------------------------------------------------------------
- * Goroutine-safe module attribute lookup.
- *
- * CPython 3.13's module getattr, on a *missing* attribute, calls
- * _PyModule_IsPossiblyShadowing to append a "did you shadow a stdlib module?"
- * hint to the AttributeError.  That helper reserves ~32 KB of C stack (two
- * wchar_t[MAXPATHLEN] path buffers) -- more than a whole default fiber
- * stack -- so an ordinary attribute miss (hasattr(mod, x) == False, a
- * namespace __getattr__ proxy, ...) inside a fiber overflows the stack and
- * crashes (the only thing the hint adds is a nicer error string).
- *
- * Replace PyModule_Type's getattr slot with a thin wrapper: do the normal
- * lookup (every hit, plus a proper AttributeError on miss), honour a
- * module-level __getattr__, and then -- only when running on a fiber's
- * small swapped stack -- raise that AttributeError directly, skipping the
- * 32 KB hint.  Off-fiber we defer to the stock implementation, so the hint
- * and every other behaviour are byte-for-byte preserved on the main thread.
- * -------------------------------------------------------------------------- */
-static getattrofunc runloom_orig_module_getattro = NULL;
-static PyObject    *runloom_str_dunder_getattr   = NULL;   /* interned "__getattr__" */
-
-static int runloom_running_in_fiber(void)
-{
-    /* Both are non-allocating thread-local peeks (never runloom_sched_get). */
-    if (runloom_mn_tls_current_g() != NULL) return 1;       /* M:N hub path        */
-    return runloom_sched_peek_current() != NULL;            /* single-thread path  */
-}
-
-static PyObject *runloom_module_getattro(PyObject *m, PyObject *name)
-{
-    PyObject *res = PyObject_GenericGetAttr(m, name);
-    if (res != NULL) return res;                         /* hit -- common case  */
-    if (!PyErr_ExceptionMatches(PyExc_AttributeError)) return NULL;
-
-    /* Miss: keep GenericGetAttr's AttributeError (correct .name/.obj) and look
-     * for a module-level __getattr__ (PEP 562), honoured in both domains. */
-    PyObject *exc = PyErr_GetRaisedException();          /* clears current exc  */
-    PyObject *mdict = PyModule_GetDict(m);               /* borrowed; non-NULL for a module */
-    PyObject *getattr = NULL;
-    if (mdict != NULL && runloom_str_dunder_getattr != NULL) {
-        if (PyDict_GetItemRef(mdict, runloom_str_dunder_getattr, &getattr) < 0) {
-            Py_DECREF(exc);
-            return NULL;                                 /* lookup error        */
-        }
-    }
-    if (getattr != NULL) {
-        Py_DECREF(exc);
-        PyObject *r = PyObject_CallOneArg(getattr, name);
-        Py_DECREF(getattr);
-        return r;
-    }
-    if (runloom_running_in_fiber()) {
-        PyErr_SetRaisedException(exc);                   /* plain AttributeError */
-        return NULL;                                     /* ...no 32 KB hint    */
-    }
-    Py_DECREF(exc);
-    return runloom_orig_module_getattro(m, name);           /* stock hint off-g    */
-}
-
-static void runloom_install_module_getattro(void)
-{
-    if (runloom_orig_module_getattro != NULL) return;       /* idempotent          */
-    runloom_str_dunder_getattr = PyUnicode_InternFromString("__getattr__");
-    if (runloom_str_dunder_getattr == NULL) { PyErr_Clear(); return; }
-    runloom_orig_module_getattro = PyModule_Type.tp_getattro;
-    PyModule_Type.tp_getattro = runloom_module_getattro;
-    /* The slot above covers every DIRECT module lookup (getattr/hasattr/mod.x).
-     * A ModuleType *subclass* that defines its own __getattr__ instead gets
-     * tp_getattro = slot_tp_getattr_hook, which reaches stock module getattr
-     * via the __getattribute__ wrapper descriptor, bypassing the slot -- as
-     * does an explicit mod.__getattribute__(x).  Repoint that descriptor at
-     * our wrapper too, so EVERY path is covered.  (Static-type tp_dict is NULL
-     * in 3.12+, so go through PyType_GetDict, not &PyModule_Type->tp_dict.) */
-    {
-        PyObject *mtdict = PyType_GetDict(&PyModule_Type);   /* new ref */
-        if (mtdict != NULL) {
-            PyObject *ga = PyDict_GetItemString(mtdict, "__getattribute__");
-            if (ga != NULL && Py_IS_TYPE(ga, &PyWrapperDescr_Type)) {
-                ((PyWrapperDescrObject *)ga)->d_wrapped =
-                    (void *)runloom_module_getattro;
-            }
-            Py_DECREF(mtdict);
-        }
-        PyErr_Clear();   /* a failed lookup is non-fatal: slot still covers the common path */
-    }
-}
 
 PyMODINIT_FUNC PyInit_stackweave_c(void)
 {
@@ -582,9 +493,7 @@ PyMODINIT_FUNC PyInit_stackweave_c(void)
     const char *scrub_env;
     runloom_diag_init();          /* parses RUNLOOM_DEBUG once; cheap; idempotent */
     runloom_introspect_init();    /* fiber registry lock; reads RUNLOOM_INTROSPECT_TIME */
-#if PY_VERSION_HEX >= 0x030E0000
     runloom_coro_pre_swap = runloom_coro_rearm_stackprot;  /* 3.14: re-arm fiber C-stack limit on every resume */
-#endif
     scrub_env = getenv("STACKWEAVE_STACK_SCRUB");   /* opt-in recycled-stack wipe */
     if (scrub_env && scrub_env[0] && scrub_env[0] != '0') {
         runloom_coro_scrub_set(1);
@@ -601,7 +510,6 @@ PyMODINIT_FUNC PyInit_stackweave_c(void)
             (void)sigaction(SIGQUIT, &sa, NULL);
         }
     }
-    runloom_install_module_getattro();   /* fiber-safe module attr lookup */
     if (PyType_Ready(&RunloomCoroType) < 0) return NULL;
     /* Set by hand rather than in the positional initializer, whose long run
      * of zero slots is easy to miscount: identity-free equality/hash so a
@@ -768,11 +676,9 @@ PyMODINIT_FUNC PyInit_stackweave_c(void)
             return NULL;
         }
     }
-#ifdef Py_GIL_DISABLED
     /* Declare free-thread safety.  v0 scheduler is still single-OS-
      * thread, so this is trivially safe.  Phase C M:N needs to maintain
      * this when adding the work-stealing ring queue. */
     PyUnstable_Module_SetGIL(m, Py_MOD_GIL_NOT_USED);
-#endif
     return m;
 }

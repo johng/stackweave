@@ -33,7 +33,7 @@ import pytest
 import stackweave  # noqa: F401  (ensures the extension + interlock are importable)
 import stackweave_c as rc
 
-_FT = sys.version_info[:2] >= (3, 14) and not sys._is_gil_enabled()
+_FT = not sys._is_gil_enabled()
 pytestmark = pytest.mark.skipif(
     not _FT, reason="parked-frame GC visibility fix is free-threaded 3.14+ only")
 

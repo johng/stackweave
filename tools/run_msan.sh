@@ -18,9 +18,9 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
 # RUN under the MSan interpreter; BUILD with a clean python that HAS setuptools
 # and is NOT MSan -- setuptools imports hashlib -> _hashopenssl (uninstrumented
 # OpenSSL) and terminates under MSan, but building the .so itself only needs a
-# setuptools-capable driver + clang with MSan flags.  Same 3.13t free-threaded
+# setuptools-capable driver + clang with MSan flags.  Same 3.14t free-threaded
 # ABI, so the MSan-instrumented .so loads in the MSan interpreter.
-PY="${STACKWEAVE_MSAN_PYTHON:-$HOME/cpython-msan/bin/python3.13t}"
+PY="${STACKWEAVE_MSAN_PYTHON:-$HOME/cpython-msan/bin/python3.14t}"
 [ -x "$PY" ] || PY="$HOME/cpython-msan/bin/python3"
 BUILD_PY="${STACKWEAVE_BUILD_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
 ITERS="${1:-4}"

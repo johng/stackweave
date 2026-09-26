@@ -35,9 +35,9 @@ Design notes that matter under M:N (run(n>1)):
     parked accept() unblocks and the loop exits.
 
 Run one project directly:
-    PYTHON_GIL=0 python3.13t big_100/p01_tcp_echo.py --duration 10 --hubs 4
+    PYTHON_GIL=0 python3.14t big_100/p01_tcp_echo.py --duration 10 --hubs 4
 Run many in parallel across the box:
-    PYTHON_GIL=0 python3.13t big_100/run_all.py --jobs 16 --hubs 4 --duration 60
+    PYTHON_GIL=0 python3.14t big_100/run_all.py --jobs 16 --hubs 4 --duration 60
 """
 import argparse
 import faulthandler

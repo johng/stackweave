@@ -21,11 +21,11 @@ haulting the entire program in a single thread.
 
 - You want fiber-cheap parallelism without thread-pool ceremony.
 - You're running CPU-bound fibers (hashing, parsing, computation)
-  and have a free-threaded 3.13t build.
+  on the free-threaded build stackweave requires.
 
 **Skip it when:**
 
-- You're on a GIL build -- the GIL serialises Python execution across
+- The GIL is re-enabled at runtime (`PYTHON_GIL=1`) -- it serialises Python execution across
   threads anyway, so M:N gives no speedup.
 - All your work is I/O-bound -- a single OS thread with netpoll
   saturates an NIC easily; M:N adds overhead without benefit.
@@ -164,11 +164,11 @@ stackweave.preempt_init(quantum_us=10_000)
 
 ## Caveats
 
-### Free-threaded 3.13t only
+### GIL off only
 
-`mn_init` raises on GIL builds.  The M:N scheduler relies on
+`mn_init` raises if the GIL has been re-enabled at runtime.  The M:N scheduler relies on
 `Py_MOD_GIL_NOT_USED` and CPython's free-threading guarantees about
-atomic refcount + GC; on a GIL build you'd get serialisation through
+atomic refcount + GC; with the GIL on you'd get serialisation through
 the lock with no concurrency benefit and a small overhead loss.
 
 ### Channel + lock contention
