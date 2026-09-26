@@ -167,6 +167,17 @@ void runloom_iframe_brc_adopt(PyThreadState *fiber, PyThreadState *hub)
     _PyThreadStateImpl *h = (_PyThreadStateImpl *)hub;
     uintptr_t tid = h->brc.tid;
     struct _brc_bucket *nb = runloom_brc_bucket(fiber->interp, tid);
+    /* Identity for introspection: tstate->thread_id is what
+     * sys._current_frames() / _current_exceptions() and faulthandler key on,
+     * and it was the SPAWNER's thread for the fiber's whole life, so the
+     * running fiber never appeared under the thread id it reports through
+     * threading.get_ident().  While it runs it carries the hub's id; while
+     * parked (release below) it carries a value that is no thread's, so it
+     * cannot shadow the running fiber under the hub's id.  _current_frames
+     * skips states with no frame and lets the OLDEST duplicate win, which
+     * with this scheme is the hub's frameless state -> skipped -> the fiber. */
+    fiber->thread_id = hub->thread_id;
+    fiber->native_thread_id = hub->native_thread_id;
     if (f->brc.tid == tid) {
         PyMutex_Lock(&nb->mutex);
         runloom_brc_move_to_front(nb, &f->brc.bucket_node);
@@ -199,6 +210,9 @@ void runloom_iframe_brc_release(PyThreadState *fiber, PyThreadState *hub)
     _PyThreadStateImpl *h = (_PyThreadStateImpl *)hub;
     struct _brc_bucket *b = runloom_brc_bucket(fiber->interp, h->brc.tid);
     int pending;
+    /* Parked: an id that is no OS thread's (the state's own address), see adopt. */
+    fiber->thread_id = (unsigned long)(uintptr_t)fiber;
+    fiber->native_thread_id = 0;
     PyMutex_Lock(&b->mutex);
     runloom_brc_move_to_front(b, &h->brc.bucket_node);
     /* Read under the bucket mutex: a dropper pushes under it and sets the
