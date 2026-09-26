@@ -163,6 +163,11 @@ static runloom_g_t *runloom_mn_global_runq_pull(int hub_id)
 {
     runloom_g_t *g, *prev;
     const int want = hub_id + 1;   /* +1 encoding; hub_id<0 -> match unpinned only */
+    /* Exclusion 2 from the puller's side: an OFFLOAD hub takes only what is
+     * pinned to it.  Taking an unpinned general fiber would strand it behind
+     * the hub's next blocking call (it was the one general-work path left
+     * onto an offload hub). */
+    const int take_unpinned = !(hub_id >= 0 && runloom_hub_is_offload(hub_id));
     /* Lock-free fast-out: the queue is empty in the common case (default
      * mode never touches it; per-g-tstate only when a wake is in flight),
      * so skip the mutex when there is clearly nothing to take.  A racing
@@ -179,7 +184,7 @@ static runloom_g_t *runloom_mn_global_runq_pull(int hub_id)
          * pin_hub1 per entry; its stores are under this lock (repin) or
          * pre-publication (spawn). */
         int p1 = __atomic_load_n(&g->pin_hub1, __ATOMIC_ACQUIRE);
-        if (p1 == 0 || p1 == want) break;
+        if ((p1 == 0 && take_unpinned) || p1 == want) break;
         prev = g;
         g = g->next;
     }

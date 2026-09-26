@@ -251,10 +251,17 @@ static volatile int runloom_mn_nidle = 0;   /* # hubs with idle_parked=1 (hint) 
 static int runloom_mn_any_stealable_work(const runloom_hub_t *self)
 {
     int i;
-    if (__atomic_load_n(&runloom_global_runq_unpinned_len, __ATOMIC_ACQUIRE) > 0)
+    /* An offload hub only ever runs work pinned to it (exclusion 2 from the
+     * puller's side, mirrored in runloom_mn_global_runq_pull): unpinned
+     * run-queue entries and other hubs' deques are not its work, so they
+     * must not keep it awake either. */
+    int self_offload = (self != NULL && runloom_hub_is_offload(self->id));
+    if (!self_offload &&
+        __atomic_load_n(&runloom_global_runq_unpinned_len, __ATOMIC_ACQUIRE) > 0)
         return 1;
     if (self != NULL &&
         __atomic_load_n(&self->runq_pinned_n, __ATOMIC_ACQUIRE) > 0) return 1;
+    if (self_offload) return 0;
     /* General hubs only: work sitting on an offload hub is NOT stealable by
      * anyone (exclusion 2), so counting it here would wake general hubs to
      * hunt for work they are forbidden to take. */
