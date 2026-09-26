@@ -137,9 +137,16 @@ static void runloom_mn_global_runq_push(runloom_g_t *g)
 /* Pop one g from the global run-queue head (NULL if empty).  No per-hub
  * pending rebalance (see header: only the sum matters, and the mutex
  * release/acquire already orders the g's writes for the puller). */
-static runloom_g_t *runloom_mn_global_runq_pull(void)
+static runloom_g_t *runloom_mn_global_runq_pull(int hub_id)
 {
     runloom_g_t *g;
+    /* Exclusion 2 from the puller's side: an OFFLOAD hub takes nothing from
+     * the global run-queue.  An unpinned general fiber pulled here would
+     * strand behind the hub's next blocking call (it was the one general-work
+     * path left onto an offload hub).  This tree has no per-fiber pin, so a
+     * woken offload fiber on this queue is run by a general hub instead --
+     * the documented known gap, unchanged here. */
+    if (hub_id >= 0 && runloom_hub_is_offload(hub_id)) return NULL;
     /* Lock-free fast-out: the queue is empty in the common case (default
      * mode never touches it; per-g-tstate only when a wake is in flight),
      * so skip the mutex when there is clearly nothing to take.  A racing

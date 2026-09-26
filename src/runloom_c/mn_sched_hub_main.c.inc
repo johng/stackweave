@@ -250,9 +250,13 @@ static volatile int runloom_mn_nidle = 0;   /* # hubs with idle_parked=1 (hint) 
 /* True iff some hub holds stealable surplus a steal would find RIGHT NOW: the
  * global runq is non-empty, or some deque has >1 g (one for its owner to run, at
  * least one to steal).  Cheap, lock-free; scanned only at park-decision time. */
-static int runloom_mn_any_stealable_work(void)
+static int runloom_mn_any_stealable_work(const runloom_hub_t *self)
 {
     int i;
+    /* An offload hub takes nothing from the global run-queue and never steals
+     * (exclusion 2, mirrored in runloom_mn_global_runq_pull), so neither may
+     * keep it awake; its own submits wake it through hub_submit. */
+    if (self != NULL && runloom_hub_is_offload(self->id)) return 0;
     if (__atomic_load_n(&runloom_global_runq_len, __ATOMIC_ACQUIRE) > 0) return 1;
     /* General hubs only: work sitting on an offload hub is NOT stealable by
      * anyone (exclusion 2), so counting it here would wake general hubs to
@@ -313,7 +317,7 @@ static int runloom_mn_park_enter(runloom_hub_t *h)
     __atomic_store_n(&h->idle_parked, 1, __ATOMIC_RELEASE);
     __atomic_add_fetch(&runloom_mn_nidle, 1, __ATOMIC_ACQ_REL);
     __atomic_thread_fence(__ATOMIC_SEQ_CST);   /* set-flag BEFORE re-scan */
-    if (runloom_mn_any_stealable_work()) {
+    if (runloom_mn_any_stealable_work(h)) {
         expect = 1;
         if (__atomic_compare_exchange_n(&h->idle_parked, &expect, 0, 0,
                                         __ATOMIC_ACQ_REL, __ATOMIC_RELAXED))
@@ -812,7 +816,7 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
              * stalled hub's woken work is recovered promptly.  from_runq tells
              * the resume block to claim the g (QUEUED->RUNNING) and to drop the
              * entry's queue ref when the resume ends. */
-            g = runloom_mn_global_runq_pull();
+            g = runloom_mn_global_runq_pull(h->id);
             if (g != NULL) {
                 RUNLOOM_COVER_HIT(RUNLOOM_COV_GLOBAL_RUNQ_PULL);
                 from_runq = 1;
