@@ -33,6 +33,22 @@
  * io_uring_enter(GETEVENTS)), so the loop drain runs single-reaper and needs
  * no per-CQE CAS (unlike runloom_iouring_ring_drain, which can race the shared
  * epoll pump on another idle hub).
+ *
+ * Cross-hub migration.  Every park is a possible migration: the woken fiber
+ * resumes on whichever hub pulls it.  Each ring has exactly one SQ producer and
+ * one CQ reaper, its hub thread, with no locks, so a fiber may only write SQEs
+ * into the ring of the hub it is running on right now.  Two rules keep that:
+ *   - a single-shot op (loop_recv / loop_send) resolves the CURRENT hub's ring
+ *     at submit and takes no ring argument, so no caller can hold a ring across
+ *     a park.  The CQE is reaped by the submitting hub, which wakes the fiber
+ *     wherever it will resume; the op record lives on the fiber's own stack.
+ *   - a multishot recv handle is bound to one ring and its provided-buffer
+ *     ring for its whole life, so loop_ms_open pins its fiber to that hub and
+ *     loop_ms_close restores the previous pin (runloom_mn_pin_current_here).
+ * Before these rules the all-C echo cached its hub's ring for the whole
+ * connection; after a migration it wrote SQEs into another hub's ring from a
+ * foreign thread, and a lost SQE left its fiber parked forever (a few percent
+ * of echo runs at 2 and 4 hubs).
  */
 
 /* user_data sentinels for the persistent infrastructure polls.  Op records are
@@ -55,31 +71,12 @@
 int runloom_iouring_loop_enabled(void)
 {
     static int v = -1;
-    static int per_g_noted = 0;
     int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
     if (cur < 0) {
         const char *e = getenv("STACKWEAVE_IOURING_LOOP");
         cur = (e != NULL && *e != '0' && *e != '\0') ? 1 : 0;
         if (runloom_sim_enabled()) cur = 0;
         __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
-    }
-    /* BROKEN UNDER MIGRATION, so ignored in every M:N run (migration is always
-     * on; per-g-tstate mode is set from mn_init until the hubs are joined).
-     * The loop backend's whole design pins a fiber to the hub whose ring it
-     * submitted on -- the ring is SINGLE_ISSUER, the multishot buffer ring is
-     * returned to by "its pinned echo fibers", and loop_recv/loop_send re-read
-     * the CURRENT hub's ring on every call.  A migrated fiber resumes on
-     * another hub and the next call lands on the wrong ring: exact-once echo
-     * across 192 connections returned 0 correct payloads at H=1 and hung at
-     * H=2.  The code is kept so it can be made migration-safe; the strict
-     * xfails in tests/test_cov95_iouring_loopbuf.py track the gap. */
-    if (cur && runloom_get_per_g_tstate_mode()) {
-        if (__atomic_exchange_n(&per_g_noted, 1, __ATOMIC_RELAXED) == 0)
-            fprintf(stderr, "[stackweave] STACKWEAVE_IOURING_LOOP ignored: the "
-                            "io_uring loop backend is broken under cross-hub "
-                            "migration (hub-ring affinity does not survive "
-                            "migration); using the default backend\n");
-        return 0;
     }
     return cur;
 }
@@ -107,12 +104,12 @@ int runloom_iouring_loop_pump_always(void)
  * and no submit/park per recv, amortising the per-op cost the single-shot
  * Stage-2 path pays.  Everything here runs ONLY on the ring's owning hub
  * thread: it is the sole SQE issuer (SINGLE_ISSUER), the sole CQE reaper
- * (loop_drain), and the sole buffer-returner -- the echo fibers are
- * hub-pinned (a woken fiber routes to the hub-local FIFO, never the stealable
- * deque, so it never migrates off the hub its multishot is armed on).  Hence
- * NO LOCKS: the fiber and loop_drain are the same OS thread and never run
- * concurrently.  Gated behind RUNLOOM_IOURING_MS (requires the loop backend),
- * default off. */
+ * (loop_drain), and the sole buffer-returner.  A fiber could migrate at any
+ * park, so loop_ms_open pins it to the hub it armed on (pin_hub1: its wakes go
+ * through the global run-queue, which only that hub pulls from) and
+ * loop_ms_close restores the previous pin.  Hence NO LOCKS: the fiber and
+ * loop_drain are the same OS thread and never run concurrently.  Gated behind
+ * RUNLOOM_IOURING_MS (requires the loop backend), default off. */
 
 #ifndef RUNLOOM_LOOP_MS_BGID
 #  define RUNLOOM_LOOP_MS_BGID 0
@@ -472,6 +469,7 @@ void runloom_iouring_loop_wait(runloom_iouring_ring_t *r, long long timeout_ns,
     struct __kernel_timespec ts;
     int rc;
     if (r == NULL) return;
+    r->loop_waits++;
 
     /* Submit deferred SQEs (poll re-arms; Stage-2 ops).  Separated from the
      * wait enter below so an EINTR during submit can't be mistaken for a wait
@@ -533,13 +531,17 @@ static void runloom_iouring_loop_enqueue_op(runloom_iouring_ring_t *r,
     __atomic_add_fetch(&runloom_iouring_inflight_count, 1, __ATOMIC_ACQ_REL);
 }
 
-/* Submit `sqe` (deferred) on the current hub's ring, park the fiber, and
- * return the CQE result (bytes, 0 on EOF, -1 with errno on error).  Must run on
- * a fiber whose hub owns r. */
-static runloom_iouring_ssize_t runloom_iouring_loop_io(runloom_iouring_ring_t *r,
-                                                       struct io_uring_sqe sqe)
+/* Submit `sqe` (deferred) on the CURRENT hub's ring, park the fiber, and
+ * return the CQE result (bytes, 0 on EOF, -1 with errno on error).  The ring is
+ * looked up here, at submit, never passed in: the fiber may have migrated at
+ * any earlier park, and only the hub it runs on now may write this ring's SQ
+ * (see "Cross-hub migration" at the top).  EINVAL off a hub or on a hub with no
+ * ring; callers check runloom_mn_current_iouring_ring() first and fall back to
+ * the readiness path. */
+static runloom_iouring_ssize_t runloom_iouring_loop_io(struct io_uring_sqe sqe)
 {
     runloom_iouring_op_t op;
+    runloom_iouring_ring_t *r = runloom_mn_current_iouring_ring();
     void *hub;
     if (r == NULL) { errno = EINVAL; return -1; }
     hub = runloom_mn_current_hub_opaque();
@@ -574,8 +576,7 @@ static runloom_iouring_ssize_t runloom_iouring_loop_io(runloom_iouring_ring_t *r
     }
 }
 
-runloom_iouring_ssize_t runloom_iouring_loop_recv(runloom_iouring_ring_t *r,
-                                                  int fd, void *buf, size_t n,
+runloom_iouring_ssize_t runloom_iouring_loop_recv(int fd, void *buf, size_t n,
                                                   int flags)
 {
     struct io_uring_sqe sqe;
@@ -585,11 +586,10 @@ runloom_iouring_ssize_t runloom_iouring_loop_recv(runloom_iouring_ring_t *r,
     sqe.addr      = (uintptr_t)buf;
     sqe.len       = (unsigned)n;
     sqe.msg_flags = (uint32_t)flags;
-    return runloom_iouring_loop_io(r, sqe);
+    return runloom_iouring_loop_io(sqe);
 }
 
-runloom_iouring_ssize_t runloom_iouring_loop_send(runloom_iouring_ring_t *r,
-                                                  int fd, const void *buf,
+runloom_iouring_ssize_t runloom_iouring_loop_send(int fd, const void *buf,
                                                   size_t n, int flags)
 {
     struct io_uring_sqe sqe;
@@ -599,7 +599,7 @@ runloom_iouring_ssize_t runloom_iouring_loop_send(runloom_iouring_ring_t *r,
     sqe.addr      = (uintptr_t)buf;
     sqe.len       = (unsigned)n;
     sqe.msg_flags = (uint32_t)flags;
-    return runloom_iouring_loop_io(r, sqe);
+    return runloom_iouring_loop_io(sqe);
 }
 
 /* Write a hub's wake eventfd to interrupt its ring wait (called by a peer in
@@ -613,10 +613,23 @@ void runloom_iouring_loop_wake(int wake_fd)
     }
 }
 
+/* Process total of hub ring waits, folded in from each ring at disarm (so a
+ * value read after run() covers the whole session).  A diagnostic: a run with
+ * STACKWEAVE_IOURING_LOOP set and this still 0 never used the loop backend. */
+static unsigned long long runloom_iouring_loop_waits_total = 0;
+
+unsigned long long runloom_iouring_loop_waits(void)
+{
+    return __atomic_load_n(&runloom_iouring_loop_waits_total, __ATOMIC_RELAXED);
+}
+
 /* Tear down the loop wake fd (the polls die with the ring at destroy). */
 void runloom_iouring_loop_hub_disarm(runloom_iouring_ring_t *r)
 {
     if (r == NULL) return;
+    __atomic_add_fetch(&runloom_iouring_loop_waits_total, r->loop_waits,
+                       __ATOMIC_RELAXED);
+    r->loop_waits = 0;
     runloom_iouring_loop_ms_pbuf_teardown(r);   /* unregister + free the pool */
     if (r->loop_wake_fd >= 0) { close(r->loop_wake_fd); r->loop_wake_fd = -1; }
     r->loop_epoll_fd = -1;
@@ -626,7 +639,8 @@ void runloom_iouring_loop_hub_disarm(runloom_iouring_ring_t *r)
  * Heap-allocated (opaque void* to the caller in module_io's all-C echo, which
  * lives in a different translation unit).  Accessed ONLY by the owning hub
  * thread -- the echo fiber AND loop_drain are that one thread and never run
- * concurrently (the fiber is hub-pinned once armed) -- so no locks. */
+ * concurrently (loop_ms_open pins the fiber to the hub until loop_ms_close) --
+ * so no locks. */
 struct runloom_loop_ms {
     runloom_iouring_op_t op;        /* FIRST: SQE user_data; op.type==MULTISHOT */
     runloom_iouring_ring_t *ring;
@@ -636,6 +650,7 @@ struct runloom_loop_ms {
     int err;                        /* sticky -errno (NOT ENOBUFS / ECANCELED) */
     runloom_g_t *waiter_g;          /* set while the fiber is parked for data */
     void *waiter_hub;
+    int prev_pin1;                  /* the fiber's pin before ms_open pinned it */
     /* FIFO of delivered-but-unconsumed buffers.  Capacity q_cap == ms_count, so
      * it can never overflow: the pool holds at most ms_count buffers total, so
      * a single handle can hold at most that many un-returned.  q_bid/q_len point
@@ -720,13 +735,16 @@ static void runloom_loop_ms_on_cqe(runloom_loop_ms_t *h, int32_t res,
     }
 }
 
-/* Open a multishot recv stream on fd on ring r.  Returns an opaque handle, or
- * NULL if multishot isn't available on this hub ring (no pbuf pool / alloc
- * failure) -- the caller then falls back to single-shot recv.  Arms the
- * persistent SQE immediately. */
-void *runloom_iouring_loop_ms_open(runloom_iouring_ring_t *r, int fd)
+/* Open a multishot recv stream on fd on the CURRENT hub's ring, and pin the
+ * calling fiber to that hub until loop_ms_close: the handle's SQE, CQEs and
+ * buffers all belong to this one ring.  Returns an opaque handle, or NULL if
+ * multishot isn't available here (not on a hub, no ring, no pbuf pool, alloc
+ * failure) -- the caller then falls back to single-shot recv, unpinned.  Arms
+ * the persistent SQE immediately. */
+void *runloom_iouring_loop_ms_open(int fd)
 {
     runloom_loop_ms_t *h;
+    runloom_iouring_ring_t *r = runloom_mn_current_iouring_ring();
     unsigned cap;
     size_t need;
     if (r == NULL || r->ms_pool == NULL) return NULL;
@@ -740,6 +758,7 @@ void *runloom_iouring_loop_ms_open(runloom_iouring_ring_t *r, int fd)
     h->ring = r; h->fd = fd;
     h->armed = 0; h->eof = 0; h->err = 0;
     h->waiter_g = NULL; h->waiter_hub = NULL;
+    h->prev_pin1 = runloom_mn_pin_current_here();
     h->q_bid = (uint16_t *)(h + 1);
     h->q_len = h->q_bid + cap;
     h->q_cap = cap; h->q_head = 0; h->q_count = 0;
@@ -802,7 +821,8 @@ runloom_iouring_ssize_t runloom_iouring_loop_ms_recv(void *handle,
 /* Close a multishot stream.  If still armed (a mid-stream close, e.g. a send
  * error), cancel the SQE and park until its terminal CQE clears the handle, so
  * no in-flight completion dereferences freed memory.  Returns all held buffers
- * to the pool and frees the handle. */
+ * to the pool, frees the handle, and restores the fiber's pin from before
+ * loop_ms_open (still on the owning hub: every park above resumed there). */
 void runloom_iouring_loop_ms_close(void *handle)
 {
     runloom_loop_ms_t *h = (runloom_loop_ms_t *)handle;
@@ -843,5 +863,6 @@ void runloom_iouring_loop_ms_close(void *handle)
         h->q_head = (h->q_head + 1) % h->q_cap;
         h->q_count--;
     }
+    runloom_mn_pin_current_restore(h->prev_pin1);
     free(h);
 }

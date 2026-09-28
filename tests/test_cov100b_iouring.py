@@ -18,12 +18,8 @@ import sys
 
 import pytest
 
-from adv_util import (IOURING_LOOP_BROKEN, assert_iouring_loop_ran,
+from adv_util import (IOURING_LOOP_TRAILER, assert_iouring_loop_ran,
                       needs_free_threading)
-
-# The loop backend (and its migration guard) is compiled only on Linux.
-iouring_loop_broken = pytest.mark.xfail(sys.platform.startswith("linux"),
-                                        strict=True, reason=IOURING_LOOP_BROKEN)
 
 FT = needs_free_threading()
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -89,11 +85,78 @@ sys.stdout.write("ECHO_OK %d\n" % ok)
 
 
 @needs_iouring
-@iouring_loop_broken
 def test_iouring_loop_echo_exact_once():
-    p = _run(_ECHO, {})
+    p = _run(_ECHO + IOURING_LOOP_TRAILER, {})
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1200:])
     assert "ECHO_OK 64" in p.stdout, (p.stdout[-400:], p.stderr[-800:])
+    assert_iouring_loop_ran(p)
+
+
+# --------------------------------------------------------------------------
+# 1b. the all-C echo keeps working while its fibers migrate between hubs.
+#     Every park is a possible migration, and each hub ring has ONE lock-free
+#     SQ producer (its hub).  The echo used to cache its hub's ring for the
+#     whole connection, so after a migration it wrote SQEs into another hub's
+#     ring from a foreign thread and a lost SQE parked the fiber forever.  Many
+#     round trips per connection on 4 hubs give every echo fiber hundreds of
+#     parks.  A hang must FAIL, not skip like _run's timeout, hence the
+#     in-child watchdog.  multishot=1 covers the ms_open pin; 0 the per-op
+#     ring lookup of loop_recv/loop_send.
+# --------------------------------------------------------------------------
+_ECHO_MIGRATE = r"""
+import sys, struct, faulthandler; sys.path.insert(0, "src")
+faulthandler.dump_traceback_later(60, exit=True)
+import stackweave, stackweave_c as rc
+from stackweave.sync import WaitGroup
+N, ROUNDS = 48, 200
+ok = bytearray(N)
+def recv_exact(c, n):
+    buf = b""
+    while len(buf) < n:
+        d = c.recv(n - len(buf))
+        if not d:
+            break
+        buf += d
+    return buf
+def main():
+    port, lst = rc.serve("127.0.0.1", 0, None, 4)   # all-C echo, one acceptor per hub
+    wg = WaitGroup(); wg.add(N)
+    def client(i):
+        try:
+            c = rc.TCPConn.connect("127.0.0.1", port)
+            good = True
+            for r in range(ROUNDS):
+                msg = struct.pack(">II", i, r)
+                c.send_all(msg)
+                if recv_exact(c, 8) != msg:
+                    good = False
+            c.close()
+            ok[i] = good
+        finally:
+            wg.done()
+    for i in range(N):
+        rc.mn_fiber(lambda i=i: client(i))
+    wg.wait()
+    for ln in lst:
+        ln.close()
+stackweave.run(4, main)
+faulthandler.cancel_dump_traceback_later()
+sys.stdout.write("MIGRATE_OK %d\n" % sum(ok))
+"""
+
+
+@needs_iouring
+@pytest.mark.parametrize("multishot", ["1", "0"])
+def test_iouring_loop_echo_survives_fiber_migration(multishot):
+    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src",
+               STACKWEAVE_IOURING_LOOP="1", STACKWEAVE_IOURING_MS=multishot)
+    p = subprocess.run([PY, "-c", _ECHO_MIGRATE + IOURING_LOOP_TRAILER],
+                       cwd=REPO, env=env, capture_output=True, text=True,
+                       timeout=240)
+    assert p.returncode == 0, (
+        "echo run failed or hung (the watchdog exits 1 after 60 s)\n"
+        "stdout=%s\nstderr=%s" % (p.stdout[-400:], p.stderr[-2000:]))
+    assert "MIGRATE_OK 48" in p.stdout, (p.stdout[-400:], p.stderr[-800:])
     assert_iouring_loop_ran(p)
 
 
@@ -132,9 +195,8 @@ sys.stdout.write("PYH_OK %d\n" % sum(1 for i in range(N) if got[i] == struct.pac
 
 
 @needs_iouring
-@iouring_loop_broken
 def test_iouring_loop_python_handler():
-    p = _run(_PYHANDLER, {})
+    p = _run(_PYHANDLER + IOURING_LOOP_TRAILER, {})
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1200:])
     assert "PYH_OK 40" in p.stdout, (p.stdout[-400:], p.stderr[-800:])
     assert_iouring_loop_ran(p)
@@ -172,9 +234,8 @@ sys.stdout.write("TEARDOWN_OK %d\n" % total)
 
 
 @needs_iouring
-@iouring_loop_broken
 def test_iouring_loop_ring_create_destroy_cycles():
-    p = _run(_TEARDOWN, {})
+    p = _run(_TEARDOWN + IOURING_LOOP_TRAILER, {})
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1500:])
     assert "TEARDOWN_OK 32" in p.stdout, (p.stdout[-400:], p.stderr[-1000:])
     assert_iouring_loop_ran(p)
@@ -230,9 +291,8 @@ sys.stdout.write("CANCEL rv=%r woke=%r\n" % (res.get("rv"), res.get("woke")))
 
 
 @needs_iouring
-@iouring_loop_broken
 def test_iouring_loop_cancel_parked_fiber():
-    p = _run(_CANCEL, {})
+    p = _run(_CANCEL + IOURING_LOOP_TRAILER, {})
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1500:])
     # the parked reader must have been woken (cancelled), not stranded
     assert "CANCEL rv=" in p.stdout and "woke=True" in p.stdout, (
@@ -268,9 +328,8 @@ sys.stdout.write("FILEIO_OK %d\n" % sum(ok))
 @needs_iouring
 @pytest.mark.skipif(not hasattr(__import__("stackweave_c"), "file_read"),
                     reason="file_read not built")
-@iouring_loop_broken
 def test_iouring_loop_file_io():
-    p = _run(_FILEIO, {})
+    p = _run(_FILEIO + IOURING_LOOP_TRAILER, {})
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1200:])
     assert "FILEIO_OK 24" in p.stdout, (p.stdout[-400:], p.stderr[-800:])
     assert_iouring_loop_ran(p)

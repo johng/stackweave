@@ -120,6 +120,13 @@ PyObject *runloom_mn_fiber_pinned(PyObject *callable, size_t stack_size,
  * contract: runloom_mn_fiber_pinned above. */
 int runloom_mn_pin_for_wake(runloom_g_t *g, int hub_id);
 
+/* C-only pin of the CURRENT fiber to the CURRENT hub, for runtime code that
+ * keeps hub-local state across a park (the io_uring loop backend's multishot
+ * recv handle).  Returns the previous pin (0 = unpinned) to hand back to
+ * runloom_mn_pin_current_restore, or -1 off a hub fiber.  No Python error. */
+int  runloom_mn_pin_current_here(void);
+void runloom_mn_pin_current_restore(int prev_pin1);
+
 /* Bulk-spawn n fibers all running `callable`, looping the spawn core in C
  * (skips n Python->C dispatches + per-call arg parsing).  indexed != 0 calls
  * each as callable(i) for i in 0..n-1 (per-fiber arg); 0 calls callable().

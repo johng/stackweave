@@ -9,8 +9,8 @@ mode, which this suite drives:
               hub thread creates its own ring (mn_sched_hub_main.c.inc:204) and
               the C echo handler / TCPConn iouring recv resolve the ring through
               this accessor (module_io.c.inc:158, io_uring_l_msclose.c.inc:63).
-              The loop backend is BROKEN under cross-hub migration and ignored in
-              every M:N run, so its test is a strict xfail (adv_util.py).
+              Each op re-resolves the ring at submit, since a fiber can resume
+              on another hub after any park.
     * L257-273 runloom_mn_hub_request_iouring_cancel(): cross-thread cancel of a
               fiber parked on a *hub-ring* (SINGLE_ISSUER) io_uring op.  The only
               ops with op->ring != NULL are hub-ring recv/send; a Python-reachable
@@ -37,12 +37,8 @@ import sys
 
 import pytest
 
-from adv_util import (IOURING_LOOP_BROKEN, assert_iouring_loop_ran,
+from adv_util import (IOURING_LOOP_TRAILER, assert_iouring_loop_ran,
                       needs_free_threading)
-
-# The loop backend (and its migration guard) is compiled only on Linux.
-iouring_loop_broken = pytest.mark.xfail(sys.platform.startswith("linux"),
-                                        strict=True, reason=IOURING_LOOP_BROKEN)
 
 FT = needs_free_threading()
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -53,6 +49,14 @@ LOOP_ENV = {"STACKWEAVE_IOURING_LOOP": "1"}
 LOOP_TCPCONN_ENV = {"STACKWEAVE_IOURING_LOOP": "1", "STACKWEAVE_TCPCONN_IOURING": "1"}
 
 pytestmark = pytest.mark.skipif(not FT, reason="M:N + io_uring loop need GIL-disabled build")
+
+
+def _iou_available():
+    try:
+        import stackweave_c
+        return bool(stackweave_c.iouring_available())
+    except Exception:
+        return False
 
 
 def _run(script, env_extra, timeout=240):
@@ -114,17 +118,17 @@ sys.stdout.write("CECHO_OK %d\n" % (1 if ok else 0))
 '''
 
 
-@iouring_loop_broken
 def test_iouring_loop_cecho_drives_current_ring_accessor():
     # Drives L39-42 (and the C echo recv/send through the hub ring).
-    p = _run(_SERVE_CECHO, LOOP_ENV)
+    p = _run(_SERVE_CECHO + IOURING_LOOP_TRAILER, LOOP_ENV)
     _no_crash(p, "iouring-loop C-echo")
     assert p.returncode == 0, "C-echo run failed rc=%d\nstderr=%s" % (
         p.returncode, p.stderr[-1500:])
     assert "CECHO_OK 1" in p.stdout, (
         "io_uring-loop C-echo did not round-trip every reply through the hub "
         "ring\nstdout=%s\nstderr=%s" % (p.stdout, p.stderr[-1200:]))
-    assert_iouring_loop_ran(p)
+    if _iou_available():      # without io_uring the echo takes the readiness path
+        assert_iouring_loop_ran(p)
 
 
 # ===========================================================================

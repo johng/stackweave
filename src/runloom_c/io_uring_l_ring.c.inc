@@ -33,15 +33,20 @@ struct runloom_iouring_ring {
      * kernel has consumed (everything < it is submitted, [it, sq_tail) is
      * pending).  loop_wake_fd / loop_epoll_fd are the fds armed as persistent
      * multishot POLL_ADDs on this ring (cached so a dead multishot poll can be
-     * re-armed).  All 0/-1 and unused unless the loop backend is on. */
+     * re-armed).  All 0/-1 and unused unless the loop backend is on.
+     * loop_waits counts this hub's blocking waits in the ring (owner-only, so a
+     * plain counter); loop_hub_disarm folds it into the process total that
+     * stats()["iouring_loop_waits"] reports, the tests' proof the backend ran. */
     unsigned sq_submitted_tail;
     int loop_wake_fd;
     int loop_epoll_fd;
+    unsigned long long loop_waits;
 
     /* Stage-3 multishot recv (RUNLOOM_IOURING_MS=1): a per-hub provided buffer
      * ring registered on THIS ring fd (bgid RUNLOOM_LOOP_MS_BGID).  The hub
      * thread is the sole issuer (SINGLE_ISSUER), sole reaper (loop_drain), and
-     * sole buffer-returner (its pinned echo fibers), so the tail publish needs
+     * sole buffer-returner (the echo fibers, which loop_ms_open pins to this
+     * hub while their stream is open), so the tail publish needs
      * NO lock -- unlike the process-global pool, which several hubs share.
      * ms_pool/ms_bring are NULL unless the multishot path armed on this ring. */
     void    *ms_pool;        /* buffer pool base (ms_count * ms_size bytes) */

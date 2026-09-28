@@ -251,27 +251,28 @@ static void runloom_io_c_echo(void *arg)
     int fd = (int)(intptr_t)arg;
     char buf[64];
     /* Under the io_uring-as-loop backend, drive recv/send as proactor ring ops
-     * (IORING_OP_RECV/SEND on the owning hub's ring): the data op runs in the
+     * (IORING_OP_RECV/SEND on the current hub's ring): the data op runs in the
      * kernel and the fiber parks until the CQE arrives, drained inline by the
      * hub's loop_wait -- no readiness round trip, no epoll bridge.  Off the loop
      * backend (or with no hub ring), fall back to the readiness path (raw
-     * recv/send + cooperative wait_fd). */
-    runloom_iouring_ring_t *ring = runloom_iouring_loop_enabled()
-                                       ? runloom_mn_current_iouring_ring()
-                                       : NULL;
+     * recv/send + cooperative wait_fd).  The hub ring is re-checked before
+     * EVERY op, never cached: this fiber may resume on another hub after any
+     * park, and loop_recv/loop_send submit on whichever hub it is on now. */
+    const int loop = runloom_iouring_loop_enabled();
     /* Stage-3: one persistent multishot recv per connection on the hub ring
-     * (RUNLOOM_IOURING_MS=1).  Falls back to single-shot proactor recv when the
-     * pool isn't available (ms==NULL).  Send stays single-shot proactor. */
-    void *ms = (ring != NULL && runloom_iouring_loop_ms_enabled())
-                   ? runloom_iouring_loop_ms_open(ring, fd)
+     * (RUNLOOM_IOURING_MS=1); ms_open pins this fiber to the hub until
+     * ms_close.  Falls back to single-shot proactor recv when the pool isn't
+     * available (ms==NULL).  Send stays single-shot proactor. */
+    void *ms = (loop && runloom_iouring_loop_ms_enabled())
+                   ? runloom_iouring_loop_ms_open(fd)
                    : NULL;
     for (;;) {
         ssize_t n;
         if (ms != NULL) {
             n = runloom_iouring_loop_ms_recv(ms, buf, 8);
             if (n < 0) { runloom_iouring_loop_ms_close(ms); runloom_io_c_close(fd); return; }
-        } else if (ring != NULL) {
-            n = runloom_iouring_loop_recv(ring, fd, buf, 8, 0);
+        } else if (loop && runloom_mn_current_iouring_ring() != NULL) {
+            n = runloom_iouring_loop_recv(fd, buf, 8, 0);
             if (n < 0) { runloom_io_c_close(fd); return; }    /* errno set; hard error */
         } else {
             for (;;) {
@@ -292,8 +293,8 @@ static void runloom_io_c_echo(void *arg)
             ssize_t sent = 0;
             while (sent < n) {
                 ssize_t s;
-                if (ring != NULL) {
-                    s = runloom_iouring_loop_send(ring, fd, buf + sent,
+                if (loop && runloom_mn_current_iouring_ring() != NULL) {
+                    s = runloom_iouring_loop_send(fd, buf + sent,
                                                   (size_t)(n - sent), 0);
                     if (s > 0) { sent += s; continue; }
                     if (ms != NULL) runloom_iouring_loop_ms_close(ms);

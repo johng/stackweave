@@ -15,9 +15,7 @@
 #   normal-72h   72h mixed, full workers
 #   asan-24h     24h mixed under ASan, N/4 (ASan ~2x)
 #   tsan-24h     24h mixed under TSan, N/8 (TSan ~5-10x; needs the TSan ext)
-#   iouring-24h  24h mixed, STACKWEAVE_IOURING_LOOP=1 (the loop backend is broken
-#                under migration and ignored in M:N runs, so until it is fixed
-#                this soaks the default backend; see tests/adv_util.py)
+#   iouring-24h  24h mixed, STACKWEAVE_IOURING_LOOP=1 (the io_uring loop backend)
 #
 # Sanitizer reports are captured via ASAN_OPTIONS/TSAN_OPTIONS log_path=<dir>/<tag>
 # (one file per pid); tools/soak/triage_san.py scans + dedups them and the ledger

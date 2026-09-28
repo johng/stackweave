@@ -34,12 +34,8 @@ import threading
 
 import pytest
 
-from adv_util import (IOURING_LOOP_BROKEN, assert_iouring_loop_ran,
+from adv_util import (IOURING_LOOP_TRAILER, assert_iouring_loop_ran,
                       needs_free_threading)
-
-# The loop backend (and its migration guard) is compiled only on Linux.
-iouring_loop_broken = pytest.mark.xfail(sys.platform.startswith("linux"),
-                                        strict=True, reason=IOURING_LOOP_BROKEN)
 
 FT = needs_free_threading()
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -108,10 +104,9 @@ sys.stdout.write("LOOPRECV_OK %d\n" % ok)
 
 
 @needs_iouring
-@iouring_loop_broken
 def test_loop_single_shot_recv_ms_off():
     # LOOP on, MS explicitly OFF -> loop_recv (not ms_recv) is the recv path.
-    p = _run(_LOOP_RECV, {"STACKWEAVE_IOURING_LOOP": "1", "STACKWEAVE_IOURING_MS": "0"})
+    p = _run(_LOOP_RECV + IOURING_LOOP_TRAILER, {"STACKWEAVE_IOURING_LOOP": "1", "STACKWEAVE_IOURING_MS": "0"})
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1500:])
     assert "LOOPRECV_OK 32" in p.stdout, (p.stdout[-400:], p.stderr[-800:])
     assert_iouring_loop_ran(p)
@@ -180,9 +175,8 @@ sys.stdout.write("MSCANCEL_FIRST %d\n" % sum(got_first))
 
 
 @needs_iouring
-@iouring_loop_broken
 def test_loop_ms_close_while_armed_on_peer_rst():
-    p = _run(_MS_CANCEL, {"STACKWEAVE_IOURING_LOOP": "1", "STACKWEAVE_IOURING_MS": "1"})
+    p = _run(_MS_CANCEL + IOURING_LOOP_TRAILER, {"STACKWEAVE_IOURING_LOOP": "1", "STACKWEAVE_IOURING_MS": "1"})
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-2000:])
     # All 12 must have gotten the FIRST echo back (the steady stream is correct);
     # the RST/cancel of the SECOND chunk must not corrupt or hang any of them.
@@ -226,9 +220,8 @@ sys.stdout.write("HICONC_OK %d\n" % sum(1 for i in range(N) if got[i] == struct.
 
 
 @needs_iouring
-@iouring_loop_broken
 def test_loop_high_concurrency_sq_pressure():
-    p = _run(_HICONC, {"STACKWEAVE_IOURING_LOOP": "1", "STACKWEAVE_IOURING_MS": "1"},
+    p = _run(_HICONC + IOURING_LOOP_TRAILER, {"STACKWEAVE_IOURING_LOOP": "1", "STACKWEAVE_IOURING_MS": "1"},
              timeout=300)
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1500:])
     assert "HICONC_OK 192" in p.stdout, (p.stdout[-400:], p.stderr[-1000:])

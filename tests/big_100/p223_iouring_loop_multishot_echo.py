@@ -11,8 +11,10 @@ re-park, so the regression surface is live and otherwise untested here.
 The server is the built-in all-C echo (stackweave_c.serve(host, port, None)) --
 that handler runs runloom_io_c_echo, the only path that actually arms the
 multishot persistent SQE + provided-buffer-ring recv on the owning hub's ring.
-Connections are long-lived and hub-pinned: a woken echo fiber routes to its
-hub-local FIFO, so its multishot stays armed on the hub it was opened on.
+Connections are long-lived and hub-pinned: runloom_iouring_loop_ms_open pins
+each echo fiber to the hub its multishot is armed on until the stream closes.
+Without that pin (and with the ring cached across parks) a migrated fiber wrote
+another hub's ring and every run stalled within seconds.
 
 We force buffer-ring recycle/exhaustion by setting STACKWEAVE_IOURING_MS_BUFS
 small (default 16) so the ring of provided buffers must be returned and reused

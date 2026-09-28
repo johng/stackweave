@@ -367,23 +367,22 @@ void runloom_iouring_loop_wait(runloom_iouring_ring_t *r, long long timeout_ns,
 }
 void runloom_iouring_loop_wake(int wake_fd) { (void)wake_fd; }
 void runloom_iouring_loop_hub_disarm(runloom_iouring_ring_t *r) { (void)r; }
-runloom_iouring_ssize_t runloom_iouring_loop_recv(runloom_iouring_ring_t *r,
-                                                  int fd, void *buf, size_t n,
+unsigned long long runloom_iouring_loop_waits(void) { return 0; }
+runloom_iouring_ssize_t runloom_iouring_loop_recv(int fd, void *buf, size_t n,
                                                   int flags)
 {
-    (void)r; (void)fd; (void)buf; (void)n; (void)flags;
+    (void)fd; (void)buf; (void)n; (void)flags;
     errno = ENOSYS; return -1;
 }
-runloom_iouring_ssize_t runloom_iouring_loop_send(runloom_iouring_ring_t *r,
-                                                  int fd, const void *buf,
+runloom_iouring_ssize_t runloom_iouring_loop_send(int fd, const void *buf,
                                                   size_t n, int flags)
 {
-    (void)r; (void)fd; (void)buf; (void)n; (void)flags;
+    (void)fd; (void)buf; (void)n; (void)flags;
     errno = ENOSYS; return -1;
 }
-void *runloom_iouring_loop_ms_open(runloom_iouring_ring_t *r, int fd)
+void *runloom_iouring_loop_ms_open(int fd)
 {
-    (void)r; (void)fd; return NULL;
+    (void)fd; return NULL;
 }
 runloom_iouring_ssize_t runloom_iouring_loop_ms_recv(void *handle,
                                                      void *buf, size_t n)

@@ -293,6 +293,41 @@ int runloom_mn_pin_for_wake(runloom_g_t *g, int hub_id)
     return 0;
 }
 
+/* C-side pin for runtime code that holds hub-local state across a park.  The
+ * io_uring loop backend's multishot recv handle is armed on ONE hub's
+ * SINGLE_ISSUER ring and consumes that hub's provided-buffer ring with no
+ * locks, so its fiber must resume only on that hub while the handle is open.
+ * Pins the CURRENT fiber to the CURRENT hub and returns the previous pin_hub1
+ * (0 = unpinned) for runloom_mn_pin_current_restore; returns -1, pinning
+ * nothing, off a hub fiber.  Sets no Python error: all-C fibers carry no
+ * tstate.
+ *
+ * A plain store is enough here, unlike G.pin's runloom_mn_global_runq_repin:
+ * the current g is RUNNING, so it sits on no run-queue whose pinned/unpinned
+ * counters could drift.  A wake that lands meanwhile only flips RUNNING ->
+ * RUNNING_WOKEN, and the owner enqueues the g at release, after this store,
+ * where runloom_mn_woken_enqueue and the global-runq push read the new pin. */
+int runloom_mn_pin_current_here(void)
+{
+    runloom_hub_t *h = runloom_tls_hub;
+    runloom_g_t *g = runloom_tls_current_g;
+    int prev;
+    if (h == NULL || g == NULL) return -1;
+    prev = __atomic_load_n(&g->pin_hub1, __ATOMIC_ACQUIRE);
+    __atomic_store_n(&g->pin_hub1, h->id + 1, __ATOMIC_RELEASE);
+    return prev;
+}
+
+/* Undo runloom_mn_pin_current_here: restore the pin it returned.  Must run on
+ * the same fiber, still RUNNING (same reasoning as above); a negative
+ * prev_pin1 (the pin never took) is a no-op. */
+void runloom_mn_pin_current_restore(int prev_pin1)
+{
+    runloom_g_t *g = runloom_tls_current_g;
+    if (g == NULL || prev_pin1 < 0) return;
+    __atomic_store_n(&g->pin_hub1, prev_pin1, __ATOMIC_RELEASE);
+}
+
 /* Enqueue a woken migratable g (wake_state QUEUED, holding its queue ref) where
  * a hub will find it soonest.
  *

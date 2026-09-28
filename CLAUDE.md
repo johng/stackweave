@@ -6,16 +6,18 @@ Full derivations for the invariants below: [docs/dev/RUNTIME_GOTCHAS.md](docs/de
 - **Migration-only tree.** Cross-hub fiber migration is always on. The env
   vars that chose the old per-hub-tstate scheduler or only turned a default off
   are gone (numeric knobs and debug/fault/sim hooks remain). A few opt-in
-  features keep their env var: `STACKWEAVE_TCPCONN_IOURING` and
-  `STACKWEAVE_STACK_ARENA*` work under migration; `STACKWEAVE_IOURING_LOOP` and
-  `STACKWEAVE_GON_BULK` (+ `GON_*`) are **broken under migration** and ignored
-  in every M:N run with a one-time stderr note.
+  features keep their env var: `STACKWEAVE_TCPCONN_IOURING`,
+  `STACKWEAVE_IOURING_LOOP` (+ `IOURING_MS`) and `STACKWEAVE_STACK_ARENA*` work
+  under migration; `STACKWEAVE_GON_BULK` (+ `GON_*`) is **broken under
+  migration** and ignored in every M:N run with a one-time stderr note.
 - **Broken features are kept, not deleted.** A feature that does not work under
   migration keeps its code and env var, is guarded off with a one-time stderr
-  note, and has strict xfails that assert it actually ran (the note is absent:
-  `assert_iouring_loop_ran` in `tests/adv_util.py`; `[GON_TIMING]` for bulk
-  spawn), after the test's own correctness checks. Known gaps are xfail, never
-  skip (`tests/conftest.py`). Fixing one turns its xfails into XPASSes.
+  note, and has strict xfails that assert it actually ran (`[GON_TIMING]` for
+  bulk spawn), after the test's own correctness checks. Known gaps are xfail,
+  never skip (`tests/conftest.py`). Fixing one turns its xfails into XPASSes;
+  then drop the xfails and keep a positive it-ran check (the loop backend's
+  `assert_iouring_loop_ran` in `tests/adv_util.py` reads the hub ring-wait
+  count).
 - Migration is only sound on a free-threaded
   CPython built with BOTH `src/patches/` halves (alloc-home + exec-home), and
   nothing checks for them at runtime — on a stock interpreter it crashes under
@@ -169,6 +171,16 @@ Full derivations for the invariants below: [docs/dev/RUNTIME_GOTCHAS.md](docs/de
   be deterministic. The controller is compiled in behind `RUNLOOM_MN_CTRL`
   (default 0) until it is re-implemented; its tests are skipped via
   `_SEEDED_MN_TODO` in `tests/conftest.py`.
+- **A hub's io_uring ring has one producer: its own hub thread.** Under the
+  loop backend (`STACKWEAVE_IOURING_LOOP`) a fiber may write SQEs only into the
+  ring of the hub it runs on NOW, since every park is a possible migration.
+  Single-shot ops (`runloom_iouring_loop_recv/send`) look up the current hub's
+  ring at submit and take no ring argument; a multishot recv handle is bound to
+  one ring and its buffer ring, so `runloom_iouring_loop_ms_open` pins the
+  fiber to that hub (`runloom_mn_pin_current_here`) until `loop_ms_close`.
+  Caching a ring across a park (the old all-C echo) lost SQEs and stranded
+  fibers. Guard: `tests/test_cov100b_iouring.py::test_iouring_loop_echo_survives_fiber_migration`
+  (and big_100 p223, which stalls within seconds without it).
 
 ## aio bridge invariants (src/stackweave/aio/)
 - Layout: `_base.py` is the foundation (`_go_io`, `_wait_fd`, `_CURRENT_TASKS`);
