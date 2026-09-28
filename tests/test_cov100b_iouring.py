@@ -13,6 +13,7 @@ teardown across many ring create/destroy cycles, and cancel-wakes a fiber parked
 on an in-flight io_uring op (asserts it returns CANCELLED, not hangs).
 """
 import os
+import re
 import subprocess
 import sys
 
@@ -100,8 +101,10 @@ def test_iouring_loop_echo_exact_once():
 #     ring from a foreign thread and a lost SQE parked the fiber forever.  Many
 #     round trips per connection on 4 hubs give every echo fiber hundreds of
 #     parks.  A hang must FAIL, not skip like _run's timeout, hence the
-#     in-child watchdog.  multishot=1 covers the ms_open pin; 0 the per-op
-#     ring lookup of loop_recv/loop_send.
+#     in-child watchdog.  multishot=0 covers the per-op ring lookup of
+#     loop_recv/loop_send; multishot=1 the stream's owner-hub inbox, and it
+#     asserts buffers really were returned from another hub (the fibers
+#     migrated while their stream was open), or the test would prove nothing.
 # --------------------------------------------------------------------------
 _ECHO_MIGRATE = r"""
 import sys, struct, faulthandler; sys.path.insert(0, "src")
@@ -142,6 +145,7 @@ def main():
 stackweave.run(4, main)
 faulthandler.cancel_dump_traceback_later()
 sys.stdout.write("MIGRATE_OK %d\n" % sum(ok))
+sys.stdout.write("REMOTE_RETURNS %d\n" % rc.stats()["iouring_loop_ms_remote_returns"])
 """
 
 
@@ -158,6 +162,11 @@ def test_iouring_loop_echo_survives_fiber_migration(multishot):
         "stdout=%s\nstderr=%s" % (p.stdout[-400:], p.stderr[-2000:]))
     assert "MIGRATE_OK 48" in p.stdout, (p.stdout[-400:], p.stderr[-800:])
     assert_iouring_loop_ran(p)
+    if multishot == "1":
+        m = re.search(r"REMOTE_RETURNS (\d+)", p.stdout)
+        assert m and int(m.group(1)) > 0, (
+            "no multishot buffer was returned from another hub: the fibers "
+            "never migrated with a stream open\n" + p.stdout[-400:])
 
 
 # --------------------------------------------------------------------------

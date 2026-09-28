@@ -260,9 +260,10 @@ static void runloom_io_c_echo(void *arg)
      * park, and loop_recv/loop_send submit on whichever hub it is on now. */
     const int loop = runloom_iouring_loop_enabled();
     /* Stage-3: one persistent multishot recv per connection on the hub ring
-     * (RUNLOOM_IOURING_MS=1); ms_open pins this fiber to the hub until
-     * ms_close.  Falls back to single-shot proactor recv when the pool isn't
-     * available (ms==NULL).  Send stays single-shot proactor. */
+     * (RUNLOOM_IOURING_MS=1).  The stream stays on the ring it was opened on
+     * while this fiber migrates; ms_recv/ms_close reach that ring's hub
+     * through its inbox.  Falls back to single-shot proactor recv when the
+     * pool isn't available (ms==NULL).  Send stays single-shot proactor. */
     void *ms = (loop && runloom_iouring_loop_ms_enabled())
                    ? runloom_iouring_loop_ms_open(fd)
                    : NULL;

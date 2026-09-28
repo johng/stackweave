@@ -43,8 +43,10 @@
  *     a park.  The CQE is reaped by the submitting hub, which wakes the fiber
  *     wherever it will resume; the op record lives on the fiber's own stack.
  *   - a multishot recv handle is bound to one ring and its provided-buffer
- *     ring for its whole life, so loop_ms_open pins its fiber to that hub and
- *     loop_ms_close restores the previous pin (runloom_mn_pin_current_here).
+ *     ring for its whole life, but its fiber is not: it reads delivered chunks
+ *     from any hub, and off the owner hub it posts buffer returns, re-arms and
+ *     its close to the owner's inbox, which the owner drains at the top of its
+ *     loop (runloom_iouring_loop_inbox_drain).
  * Before these rules the all-C echo cached its hub's ring for the whole
  * connection; after a migration it wrote SQEs into another hub's ring from a
  * foreign thread, and a lost SQE left its fiber parked forever (a few percent
@@ -102,21 +104,20 @@ int runloom_iouring_loop_pump_always(void)
  * One persistent IORING_OP_RECV | MULTISHOT | BUFFER_SELECT SQE per connection
  * delivers a CQE per chunk into a PER-HUB provided buffer ring -- no re-submit
  * and no submit/park per recv, amortising the per-op cost the single-shot
- * Stage-2 path pays.  Everything here runs ONLY on the ring's owning hub
- * thread: it is the sole SQE issuer (SINGLE_ISSUER), the sole CQE reaper
- * (loop_drain), and the sole buffer-returner.  A fiber could migrate at any
- * park, so loop_ms_open pins it to the hub it armed on (pin_hub1: its wakes go
- * through the global run-queue, which only that hub pulls from) and
- * loop_ms_close restores the previous pin.  Hence NO LOCKS: the fiber and
- * loop_drain are the same OS thread and never run concurrently.  Gated behind
- * RUNLOOM_IOURING_MS (requires the loop backend), default off. */
+ * Stage-2 path pays.  The ring's owning hub thread is the sole SQE issuer
+ * (SINGLE_ISSUER), the sole CQE reaper (loop_drain) and the sole writer of the
+ * buffer ring, so none of that is locked.  The consumer fiber migrates freely:
+ * it reads delivered chunks from any hub and hands buffer returns, re-arms and
+ * its close to the owner through the ring's inbox (see "OWNER VS CONSUMER" at
+ * the handle below).  Gated behind RUNLOOM_IOURING_MS (requires the loop
+ * backend), default off. */
 
 #ifndef RUNLOOM_LOOP_MS_BGID
 #  define RUNLOOM_LOOP_MS_BGID 0
 #endif
 #define RUNLOOM_LOOP_MS_PBUF_COUNT_DEFAULT 1024
 #define RUNLOOM_LOOP_MS_PBUF_SIZE          2048
-/* user_data sentinel for the ASYNC_CANCEL loop_ms_close submits; its own
+/* user_data sentinel for the ASYNC_CANCEL a multishot close submits; its own
  * completion CQE is discarded by loop_drain (op records are 8-byte-aligned
  * pointers, never this tiny value, alongside UD_WAKE=1 / UD_EPOLL=2). */
 #define RUNLOOM_LOOP_UD_MSCANCEL  ((uint64_t)3)
@@ -359,9 +360,10 @@ static void runloom_iouring_loop_drain(runloom_iouring_ring_t *r, int *flags_out
             continue;
         }
         if (ud == RUNLOOM_LOOP_UD_MSCANCEL) {
-            /* ASYNC_CANCEL completion from loop_ms_close: nothing to do -- the
-             * cancelled multishot's own terminal (no-F_MORE) CQE is what clears
-             * its handle.  Did not bump inflight, so don't decrement. */
+            /* ASYNC_CANCEL completion for a closed multishot: nothing to do --
+             * the cancelled multishot's own terminal (no-F_MORE) CQE is what
+             * frees its handle (loop_ms_on_cqe, closing).  Did not bump
+             * inflight, so don't decrement. */
             continue;
         }
         /* Op record (Stage-2 proactor recv/send, or a Stage-3 multishot recv).
@@ -623,13 +625,27 @@ unsigned long long runloom_iouring_loop_waits(void)
     return __atomic_load_n(&runloom_iouring_loop_waits_total, __ATOMIC_RELAXED);
 }
 
+/* Process total of buffers returned through the inbox, i.e. finished by a
+ * fiber on a hub other than its handle's owner (folded in at ring disarm):
+ * proof that multishot fibers migrated while their stream was open. */
+static unsigned long long runloom_iouring_loop_ms_remote_returns_total = 0;
+
+unsigned long long runloom_iouring_loop_ms_remote_returns(void)
+{
+    return __atomic_load_n(&runloom_iouring_loop_ms_remote_returns_total,
+                           __ATOMIC_RELAXED);
+}
+
 /* Tear down the loop wake fd (the polls die with the ring at destroy). */
 void runloom_iouring_loop_hub_disarm(runloom_iouring_ring_t *r)
 {
     if (r == NULL) return;
     __atomic_add_fetch(&runloom_iouring_loop_waits_total, r->loop_waits,
                        __ATOMIC_RELAXED);
+    __atomic_add_fetch(&runloom_iouring_loop_ms_remote_returns_total,
+                       r->ms_remote_returns, __ATOMIC_RELAXED);
     r->loop_waits = 0;
+    r->ms_remote_returns = 0;
     runloom_iouring_loop_ms_pbuf_teardown(r);   /* unregister + free the pool */
     if (r->loop_wake_fd >= 0) { close(r->loop_wake_fd); r->loop_wake_fd = -1; }
     r->loop_epoll_fd = -1;
@@ -637,36 +653,81 @@ void runloom_iouring_loop_hub_disarm(runloom_iouring_ring_t *r)
 
 /* ---- Stage-3 multishot recv handle (per connection) ----------------------
  * Heap-allocated (opaque void* to the caller in module_io's all-C echo, which
- * lives in a different translation unit).  Accessed ONLY by the owning hub
- * thread -- the echo fiber AND loop_drain are that one thread and never run
- * concurrently (loop_ms_open pins the fiber to the hub until loop_ms_close) --
- * so no locks. */
+ * lives in a different translation unit).
+ *
+ * OWNER VS CONSUMER.  A handle is bound to the ring of the hub that opened it
+ * (h->ring, the "owner"): its multishot SQE, its CQEs and its buffers all live
+ * there, and only the owner's thread may write that ring's SQ or its
+ * provided-buffer ring.  The consumer fiber may migrate at any park and read
+ * from any hub.  They share the handle like this:
+ *   - Delivered chunks: an SPSC queue (q_*).  The owner's loop_drain produces
+ *     (loop_ms_on_cqe) and the fiber consumes (ms_recv).  Copying a chunk out
+ *     of the owner's buffer is plain shared memory, safe from any thread.
+ *   - Buffer returns and re-arms: done directly when the fiber runs on the
+ *     owner; otherwise POSTED.  A return goes into a second SPSC queue (ret_*,
+ *     fiber produces, owner consumes), a re-arm is a bit, and the handle is
+ *     pushed onto the owner ring's inbox list with a kick to the owner hub,
+ *     which carries the work out at the top of its next loop turn
+ *     (runloom_iouring_loop_inbox_drain).  Only the consumer posts.
+ *   - Parking: a waiting-flag handshake (loop_ms_park / loop_ms_wake).  The
+ *     owner can deliver a chunk while the fiber is on its way to park, so the
+ *     fiber publishes `waiting`, re-checks, and a wake the owner has claimed
+ *     is always consumed by exactly one park (a stray wake would resume the
+ *     fiber inside some later, unrelated park).
+ *   - Close: a hand-off.  ms_close gives the handle to the owner and never
+ *     touches it again; the owner returns every buffer it still holds, cancels
+ *     an armed SQE, and frees the handle at its terminal CQE (at once if none
+ *     is in flight).
+ * The pool bounds every queue: a bid is delivered again only after it has been
+ * returned, so no handle ever holds more than q_cap (== ms_count) bids across
+ * q_*, ret_* and cur_bid together, and neither SPSC queue can overflow. */
+
+/* h->armed */
+#define RUNLOOM_LOOP_MS_IDLE      0   /* no multishot SQE in flight */
+#define RUNLOOM_LOOP_MS_ARMED     1   /* a multishot SQE is in flight */
+#define RUNLOOM_LOOP_MS_REARMING  2   /* re-arm posted, the owner has not run it yet */
+/* h->inbox_bits */
+#define RUNLOOM_LOOP_MS_QUEUED    0x1 /* on the owner ring's inbox list */
+#define RUNLOOM_LOOP_MS_REARM     0x2
+#define RUNLOOM_LOOP_MS_CLOSE     0x4
+
 struct runloom_loop_ms {
     runloom_iouring_op_t op;        /* FIRST: SQE user_data; op.type==MULTISHOT */
-    runloom_iouring_ring_t *ring;
+    runloom_iouring_ring_t *ring;   /* the owner hub's ring */
+    void *owner_hub;                /* the owner hub, for the inbox kick */
     int fd;
-    int armed;                      /* 1 while a multishot SQE is in flight */
-    int eof;                        /* peer closed (a res==0 CQE) */
-    int err;                        /* sticky -errno (NOT ENOBUFS / ECANCELED) */
-    runloom_g_t *waiter_g;          /* set while the fiber is parked for data */
+    int armed;                      /* RUNLOOM_LOOP_MS_IDLE/_ARMED/_REARMING; atomic */
+    int eof;                        /* peer closed (a res==0 CQE); atomic */
+    int err;                        /* sticky -errno (NOT ENOBUFS / ECANCELED); atomic */
+    int closing;                    /* owner-only: closed, free at the terminal CQE */
+    /* park handshake */
+    int waiting;                    /* 1 while the fiber is parked or parking; atomic */
+    runloom_g_t *waiter_g;
     void *waiter_hub;
-    int prev_pin1;                  /* the fiber's pin before ms_open pinned it */
-    /* FIFO of delivered-but-unconsumed buffers.  Capacity q_cap == ms_count, so
-     * it can never overflow: the pool holds at most ms_count buffers total, so
-     * a single handle can hold at most that many un-returned.  q_bid/q_len point
-     * into the one allocation that backs this handle (no per-recv malloc). */
+    /* inbox */
+    int inbox_bits;                 /* RUNLOOM_LOOP_MS_QUEUED | _REARM | _CLOSE; atomic */
+    runloom_loop_ms_t *inbox_next;  /* link on the owner ring's inbox list */
+    /* Delivered-but-unconsumed buffers, owner -> fiber.  Free-running indices:
+     * the owner writes q_tail, the fiber writes q_head.  q_bid/q_len/ret_bid
+     * point into the one allocation that backs this handle. */
     uint16_t *q_bid;
     uint16_t *q_len;
-    unsigned  q_cap, q_head, q_count;
-    /* partially-consumed head buffer */
+    unsigned  q_cap;
+    unsigned  q_head;
+    unsigned  q_tail;
+    /* Buffers the fiber finished off the owner hub, fiber -> owner. */
+    uint16_t *ret_bid;
+    unsigned  ret_head;             /* owner-owned */
+    unsigned  ret_tail;             /* fiber-owned */
+    /* partially-consumed head buffer (fiber-owned) */
     int      cur_bid;               /* -1 = none */
     unsigned cur_off, cur_len;
 };
 
 /* Write the persistent multishot recv SQE into the hub ring SQ (deferred;
- * loop_wait submits the batch).  Bumps inflight so the hub keeps reaping while
- * armed.  Marks the handle armed.  Returns 0 (always succeeds: SQ-full is
- * resolved by flush+drain, single issuer). */
+ * loop_wait or the inbox drain submits it).  Bumps inflight so the hub keeps
+ * reaping while armed.  Marks the handle armed.  OWNER ONLY (SINGLE_ISSUER).
+ * Returns 0 (always succeeds: SQ-full is resolved by flush+drain). */
 static int runloom_iouring_loop_ms_submit(runloom_loop_ms_t *h)
 {
     runloom_iouring_ring_t *r = h->ring;
@@ -692,55 +753,227 @@ static int runloom_iouring_loop_ms_submit(runloom_loop_ms_t *h)
     __atomic_store_n(r->sq_tail, tail + 1, __ATOMIC_RELEASE);
     __atomic_add_fetch(&r->inflight, 1, __ATOMIC_ACQ_REL);
     __atomic_add_fetch(&runloom_iouring_inflight_count, 1, __ATOMIC_ACQ_REL);
-    h->armed = 1;
+    __atomic_store_n(&h->armed, RUNLOOM_LOOP_MS_ARMED, __ATOMIC_RELEASE);
     return 0;
 }
 
-/* Drain handler: a multishot CQE delivered a buffer / EOF / error / de-arm.
- * Runs on the hub thread inside loop_drain while the consumer fiber is parked
- * (same thread -> no lock).  Pushes data into the ready FIFO and wakes the
- * fiber if it is waiting. */
-static void runloom_loop_ms_on_cqe(runloom_loop_ms_t *h, int32_t res,
-                                   uint32_t flags)
+/* Cancel the handle's armed multishot SQE by user_data.  OWNER ONLY.  The
+ * cancel's own CQE carries the MSCANCEL sentinel and is discarded by
+ * loop_drain; the multishot's terminal CQE (no F_MORE) follows. */
+static void runloom_loop_ms_submit_cancel(runloom_loop_ms_t *h)
 {
-    if (res > 0 && (flags & IORING_CQE_F_BUFFER)) {
-        unsigned bid = (unsigned)(flags >> IORING_CQE_BUFFER_SHIFT);
-        if (h->q_count < h->q_cap) {       /* invariant: cannot exceed the pool */
-            unsigned slot = (h->q_head + h->q_count) % h->q_cap;
-            h->q_bid[slot] = (uint16_t)bid;
-            h->q_len[slot] = (uint16_t)res;
-            h->q_count++;
-        } else {
-            /* Should be unreachable (depth bounded by pool size).  Don't corrupt
-             * memory: return the buffer instead of enqueuing (drops the chunk). */
-            runloom_iouring_loop_ms_buf_return(h->ring, bid);
-        }
-    } else if (res == 0) {
-        h->eof = 1;                        /* orderly peer close */
-    } else if (res < 0) {
-        int e = -res;
-        if (e != ENOBUFS && e != ECANCELED && h->err == 0)
-            h->err = e;                    /* a real, sticky error */
-        /* ENOBUFS (pool momentarily empty) / ECANCELED (close): not sticky;
-         * the multishot de-arms and recv re-submits when it next needs data. */
+    runloom_iouring_ring_t *r = h->ring;
+    unsigned tail, head, idx;
+    struct io_uring_sqe *sqe;
+    for (;;) {
+        tail = __atomic_load_n(r->sq_tail, __ATOMIC_RELAXED);
+        head = __atomic_load_n(r->sq_head, __ATOMIC_ACQUIRE);
+        if ((tail - head) < r->sq_entries) break;
+        runloom_iouring_loop_flush(r);
+        runloom_iouring_loop_drain(r, NULL);
     }
-    if (!(flags & IORING_CQE_F_MORE))
-        h->armed = 0;                      /* terminated; recv re-arms if needed */
-    if (h->waiter_g != NULL) {
+    idx = tail & r->sq_mask;
+    sqe = &r->sqes[idx];
+    memset(sqe, 0, sizeof(*sqe));
+    sqe->opcode    = IORING_OP_ASYNC_CANCEL;
+    sqe->addr      = (uint64_t)(uintptr_t)&h->op;   /* cancel by user_data */
+    sqe->user_data = RUNLOOM_LOOP_UD_MSCANCEL;       /* drain discards it */
+    r->sq_array[idx] = idx;
+    __atomic_store_n(r->sq_tail, tail + 1, __ATOMIC_RELEASE);
+}
+
+/* Wake the consumer if it is parked or on its way to park.  OWNER side, after
+ * publishing a chunk / EOF / error / de-arm.  The SEQ_CST fence pairs with
+ * the one in loop_ms_park: either the fiber's re-check sees what was just
+ * published, or this sees `waiting` and claims the wake. */
+static void runloom_loop_ms_wake(runloom_loop_ms_t *h)
+{
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    if (__atomic_load_n(&h->waiting, __ATOMIC_RELAXED) &&
+        __atomic_exchange_n(&h->waiting, 0, __ATOMIC_ACQ_REL)) {
         runloom_g_t *g = h->waiter_g;
         void *hub = h->waiter_hub;
-        h->waiter_g = NULL; h->waiter_hub = NULL;
         if (hub != NULL) runloom_mn_wake_g(hub, g);
         else             runloom_sched_wake_safe(g);
     }
 }
 
-/* Open a multishot recv stream on fd on the CURRENT hub's ring, and pin the
- * calling fiber to that hub until loop_ms_close: the handle's SQE, CQEs and
- * buffers all belong to this one ring.  Returns an opaque handle, or NULL if
- * multishot isn't available here (not on a hub, no ring, no pbuf pool, alloc
- * failure) -- the caller then falls back to single-shot recv, unpinned.  Arms
- * the persistent SQE immediately. */
+/* Drain handler: a multishot CQE delivered a buffer / EOF / error / de-arm.
+ * Runs on the OWNER inside loop_drain, possibly while the consumer runs on
+ * another hub (see OWNER VS CONSUMER). */
+static void runloom_loop_ms_on_cqe(runloom_loop_ms_t *h, int32_t res,
+                                   uint32_t flags)
+{
+    int more = (flags & IORING_CQE_F_MORE) != 0;
+    if (h->closing) {
+        /* Handed over by ms_close: nobody consumes any more, so give each late
+         * chunk straight back, and free the handle at the terminal CQE (the
+         * kernel posts nothing for this user_data after it). */
+        if (res > 0 && (flags & IORING_CQE_F_BUFFER))
+            runloom_iouring_loop_ms_buf_return(
+                h->ring, (unsigned)(flags >> IORING_CQE_BUFFER_SHIFT));
+        if (!more) free(h);
+        return;
+    }
+    if (res > 0 && (flags & IORING_CQE_F_BUFFER)) {
+        unsigned bid  = (unsigned)(flags >> IORING_CQE_BUFFER_SHIFT);
+        unsigned tail = h->q_tail;       /* owner-owned */
+        if (tail - __atomic_load_n(&h->q_head, __ATOMIC_ACQUIRE) < h->q_cap) {
+            unsigned slot = tail % h->q_cap;
+            h->q_bid[slot] = (uint16_t)bid;
+            h->q_len[slot] = (uint16_t)res;
+            __atomic_store_n(&h->q_tail, tail + 1, __ATOMIC_RELEASE);
+        } else {
+            /* Should be unreachable (see the pool bound above).  Don't corrupt
+             * memory: return the buffer instead of enqueuing (drops the chunk). */
+            runloom_iouring_loop_ms_buf_return(h->ring, bid);
+        }
+    } else if (res == 0) {
+        __atomic_store_n(&h->eof, 1, __ATOMIC_RELEASE);   /* orderly peer close */
+    } else if (res < 0) {
+        int e = -res;
+        if (e != ENOBUFS && e != ECANCELED &&
+            __atomic_load_n(&h->err, __ATOMIC_RELAXED) == 0)
+            __atomic_store_n(&h->err, e, __ATOMIC_RELEASE);   /* real, sticky */
+        /* ENOBUFS (pool momentarily empty) / ECANCELED: not sticky; the
+         * multishot de-arms and recv re-arms when it next needs data. */
+    }
+    if (!more)
+        __atomic_store_n(&h->armed, RUNLOOM_LOOP_MS_IDLE, __ATOMIC_RELEASE);
+    runloom_loop_ms_wake(h);
+}
+
+/* Give a finished buffer back to the owner's pool: directly on the owner,
+ * else through the ret queue + inbox. */
+static void runloom_loop_ms_post(runloom_loop_ms_t *h, int bits);
+static void runloom_loop_ms_give_back(runloom_loop_ms_t *h, unsigned bid)
+{
+    unsigned t;
+    if (runloom_mn_current_iouring_ring() == h->ring) {
+        runloom_iouring_loop_ms_buf_return(h->ring, bid);
+        return;
+    }
+    t = h->ret_tail;                     /* fiber-owned */
+    h->ret_bid[t % h->q_cap] = (uint16_t)bid;
+    __atomic_store_n(&h->ret_tail, t + 1, __ATOMIC_RELEASE);
+    runloom_loop_ms_post(h, 0);
+}
+
+/* Ask for the multishot to be re-armed if it has ended: directly on the
+ * owner, else posted.  IDLE -> REARMING is the consumer's claim, so a re-arm
+ * is requested at most once per de-arm. */
+static void runloom_loop_ms_rearm(runloom_loop_ms_t *h)
+{
+    int idle = RUNLOOM_LOOP_MS_IDLE;
+    if (!__atomic_compare_exchange_n(&h->armed, &idle, RUNLOOM_LOOP_MS_REARMING,
+                                     0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+        return;                          /* armed, or a re-arm is already posted */
+    if (runloom_mn_current_iouring_ring() == h->ring)
+        runloom_iouring_loop_ms_submit(h);
+    else
+        runloom_loop_ms_post(h, RUNLOOM_LOOP_MS_REARM);
+}
+
+/* Post work to the owner: set `bits` (plus QUEUED) and, if the handle was not
+ * already queued, push it onto the owner ring's inbox list (a lock-free LIFO;
+ * only the owner removes, and it takes the whole list at once, so there is no
+ * ABA) and kick the owner if the list was empty.  CONSUMER ONLY, and after a
+ * CLOSE post the handle belongs to the owner: nothing here touches it after
+ * the RMW (not queued) or the push (queued). */
+static void runloom_loop_ms_post(runloom_loop_ms_t *h, int bits)
+{
+    runloom_iouring_ring_t *r = h->ring;   /* read first: see above */
+    void *owner = h->owner_hub;
+    runloom_loop_ms_t *head;
+    int old = __atomic_fetch_or(&h->inbox_bits, bits | RUNLOOM_LOOP_MS_QUEUED,
+                                __ATOMIC_ACQ_REL);
+    if (old & RUNLOOM_LOOP_MS_QUEUED)
+        return;                          /* on the list: the owner reads the new bits */
+    head = __atomic_load_n(&r->inbox_head, __ATOMIC_RELAXED);
+    do {
+        h->inbox_next = head;
+    } while (!__atomic_compare_exchange_n(&r->inbox_head, &head, h, 1,
+                                          __ATOMIC_RELEASE, __ATOMIC_RELAXED));
+    if (head == NULL) {
+        /* Dekker with hub_main's pre-wait inbox check (ring_waiting=1, fence,
+         * runloom_iouring_loop_inbox_pending): either the owner sees the list
+         * before it waits, or this kick breaks its ring wait. */
+        __atomic_thread_fence(__ATOMIC_SEQ_CST);
+        runloom_mn_hub_kick(owner);
+    }
+}
+
+/* OWNER: return the buffers the fiber finished off-owner. */
+static void runloom_loop_ms_take_returns(runloom_loop_ms_t *h)
+{
+    runloom_iouring_ring_t *r = h->ring;
+    unsigned head = h->ret_head;
+    unsigned tail = __atomic_load_n(&h->ret_tail, __ATOMIC_ACQUIRE);
+    while (head != tail) {
+        runloom_iouring_loop_ms_buf_return(r, h->ret_bid[head % h->q_cap]);
+        head++;
+        r->ms_remote_returns++;
+    }
+    h->ret_head = head;
+}
+
+/* OWNER: take a closed handle.  Return every buffer it still holds, then
+ * cancel the armed SQE (the terminal CQE frees it, see on_cqe) or free it now
+ * when nothing is in flight (IDLE, or a REARMING never run). */
+static void runloom_loop_ms_close_owner(runloom_loop_ms_t *h)
+{
+    runloom_iouring_ring_t *r = h->ring;
+    unsigned head;
+    runloom_loop_ms_take_returns(h);
+    h->closing = 1;
+    if (h->cur_bid >= 0)
+        runloom_iouring_loop_ms_buf_return(r, (unsigned)h->cur_bid);
+    for (head = h->q_head; head != h->q_tail; head++)
+        runloom_iouring_loop_ms_buf_return(r, h->q_bid[head % h->q_cap]);
+    h->q_head = h->q_tail;
+    if (__atomic_load_n(&h->armed, __ATOMIC_ACQUIRE) == RUNLOOM_LOOP_MS_ARMED)
+        runloom_loop_ms_submit_cancel(h);
+    else
+        free(h);
+}
+
+int runloom_iouring_loop_inbox_pending(runloom_iouring_ring_t *r)
+{
+    return r != NULL && __atomic_load_n(&r->inbox_head, __ATOMIC_RELAXED) != NULL;
+}
+
+/* OWNER, at the top of every hub loop turn (and before hub teardown): carry
+ * out the work fibers on other hubs posted for this ring's multishot handles.
+ * Returns first (they refill the pool a re-arm draws from), then CLOSE or
+ * REARM.  Submits what it wrote, so a re-arm or cancel reaches the kernel
+ * without waiting for the next ring wait. */
+void runloom_iouring_loop_inbox_drain(runloom_iouring_ring_t *r)
+{
+    runloom_loop_ms_t *h, *next;
+    if (!runloom_iouring_loop_inbox_pending(r)) return;
+    h = __atomic_exchange_n(&r->inbox_head, (runloom_loop_ms_t *)NULL,
+                            __ATOMIC_ACQUIRE);
+    for (; h != NULL; h = next) {
+        int bits;
+        next = h->inbox_next;            /* before the exchange: a re-post relinks */
+        bits = __atomic_exchange_n(&h->inbox_bits, 0, __ATOMIC_ACQ_REL);
+        if (bits & RUNLOOM_LOOP_MS_CLOSE) {
+            runloom_loop_ms_close_owner(h);
+            continue;
+        }
+        runloom_loop_ms_take_returns(h);
+        if ((bits & RUNLOOM_LOOP_MS_REARM) &&
+            __atomic_load_n(&h->armed, __ATOMIC_ACQUIRE) == RUNLOOM_LOOP_MS_REARMING)
+            runloom_iouring_loop_ms_submit(h);
+    }
+    runloom_iouring_loop_flush(r);
+}
+
+/* Open a multishot recv stream on fd on the CURRENT hub's ring, which becomes
+ * the handle's owner for its whole life; the fiber itself stays free to
+ * migrate.  Returns an opaque handle, or NULL if multishot isn't available
+ * here (not on a hub, no ring, no pbuf pool, alloc failure) -- the caller then
+ * falls back to single-shot recv.  Arms the persistent SQE immediately. */
 void *runloom_iouring_loop_ms_open(int fd)
 {
     runloom_loop_ms_t *h;
@@ -749,33 +982,63 @@ void *runloom_iouring_loop_ms_open(int fd)
     size_t need;
     if (r == NULL || r->ms_pool == NULL) return NULL;
     cap  = r->ms_count;
-    need = sizeof(*h) + (size_t)cap * 2u * sizeof(uint16_t);
+    need = sizeof(*h) + (size_t)cap * 3u * sizeof(uint16_t);
     h = (runloom_loop_ms_t *)malloc(need);
     if (h == NULL) return NULL;
-    memset(&h->op, 0, sizeof(h->op));
+    memset(h, 0, sizeof(*h));
     h->op.type = RUNLOOM_IOURING_OP_MULTISHOT;
     h->op.ring = r;
-    h->ring = r; h->fd = fd;
-    h->armed = 0; h->eof = 0; h->err = 0;
-    h->waiter_g = NULL; h->waiter_hub = NULL;
-    h->prev_pin1 = runloom_mn_pin_current_here();
+    h->ring = r;
+    h->owner_hub = runloom_mn_current_hub_opaque();
+    h->fd = fd;
+    h->armed = RUNLOOM_LOOP_MS_IDLE;
     h->q_bid = (uint16_t *)(h + 1);
     h->q_len = h->q_bid + cap;
-    h->q_cap = cap; h->q_head = 0; h->q_count = 0;
-    h->cur_bid = -1; h->cur_off = 0; h->cur_len = 0;
-    runloom_iouring_loop_ms_submit(h);
+    h->ret_bid = h->q_len + cap;
+    h->q_cap = cap;
+    h->cur_bid = -1;
+    runloom_iouring_loop_ms_submit(h);   /* we are on the owner */
     return h;
 }
 
+/* Is there anything for ms_recv to act on? */
+static int runloom_loop_ms_ready(runloom_loop_ms_t *h)
+{
+    return __atomic_load_n(&h->q_tail, __ATOMIC_ACQUIRE) != h->q_head ||
+           __atomic_load_n(&h->eof, __ATOMIC_ACQUIRE) ||
+           __atomic_load_n(&h->err, __ATOMIC_ACQUIRE) ||
+           __atomic_load_n(&h->armed, __ATOMIC_ACQUIRE) == RUNLOOM_LOOP_MS_IDLE;
+}
+
+/* CONSUMER: park until the owner delivers something.  Publishes `waiting`,
+ * then re-checks (the owner may be delivering right now, on another hub).  If
+ * something is ready and the fiber takes `waiting` back first, no wake is
+ * coming and it returns; if the owner already took it, its wake is in flight
+ * and the fiber parks to consume exactly that wake. */
+static void runloom_loop_ms_park(runloom_loop_ms_t *h)
+{
+    h->waiter_g   = runloom_mn_tls_current_g();
+    h->waiter_hub = runloom_mn_current_hub_opaque();
+    __atomic_store_n(&h->waiting, 1, __ATOMIC_RELEASE);
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    if (runloom_loop_ms_ready(h) &&
+        __atomic_exchange_n(&h->waiting, 0, __ATOMIC_ACQ_REL))
+        return;
+    runloom_sched_park_current();
+    runloom_coro_yield();
+}
+
 /* Cooperatively read up to n bytes.  Returns bytes (>0), 0 on EOF, or -1 with
- * errno on error.  Serves from buffered data first, parks for more if needed. */
+ * errno on error.  Serves from buffered data first, parks for more if needed.
+ * CONSUMER; may run on any hub. */
 runloom_iouring_ssize_t runloom_iouring_loop_ms_recv(void *handle,
                                                      void *buf, size_t n)
 {
     runloom_loop_ms_t *h = (runloom_loop_ms_t *)handle;
     runloom_iouring_ring_t *r = h->ring;
     for (;;) {
-        /* 1. Serve from the partially-consumed current buffer. */
+        /* 1. Serve from the partially-consumed current buffer (the owner's
+         *    pool memory; reading it from any hub is safe). */
         if (h->cur_bid >= 0) {
             unsigned avail = h->cur_len - h->cur_off;
             unsigned take  = (avail < n) ? avail : (unsigned)n;
@@ -785,84 +1048,57 @@ runloom_iouring_ssize_t runloom_iouring_loop_ms_recv(void *handle,
                 memcpy(buf, src + h->cur_off, take);
             h->cur_off += take;
             if (h->cur_off >= h->cur_len) {
-                runloom_iouring_loop_ms_buf_return(r, (unsigned)h->cur_bid);
+                runloom_loop_ms_give_back(h, (unsigned)h->cur_bid);
                 h->cur_bid = -1; h->cur_off = h->cur_len = 0;
             }
             if (take > 0) return (runloom_iouring_ssize_t)take;
             /* a zero-length buffer: drop it and keep going */
             continue;
         }
-        /* 2. Promote the next queued buffer to current. */
-        if (h->q_count > 0) {
-            h->cur_bid = (int)h->q_bid[h->q_head];
-            h->cur_len = h->q_len[h->q_head];
-            h->cur_off = 0;
-            h->q_head  = (h->q_head + 1) % h->q_cap;
-            h->q_count--;
-            continue;
+        /* 2. Promote the next delivered buffer to current. */
+        {
+            unsigned head = h->q_head;       /* fiber-owned */
+            if (__atomic_load_n(&h->q_tail, __ATOMIC_ACQUIRE) != head) {
+                unsigned slot = head % h->q_cap;
+                h->cur_bid = (int)h->q_bid[slot];
+                h->cur_len = h->q_len[slot];
+                h->cur_off = 0;
+                __atomic_store_n(&h->q_head, head + 1, __ATOMIC_RELEASE);
+                continue;
+            }
         }
-        /* 3. No buffered data: report terminal conditions. */
-        if (h->eof) return 0;
-        if (h->err) { errno = h->err; return -1; }
-        /* Re-arm if the multishot de-armed (ENOBUFS / kernel ended it). */
-        if (!h->armed)
-            runloom_iouring_loop_ms_submit(h);
-        /* 4. Park until loop_drain delivers a buffer / EOF / error.  Same thread
-         * as the drainer, so publishing the waiter BEFORE coro_yield is
-         * race-free (the drain cannot run until we yield). */
-        h->waiter_g   = runloom_mn_tls_current_g();
-        h->waiter_hub = runloom_mn_current_hub_opaque();
-        runloom_sched_park_current();
-        runloom_coro_yield();
-        h->waiter_g = NULL; h->waiter_hub = NULL;
+        /* 3. Terminal conditions.  The owner publishes a stream's data before
+         *    the EOF or error that ends it, so read the flag, then re-check the
+         *    queue before trusting it. */
+        {
+            int eof = __atomic_load_n(&h->eof, __ATOMIC_ACQUIRE);
+            int err = __atomic_load_n(&h->err, __ATOMIC_ACQUIRE);
+            if (__atomic_load_n(&h->q_tail, __ATOMIC_ACQUIRE) != h->q_head)
+                continue;
+            if (eof) return 0;
+            if (err) { errno = err; return -1; }
+        }
+        /* 4. Re-arm if the multishot ended (ENOBUFS / kernel ended it). */
+        runloom_loop_ms_rearm(h);
+        /* 5. Park until the owner delivers a buffer / EOF / error / de-arm. */
+        runloom_loop_ms_park(h);
     }
 }
 
-/* Close a multishot stream.  If still armed (a mid-stream close, e.g. a send
- * error), cancel the SQE and park until its terminal CQE clears the handle, so
- * no in-flight completion dereferences freed memory.  Returns all held buffers
- * to the pool, frees the handle, and restores the fiber's pin from before
- * loop_ms_open (still on the owning hub: every park above resumed there). */
+/* Close a multishot stream by handing it to its owner (see OWNER VS
+ * CONSUMER): the owner returns its buffers, cancels an armed SQE and frees it.
+ * Returns at once; do not touch the handle afterwards.  On the owner hub with
+ * nothing queued for it, the owner's part runs right here. */
 void runloom_iouring_loop_ms_close(void *handle)
 {
     runloom_loop_ms_t *h = (runloom_loop_ms_t *)handle;
-    runloom_iouring_ring_t *r;
     if (h == NULL) return;
-    r = h->ring;
-    if (h->armed) {
-        unsigned tail, head, idx;
-        struct io_uring_sqe *sqe;
-        for (;;) {
-            tail = __atomic_load_n(r->sq_tail, __ATOMIC_RELAXED);
-            head = __atomic_load_n(r->sq_head, __ATOMIC_ACQUIRE);
-            if ((tail - head) < r->sq_entries) break;
-            runloom_iouring_loop_flush(r);
-            runloom_iouring_loop_drain(r, NULL);
-        }
-        idx = tail & r->sq_mask;
-        sqe = &r->sqes[idx];
-        memset(sqe, 0, sizeof(*sqe));
-        sqe->opcode    = IORING_OP_ASYNC_CANCEL;
-        sqe->addr      = (uint64_t)(uintptr_t)&h->op;   /* cancel by user_data */
-        sqe->user_data = RUNLOOM_LOOP_UD_MSCANCEL;       /* drain discards it */
-        r->sq_array[idx] = idx;
-        __atomic_store_n(r->sq_tail, tail + 1, __ATOMIC_RELEASE);
-        while (h->armed) {
-            h->waiter_g   = runloom_mn_tls_current_g();
-            h->waiter_hub = runloom_mn_current_hub_opaque();
-            runloom_sched_park_current();
-            runloom_coro_yield();
-            h->waiter_g = NULL; h->waiter_hub = NULL;
-        }
+    /* Not queued => not on the inbox list, and only this fiber posts, so it
+     * cannot become queued under us; the owner's drain runs on this thread. */
+    if (runloom_mn_current_iouring_ring() == h->ring &&
+        __atomic_load_n(&h->inbox_bits, __ATOMIC_ACQUIRE) == 0) {
+        runloom_loop_ms_close_owner(h);
+        return;
     }
-    /* Reclaim every buffer still held so the pool doesn't leak across conns. */
-    if (h->cur_bid >= 0)
-        runloom_iouring_loop_ms_buf_return(r, (unsigned)h->cur_bid);
-    while (h->q_count > 0) {
-        runloom_iouring_loop_ms_buf_return(r, h->q_bid[h->q_head]);
-        h->q_head = (h->q_head + 1) % h->q_cap;
-        h->q_count--;
-    }
-    runloom_mn_pin_current_restore(h->prev_pin1);
-    free(h);
+    runloom_loop_ms_post(h, RUNLOOM_LOOP_MS_CLOSE);
 }

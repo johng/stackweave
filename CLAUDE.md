@@ -175,11 +175,12 @@ Full derivations for the invariants below: [docs/dev/RUNTIME_GOTCHAS.md](docs/de
   loop backend (`STACKWEAVE_IOURING_LOOP`) a fiber may write SQEs only into the
   ring of the hub it runs on NOW, since every park is a possible migration.
   Single-shot ops (`runloom_iouring_loop_recv/send`) look up the current hub's
-  ring at submit and take no ring argument; a multishot recv handle is bound to
-  one ring and its buffer ring, so `runloom_iouring_loop_ms_open` pins the
-  fiber to that hub (`runloom_mn_pin_current_here`) until `loop_ms_close`.
-  Caching a ring across a park (the old all-C echo) lost SQEs and stranded
-  fibers. Guard: `tests/test_cov100b_iouring.py::test_iouring_loop_echo_survives_fiber_migration`
+  ring at submit and take no ring argument. A multishot recv handle stays bound
+  to the ring that opened it while its fiber migrates: the fiber reads chunks
+  from any hub, and off the owner it posts buffer returns, re-arms and its close
+  to the ring's inbox, which only the owner drains
+  (`runloom_iouring_loop_inbox_drain`, at its loop top). Caching a ring across
+  a park (the old all-C echo) lost SQEs and stranded fibers. Guard: `tests/test_cov100b_iouring.py::test_iouring_loop_echo_survives_fiber_migration`
   (and big_100 p223, which stalls within seconds without it).
 
 ## aio bridge invariants (src/stackweave/aio/)

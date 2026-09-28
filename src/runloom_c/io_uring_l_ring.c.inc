@@ -45,8 +45,8 @@ struct runloom_iouring_ring {
     /* Stage-3 multishot recv (RUNLOOM_IOURING_MS=1): a per-hub provided buffer
      * ring registered on THIS ring fd (bgid RUNLOOM_LOOP_MS_BGID).  The hub
      * thread is the sole issuer (SINGLE_ISSUER), sole reaper (loop_drain), and
-     * sole buffer-returner (the echo fibers, which loop_ms_open pins to this
-     * hub while their stream is open), so the tail publish needs
+     * sole buffer-returner (a fiber on another hub hands its buffers back
+     * through inbox_head below), so the tail publish needs
      * NO lock -- unlike the process-global pool, which several hubs share.
      * ms_pool/ms_bring are NULL unless the multishot path armed on this ring. */
     void    *ms_pool;        /* buffer pool base (ms_count * ms_size bytes) */
@@ -54,6 +54,13 @@ struct runloom_iouring_ring {
     unsigned ms_count;       /* buffer count (power of two) */
     unsigned ms_size;        /* per-buffer size */
     unsigned ms_mask;        /* ms_count - 1 */
+    /* Multishot inbox: handles whose fiber, running on another hub, posted
+     * work only this hub may do (buffer returns, re-arm, close).  A lock-free
+     * LIFO pushed by those fibers and taken whole by this hub at its loop top
+     * (runloom_iouring_loop_inbox_drain).  ms_remote_returns counts the
+     * buffers returned that way (owner-only; folded in at disarm). */
+    struct runloom_loop_ms *inbox_head;
+    unsigned long long ms_remote_returns;
 };
 
 /* Hub-ring init.  Tries SINGLE_ISSUER + (optionally) DEFER_TASKRUN;

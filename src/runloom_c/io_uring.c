@@ -391,5 +391,11 @@ runloom_iouring_ssize_t runloom_iouring_loop_ms_recv(void *handle,
     errno = ENOSYS; return -1;
 }
 void runloom_iouring_loop_ms_close(void *handle) { (void)handle; }
+void runloom_iouring_loop_inbox_drain(runloom_iouring_ring_t *r) { (void)r; }
+int runloom_iouring_loop_inbox_pending(runloom_iouring_ring_t *r)
+{
+    (void)r; return 0;
+}
+unsigned long long runloom_iouring_loop_ms_remote_returns(void) { return 0; }
 
 #endif

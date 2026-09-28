@@ -11,10 +11,12 @@ re-park, so the regression surface is live and otherwise untested here.
 The server is the built-in all-C echo (stackweave_c.serve(host, port, None)) --
 that handler runs runloom_io_c_echo, the only path that actually arms the
 multishot persistent SQE + provided-buffer-ring recv on the owning hub's ring.
-Connections are long-lived and hub-pinned: runloom_iouring_loop_ms_open pins
-each echo fiber to the hub its multishot is armed on until the stream closes.
-Without that pin (and with the ring cached across parks) a migrated fiber wrote
-another hub's ring and every run stalled within seconds.
+Connections are long-lived and their echo fibers migrate between hubs while
+the multishot stays armed on the hub that opened it; off that hub a fiber hands
+buffer returns, re-arms and its close to the owner through the ring's inbox.
+When the echo instead cached its first hub's ring across parks, a migrated
+fiber wrote another hub's ring and every run stalled within seconds, with
+multishot on or off.
 
 We force buffer-ring recycle/exhaustion by setting STACKWEAVE_IOURING_MS_BUFS
 small (default 16) so the ring of provided buffers must be returned and reused
@@ -34,22 +36,34 @@ The availability guard SKIPs cleanly (exit 0) when io_uring isn't usable
 the sweep.
 
 Stresses: Stresses: per-hub io_uring loop backend (single-issuer/reaper) and
-multishot recv + provided-buffer-ring (BUFFER_SELECT) on long-lived hub-pinned
-streaming echo conns; buffer-ring exhaustion/recycle and the spurious-wake
-re-park path.
+multishot recv + provided-buffer-ring (BUFFER_SELECT) on long-lived streaming
+echo conns whose fibers migrate; buffer-ring exhaustion/recycle through the
+owner-hub inbox and the spurious-wake re-park path.
 """
 import os
 import sys
 
 # The loop backend + multishot + buffer-ring count are read ONCE from the
-# environment and cached in C (io_uring_l_loop.c.inc) at first use / hub init,
-# so they MUST be set before stackweave is imported and the hubs come up.  We
-# default them ON here; the --ms arg (handled in add_args/setup) can turn the
-# multishot path off for a control run, and STACKWEAVE_IOURING_MS_BUFS sizes the
-# provided buffer ring small to force recycle/exhaustion.
+# environment and cached in C (io_uring_l_loop.c.inc) when the hubs arm their
+# rings, and the harness starts the hubs BEFORE setup() runs.  So --ms and
+# --ms-bufs are resolved from argv here, before stackweave is imported; setting
+# them in setup() (as this program once did) never took effect, and a --ms 0
+# control run silently ran multishot.
+
+
+def _pre_arg(name, default):
+    argv = sys.argv[1:]
+    for i, a in enumerate(argv):
+        if a == name and i + 1 < len(argv):
+            return argv[i + 1]
+        if a.startswith(name + "="):
+            return a.split("=", 1)[1]
+    return default
+
+
 os.environ.setdefault("STACKWEAVE_IOURING_LOOP", "1")
-os.environ.setdefault("STACKWEAVE_IOURING_MS", "1")
-os.environ.setdefault("STACKWEAVE_IOURING_MS_BUFS", "16")
+os.environ["STACKWEAVE_IOURING_MS"] = "1" if int(_pre_arg("--ms", "1")) else "0"
+os.environ["STACKWEAVE_IOURING_MS_BUFS"] = str(max(1, int(_pre_arg("--ms-bufs", "16"))))
 
 import harness          # noqa: E402  (sets up sys.path + imports stackweave_c)
 import stackweave_c        # noqa: E402
@@ -95,18 +109,13 @@ def setup(H):
     # a clean exit-0 skip -- the macOS false-fault this layout fixes.  p222 does
     # the same guard-before-harness.main.)
 
-    # Re-assert the env toggles from the parsed args.  These were already
-    # defaulted at module import (before stackweave_c loaded), but --ms / --ms-bufs
-    # let an explicit control run override; the C side reads them lazily at
-    # hub-ring init, which has not happened yet inside setup().
-    os.environ["STACKWEAVE_IOURING_LOOP"] = "1"
-    os.environ["STACKWEAVE_IOURING_MS"] = "1" if H.args.ms else "0"
-    os.environ["STACKWEAVE_IOURING_MS_BUFS"] = str(max(1, H.args.ms_bufs))
+    # --ms / --ms-bufs were applied to the environment at import (see _pre_arg):
+    # the hubs, and the C side's one-time read of them, are already up here.
 
     # Built-in all-C echo server (handler=None): this is the ONLY serve() path
     # that runs runloom_io_c_echo and thus arms the multishot persistent SQE +
     # provided-buffer-ring recv on the owning hub's ring.  SO_REUSEPORT
-    # acceptors (one per hub) spread accept load and keep conns hub-pinned.
+    # acceptors (one per hub) spread accept load.
     acceptors = min(H.hubs, 8)
     port, listeners = stackweave_c.serve(H.net_ip(0), 0, None, acceptors, 1024)
     for L in listeners:
@@ -205,4 +214,4 @@ if __name__ == "__main__":
         "p223_iouring_loop_multishot_echo", body, setup=setup,
         default_funcs=2000, add_args=add_args,
         describe="io_uring per-hub loop backend + multishot|buffer-select recv "
-                 "on long-lived hub-pinned streaming echo conns")
+                 "on long-lived streaming echo conns whose fibers migrate")

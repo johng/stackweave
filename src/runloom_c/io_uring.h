@@ -307,19 +307,20 @@ unsigned long long runloom_iouring_loop_waits(void);
  *
  * ONE persistent IORING_OP_RECV | MULTISHOT | BUFFER_SELECT SQE per connection
  * delivers a CQE per chunk into the owning hub's provided buffer ring, with no
- * re-submit and no submit/park per recv.  Used by the all-C serve path.  Handle
- * access is single-hub-thread (ms_open pins the fiber to its hub until ms_close),
- * so it is lock-free.
+ * re-submit and no submit/park per recv.  Used by the all-C serve path.  The
+ * stream belongs to the ring it was opened on; its fiber may migrate, and off
+ * that hub it hands buffer returns, re-arms and the close to the ring's owner
+ * through the ring's inbox, drained by runloom_iouring_loop_inbox_drain.
  */
 
 /* 1 if the multishot recv path is enabled (RUNLOOM_IOURING_MS set; read once). */
 int runloom_iouring_loop_ms_enabled(void);
 
-/* Open a multishot recv stream on fd on the current hub's ring, and pin the
- * calling fiber to that hub until ms_close (the stream's SQE, CQEs and buffers
- * all belong to that ring).  Returns an opaque handle, or NULL if multishot
- * isn't available (not on a hub with a ring, no per-hub buffer pool, alloc
- * failure) -- the caller then falls back to single-shot loop_recv, unpinned. */
+/* Open a multishot recv stream on fd on the current hub's ring, which owns the
+ * stream for its whole life (the calling fiber stays free to migrate).  Returns
+ * an opaque handle, or NULL if multishot isn't available (not on a hub with a
+ * ring, no per-hub buffer pool, alloc failure) -- the caller then falls back to
+ * single-shot loop_recv. */
 void *runloom_iouring_loop_ms_open(int fd);
 
 /* Cooperatively read up to n bytes from the stream into buf.  Returns bytes
@@ -328,9 +329,20 @@ void *runloom_iouring_loop_ms_open(int fd);
 runloom_iouring_ssize_t runloom_iouring_loop_ms_recv(void *handle,
                                                      void *buf, size_t n);
 
-/* Close the stream: cancel an armed SQE, wait for its terminal CQE, reclaim
- * held buffers, free the handle, and restore the fiber's pin from before
- * ms_open.  Do not touch the handle afterwards. */
+/* Close the stream by handing it to its owning hub, which returns its
+ * buffers, cancels an armed SQE and frees the handle at the terminal CQE.
+ * Returns at once; do not touch the handle afterwards. */
 void runloom_iouring_loop_ms_close(void *handle);
+
+/* Owning hub, at the top of each loop turn and before teardown: carry out the
+ * multishot work fibers on other hubs posted to this ring's inbox.  Cheap
+ * no-op when the inbox is empty. */
+void runloom_iouring_loop_inbox_drain(runloom_iouring_ring_t *r);
+/* 1 if the ring's inbox has posted work (hub_main's pre-wait check). */
+int runloom_iouring_loop_inbox_pending(runloom_iouring_ring_t *r);
+/* Buffers returned through an inbox in this process, from every ring disarmed
+ * so far (stats()["iouring_loop_ms_remote_returns"]): a multishot fiber
+ * finished them on a hub other than its stream's. */
+unsigned long long runloom_iouring_loop_ms_remote_returns(void);
 
 #endif
