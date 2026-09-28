@@ -122,14 +122,15 @@ controls (`-DBUG_CLOSE_NULL`, `-DBUG_ABORT_NOCASE`, `-DBUG_ABORT_DROP`,
 `-DBUG_SPURIOUS`) each reintroduce a bug and make the model fail, so the
 properties demonstrably have teeth.
 
-### 6. Default M:N wake path -- `spin/hub_submit.pml`
+### 6. M:N hub submission list -- `spin/hub_submit.pml`
 
-The wake path that actually runs by default on Linux free-threaded 3.13t:
-`STACKWEAVE_PER_G_TSTATE` and `STACKWEAVE_STEAL_WOKEN` are both off, so `runloom_mn_wake_g`
-routes through `runloom_mn_hub_submit` (the per-hub-tstate MPSC submission
-list), **not** the global-runq `wake_state` machine of #2. A parker can be
-`wake_g`'d more than once (a netpoll-pump unlink + a stale safety-unlink
-wake); two defenses keep that safe and are modelled here:
+`runloom_mn_hub_submit` pushes a g onto a hub's MPSC submission list. It was
+the default M:N wake path while cross-hub migration was opt-in; migration is
+now always on, so every M:N wake goes through the global-runq `wake_state`
+machine of #2, and `hub_submit` carries spawn placement
+(`runloom_mn_fiber_core`) and wakes outside a run. A g can be submitted more
+than once (historically a netpoll-pump unlink + a stale safety-unlink wake);
+two defenses keep that safe and are modelled here:
 
 * **No resume-after-done** -- the hub never resumes a g that already ran to
   completion (the second resume would touch a coro freed by the

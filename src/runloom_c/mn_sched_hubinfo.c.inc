@@ -89,8 +89,6 @@ runloom_hub_info_t *runloom_mn_hub_snapshot(long *count_out)
         o->id                = h->id;
         o->pending           = __atomic_load_n(&h->pending, __ATOMIC_RELAXED);
         o->attach_state      = tss;
-        o->preempt_requested = __atomic_load_n(&h->preempt_requested, __ATOMIC_RELAXED);
-        o->instrumented      = runloom_sysmon_enabled;
         o->blocked_at[0]     = '\0';
         o->has_running_g     = (start != 0) ? 1 : 0;
         o->dwell_ms          = (start != 0 && now > start)

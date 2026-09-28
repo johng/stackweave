@@ -59,7 +59,7 @@ Off by default (it costs one clock read per park).  Turn it on to populate
 `age` and spot a wedged fiber:
 
 ```python
-gi.enable_timestamps()       # or env STACKWEAVE_INTROSPECT_TIME=1
+gi.enable_timestamps()
 ```
 
 ### Leak watchdog
@@ -86,16 +86,12 @@ loops) and old `sleep` fibers (tickers), so narrow `states` / raise
 
 ### When is the Python stack available?
 
-* **Single-thread scheduler (`stackweave.aio`, the common case):** the full stack
-  of any parked fiber is reconstructed.  asyncio Tasks also expose
+* **Any parked fiber**, under the single-thread scheduler (`stackweave.aio`)
+  and under M:N alike: the full stack is reconstructed (under M:N each fiber
+  owns a thread-state that is claimed for the walk).  asyncio Tasks also expose
   their own stack via the stock `Task.get_stack()`; stackweave fills in the *raw*
   fibers (channel ops, the netpoll pump, accept loops) that
   `asyncio.all_tasks()` never sees.
-* **Default M:N scheduler:** a parked fiber can be resumed by its hub at
-  any instant, so its stack is withheld (there is no safe way to freeze it);
-  the structural fields above still tell the story.  Run with
-  `STACKWEAVE_PER_G_TSTATE=1` to get full stacks under M:N (each fiber then
-  owns a thread-state that can be claimed for the walk).
 * The **currently-running** fiber has no *saved* stack — use the normal
   `traceback` / `sys._getframe` for your own frames.
 
@@ -134,8 +130,6 @@ Each dict has:
 | `running_g` | goid being resumed, or `None` when idle |
 | `dwell_ms` | how long the **current resume** has run; a large value with `detached` is a hub wedged in a blocking call |
 | `pending` | fibers owned + queued on this hub |
-| `preempt_requested` | sysmon has asked this hub to yield (a CPU wedge) |
-| `instrumented` | whether sysmon resume-tracking is live (it is by default; `running_g`/`dwell_ms`/`blocked_at` need it) |
 | `blocked_at` | best-effort Python call site of a **DETACHED-wedged** hub's blocking call, e.g. `cursor.execute (db.py:88)`, else `None` |
 | `stack_cmd` | a ready-to-run `py-spy dump --pid <PID>` for **this** process — the always-safe, out-of-process full C+Python stack of every thread |
 
@@ -158,7 +152,6 @@ lock-free atomic reads, so `hubs()` is cheap enough to poll from a watchdog.
 
 ```python
 gi.install_dump_signal()     # SIGQUIT -> fiber dump on stderr
-# or set env STACKWEAVE_TRACEBACK=1 before import
 ```
 
 This installs a **raw C** handler, so the dump fires even when the
@@ -188,7 +181,6 @@ The crash reporter turns it into a classified dump:
 
 ```python
 gi.install_crash_handler()       # or "all" / "wait" / "gdb" / ...
-# or set env STACKWEAVE_CRASH=on (auto-installs at import — every crash dumps)
 ```
 
 On a fault it maps the faulting address onto the guard pages and prints, e.g.:
@@ -210,7 +202,7 @@ on that fiber; anything else (main/hub stack, heap, a stray pointer) is
 flagged as a non-fiber fault.  After the dump it **chains to the previous
 handler** so a core dump / correct exit code still follow.
 
-`level` (or the `STACKWEAVE_CRASH` env value) selects behaviour, comma-separated:
+`level` selects behaviour, comma-separated:
 
 | level        | effect                                                           |
 |--------------|------------------------------------------------------------------|
@@ -222,8 +214,8 @@ handler** so a core dump / correct exit code still follow.
 | `gdb`        | fork+exec `gdb -batch -ex 'thread apply all bt full'` on self    |
 | `off`        | uninstall                                                        |
 
-`STACKWEAVE_CRASH_FILE` (or `install_crash_handler(file=...)`) appends the report
-to a file as well as stderr.  Call `install_crash_handler()` **before** starting
+`install_crash_handler(file=...)` appends the report to a file as well as
+stderr.  Call `install_crash_handler()` **before** starting
 the runtime so the scheduler hubs are armed as they spawn.
 
 It survives the very overflow it reports because every stackweave OS thread (the
@@ -260,8 +252,7 @@ gi.set_deadlock_mode("raise")   # raise RuntimeError out of run()
 gi.set_deadlock_mode("off")     # do nothing
 ```
 
-Also via env `STACKWEAVE_DEADLOCK=off|warn|raise`.  This applies to the
-single-thread scheduler (which `stackweave.aio` uses).  A clean `stackweave.aio` shutdown
+This applies to the single-thread scheduler (which `stackweave.aio` uses).  A clean `stackweave.aio` shutdown
 goes through `sched_stop`, which is **excluded**, so a normal loop teardown
 with pending background tasks never trips the detector — only a genuine
 "everyone is blocked, nothing can make progress" quiescence does.

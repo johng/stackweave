@@ -87,9 +87,8 @@ void *runloom_coro_stack_base(const runloom_coro_t *c);
 /* Size in bytes of the guard page below each coro stack. */
 size_t runloom_coro_guard_size(void);
 
-/* Force park-time idle-page reclaim on/off programmatically (in addition to the
- * RUNLOOM_STACK_PARK_DONTNEED env).  The stack auto-sizer enables it so that
- * starting fibers large stays RSS-free. */
+/* Turn park-time idle-page reclaim (runloom_coro_park) on/off.  Off by default;
+ * the stack auto-sizer enables it so that starting fibers large stays RSS-free. */
 void runloom_coro_park_reclaim_set(int on);
 
 /* Backend identifier ("fcontext-asm", "ucontext"); useful for tests. */
@@ -142,9 +141,9 @@ void runloom_stack_autocap_reset(void);
  * fiber.  The scheduler calls this when a g parks on a waiter
  * (netpoll/chan/sleep/park_safe); the next resume re-faults the few
  * touched pages (~one page fault).  MUST be called only while c is
- * SUSPENDED (so its saved stack pointer is valid).  No-op unless
- * RUNLOOM_STACK_PARK_DONTNEED=1, and on backends without an inspectable
- * saved SP (ucontext).
+ * SUSPENDED (so its saved stack pointer is valid).  No-op unless the
+ * auto-sizer enabled it (runloom_coro_park_reclaim_set), and on backends
+ * without an inspectable saved SP (ucontext).
  *
  * M:N SAFETY: race-free against a concurrent resume even though a netpoll
  * parker is wakeable (commit==PARKED) before its yield returns control
@@ -155,16 +154,15 @@ void runloom_stack_autocap_reset(void);
  * deque is stealable -- mn_sched.c:248-286).  So the sole thread that
  * resumes g is the same hub that runs this madvise at its post-resume
  * site: madvise happens-before the next resume on one thread, and no
- * other hub ever touches the stack.  RUNLOOM_STACK_PARK_DONTNEED stays
- * default-OFF only for the throughput cost (madvise+refault per park
- * hurts short-park churn), not for safety; the path to default-ON is a
- * long-park heuristic that skips short parks.  See HANDOFF. */
+ * other hub ever touches the stack.  It stays off outside autosize only
+ * for the throughput cost (madvise+refault per park hurts short-park
+ * churn), not for safety.  See HANDOFF. */
 void runloom_coro_park(runloom_coro_t *c);
 
-/* Unconditional variant: madvise c's below-SP idle pages with no env
- * gate.  Used by the hub-idle dwell-based sweep (RUNLOOM_STACK_PARK_SWEEP),
- * which does its own gating + threshold.  Same SUSPENDED + owning-hub
- * safety contract as runloom_coro_park. */
+/* Unconditional variant: madvise c's below-SP idle pages with no reclaim
+ * gate.  Used by the hub-idle dwell-based sweep, which does its own gating
+ * + threshold.  Same SUSPENDED + owning-hub safety contract as
+ * runloom_coro_park. */
 void runloom_coro_madvise_idle(runloom_coro_t *c);
 
 /* ------------------------------------------------------------------ */

@@ -3,7 +3,13 @@
 For each (primitive, seed): record a concurrent history on the real M:N scheduler
 in a FRESH hermetic subprocess (mn statics + cached env flags reset only at process
 birth), then check it against the sequential reference spec with the pure-Python
-WGL checker.  Under --seeded the history is a function of the seed, so:
+WGL checker.  The seed always picks the workload and hub count.
+
+By default the schedule is the real, migrating M:N one, timestamped with
+wall-clock time: a NOT-LINEARIZABLE verdict is a real correctness bug, but only
+its workload replays from the seed.  --seeded also pins the schedule with
+STACKWEAVE_MN_SEED (refused by mn_init until the seeded M:N scheduler is
+re-implemented for migration), so the history is a function of the seed:
 
   * a NOT-LINEARIZABLE verdict is a real correctness bug in the primitive,
     reproducible from the single integer seed;
@@ -12,11 +18,12 @@ WGL checker.  Under --seeded the history is a function of the seed, so:
     itself a finding (this is the same twice-and-compare the lifefuzz mn kinds do).
 
 This is the generative pillar: unbounded coverage of each primitive from a ~15-line
-spec + a ~20-line workload, every failure a reproducible integer.
+spec + a ~20-line workload, every failure's workload a reproducible integer.
 
 Usage:
   battery.py [primitive ...] [--seeds A B] [--procs K] [--ops M] [--hubs H]
-             [--wallclock] [--budget N] [-v]
+             [--seeded | --wallclock] [--budget N] [-v]
+  (--wallclock is the default and is kept as an explicit spelling of it)
   (no primitive -> all of: chan mutex rwmutex semaphore waitgroup event)
 """
 import hashlib
@@ -73,7 +80,7 @@ def record_one(primitive, seed, seeded, procs, ops, hubs, timeout=120):
     if seeded:
         cmd += ["--seeded", str(seed)]
     else:
-        cmd += ["--wallclock"]
+        cmd += ["--wallclock", "--seed", str(seed)]
     if procs is not None:
         cmd += ["--procs", str(procs)]
     if ops is not None:
@@ -206,7 +213,7 @@ def main(argv):
     prims = []
     seed_lo, seed_hi = 0, 20
     procs = ops = hubs = None
-    seeded = True
+    seeded = False
     budget = checker.DEFAULT_BUDGET
     verbose = False
     i = 1
@@ -223,6 +230,8 @@ def main(argv):
             hubs = int(argv[i + 1]); i += 2
         elif a == "--wallclock":
             seeded = False; i += 1
+        elif a == "--seeded":
+            seeded = True; i += 1
         elif a == "--budget":
             budget = int(argv[i + 1]); i += 2
         elif a in ("-v", "--verbose"):

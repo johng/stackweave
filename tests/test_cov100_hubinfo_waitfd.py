@@ -146,8 +146,6 @@ def test_hubinfo_blocked_at_for_detached_wedge():
         "STACKWEAVE_SYSMON": "1",
         "STACKWEAVE_SYSMON_QUIET": "1",
         "STACKWEAVE_SYSMON_MS": "30",
-        # keep ATTACHED-preempt out of the picture -- we want a pure DETACHED wedge.
-        "STACKWEAVE_PREEMPT": "0",
     }
     script = _HUBINFO_WEDGE.format(sleep="0.5", watch="0.45")
     p = _run_subprocess(script, env, timeout=40)

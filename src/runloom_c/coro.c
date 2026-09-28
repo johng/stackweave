@@ -243,9 +243,8 @@ static int    runloom_global_stack_n = 0;
  * HONEST BOUND: this caps the depot's VMA (mapping) count to ~1.5x the live-stack
  * high-water, clamped to SAFE_MAX = min(VMA budget, RAM budget) and squeezed so
  * live + pool VMAs stay under vm.max_map_count.  It does NOT bound RSS directly --
- * idle entries hold MADV_FREE'd (reclaimable-under-pressure) pages; only
- * RUNLOOM_STACK_MADV=off keeps them resident.  An explicit RUNLOOM_STACK_DEPOT_CAP
- * forces a static cap (override wins). */
+ * idle entries keep their touched pages resident (see runloom_stack_madv_reclaim).
+ * An explicit RUNLOOM_STACK_DEPOT_CAP forces a static cap (override wins). */
 static int  runloom_stack_cap_mode      = -1;  /* -1 unresolved, 0 static(env), 1 auto */
 static int  runloom_stack_cap_static    = 0;   /* the env value, when mode==static */
 static int  runloom_stack_cap_cached    = 0;   /* AUTO: recomputed per tick (0 = no tick yet) */
@@ -694,100 +693,34 @@ static void *runloom_stack_acquire(size_t size)
     return runloom_stack_map_guarded(size);       /* truly out of stock */
 }
 
-/* RSS reclaim of a POOLED (about-to-be-reused) stack body.  Prefer MADV_FREE
- * (Linux 4.5+), Go's scavenger choice (sysUnused).
+/* Page reclaim of a POOLED (about-to-be-reused) stack body, and of a parked
+ * fiber's below-SP idle pages (runloom_coro_madvise_idle).  Normally a no-op:
+ * pooled stacks stay RESIDENT, so a release pays no madvise and no per-release
+ * TLB-shootdown IPI.  MEASURED ~17% of naked-spawn self-time at 8 hubs, and it
+ * SCALES WITH HUB COUNT (each stack release IPIs every hub thread sharing the mm
+ * to flush TLBs).  Trades pool RSS (bounded by the depot cap x stack_size) for
+ * spawn throughput, like Go keeping freed g-stacks warm.
  *
- * MEASURED, not assumed: MADV_FREE is ~2.3x cheaper per call than MADV_DONTNEED
- * on a multi-hub process (25us vs 59us / 256KB).  The win is NOT fewer TLB
- * shootdowns -- both flush the range's TLB on a multi-thread mm, and the
- * shootdown sample count was flat in profiling.  The win is that MADV_FREE skips
- * the EAGER page reclaim AND, if the stack is reacquired before the kernel
- * reclaims under pressure, the pages revalidate with NO re-fault (MADV_DONTNEED
- * zaps the pages, forcing a zero-fill fault on the next touch).  On a stack-churn
- * workload (1M bare fibers spawned+completed) this cut wall ~1.8x and sys-time
- * ~26%.  On a socket-I/O-bound workload (p01) it is negligible -- stack reclaim
- * is a rounding error against the socket syscalls there.  So this helps mass
- * fiber spawn/complete, not request/response servers.
+ * MEASUREMENT OVERRIDE.  While any HWM consumer is live -- the startup
+ * calibration window, stack-advice profiling, autosize (all gate on paint_on;
+ * runloom_coro_paint_enabled) -- the resident-page scan (mincore,
+ * runloom_stack_hwm_scan) IS the measurement, so a pooled stack's pages must
+ * ACTUALLY drop at release.  Kept resident, a recycled stack carries the
+ * PREVIOUS occupant's residency, which the next occupant's scan then reports as
+ * its own HWM: a shallow fiber on a previously-deep stack over-reports, autosize
+ * can never learn DOWN past the pool's high water, and the per-kind ordering
+ * assertions flip when one kind draws a deeper-residency stack than the other
+ * sampled (test_autosize_learns_down flake).  This also keeps autosize's
+ * park-time reclaim promise ("large starts stay RSS-free").  DONTNEED only while
+ * measuring; steady state (calibration frozen, autosize off) pays nothing.
  *
- * Probed lazily: under GIL-off the first few concurrent hubs may each probe
- * MADV_FREE on their OWN region and store the flag (RELAXED) -- harmless, they
- * converge on the same value.  Falls back to MADV_DONTNEED where MADV_FREE is
- * unsupported.  Env RUNLOOM_STACK_MADV forces it: "free" (default), an
- * unrecognized value also taking the default; "dontneed" (eager reclaim /
- * tighter RSS / the old behaviour), or "off" (no reclaim -- keep pages resident).
- * Used for BOTH the pool release path AND the park idle-sweep
- * (runloom_coro_madvise_idle).  The only cost vs DONTNEED is lazy RSS: pages stay
- * counted until pressure -- set RUNLOOM_STACK_MADV=dontneed if RSS metrics matter
- * more than the spawn/complete CPU.
- *
- * Unlike MADV_DONTNEED, MADV_FREE does NOT zero the pages -- a pooled stack keeps
- * the prior fiber's bytes until overwritten.  Same trust domain, and the security
- * scrub (RUNLOOM_STACK_SCRUB) is a SEPARATE path that deliberately stays on
- * MADV_DONTNEED for its zero-on-next-touch guarantee. */
-static int runloom_stack_madv_flag = -1;      /* -1 unknown; 0 = off; else flag */
+ * The security scrub (runloom_stack_scrub) is a SEPARATE path with its own
+ * zero-every-touched-byte guarantee. */
 static void runloom_stack_madv_reclaim(void *addr, size_t len)
 {
-#if defined(__linux__)
-    int flag = __atomic_load_n(&runloom_stack_madv_flag, __ATOMIC_RELAXED);
-    /* MEASUREMENT OVERRIDE.  While any HWM consumer is live -- the startup
-     * calibration window, stack-advice profiling, autosize (all gate on
-     * paint_on; runloom_coro_paint_enabled) -- the resident-page scan
-     * (mincore, runloom_stack_hwm_scan) IS the measurement, so a pooled
-     * stack's pages must ACTUALLY drop at release.  Under the flag=0
-     * spawn-throughput default (and under MADV_FREE, whose pages stay
-     * mincore-resident until memory pressure), a recycled stack keeps the
-     * PREVIOUS occupant's residency, which the next occupant's scan then
-     * reports as its own HWM: a shallow fiber on a previously-deep stack
-     * over-reports, autosize can never learn DOWN past the pool's high
-     * water, and the per-kind ordering assertions flip when one kind draws
-     * a deeper-residency stack than the other sampled
-     * (test_autosize_learns_down flake).  This also restores autosize's
-     * park-time reclaim promise ("large starts stay RSS-free"), which the
-     * flag=0 default had silently gutted.  DONTNEED only while measuring;
-     * steady state (calibration frozen, autosize off) keeps the configured
-     * fast path untouched. */
-#if defined(MADV_DONTNEED)
-    if (runloom_coro_paint_enabled()) {
+#if defined(__linux__) && defined(MADV_DONTNEED)
+    if (runloom_coro_paint_enabled())
         (void)madvise(addr, len, MADV_DONTNEED);
-        return;
-    }
-#endif
-    if (flag == -1) {
-        const char *e = getenv("STACKWEAVE_STACK_MADV");
-        if (e != NULL && strcmp(e, "dontneed") == 0) {
-#if defined(MADV_DONTNEED)
-            flag = MADV_DONTNEED;
-#else
-            flag = 0;
-#endif
-        } else if (e != NULL && strcmp(e, "free") == 0) {
-#if defined(MADV_FREE)
-            /* Explicit opt-in to lazy reclaim: probe MADV_FREE on this first call
-             * (EINVAL => kernel too old).  On success the region is already
-             * reclaimed -> remember + return. */
-            if (madvise(addr, len, MADV_FREE) == 0) {
-                __atomic_store_n(&runloom_stack_madv_flag, MADV_FREE, __ATOMIC_RELAXED);
-                return;
-            }
-#endif
-#if defined(MADV_DONTNEED)
-            flag = MADV_DONTNEED;
-#else
-            flag = 0;
-#endif
-        } else {
-            /* DEFAULT (and explicit "off"): keep pooled stacks RESIDENT -- no
-             * madvise, so no per-release TLB-shootdown IPI.  MEASURED ~17% of
-             * naked-spawn self-time at 8 hubs, and it SCALES WITH HUB COUNT (each
-             * stack release IPIs every hub thread sharing the mm to flush TLBs).
-             * Trades pool RSS (bounded by the depot cap x stack_size) for spawn
-             * throughput -- the spawn-freely default.  RUNLOOM_STACK_MADV=free
-             * (lazy, reclaim-under-pressure) or =dontneed (eager) re-enables it. */
-            flag = 0;
-        }
-        __atomic_store_n(&runloom_stack_madv_flag, flag, __ATOMIC_RELAXED);
-    }
-    if (flag != 0) (void)madvise(addr, len, flag);
 #else
     (void)addr; (void)len;
 #endif
@@ -873,25 +806,10 @@ static void runloom_stack_release(void *stack, size_t size)
         runloom_stack_unmap_guarded(stack, size);
         return;
     }
-    /* Drop physical pages back to the OS *before* writing the header.
-     * MADV_DONTNEED keeps the VA reservation but lets the kernel reclaim
-     * the page frames; next touch re-faults a fresh zero page.  We have
-     * to skip the first page so the pool linkage survives -- the header
-     * lives in the first 16 bytes of the stack.
-     *
-     * Net effect with MADV_DONTNEED: pool entries hold 4 KB resident each
-     * instead of the full stack_size.  With RUNLOOM_STACK_MADV=free the reclaim
-     * is LAZY (pages stay counted until pressure, then drop); the DEFAULT is no
-     * madvise at all (keep pooled stacks warm -- see runloom_stack_madv_reclaim,
-     * which also documents the measurement-mode DONTNEED override) -- we trade
-     * pool RSS for killing the per-release synchronous TLB shootdown, exactly
-     * like Go.  Either way the deepest-used pages re-fault/re-validate on reuse,
-     * so steady-state RSS still tracks active gs, not capacity.
-     *
-     * (Tried "optimization A" -- mincore the resident depth and madvise only the
-     * touched range -- but MEASURED it as a net LOSS: with MADV_FREE the madvise
-     * of never-resident pages is already nearly free, so the per-release mincore
-     * cost +6s sys / 1M fibers for no wall win.  Reverted; left as a warning.) */
+    /* Pooled stacks stay resident (see runloom_stack_madv_reclaim); only the
+     * measurement window drops their pages, *before* the header is written.
+     * Skip the first page so the pool linkage survives -- the header lives in
+     * the first 16 bytes of the stack. */
     {
         long ps = sysconf(_SC_PAGESIZE);
         size_t page = (ps > 0) ? (size_t)ps : (size_t)4096;
@@ -978,50 +896,28 @@ long runloom_coro_depot_pooled(void)
  * default: it costs one stack-sized memset per fiber completion, and the
  * leftover is only reachable via a C extension reading uninitialised stack
  * (Python objects live on the heap, not the fiber C stack). Enable for
- * security-sensitive workloads via RUNLOOM_STACK_SCRUB=1 or set_stack_scrub(True).
+ * security-sensitive workloads via set_stack_scrub(True).
  * (Painting would also overwrite the data, but it is calibrated off for
  * performance after the first few spawns -- so it can't be relied on.) */
 static int runloom_stack_scrub_on = 0;
 void runloom_coro_scrub_set(int enabled) { runloom_stack_scrub_on = enabled ? 1 : 0; }
 int  runloom_coro_scrub_enabled(void)    { return runloom_stack_scrub_on; }
 
-/* Wipe a whole fiber stack.  On Linux, MADV_DONTNEED frees the page
- * frames and the next touch re-faults a zero page -- a complete scrub that
- * costs an O(1) syscall instead of a stack-sized memset (a 512 KB memset
- * was ~60x the spawn cost in measurement; this is ~flat).  Elsewhere
- * MADV_DONTNEED is only advisory (may not zero), so fall back to memset for
- * a guaranteed wipe.  stack is page-aligned and size page-rounded.
- *
- * EXPERIMENT (Exp D, docs/dev/spawn_experiments.md): the default MADV_DONTNEED
- * scrub is the per-fiber-completion cost the keep_resident shim was suppressing
- * (NOT a CPython purge) -- it fires a cross-hub TLB-shootdown IPI per fiber AND
- * drops the arena slot's pages, forcing a re-fault on reuse (defeats keep-warm).
- * RUNLOOM_STACK_SCRUB_RESIDENT=1 keeps the SAME security guarantee (every byte the
- * fiber wrote is zeroed) but does it in userspace: mincore() finds the resident
- * (touched) pages -- only a handful for a shallow fiber -- and memset()s just those.
- * No IPI, no page drop, no re-fault.  Wipes a touched-then-swapped page only if it
- * is still resident (same swap caveat the DONTNEED path silently has). */
-static int runloom_scrub_resident_mode(void)
-{
-    static int v = -1;
-    int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
-    if (cur < 0) {
-        /* DEFAULT ON (Exp D): the resident memset wipe is secure AND ~1.5x faster
-         * than the madvise(DONTNEED) wipe (no cross-hub TLB-shootdown IPI, no
-         * page-drop/re-fault).  Opt out with RUNLOOM_STACK_SCRUB_RESIDENT=0 to get
-         * the old DONTNEED wipe -- which ALSO reclaims RSS, so the "memory" trade
-         * (optimize("memory")) sets =0 for tight-RSS hosts. */
-        const char *e = getenv("STACKWEAVE_STACK_SCRUB_RESIDENT");
-        cur = (e != NULL && e[0] == '0') ? 0 : 1;
-        __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
-    }
-    return cur;
-}
-
+/* Wipe a whole fiber stack.  On Linux the wipe is done in userspace:
+ * mincore() finds the resident (touched) pages -- only a handful for a shallow
+ * fiber -- and memset()s just those, so every byte the fiber wrote is zeroed
+ * with no cross-hub TLB-shootdown IPI, no page drop and no re-fault on reuse
+ * (~1.5x faster than a madvise(MADV_DONTNEED) wipe; Exp D,
+ * docs/dev/spawn_experiments.md).  A touched-then-swapped page is wiped only if
+ * it is still resident.  If the stack is too large for the mincore vector or
+ * mincore fails, MADV_DONTNEED frees the page frames instead (next touch
+ * re-faults a zero page).  Elsewhere MADV_DONTNEED is only advisory (may not
+ * zero), so fall back to memset for a guaranteed wipe.  stack is page-aligned
+ * and size page-rounded. */
 static void runloom_stack_scrub(void *stack, size_t size)
 {
 #if defined(__linux__) && defined(MADV_DONTNEED)
-    if (runloom_scrub_resident_mode()) {
+    {
         long ps = sysconf(_SC_PAGESIZE);
         size_t page = (ps > 0) ? (size_t)ps : 4096;
         size_t npages = (size + page - 1) / page;
@@ -1326,7 +1222,7 @@ void runloom_stack_autocap_init(void)
  * Design rationale (validated against jemalloc/Go prior art -- read before "fixing"):
  *  - TAU controls how long a recent burst's pool stays warm, i.e. it trades
  *    re-mmap/fault churn on the NEXT burst against idle VMA headroom.  It is NOT a
- *    purge pacer: we MADV_FREE once at release and the tick issues ZERO syscalls,
+ *    purge pacer: pooled stacks are never madvised and the tick issues ZERO syscalls,
  *    so jemalloc's dirty_decay_ms=10s (which paces madvise volume) is the wrong
  *    axis -- do not anchor TAU to it, and never re-set a jemalloc decay_ms per tick
  *    (that forces a synchronous bulk-purge storm).
@@ -1337,8 +1233,8 @@ void runloom_stack_autocap_init(void)
  *    burst when the cap is high.  An idle trough is silent, so the decaying cap is
  *    naturally immune to the cap-chatter a down-side hysteresis band would guard
  *    (measured: a 1s-period 3k sawtooth -> 53 munmaps vs 12,980 at a static cap).
- *  - Posture = jemalloc `muzzy`/`-1`-decay / Go pre-1.16: front-load MADV_FREE, no
- *    timed escalation; "idle RSS looks high until pressure" is EXPECTED.  If a
+ *  - Posture = keep-warm, no timed escalation; "idle RSS stays at the pool's
+ *    high-water" is EXPECTED.  If a
  *    cgroup memory.max / observability requirement ever appears, the prior-art
  *    escape hatch is an OPTIONAL watchdog-driven MADV_DONTNEED 2nd stage (Go 1.16's
  *    default) -- not a shorter TAU, not a pacer. */
@@ -1442,7 +1338,7 @@ static RUNLOOM_TLS int runloom_coro_pool_size = 0;
  * pool, in practice the M:N default).  Coros of any other size never enter the
  * global -- they take the old release+free over-cap path.  Without this a
  * mixed-size spawn could fill the global with coros that never match a refill
- * request, so they never recycle and (with stacks resident under madv=off) grow
+ * request, so they never recycle and (with pooled stacks resident) grow
  * without bound -> OOM.  One class keeps the global homogeneous: every refilled
  * coro matches the requesting size, so it always recycles and the occupancy is
  * bounded by live fibers of that size.  Lock amortized (once per batch). */
@@ -2002,20 +1898,12 @@ static int runloom_coro_grow(runloom_coro_t *c, size_t new_usable)
  * default stack.  It cannot rescue a deep NON-yielding burst between
  * two yields -- that overflows into the guard page (clean SIGSEGV, not
  * silent corruption); such code must set a larger stack explicitly or
- * (for known deep stdlib paths) be pre-warmed.  Env RUNLOOM_STACK_GROW=0
- * disables. */
+ * (for known deep stdlib paths) be pre-warmed. */
 #define RUNLOOM_STACK_GROW_MAX (8u << 20)   /* 8 MB ceiling (matches MAX_STACK) */
 static int runloom_coro_maybe_grow(runloom_coro_t *c)
 {
-    static int grow_on = -1;
-    int on = __atomic_load_n(&grow_on, __ATOMIC_RELAXED);
     uintptr_t sp, lo, headroom, quarter;
-    if (on < 0) {
-        const char *e = getenv("STACKWEAVE_STACK_GROW");
-        on = (e != NULL && *e == '0') ? 0 : 1;     /* default ON */
-        __atomic_store_n(&grow_on, on, __ATOMIC_RELAXED);
-    }
-    if (!on || c == NULL || c->stack == NULL || c->done) return 0;
+    if (c == NULL || c->stack == NULL || c->done) return 0;
     if (c->stack_size >= RUNLOOM_STACK_GROW_MAX) return 0;
 #if defined(RUNLOOM_FORCE_STACKGROW)
     /* Force-the-rare-path (PostgreSQL CLOBBER_CACHE_ALWAYS / Go maymorestack):
@@ -2228,8 +2116,8 @@ int runloom_coro_done(const runloom_coro_t *c)
 /* ------------------------------------------------------------------ */
 
 /* Unconditional madvise of c's below-SP idle stack pages.  Caller owns
- * the gating (the per-park env flag below, or the hub-idle sweep) and
- * the M:N safety contract (only the owning hub may run this, and only
+ * the gating (the autosize-forced park reclaim below, or the hub-idle sweep)
+ * and the M:N safety contract (only the owning hub may run this, and only
  * while c is suspended -- see the runloom_coro_park doc in coro.h). */
 void runloom_coro_madvise_idle(runloom_coro_t *c)
 {
@@ -2249,9 +2137,8 @@ void runloom_coro_madvise_idle(runloom_coro_t *c)
         lo = base + page;                       /* keep first page (pool hdr) */
         hi = sp & ~(uintptr_t)(page - 1);       /* page-align DOWN below sp */
         if (hi > lo) {
-            /* MADV_FREE (default): ~2.3x cheaper than DONTNEED and no re-fault if
-             * this parked fiber resumes before reclaim -- the request/response
-             * recv-park case.  Env RUNLOOM_STACK_MADV=dontneed forces eager. */
+            /* Same policy as a pooled-stack release: pages stay resident
+             * outside the HWM measurement window. */
             runloom_stack_madv_reclaim((void *)lo, (size_t)(hi - lo));
         }
     }
@@ -2260,10 +2147,9 @@ void runloom_coro_madvise_idle(runloom_coro_t *c)
 #endif
 }
 
-/* Programmatic override for park-time idle-page reclaim, in addition to the
- * RUNLOOM_STACK_PARK_DONTNEED env.  The stack auto-sizer turns this on when it
- * starts fibers large (so the large idle pages are returned on park),
- * making "start large, learn down" RSS-free without a global env flip. */
+/* Park-time idle-page reclaim, off until the stack auto-sizer turns it on
+ * (it starts fibers large, so the large idle pages are returned on park),
+ * making "start large, learn down" RSS-free. */
 static int runloom_park_reclaim_forced = 0;
 void runloom_coro_park_reclaim_set(int on)
 {
@@ -2273,16 +2159,7 @@ void runloom_coro_park_reclaim_set(int on)
 void runloom_coro_park(runloom_coro_t *c)
 {
 #if defined(RUNLOOM_HAVE_FCONTEXT) && defined(MADV_DONTNEED)
-    /* Opt-in, evaluated once.  getenv reads are safe to race here --
-     * every thread computes the same value. */
-    static int park_dontneed = -1;
-    int on = __atomic_load_n(&park_dontneed, __ATOMIC_RELAXED);
-    if (on < 0) {
-        const char *e = getenv("STACKWEAVE_STACK_PARK_DONTNEED");
-        on = (e != NULL && *e == '1') ? 1 : 0;
-        __atomic_store_n(&park_dontneed, on, __ATOMIC_RELAXED);
-    }
-    if (!on && !__atomic_load_n(&runloom_park_reclaim_forced, __ATOMIC_RELAXED)) return;
+    if (!__atomic_load_n(&runloom_park_reclaim_forced, __ATOMIC_RELAXED)) return;
     runloom_coro_madvise_idle(c);
 #else
     (void)c;

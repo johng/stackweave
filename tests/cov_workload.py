@@ -46,9 +46,9 @@ def workload(producers=4, consumers=4, per=80):
             sink_mu.lock(); sink[0] += 1; sink_mu.unlock()
             n += 1
 
-    # CPU spin: env-tunable so the sysmon/preempt tests can make a fiber occupy
-    # its hub long enough (> STACKWEAVE_SYSMON_MS / STACKWEAVE_PREEMPT_MS) to trip the
-    # detector, while the default-path tests keep it cheap.
+    # CPU spin: env-tunable so the sysmon tests can make a fiber occupy its hub
+    # long enough (> STACKWEAVE_SYSMON_MS) to trip the detector, while the
+    # default-path tests keep it cheap.
     _cpu_iters = int(os.environ.get("STACKWEAVE_COV_CPU", "200000"))
     def cpu():
         x = 0

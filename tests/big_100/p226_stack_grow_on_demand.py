@@ -3,15 +3,15 @@
 Every other big_100 program PINS a fixed C stack (the harness sets --stack-kb,
 default 512KB, via stackweave_c.set_stack_size before the run).  That leaves the
 grow-on-demand machinery -- a fiber whose live frames creep toward its guard
-page is doubled, page-rounded, up to an 8MB ceiling (runloom_coro_maybe_grow,
-STACKWEAVE_STACK_GROW=1) -- and the stack-autosize / advice profiler entirely
+page is doubled, page-rounded, up to an 8MB ceiling (runloom_coro_maybe_grow)
+-- and the stack-autosize / advice profiler entirely
 UNEXERCISED.  Yet that grow path is exactly what the aio bridge leans on for
 deep C recursion inside protocol callbacks (asyncssh kex, chacha20/OpenSSL); a
 regression in grow-mid-run would SEGV under load and this campaign would never
 catch it.
 
 We start each worker fiber on a SMALL initial stack (set_stack_size(64KB),
-STACKWEAVE_STACK_AUTOSIZE_START small) with STACKWEAVE_STACK_GROW=1, then recurse
+STACKWEAVE_STACK_AUTOSIZE_START small), then recurse
 DEEP into a C extension -- json.dumps/loads over a deeply-nested structure, one
 C frame per nesting level -- so the live C frames push past the small stack and
 the runtime grows it (the measured HWM lands well above 64KB).  yield_now() is
@@ -29,10 +29,9 @@ Stresses: per-fiber C-stack grow-on-demand crossing the guard-headroom threshold
 """
 import os
 
-# STACKWEAVE_STACK_GROW defaults ON; make it explicit and pick a SMALL autosize
-# start so the autosize path also begins below the depth we recurse to.  Both
-# are read by the C extension, so set them BEFORE importing stackweave_c.
-os.environ.setdefault("STACKWEAVE_STACK_GROW", "1")
+# Pick a SMALL autosize start so the autosize path also begins below the depth
+# we recurse to.  Read by the C extension, so set it BEFORE importing
+# stackweave_c.
 os.environ.setdefault("STACKWEAVE_STACK_AUTOSIZE_START", str(64 * 1024))
 
 import json

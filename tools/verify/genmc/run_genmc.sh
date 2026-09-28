@@ -235,8 +235,8 @@ fi
 # The Dekker handshake (sched_parkwake.c) and the wake_state machine
 # (iouring/global-runq) are each proven in isolation; this checks their
 # COMPOSITION -- a park that commits via Dekker then the wake_state CAS, racing
-# wake_g -- holds no-lost-wake + enqueued-at-most-once under RC11.  Gate this
-# BEFORE promoting STACKWEAVE_STEAL_WOKEN / STACKWEAVE_PER_G_TSTATE toward default.
+# wake_g -- holds no-lost-wake + enqueued-at-most-once under RC11.  This was the
+# gate for making the migratable path the default; it now guards the only path.
 # Drift-guard: sched_parkwake_seam.c is a FAITHFUL SLICE (not byte-shared), so
 # its wake_state enum must track runloom_sched.h exactly -- names AND encodings.
 # This model already drifted once (a 4-state copy of the 6-state kernel: the
@@ -338,8 +338,8 @@ done
 #   mimalloc_page_free.c -- WHO may touch a page (per-page xthread_id abandon/adopt)
 #   qsbr_drain.c         -- WHEN a deferred free may run (QSBR grace period)
 #   brc_merge.c          -- WHO may merge a refcount (biased-refcount owner drain)
-# Each is gated off in the shipping runtime (STACKWEAVE_ALLOW_UNSAFE_MIGRATION); these
-# are the SPEC a candidate abandon/adopt handshake must satisfy before it is trusted.
+# Migration is always on now and the src/patches CPython patches supply the
+# handshake; these remain the SPEC that handshake must satisfy.
 genmc_model() {                 # name  correct-grep  "BUG1 BUG2 ..."  blurb
     local f="$1" posgrep="$2" bugs="$3" blurb="$4"
     printf '  [genmc] %-30s ' "$f"

@@ -30,14 +30,12 @@ Each fiber dict has:
     owner       int        owning OS-thread scheduler (group fibers by it)
 
 Notes on the Python stack (``stack`` / ``stacks=True``):
-  * Under the single-thread scheduler -- which is what ``stackweave.aio`` uses --
-    the full stack of any parked fiber is reconstructed.  asyncio
+  * The full stack of any parked fiber is reconstructed, under both the
+    single-thread scheduler (which is what ``stackweave.aio`` uses) and M:N
+    (each fiber owns a thread-state that is claimed for the walk).  asyncio
     Tasks additionally expose their own stack via ``Task.get_stack()``;
     this fills in the raw fibers (channel ops, the netpoll pump,
     accept loops) that ``asyncio.all_tasks()`` never sees.
-  * Under the default M:N scheduler a parked fiber can be resumed by
-    its hub at any instant, so its stack is withheld (there is no safe way
-    to freeze it) -- the structural fields above still tell the story.
   * The currently-running fiber has no *saved* stack; use the normal
     ``traceback`` / ``sys._getframe`` for your own frames.
 """
@@ -101,9 +99,8 @@ def set_deadlock_mode(mode):
         "warn"   print the fiber dump (default; non-fatal)
         "raise"  raise RuntimeError out of run()
 
-    Also settable via env STACKWEAVE_DEADLOCK=off|warn|raise.  aio's clean loop
-    shutdown is excluded, so this won't fire on a normal aio teardown with
-    pending background tasks."""
+    aio's clean loop shutdown is excluded, so this won't fire on a normal aio
+    teardown with pending background tasks."""
     if isinstance(mode, str):
         mode = DEADLOCK_MODES[mode]
     _core.set_deadlock_mode(int(mode))
@@ -216,8 +213,8 @@ def install_crash_handler(level=None, file=None):
     native backtrace and the Python traceback, and finally chains to the default
     handler so a core dump / correct exit code still follow.
 
-    `level` selects behaviour (comma/space separated; default from the
-    STACKWEAVE_CRASH env var, else just the fiber dump):
+    `level` selects behaviour (comma/space separated; default: just the fiber
+    dump):
 
         on / fibers  dump the fiber registry (the default)
         all              fibers + native backtrace + Python traceback
@@ -228,7 +225,7 @@ def install_crash_handler(level=None, file=None):
         gdb              fork+exec `gdb -batch -ex 'thread apply all bt'` on self
         off              uninstall
 
-    `file` (or STACKWEAVE_CRASH_FILE) also appends the report to that path.
+    `file` also appends the report to that path.
 
     For full per-thread coverage call this BEFORE starting the runtime, so the
     scheduler hubs are armed as they spawn.  Returns the installed flag bitmask
@@ -244,6 +241,27 @@ def uninstall_crash_handler():
 def crash_handler_installed():
     """True if install_crash_handler() is currently active."""
     return _core.crash_handler_installed()
+
+
+def start_watchdog(secs):
+    """Start the self-hang watchdog.
+
+    A detached native thread that writes a hang report -- the same build +
+    runtime snapshot and flight recorder as a crash dump -- WITHOUT aborting,
+    when no fiber has completed for `secs` seconds while work is still
+    outstanding (a deadlock, a lost wake, or a hub frozen off the scheduler).
+    It re-arms once progress resumes, so a persistent wedge reports once per
+    episode.
+
+    The report reuses the crash reporter's settings: the fiber dump and the copy
+    to its report file appear only once install_crash_handler() has set a level
+    and `file`, so call that first.  Without it the report still goes to stderr.
+
+    The progress signal is fiber completion, so it suits a continuously-active
+    service; a server whose fibers are long-lived by design can look stalled
+    while healthy -- use a generous `secs` there.  Idempotent (a second call
+    keeps the first `secs`).  ValueError if secs <= 0.  POSIX only."""
+    _core.start_watchdog(secs)
 
 
 def enable_stack_advice(on=True):
@@ -285,9 +303,9 @@ def enable_stack_autosize(on=True, prescan=False):
     Enabling autosize implies `enable_stack_advice()` (so `stack_advice()` keeps
     reporting) and turns on park-time idle-page reclaim. An explicit
     `stackweave.fiber(fn, stack_size=...)` always overrides the auto-sizer. Off by
-    default; also enable via `STACKWEAVE_STACK_AUTOSIZE=1` (start size via
-    `STACKWEAVE_STACK_AUTOSIZE_START`, default 256 KiB). Best enabled before the
-    runtime starts so kinds are sized from their first spawn.
+    default; the start size comes from `STACKWEAVE_STACK_AUTOSIZE_START` (default
+    256 KiB). Best enabled before the runtime starts so kinds are sized from
+    their first spawn.
 
     `prescan=True` additionally runs the cold-start optimizer: before an unseen
     kind has been measured, its bytecode is loosely scanned for symbols whose C
@@ -423,10 +441,6 @@ def hubs():
         dwell_ms      -- how long the current resume has run (None if idle); a
                          large value with state 'detached' is a wedged hub
         pending       -- fibers owned + queued on this hub
-        preempt_requested -- sysmon has asked this hub to yield (a CPU wedge)
-        instrumented  -- whether sysmon resume-tracking is live (it is by
-                         default on free-threaded 3.13t; running_g / dwell_ms /
-                         blocked_at need it)
         blocked_at    -- best-effort Python call site of a DETACHED-wedged hub's
                          blocking call, e.g. 'cursor.execute (db.py:88)', or None
         stack_cmd     -- a ready-to-run command that dumps the full C+Python
@@ -449,8 +463,6 @@ WEDGE_MS = 50.0
 
 def _hub_label(h):
     """A one-word health label for a hub row."""
-    if not h["instrumented"]:
-        return h["state"]
     if h["running_g"] is None:
         return "idle"
     if (h["dwell_ms"] or 0.0) >= WEDGE_MS:

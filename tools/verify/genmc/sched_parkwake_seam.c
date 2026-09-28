@@ -1,7 +1,7 @@
 /*
  * sched_parkwake_seam.c -- GenMC oracle for the SEAM between runloom's TWO
- * park/wake protocols, exercised only in the migratable global-runq modes
- * (RUNLOOM_PER_G_TSTATE / RUNLOOM_STEAL_WOKEN).  In REAL C (pthreads + C11
+ * park/wake protocols, exercised by every M:N fiber now that the global-runq
+ * migration path is always on (it was once opt-in).  In REAL C (pthreads + C11
  * atomics) under GenMC's RC11 weak-memory model.
  *
  * WHY A SEAM.  A migratable fiber commits its park through BOTH protocols:
@@ -17,7 +17,8 @@
  * release) or PARKED->QUEUED (enqueue now).  Each protocol is individually
  * verified; their COMPOSITION on one fiber -- a park that runs the Dekker
  * commit, then the wake_state commit, racing a wake_g -- was not.  This harness
- * model-checks that composition before STEAL_WOKEN is promoted toward default.
+ * model-checks that composition (written as the gate for promoting the
+ * migratable wake path to default, which has since happened).
  *
  * FAITHFUL SLICE (not byte-shared), same discipline as sched_parkwake.c: the
  * exact atomic sequence + memory orders of the race-critical core, each step
@@ -105,9 +106,9 @@ static void *waker_state(void *arg)
 }
 
 /* ---- idle-stack sweeper: a THIRD concurrent claimer of a PARKED g.
- * runloom_mn_sweep_try_claim (mn_sched_mn_api.c.inc:435-440) CASes PARKED->
- * SWEEPING (exclusive, like QUEUED->RUNNING for a resumer); runloom_mn_sweep_end
- * (:454-464) then CASes SWEEPING->PARKED if no wake landed, or -- if wake_g
+ * runloom_mn_sweep_try_claim (mn_sched_mn_api.c.inc:337-346) CASes PARKED->
+ * SWEEPING (exclusive, like QUEUED->RUNNING for a resumer);
+ * runloom_mn_sweep_claim_release (:354-369) then CASes SWEEPING->PARKED if no wake landed, or -- if wake_g
  * flipped it to SWEEPING_WOKEN meanwhile -- stores QUEUED and re-enqueues the
  * deferred wake exactly once.  A wake that lands during the sweep MUST NOT be
  * dropped (that is a lost wake); -DBUG_SWEEP_DROP_WOKEN models exactly that. */

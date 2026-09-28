@@ -32,10 +32,9 @@ from .. import runtime as _runtime
 #
 # This bridge DOES run TLS handshakes / OpenSSL key material on these stacks, so
 # a deployment that handles secrets should opt in -- one call, before run():
-#     stackweave.optimize("secure")          # or export STACKWEAVE_STACK_SCRUB=1
-# optimize("secure") applies it live (see stackweave/_optimize.py); the env var is
-# read by the C runtime at import (module_init.c.inc).  No-op on a stackweave_c too
-# old to expose the API.  See tools/security/FINDINGS.md S1 + coro.c
+#     stackweave.optimize("secure")          # or stackweave_c.set_stack_scrub(True)
+# optimize("secure") applies it live (see stackweave/_optimize.py).  No-op on a
+# stackweave_c too old to expose the API.  See tools/security/FINDINGS.md S1 + coro.c
 # runloom_stack_scrub.
 
 
@@ -111,8 +110,7 @@ def _fiber_io(fn):
 # concurrent, not on the fiber's call stack).  Only task-driver
 # fibers are wrapped; raw stackweave_c.fiber() fibers (netpoll pump,
 # keepalive, timers) are untouched, so the per-fiber cost stays off the
-# scale-out path.  Disable with STACKWEAVE_AIO_MODULE_ROOT=0.
-_PG_MODULE_ROOT_ON = _os.environ.get("STACKWEAVE_AIO_MODULE_ROOT", "1") != "0"
+# scale-out path.
 _PG_ROOT_CODE = compile("__runloom_body__()", "<runloom-task-root>", "exec")
 
 

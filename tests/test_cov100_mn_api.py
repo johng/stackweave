@@ -1,15 +1,16 @@
 """Coverage-driven adversarial tests for src/runloom_c/mn_sched_mn_api.c.inc.
 
-The uncovered lines in this fragment fall into two reachability classes, and
-this suite is split accordingly:
+The io_uring lines in this fragment are reached only under an io_uring env
+mode, which this suite drives:
 
-  REACHABLE (driven here, via the io_uring-as-loop backend):
     * L39-42  runloom_mn_current_iouring_ring(): returns the running hub's
               per-hub io_uring ring.  Only non-NULL -- and only *called* -- under
               the io_uring-as-loop backend (STACKWEAVE_IOURING_LOOP=1), where each
               hub thread creates its own ring (mn_sched_hub_main.c.inc:204) and
               the C echo handler / TCPConn iouring recv resolve the ring through
               this accessor (module_io.c.inc:158, io_uring_l_msclose.c.inc:63).
+              The loop backend is BROKEN under cross-hub migration and ignored in
+              every M:N run, so its test is a strict xfail (adv_util.py).
     * L257-273 runloom_mn_hub_request_iouring_cancel(): cross-thread cancel of a
               fiber parked on a *hub-ring* (SINGLE_ISSUER) io_uring op.  The only
               ops with op->ring != NULL are hub-ring recv/send; a Python-reachable
@@ -19,18 +20,11 @@ this suite is split accordingly:
               sees op->ring != NULL and routes the cancel through this mailbox
               (io_uring_l_ring.c.inc:407).
 
-  GATED-OFF (classified unreachable -- see the module-level UNREACHABLE note and
-  the structured report):
-    * L214-250 the runloom_use_global_runq() per-g wake-state machine in
-              runloom_mn_wake_g(), and
-    * L285-310 runloom_mn_sweep_try_claim / runloom_mn_sweep_claim_release.
-    All require runloom_use_global_runq() == true, i.e. per-g-tstate mode, which
-    runloom_resolve_migratable_mode() (mn_sched_runq.c.inc) enables ONLY when
-    STACKWEAVE_ALLOW_UNSAFE_MIGRATION=1 -- a KNOWN-CRASH migration mode at H>=2 and a
-    HARD-forbidden env for this task.  There is no Python setter and no
-    hub-count carve-out, so they cannot be reached safely.
+The global-runq wake-state machine and the idle-stack-sweep claim in this
+fragment were once gated off behind an opt-in migration mode; migration is
+always on now, so every M:N wake reaches them and the default suite covers them.
 
-Both reachable scenarios depend on env (STACKWEAVE_IOURING_LOOP / _TCPCONN_IOURING)
+Both scenarios depend on env (STACKWEAVE_IOURING_LOOP / _TCPCONN_IOURING)
 that the C runtime resolves once at hub-main init, so each runs in a SUBPROCESS
 with that env set; for gcov to count the lines the subprocess must EXIT CLEANLY,
 so every scenario asserts a returncode of 0 AND a stdout marker carrying the
@@ -43,7 +37,12 @@ import sys
 
 import pytest
 
-from adv_util import needs_free_threading
+from adv_util import (IOURING_LOOP_BROKEN, assert_iouring_loop_ran,
+                      needs_free_threading)
+
+# The loop backend (and its migration guard) is compiled only on Linux.
+iouring_loop_broken = pytest.mark.xfail(sys.platform.startswith("linux"),
+                                        strict=True, reason=IOURING_LOOP_BROKEN)
 
 FT = needs_free_threading()
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -115,6 +114,7 @@ sys.stdout.write("CECHO_OK %d\n" % (1 if ok else 0))
 '''
 
 
+@iouring_loop_broken
 def test_iouring_loop_cecho_drives_current_ring_accessor():
     # Drives L39-42 (and the C echo recv/send through the hub ring).
     p = _run(_SERVE_CECHO, LOOP_ENV)
@@ -124,6 +124,7 @@ def test_iouring_loop_cecho_drives_current_ring_accessor():
     assert "CECHO_OK 1" in p.stdout, (
         "io_uring-loop C-echo did not round-trip every reply through the hub "
         "ring\nstdout=%s\nstderr=%s" % (p.stdout, p.stderr[-1200:]))
+    assert_iouring_loop_ran(p)
 
 
 # ===========================================================================

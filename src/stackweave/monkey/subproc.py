@@ -52,12 +52,9 @@ def _pidfd_open(pid):
 # readable state must PERSIST so a reused exit fd keeps reporting "exited" across
 # the caller's poll loop, exactly like a pidfd.)
 # ============================================================
-# STACKWEAVE_PROC_KQUEUE=0 forces the legacy WNOHANG poll-loop fallback (escape
-# hatch + A/B baseline for the event-driven path).
 _HAVE_KQ_PROC = (not _HAVE_PIDFD and hasattr(_select_mod, "kqueue") and
                  hasattr(_select_mod, "KQ_FILTER_PROC") and
-                 hasattr(_select_mod, "KQ_NOTE_EXIT") and
-                 os.environ.get("STACKWEAVE_PROC_KQUEUE", "1") != "0")
+                 hasattr(_select_mod, "KQ_NOTE_EXIT"))
 
 
 def _proc_exit_fd(pid):
@@ -124,12 +121,13 @@ def _patched_popen_init(self, *args, **kwargs):
     __init__ that raises propagates the exception back to the fiber.
 
     This is a throughput (and bounded-latency) fix, not a deadlock fix: the
-    default FD-mode offload parker is a level-triggered self-pipe and is
-    wake-safe, so the fstat offloads never lost a wakeup in the default config.
-    Only the opt-in inmem parker (STACKWEAVE_BLOCKPOOL_INMEM=1) routes the wake
-    through the foreign-worker pump-poke whose lost poke is bounded to <=2ms by
-    the drain backstop (runloom_sched_drain.c.inc, commit f214341); collapsing
-    the offloads removes that residual latency exposure too.
+    FD-mode offload parker is a level-triggered self-pipe and is wake-safe, so
+    the fstat offloads never lost a wakeup through it.  Only the inmem parker
+    (picked adaptively once a worker shard's backlog passes
+    STACKWEAVE_BLOCKPOOL_QDEPTH) routes the wake through the foreign-worker
+    pump-poke whose lost poke is bounded to <=2ms by the drain backstop
+    (runloom_sched_drain.c.inc, commit f214341); collapsing the offloads
+    removes that residual latency exposure too.
     """
     if _in_fiber():
         return _blocking_call(_orig_popen_init, self, *args, **kwargs)

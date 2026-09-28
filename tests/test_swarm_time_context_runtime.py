@@ -1685,7 +1685,6 @@ print("MODES_OK" if ok else ("MODES_BAD %r" % box))
 """
     proc = _subproc(script, timeout=40, extra_env={
         "STACKWEAVE_SYSMON": "1", "STACKWEAVE_SYSMON_QUIET": "1", "STACKWEAVE_SYSMON_MS": "8",
-        "STACKWEAVE_PREEMPT": "1", "STACKWEAVE_PREEMPT_MS": "8",
         "STACKWEAVE_HANDOFF": "1", "STACKWEAVE_HANDOFF_POOL": "2",
     })
     _assert_no_signal(proc, "env-modes")

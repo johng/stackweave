@@ -39,10 +39,12 @@ stackweave.monkey.patch()
 import stackweave_c
 
 # Arm the field crash + self-hang telemetry (R5) so a canary wedge produces an
-# artifact instead of a silent stall.
+# artifact instead of a silent stall.  The watchdog reuses the crash handler's
+# level + file, so it is started after it.
 stackweave_c.install_crash_handler(
     "goroutines,backtrace",
     os.environ.get("CANARY_CRASH_FILE", "canary_crash.txt"))
+stackweave_c.start_watchdog(120)
 
 _START = _time.monotonic()
 _STOP = [False]

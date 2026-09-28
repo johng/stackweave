@@ -408,7 +408,7 @@ int runloom_netpoll_wake_pump_arm(void)
     struct epoll_event ev;
     int fd;
     if (runloom_netpoll_init() != 0) return -1;
-    if (runloom_perhub_epoll()) {
+    {
         /* Per-hub: this hub's wake eventfd is created with its epoll in
          * runloom_pool_backend_create.  Ensure THIS hub's pool is up and report
          * armed iff its eventfd came up -- that is the targeted wake primitive.
@@ -474,7 +474,7 @@ int runloom_netpoll_wake_pump_arm(void)
 void runloom_netpoll_wake_pump(void *hub_opaque)
 {
 #if defined(RUNLOOM_HAVE_EPOLL)
-    if (runloom_perhub_epoll()) {
+    {
         /* Per-hub: poke ONLY the target hub's wake eventfd so its (and only its)
          * idle epoll_wait breaks -- no cross-hub thundering herd.  NULL routes to
          * the default pool.  Guard on lock_inited==2 (ACQUIRE, pairs with
@@ -484,14 +484,17 @@ void runloom_netpoll_wake_pump(void *hub_opaque)
         runloom_parker_pool_t *pool = runloom_parker_pool_for_hub(hub_opaque);
         if (__atomic_load_n(&pool->lock_inited, __ATOMIC_ACQUIRE) == 2 &&
             pool->wake_efd >= 0) {
-            /* Dedup: only the 0->1 transition writes; the pump
-             * clears wake_pending when it drains the eventfd.  SEQ_CST so the
-             * caller's sub_head push (happens-before this) is globally ordered
-             * before the skip decision -- the pump's clear+re-check on the other
-             * side gives the Dekker no-lost-kick guarantee (and the bounded pump
-             * timeout is the backstop regardless). */
-            if (!runloom_wake_dedup_enabled() ||
-                __atomic_exchange_n(&pool->wake_pending, 1, __ATOMIC_SEQ_CST) == 0) {
+            /* Dedup: only the 0->1 transition writes; the pump clears
+             * wake_pending when it drains the eventfd, so a burst of cross-hub
+             * wakes to one hub collapses to a single write (measured a clean win
+             * on the saturated echo bench: +~3-5% rps, lower p50/p99, ~99.98%
+             * fewer wake writes).  SEQ_CST so the caller's sub_head push
+             * (happens-before this) is globally ordered before the skip decision
+             * -- the pump's clear+re-check on the other side gives the Dekker
+             * no-lost-kick guarantee (proven by tools/verify/spin/
+             * netpoll_pump_kick.pml), and the bounded pump timeout is the
+             * backstop regardless. */
+            if (__atomic_exchange_n(&pool->wake_pending, 1, __ATOMIC_SEQ_CST) == 0) {
                 uint64_t one = 1;
                 ssize_t w = write(pool->wake_efd, &one, sizeof one);
                 (void)w;

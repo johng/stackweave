@@ -1,5 +1,11 @@
 # tools/mn_controlled — controlled M:N scheduler (seeded deterministic replay)
 
+> **Disabled pending a TODO.** Everything here drives the seeded M:N
+> scheduler, and `mn_init` refuses `STACKWEAVE_MN_SEED` / `STACKWEAVE_SIM_MN`
+> until it is re-implemented for migration: woken fibers now run from the
+> global run-queue, which the seeded baton does not order. The controller is
+> compiled out behind `RUNLOOM_MN_CTRL=0` until then.
+
 The high-value follow-up to single-hub PCT: control the scheduling of the
 **real M:N hubs** (work-stealing parallel OS threads) so the parallel races
 where stackweave's hard bugs live become reproducible and seed-explorable.

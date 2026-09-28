@@ -209,58 +209,36 @@ static RUNLOOM_THREAD_RET runloom_sysmon_main(void *arg)
     RUNLOOM_THREAD_RETURN(NULL);
 }
 
-/* Interpret an OPT-OUT env flag for the stall-recovery features.  Explicit
- * "0" => off; explicit anything-else => on; UNSET => on.  (Subject to the
- * per-g gates below.) */
-static int runloom_flag_default_on(const char *v)
-{
-    if (v != NULL) return (v[0] != '0') ? 1 : 0;
-    return 1;
-}
-
-/* Read RUNLOOM_SYSMON / RUNLOOM_SYSMON_MS once and set the enable flag + threshold.
- * Must run in mn_init BEFORE the hub threads start so the per-resume
- * instrumentation is live from the first resume.  RUNLOOM_PREEMPT defaults ON
- * (opt out with =0); it forces the sysmon thread on but NOT
- * its stderr logging -- WEDGED/RECOVERED lines print only when the user opts in
- * via RUNLOOM_SYSMON=1 (or RUNLOOM_SYSMON_QUIET=0). */
+/* Configure the sysmon watchdog once, in mn_init BEFORE the hub threads start
+ * so the per-resume instrumentation is live from the first resume.  The
+ * watchdog always runs: the deadlock census reads its running-fiber signal
+ * (resume_start_ns) and would report "wakeable" unconditionally without it,
+ * and it is what detects an ATTACHED (CPU-bound) wedge and arms preemption --
+ * under migration by reading the RUNNING fiber's tstate through
+ * h->resume_tstate (runloom_sysmon_hub_attach_state).  Its WEDGED/RECOVERED
+ * stderr lines print only when asked for with STACKWEAVE_SYSMON=1 (or
+ * STACKWEAVE_SYSMON_QUIET=0); STACKWEAVE_SYSMON_MS sets the wedge budget and
+ * STACKWEAVE_PREEMPT_MS the CPU time-slice. */
 static void runloom_sysmon_config(void)
 {
     const char *e = getenv("STACKWEAVE_SYSMON");
     const char *q = getenv("STACKWEAVE_SYSMON_QUIET");
     const char *ms;
-    /* Explicit opt-in signal: the user set RUNLOOM_SYSMON to a truthy value to
-     * WATCH sysmon.  Preemption (below) may also force the sysmon thread on, but
-     * that alone must not produce the WEDGED/RECOVERED chatter on stderr. */
     int sysmon_explicit = (e != NULL && e[0] != '0');
     if (!runloom_sysmon_hazard_lock_ready) {      /* mn_init, single-threaded */
         runloom_mutex_init(&runloom_sysmon_hazard_lock);
         runloom_sysmon_hazard_lock_ready = 1;
     }
-    runloom_sysmon_enabled = sysmon_explicit ? 1 : 0;
-    /* Quiet by default: log only when sysmon was explicitly requested.  When it
-     * runs solely to service preemption (the common default), stay
-     * silent.  RUNLOOM_SYSMON_QUIET still forces the choice either way
-     * (=1 quiet, =0 verbose). */
+    /* Quiet unless the user asked to watch; STACKWEAVE_SYSMON_QUIET forces the
+     * choice either way (=1 quiet, =0 verbose). */
     if (q != NULL) runloom_sysmon_quiet = (q[0] != '0') ? 1 : 0;
     else           runloom_sysmon_quiet = sysmon_explicit ? 0 : 1;
-    /* RUNLOOM_PREEMPT: ATTACHED/CPU preemption (uses the free-threaded attach
-     * states to classify the wedge).  It forces the sysmon instrumentation +
-     * watchdog on (that is what detects the wedge and arms preempt_requested).
-     * The eval-frame wrapper is installed in mn_init. */
-    runloom_preempt_enabled = runloom_flag_default_on(getenv("STACKWEAVE_PREEMPT"));  /* default ON */
-    /* Under per-g-tstate (migration) the wedge test reads the RUNNING fiber's
-     * tstate through h->resume_tstate (runloom_sysmon_hub_attach_state), so a
-     * CPU-bound fiber is ATTACHED-wedged exactly as on the per-hub scheduler
-     * and preemption stays on. */
-    if (runloom_preempt_enabled) runloom_sysmon_enabled = 1;
-    if (!runloom_sysmon_enabled) return;
     ms = getenv("STACKWEAVE_SYSMON_MS");
     if (ms != NULL) {
         long long v = atoll(ms);
         if (v > 0) runloom_sysmon_wedge_ns = v * 1000000LL;
     }
-    /* ATTACHED-preempt threshold: defaults to the wedge budget; RUNLOOM_PREEMPT_MS
+    /* ATTACHED-preempt threshold: defaults to the wedge budget; STACKWEAVE_PREEMPT_MS
      * tunes the CPU time-slice independently of the detection budget. */
     runloom_sysmon_preempt_ns = runloom_sysmon_wedge_ns;
     {
@@ -278,11 +256,11 @@ static void runloom_sysmon_config(void)
     runloom_sysmon_tick_base_ns = runloom_sysmon_tick_ns;
 }
 
-/* Spawn the watchdog thread (after hubs exist).  Enabled-gated; a spawn
- * failure is non-fatal -- the scheduler runs fine without the watchdog. */
+/* Spawn the watchdog thread (after hubs exist).  A spawn failure is non-fatal:
+ * the scheduler runs without wedge logging or preemption, and the deadlock
+ * census still sees the per-resume instrumentation. */
 static void runloom_sysmon_spawn(void)
 {
-    if (!runloom_sysmon_enabled) return;
     runloom_sysmon_stop = 0;
     if (runloom_thread_create(&runloom_sysmon_thread, runloom_sysmon_main, NULL) == 0) {
         runloom_sysmon_running = 1;

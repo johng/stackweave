@@ -1,4 +1,4 @@
-"""@stackweave.hot + auto per-core handler scaling.
+"""@stackweave.hot per-core handler scaling.
 
 The contention these fix is SHARED CLOSURE CELLS: one closure (e.g.
 ``handler = make_app(config)``) run by many fibers across many cores makes the
@@ -7,7 +7,6 @@ the same values -- distinct cells, SHARED code (the code was never the problem).
 A module-level def captures nothing and already scales, so @hot is a no-op there.
 Runnable standalone or under pytest.
 """
-import os
 import threading
 
 import stackweave
@@ -59,21 +58,6 @@ def test_hot_noop_on_rebound_capture():
     assert stackweave.hot(acc) is acc            # left shared, not split
 
 
-def test_hot_is_noop_when_disabled():
-    os.environ["STACKWEAVE_HOT_HANDLERS"] = "0"
-    try:
-        cfg = {"k": 1}
-
-        @stackweave.hot
-        def work():
-            return cfg["k"]
-
-        work(); work()
-        assert work._runloom_copies == {}     # disabled -> never made a copy
-    finally:
-        os.environ.pop("STACKWEAVE_HOT_HANDLERS", None)
-
-
 def test_hot_noop_on_non_function():
     class C:
         def __call__(self):
@@ -95,58 +79,6 @@ def test_hot_under_mn_scheduler():
 
     stackweave.run(4, root)
     assert all(out[i] == ((i * 3) & 0xff) for i in range(64)), bytes(out)
-
-
-def test_auto_promotes_busy_closure():
-    from stackweave import _hot
-    a = _hot._AutoHot()
-    a.after, a.budget = 4, 2
-    cfg = object()
-
-    def handler():
-        return cfg                            # captures cfg -> a closure
-
-    for _ in range(3):
-        assert a.resolve(handler) is handler  # below threshold: shared
-    promoted = a.resolve(handler)             # at threshold: promoted
-    assert promoted is not handler
-    assert getattr(promoted, "__runloom_hot__", False) is True
-    assert a.resolve(handler) is promoted     # sticky thereafter
-    assert a.stats()["promoted"] == 1
-
-
-def test_auto_skips_module_level_def():
-    from stackweave import _hot
-    a = _hot._AutoHot()
-    a.after = 1
-
-    def plain():                              # no capture -> already scales
-        return 1
-
-    for _ in range(5):
-        assert a.resolve(plain) is plain      # never promoted, never even counted
-    assert a.stats()["promoted"] == 0
-
-
-def test_auto_budget_caps_and_warns():
-    import warnings
-    from stackweave import _hot
-    a = _hot._AutoHot()
-    a.after, a.budget = 1, 1
-    c1, c2 = object(), object()
-
-    def h1():
-        return c1
-
-    def h2():
-        return c2
-
-    assert a.resolve(h1).__runloom_hot__      # first fits the budget
-    with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
-        assert a.resolve(h2) is h2            # over budget: stays shared
-    assert any("budget" in str(x.message) for x in w), [str(x.message) for x in w]
-    assert a.stats()["left_shared_over_budget"] == 1
 
 
 if __name__ == "__main__":

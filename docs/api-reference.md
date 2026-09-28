@@ -88,8 +88,7 @@ read half of the function-bound grow-down auto-sizer.
 (On `stackweave`, not `stackweave_c`.) Toggle the function-bound stack **grow-down**
 auto-sizer, which learns each `stackweave.fiber()`-spawned function's real stack need
 and reserves only that.  **On by default**, active under M:N (`run(n>1)`) only;
-single-thread `run(1)` keeps the fixed default.  Also disabled by
-`STACKWEAVE_GROW_DOWN=0` in the environment.  A per-call `stackweave.fiber(fn,
+single-thread `run(1)` keeps the fixed default.  A per-call `stackweave.fiber(fn,
 stack_size=N)` pin always wins, and grow-down defers to the opt-in
 `enable_stack_autosize()` when that is explicitly enabled.  See
 [docs/stack-sizing.md](stack-sizing.md#automatic-grow-down-on-by-default-mn).
@@ -153,7 +152,7 @@ True if the kernel supports io_uring (Linux 5.1+).
 
 See [Parallelism](parallelism.md).
 
-- `mn_init(n=0, offload_hubs=-1)` -- start `n` hub threads (defaults to
+- `mn_init(n=0, offload_hubs=0)` -- start `n` hub threads (defaults to
   `cpu_count`), plus `offload_hubs` reserved for blocking work (below).
 - `mn_fiber(fn) → G` -- spawn on a round-robin hub.
 - `mn_run() → int` -- wait for all hubs to drain.
@@ -161,12 +160,9 @@ See [Parallelism](parallelism.md).
 
 #### Offload hubs
 
-`mn_init(n, offload_hubs=K)` -- or `STACKWEAVE_OFFLOAD_HUBS=K` -- reserves K
-**extra** hubs, added to `n` and never carved out of it, on which a blocking
-call may run as an ordinary fiber. The argument wins over the environment
-variable: how many blocking slots you need is a property of what your code
-does, not of how the process was launched, and a library cannot set env vars
-for its host. `-1` (the default) means "no opinion" and consults the env.
+`mn_init(n, offload_hubs=K)` reserves K **extra** hubs, added to `n` and never
+carved out of it, on which a blocking call may run as an ordinary fiber. The
+default is 0 (none).
 
 Offload hubs are excluded from general placement, from work-stealing in both
 directions, from `sysmon` preemption, and from the monopoly-yield scan -- so no
@@ -193,9 +189,8 @@ stackweave_c.offload_fiber(lambda: ch.send(some_blocking_call()))
 result, alive = ch.recv()      # recv() is (value, ok), not a bare value
 ```
 
-Nothing migrates between hubs in this scheme, so unlike
-`STACKWEAVE_PER_G_TSTATE` it needs no patched CPython
-(`stackweave.migration_available()` is irrelevant here).
+The offload fiber is born and dies on its offload hub, so this scheme does not
+rely on cross-hub migration.
 
 `stackweave.monkey.offload()` routes through offload hubs automatically when any
 are reserved, and falls back to the thread pool otherwise -- see
@@ -252,8 +247,8 @@ Number of live fibers.
 
 One dict per M:N hub — the per-**hub** view: `id`, `state` (`detached` /
 `attached` / `suspended`), `running_g` (goid being resumed, or `None`),
-`dwell_ms` (how long that resume has run), `pending`, `preempt_requested`,
-`instrumented`, and `blocked_at` (best-effort Python call site of a
+`dwell_ms` (how long that resume has run), `pending`, and `blocked_at`
+(best-effort Python call site of a
 DETACHED-wedged hub's blocking call).  Lock-free atomic reads; `[]` when the M:N
 scheduler isn't running.  The friendly wrapper `stackweave.inspect.hubs()` adds a
 `stack_cmd` (`py-spy dump --pid <PID>`) per row, and `stackweave.inspect.print_hubs()`
@@ -275,12 +270,12 @@ handler and when the interpreter is wedged.
 #### `set_introspect_timestamps(bool)`
 
 Track each fiber's park time so `fibers()`/dumps report `age`.  Off
-by default (one clock read per park); also via `STACKWEAVE_INTROSPECT_TIME=1`.
+by default (one clock read per park).
 
 #### `install_traceback_signal(signum=SIGQUIT) → int`
 
 Install a raw-C signal handler that dumps all fibers to stderr -- Go's
-`GOTRACEBACK` / `kill -QUIT`.  Also via `STACKWEAVE_TRACEBACK=1`.  POSIX only.
+`GOTRACEBACK` / `kill -QUIT`.  POSIX only.
 
 #### `reset_after_fork() → None`
 
@@ -294,7 +289,7 @@ guide](debugging.md#fork-safety).
 
 Deadlock detection: when the single-thread scheduler quiesces with
 fibers still blocked on channels/parks, mode 0=off, 1=warn (print the
-dump, default), 2=raise `RuntimeError`.  Also `STACKWEAVE_DEADLOCK=off|warn|raise`.
+dump, default), 2=raise `RuntimeError`.
 `count_deadlocked()` is the current chan/park-blocked count.
 
 #### `set_max_fibers(n)` / `get_max_fibers() → int` / `live_fibers() → int`
@@ -319,8 +314,17 @@ Install a fatal-signal handler (SIGSEGV/SIGBUS/...) that, on a crash, classifies
 the fault against the per-fiber guard pages -- a fiber stack overflow is
 named and distinguished from a wild pointer -- and dumps the live-fiber
 registry, then chains to the default handler.  `level`:
-`on`/`all`/`backtrace`/`pystack`/`wait`/`gdb`/`off` (default from `STACKWEAVE_CRASH`).
+`on`/`all`/`backtrace`/`pystack`/`wait`/`gdb`/`off` (default: the fiber dump).
 `file` also appends the report there.
+
+#### `inspect.start_watchdog(secs)`
+
+Start the self-hang watchdog: a detached native thread that writes a hang report
+(build + runtime snapshot, flight recorder; no abort) when no fiber has
+completed for `secs` seconds while work is outstanding.  The fiber dump and the
+report-file copy follow `install_crash_handler()`'s level and `file`, so call
+that first.  Idempotent; `ValueError` if `secs <= 0`.  POSIX only.  See
+[Reporting crashes](reporting-crashes.md#the-self-hang-watchdog-start_watchdogsecs).
 
 #### `inspect.enable_stack_advice(on=True)` / `stack_advice() → list[dict]` / `print_stack_advice(file=None)`
 
@@ -335,7 +339,7 @@ Adaptive auto-sizer: each fiber kind starts large and, once measured, its
 later fibers start at the learned size ("start large, learn down").
 In-memory only -- never persisted.  `prescan=True` also runs the cold-start
 optimizer (a deep-frame kind like `Decimal` starts big enough to survive its
-first run).  An explicit `stack_size=` always wins.  Also `STACKWEAVE_STACK_AUTOSIZE=1`.
+first run).  An explicit `stack_size=` always wins.
 
 ### Thread setup
 

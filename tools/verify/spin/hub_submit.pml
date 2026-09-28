@@ -1,9 +1,9 @@
 /*
- * hub_submit.pml -- Promela model of the DEFAULT M:N wake path on Linux
- * free-threaded 3.13t (per-hub-tstate; RUNLOOM_PER_G_TSTATE and
- * RUNLOOM_STEAL_WOKEN both OFF, so runloom_mn_wake_g routes through
- * runloom_mn_hub_submit, NOT the global-runq wake_state machine modelled in
- * wake_state.pml).
+ * hub_submit.pml -- Promela model of runloom_mn_hub_submit, the per-hub MPSC
+ * submission list.  It was the default M:N wake path while cross-hub migration
+ * was opt-in; with migration always on, runloom_mn_wake_g routes every M:N wake
+ * through the global-runq wake_state machine (wake_state.pml), and hub_submit
+ * carries spawn placement (runloom_mn_fiber_core) and wakes outside a run.
  *
  * Models src/runloom_c/mn_sched.c:
  *   runloom_mn_hub_submit  -- CAS g->in_sub_queue 0->1; only the winner links

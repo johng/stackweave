@@ -8,8 +8,8 @@ that the happy path never produces:
   1. The datastack-tail idle reclaim + its STACKWEAVE_DATASTACK_DEBUG decompose
      instrumentation (runloom_ds_resident_bytes, the debug counter block, the
      public _datastack_sweep_stats readout, and the C-only-g early return).
-     Driven by STACKWEAVE_STACK_PARK_SWEEP=1 + STACKWEAVE_DATASTACK_DEBUG=1 in an
-     M:N run() with Python fibers parked deep in CPython long enough for the
+     Driven by STACKWEAVE_STACK_PARK_SWEEP_MS=1 + STACKWEAVE_DATASTACK_DEBUG=1 in
+     an M:N run() with Python fibers parked deep in CPython long enough for the
      hub-idle dwell sweep to madvise their idle chunk tails.
 
   2. PCT -- the probabilistic concurrency-testing controlled scheduler
@@ -145,8 +145,7 @@ sys.stdout.write("DS cgot=%d pywoke=%d tail=%d resident=%d chunks=%d\n"
 @pytest.mark.skipif(not FT, reason="datastack dwell sweep is an M:N hub-idle path")
 def test_datastack_sweep_debug_decompose():
     p = _run(_DATASTACK, {
-        "STACKWEAVE_STACK_PARK_SWEEP": "1", "STACKWEAVE_STACK_PARK_SWEEP_MS": "1",
-        "STACKWEAVE_DATASTACK_SWEEP": "1", "STACKWEAVE_DATASTACK_DEBUG": "1",
+        "STACKWEAVE_STACK_PARK_SWEEP_MS": "1", "STACKWEAVE_DATASTACK_DEBUG": "1",
         "STACKWEAVE_SWEEP_MAX_CHURN": "0",   # never throttle the sweep
     })
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1600:])
@@ -173,7 +172,7 @@ def test_datastack_sweep_debug_decompose():
         assert int(fields["tail"]) >= int(fields["resident"]), line[0]
 
 
-# A second variant with the sweep ON but the DEBUG flag OFF: drives the
+# A second variant with the DEBUG flag OFF: drives the
 # _datastack_sweep_stats() #else-free path returning the (still-zero, since
 # debug never accumulated) counters AND the madvise main body WITHOUT the
 # debug block -- confirming the gate at L111 short-circuits cleanly.
@@ -215,8 +214,7 @@ sys.stdout.write("NODBG woke=%d tail=%d chunks=%d\n" % (sum(woke), tail, chunks)
 @pytest.mark.skipif(not FT, reason="datastack dwell sweep is an M:N hub-idle path")
 def test_datastack_sweep_no_debug_counters_zero():
     p = _run(_DATASTACK_NODEBUG, {
-        "STACKWEAVE_STACK_PARK_SWEEP": "1", "STACKWEAVE_STACK_PARK_SWEEP_MS": "1",
-        "STACKWEAVE_DATASTACK_SWEEP": "1",   # sweep on, DEBUG deliberately absent
+        "STACKWEAVE_STACK_PARK_SWEEP_MS": "1",   # DEBUG deliberately absent
         "STACKWEAVE_SWEEP_MAX_CHURN": "0",
     })
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1600:])

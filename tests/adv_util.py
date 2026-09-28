@@ -328,3 +328,24 @@ def pollable_pipe():
     """
     r, w = os.pipe()
     return r, w, None
+
+
+# ---------------------------------------------------------------------------
+# The io_uring loop backend (STACKWEAVE_IOURING_LOOP) is BROKEN under cross-hub
+# migration: it pins a fiber to the SINGLE_ISSUER ring of the hub it submitted
+# on, and a migrated fiber lands on another hub's ring.  Migration is always on,
+# so the runtime ignores the flag in every M:N run and prints IOURING_LOOP_IGNORED
+# once.  A test of the backend itself runs its own checks, then
+# assert_iouring_loop_ran(p), and carries a strict xfail with this reason; a
+# migration-safe loop backend drops the note and turns those tests into XPASSes.
+IOURING_LOOP_IGNORED = "STACKWEAVE_IOURING_LOOP ignored"
+IOURING_LOOP_BROKEN = (
+    "io_uring loop backend is broken under cross-hub migration (hub-ring "
+    "affinity does not survive it), so STACKWEAVE_IOURING_LOOP is ignored")
+
+
+def assert_iouring_loop_ran(p):
+    """Fail if the child process `p` ran with the loop backend ignored."""
+    assert IOURING_LOOP_IGNORED not in p.stderr, (
+        "STACKWEAVE_IOURING_LOOP was ignored: the loop backend did not run\n"
+        + p.stderr[-800:])

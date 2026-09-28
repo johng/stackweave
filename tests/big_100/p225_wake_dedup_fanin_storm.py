@@ -1,12 +1,12 @@
 """big_100 / 225 -- cross-hub wake-eventfd coalescing fan-in storm.
 
-WAKE_DEDUP (STACKWEAVE_WAKE_DEDUP, default ON) coalesces the redundant per-hub
-wake-eventfd writes that a burst of concurrent cross-hub wakes would otherwise
-generate: a waker writes the kick eventfd only on the 0->1 transition of the
-hub's wake_pending flag, and the pump clears-then-rechecks it (a Dekker-shaped
-clear-then-recheck) when it drains the eventfd.  Spin-proven no-lost-kick
-(verify/spin/netpoll_pump_kick.pml), but a regression there would strand an idle
-hub: a coalesced-but-DROPPED kick leaves the parked consumer asleep forever.
+WAKE_DEDUP coalesces the redundant per-hub wake-eventfd writes that a burst of
+concurrent cross-hub wakes would otherwise generate: a waker writes the kick
+eventfd only on the 0->1 transition of the hub's wake_pending flag, and the pump
+clears-then-rechecks it (a Dekker-shaped clear-then-recheck) when it drains the
+eventfd.  Spin-proven no-lost-kick (verify/spin/netpoll_pump_kick.pml), but a
+regression there would strand an idle hub: a coalesced-but-DROPPED kick leaves
+the parked consumer asleep forever.
 
 This program intentionally manufactures that race.  One consumer goroutine
 blocks on an UNBUFFERED channel recv (capacity 0 -> a full park each round).
@@ -18,11 +18,8 @@ sequence (no missed round, no duplicated resume), bump the round, and re-park.
 A coalesced-but-dropped kick = the consumer never wakes = no forward progress =
 watchdog HANG (exit 3).  A spurious double-resume = the consumer observes a
 token with no matching pending send = a sequence/accounting break (exit 1).
-
-The two modes (STACKWEAVE_WAKE_DEDUP=1 coalescing vs =0 every-write) must BOTH
-pass; this module re-execs itself once per mode (a tiny sub-mode driver) when
-the env var is unset, so a single invocation asserts =0 vs =1 parity.  The race
-window is widened with STACKWEAVE_WAKE_SKEW / STACKWEAVE_DELAY if those are set.
+The race window is widened with STACKWEAVE_WAKE_SKEW / STACKWEAVE_DELAY if those
+are set.
 
 The feature is netpoll-internal and present on every backend (epoll eventfd /
 kqueue+select self-pipe), so there is no hard skip -- it runs everywhere; the
@@ -32,44 +29,10 @@ across hubs is meaningless with one hub).
 Stresses: Stresses: cross-hub pump-wake eventfd coalescing (WAKE_DEDUP) Dekker
 clear-then-recheck under a fan-in storm -- N wakers on hubs A.. simultaneously
 kick ONE parker idle on hub B; assert no lost wake (coalesced != dropped) and no
-spurious double-resume; =0 vs =1 parity.
+spurious double-resume.
 """
-import os
-import sys
-
-# STACKWEAVE_WAKE_DEDUP is read ONCE per process (getenv cached at first park), so
-# the =0/=1 parity cannot be exercised in one scheduler.  When the operator has
-# NOT pinned a mode, re-exec ourselves once per mode as child processes and
-# require BOTH to pass -- that is the "=0 vs =1 parity" assertion.  Each child
-# sets the env BEFORE importing stackweave (mandatory: mn_init/getenv caches it).
-# A sentinel guards against a re-exec loop.  This must happen before any stackweave
-# import below.
-_SUBMODE = os.environ.get("STACKWEAVE_WAKE_DEDUP")
-if _SUBMODE is None and os.environ.get("BIG100_DEDUP_PARITY_CHILD") != "1":
-    import subprocess
-    rc = 0
-    for mode in ("1", "0"):
-        env = dict(os.environ)
-        env["STACKWEAVE_WAKE_DEDUP"] = mode
-        env["BIG100_DEDUP_PARITY_CHILD"] = "1"
-        sys.stderr.write(
-            "[p225_wake_dedup_fanin_storm] === sub-mode "
-            "STACKWEAVE_WAKE_DEDUP={0} ===\n".format(mode))
-        sys.stderr.flush()
-        cp = subprocess.run([sys.executable] + sys.argv, env=env)
-        if cp.returncode != 0:
-            sys.stderr.write(
-                "[p225_wake_dedup_fanin_storm] sub-mode DEDUP={0} FAILED "
-                "(exit {1}) -> =0/=1 parity broken\n".format(
-                    mode, cp.returncode))
-            rc = cp.returncode
-    sys.exit(rc)
-
-# A single mode is now pinned in the env; default to ON if somehow still unset.
-os.environ.setdefault("STACKWEAVE_WAKE_DEDUP", "1")
-
-import harness        # noqa: E402
-import stackweave        # noqa: E402
+import harness
+import stackweave
 
 # Producers per fan-in round: a meaty burst of simultaneous cross-hub kicks at
 # the one idle consumer.  Bounded so memory/channel count stay flat at scale.
@@ -96,7 +59,6 @@ def setup(H):
         # spurious-resume / cross-talk guard: per (round,producer) one-bit seen
         # map is too big; instead the consumer tallies tokens per round and
         # asserts == PRODUCERS, and checks each token's round field matches.
-        "dedup": os.environ.get("STACKWEAVE_WAKE_DEDUP", "1"),
     }
 
 
@@ -251,8 +213,8 @@ def post(H):
     st = H.state
     rounds = st["rounds_done"][0]
     tokens = st["tokens_seen"][0]
-    H.log("dedup={0} rounds={1} tokens={2} (expected {3} tokens/round)".format(
-        st["dedup"], rounds, tokens, PRODUCERS))
+    H.log("rounds={0} tokens={1} (expected {2} tokens/round)".format(
+        rounds, tokens, PRODUCERS))
     # Conservation: every completed round drained exactly PRODUCERS tokens.
     if rounds > 0:
         H.check(tokens == rounds * PRODUCERS,
@@ -266,4 +228,4 @@ if __name__ == "__main__":
                  default_funcs=PRODUCERS + 1,
                  describe="fan-in storm at one idle hub: N cross-hub wakes kick "
                           "a single parker; assert no lost/dropped/duplicated "
-                          "wake under STACKWEAVE_WAKE_DEDUP=1 and =0")
+                          "wake under wake-eventfd coalescing")

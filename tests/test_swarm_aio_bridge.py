@@ -2448,7 +2448,6 @@ except BaseException as e:
 # stackweave's foreign-thread -> loop wake path is fixed.
 @pytest.mark.parametrize("mode", [
     {"STACKWEAVE_SYSMON": "1", "STACKWEAVE_SYSMON_QUIET": "1", "STACKWEAVE_SYSMON_MS": "8"},
-    {"STACKWEAVE_PREEMPT": "1", "STACKWEAVE_PREEMPT_MS": "8"},
     {"STACKWEAVE_HANDOFF": "1", "STACKWEAVE_HANDOFF_POOL": "2"},
 ])
 def test_env_gated_modes_under_aio_echo(mode):
@@ -2514,37 +2513,7 @@ print("RESULT", aio.run(body()), flush=True)
 
 
 # ==========================================================================
-# A16. UNSAFE-MIGRATION flags must take the GATED-OFF warn path (NEVER set
-#      STACKWEAVE_ALLOW_UNSAFE_MIGRATION).  The flag without the allow-key must warn
-#      to stderr and run the DEFAULT scheduler -- no crash, workload completes.
-# ==========================================================================
-@pytest.mark.parametrize("flag", ["STACKWEAVE_PER_G_TSTATE", "STACKWEAVE_STEAL_WOKEN"])
-def test_unsafe_migration_flag_gated_off_warns_not_crashes(flag):
-    script = r"""
-import asyncio, sys
-import stackweave.aio as aio
-async def body():
-    async def child(i):
-        await asyncio.sleep(0.005)
-        return i
-    res = await asyncio.gather(*[child(i) for i in range(8)])
-    return res == list(range(8))
-print("RESULT", aio.run(body()), flush=True)
-"""
-    # Set the flag WITHOUT STACKWEAVE_ALLOW_UNSAFE_MIGRATION -> gated-off warn path.
-    env = {flag: "1", "STACKWEAVE_GOROUTINE_PANIC": "silent"}
-    with hang_guard(30, "gated-off %s" % flag):
-        cp = _run_subprocess(script, timeout=20, env_extra=env)
-    _assert_no_signal(cp)
-    out = cp.stdout.decode(errors="replace")
-    assert "RESULT True" in out, (
-        "gated-off %s did not run the default scheduler cleanly:\n"
-        "STDOUT:%s\nSTDERR:%s"
-        % (flag, out, cp.stderr.decode(errors="replace")))
-
-
-# ==========================================================================
-# A17. INTEGRITY STRESS: many concurrent tasks each return a UNIQUE value;
+# A16. INTEGRITY STRESS: many concurrent tasks each return a UNIQUE value;
 #      assert SET-EQUALITY of the collected results (not just a count), so a
 #      lost/duplicated wake or a cross-task result swap is caught.
 # ==========================================================================
@@ -2606,7 +2575,7 @@ def test_concurrent_echo_payload_integrity_set_equality():
 
 
 # ==========================================================================
-# A18. Nested-cancel + finally ordering: a cancelled task's finally/cleanup
+# A17. Nested-cancel + finally ordering: a cancelled task's finally/cleanup
 #      awaits must run to completion BEFORE the CancelledError surfaces (the
 #      one-shot _pgmustcancel must not re-cancel cleanup awaits).
 # ==========================================================================

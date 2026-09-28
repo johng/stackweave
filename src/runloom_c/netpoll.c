@@ -109,7 +109,7 @@ typedef struct runloom_parked {
      *            fails, so it aborts the park and returns ready_mask
      *            instead -- no lost wake, no double-resume. */
     int commit;
-    /* Dwell-based stack reclaim (RUNLOOM_STACK_PARK_SWEEP).  park_ts is the
+    /* Dwell-based stack reclaim (the hub-idle sweep).  park_ts is the
      * monotonic time the g committed to parking; the hub-idle sweep
      * madvises the stacks of its own parkers whose dwell exceeds a
      * threshold.  reclaimed=1 means the sweep already dropped this

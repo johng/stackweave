@@ -653,17 +653,14 @@ _BACKEND_SHUTDOWN = object()
 # that a fully idle pool costs only ~size/interval trivial wakeups per second.
 _WORKER_STEAL_POLL = 0.02
 
-# Offload parker mode (p92).  "1" = always inmem (0-fd g.wake), "0" = always
-# FD-mode (per-task pipe + netpoll), unset = ADAPTIVE (FD while the pipe pool has
-# a spare, inmem once it drains).  Read once -- an env, fixed for the process.
-_BLOCKPOOL_INMEM_ENV = os.environ.get("STACKWEAVE_BLOCKPOOL_INMEM")
-# Adaptive threshold: when the target worker shard already has more than this many
-# jobs QUEUED (offload backlog -- the workers can't keep up == high concurrency,
-# the regime that walls FD-mode), the next offload uses the 0-fd inmem parker
-# instead of churning a pipe.  ~8/shard caps the FD-mode (pipe-churning) offloads
-# near the pool size (8 * typical hub count) so the churn never forms, while a
-# cold-start / low-concurrency offload (empty backlog) keeps FD-mode + its
-# signal-interrupt fidelity.  Overridable via STACKWEAVE_BLOCKPOOL_QDEPTH.
+# Offload parker mode (p92) is adaptive.  When the target worker shard already
+# has more than this many jobs QUEUED (offload backlog -- the workers can't keep
+# up == high concurrency, the regime that walls FD-mode), the next offload uses
+# the 0-fd inmem parker instead of churning a pipe.  ~8/shard caps the FD-mode
+# (pipe-churning) offloads near the pool size (8 * typical hub count) so the
+# churn never forms, while a cold-start / low-concurrency offload (empty
+# backlog) keeps FD-mode + its signal-interrupt fidelity.  Overridable via
+# STACKWEAVE_BLOCKPOOL_QDEPTH.
 try:
     _BLOCKPOOL_INMEM_QDEPTH = max(1, int(os.environ.get("STACKWEAVE_BLOCKPOOL_QDEPTH", "8")))
 except ValueError:
@@ -807,8 +804,7 @@ class _ThreadPoolBackend(_BlockingBackend):
         # pool-emptiness, is the signal: a cold-start BURST drains the pool too
         # (every offload arrives before any completes), so only true concurrency
         # tells it apart from a single startup offload.  The threshold caps FD-mode
-        # pipes near the pool size so the churn can't form.  STACKWEAVE_BLOCKPOOL_INMEM
-        # =1/0 force a mode (escape hatch + the swarm env-gated-mode tests).
+        # pipes near the pool size so the churn can't form.
         # ROUND-ROBIN across shards -- NOT `_thread.get_ident() % size`.  Under
         # the single-thread scheduler every fiber shares one OS-thread id, so an
         # ident-keyed shard funneled ALL offloads onto ONE worker: the pool
@@ -821,12 +817,7 @@ class _ThreadPoolBackend(_BlockingBackend):
         # at worst reuses/skips a shard -- always a valid in-range index.
         shard = self._rr
         self._rr = (shard + 1) % self.size
-        if _BLOCKPOOL_INMEM_ENV == "1":
-            use_inmem = True
-        elif _BLOCKPOOL_INMEM_ENV == "0":
-            use_inmem = False
-        else:
-            use_inmem = (self._qs[shard].qsize() > _BLOCKPOOL_INMEM_QDEPTH)
+        use_inmem = (self._qs[shard].qsize() > _BLOCKPOOL_INMEM_QDEPTH)
         p = _Parker(inmem=use_inmem)
         # box = [result, exception, done].  The done flag is essential:
         # a pooled _Parker can carry a stale wake byte and stackweave_c.wait_fd
@@ -956,7 +947,7 @@ def _blocking_call(fn, *args, **kwargs):
       2. offload hubs live -> run it as a fiber on a reserved hub.
       3. otherwise         -> the thread pool, unchanged.
 
-    Route 2 is opt-in (offload_hubs / STACKWEAVE_OFFLOAD_HUBS, default 0), so the
+    Route 2 is opt-in (run(..., offload_hubs=K), default 0), so the
     default build takes exactly the path it always did.  The pool is NOT dead
     code: it is still the only route for a single-thread scheduler run and for
     anyone who has not reserved offload hubs."""
@@ -993,13 +984,12 @@ def offload(fn, *args, **kwargs):
     scheduler (no fiber, no deque, no scheduler loop), which is why submit,
     completion and wakeup are all hand-rolled here.
 
-    When offload hubs ARE reserved (stackweave.run(n, main, offload_hubs=K), or
-    STACKWEAVE_OFFLOAD_HUBS=K), this routes there instead: the blocking call runs
+    When offload hubs ARE reserved (stackweave.run(n, main, offload_hubs=K)),
+    this routes there instead: the blocking call runs
     as an ordinary fiber on a hub excluded from general placement and stealing,
     and the result returns over a normal channel -- so submit/complete/wake are
     the same scheduler paths every other fiber uses, with no completion
-    protocol to get wrong.  It needs no patched CPython because nothing
-    migrates between hubs.  See _blocking_call for the routing order, and
+    protocol to get wrong.  See _blocking_call for the routing order, and
     tests/test_offload_hubs.py.
     """
     return _blocking_call(fn, *args, **kwargs)

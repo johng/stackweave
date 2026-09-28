@@ -12,7 +12,7 @@ channels -- and runs each under the LIFE-CYCLE ORACLES those models point at:
   * goroutine completion        (mn_run's completed count == goroutines spawned)
   * parked-leak                 (sleeping / netpoll-parked drain to 0 after run)
   * scheduler self-check        (stackweave_c._self_check)
-  * the runtime DBG oracles     (RUNLOOM_DBG_GSTATE freed-state, STACKWEAVE_DBG_MIGRATE)
+  * the runtime DBG oracle      (RUNLOOM_DBG_GSTATE freed-state)
   * a hang watchdog             (a lost wakeup becomes a TimeoutError, not a wedge)
   * ASan/TSan                   (if the ext was built with a sanitizer)
 
@@ -727,9 +727,10 @@ def run_grammar_program(spec, timeout=20.0):
 # workload x schedule x CONFIG space -- where interaction bugs hide -- and stays
 # replayable because the choice is a pure function of the seed.
 KNOB_FACTORS = (
-    ("STACKWEAVE_NETPOLL", ["epoll", "select", "io_uring"]),
-    ("STACKWEAVE_PREEMPT", ["0", "1"]),
-    ("STACKWEAVE_SYSMON",  ["0", "1"]),
+    ("STACKWEAVE_SCHED_RANDOM",       ["0", "1"]),
+    ("STACKWEAVE_READY_STARVE_BOUND", ["0", "64"]),
+    ("STACKWEAVE_IDLE_BACKOFF_MS",    ["1", "32"]),
+    ("STACKWEAVE_SYSMON",             ["0", "1"]),
 )
 
 
@@ -738,7 +739,7 @@ def knobs_for_seed(seed):
     return {name: rng.choice(vals) for name, vals in KNOB_FACTORS}
 
 
-def worker_env(seed, mn_seed, knobs=True, unsafe_migrate=False, extra=None):
+def worker_env(seed, mn_seed, knobs=True, extra=None):
     env = dict(os.environ)
     env["PYTHON_GIL"] = "0"
     env["STACKWEAVE_GIL"] = "0"
@@ -749,18 +750,12 @@ def worker_env(seed, mn_seed, knobs=True, unsafe_migrate=False, extra=None):
         env["STACKWEAVE_MN_SEED"] = str(mn_seed)   # deterministic baton -> replay
     if knobs:
         env.update(knobs_for_seed(seed))
-    if unsafe_migrate:
-        # Teeth check: actually ENABLE the gated per-g-tstate migration so the
-        # known mimalloc hazard manifests and the oracle (or a crash) is caught.
-        env["STACKWEAVE_PER_G_TSTATE"] = "1"
-        env["STACKWEAVE_ALLOW_UNSAFE_MIGRATION"] = "1"
-        env["STACKWEAVE_DBG_MIGRATE"] = "1"
     if extra:
         env.update(extra)
     return env
 
 
-def run_worker_subprocess(seed, mn_seed, timeout, unsafe_migrate=False, spec_file=None):
+def run_worker_subprocess(seed, mn_seed, timeout, spec_file=None):
     """Run one program as an isolated subprocess.  Returns a finding dict or None."""
     py = sys.executable
     # Optional per-worker exec wrapper (e.g. LIFEFUZZ_WORKER_WRAP="setarch x86_64 -R"
@@ -771,7 +766,7 @@ def run_worker_subprocess(seed, mn_seed, timeout, unsafe_migrate=False, spec_fil
                    str(mn_seed if mn_seed is not None else -1), str(timeout)]
     if spec_file:
         argv += ["--spec-file", spec_file]
-    env = worker_env(seed, mn_seed, unsafe_migrate=unsafe_migrate)
+    env = worker_env(seed, mn_seed)
     try:
         p = subprocess.run(argv, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                            timeout=timeout + 10)
@@ -809,18 +804,18 @@ def worker_main(seed, mn_seed, timeout, spec_file=None):
     return 1
 
 
-def sweep(n, workers, seed0, timeout, mn_seed, unsafe_migrate=False):
+def sweep(n, workers, seed0, timeout, mn_seed):
     import concurrent.futures
     corpus = os.path.join(HERE, "corpus")
     os.makedirs(corpus, exist_ok=True)
-    print("lifefuzz sweep: seeds [{0},{1}) workers={2} timeout={3}s mn_seed={4} unsafe_migrate={5}"
-          .format(seed0, seed0 + n, workers, timeout, mn_seed, unsafe_migrate))
+    print("lifefuzz sweep: seeds [{0},{1}) workers={2} timeout={3}s mn_seed={4}"
+          .format(seed0, seed0 + n, workers, timeout, mn_seed))
     findings = []
     done = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
         futs = {ex.submit(run_worker_subprocess, seed0 + i,
                           (mn_seed + i) if mn_seed is not None else None,
-                          timeout, unsafe_migrate): seed0 + i for i in range(n)}
+                          timeout): seed0 + i for i in range(n)}
         for fut in concurrent.futures.as_completed(futs):
             done += 1
             f = fut.result()
@@ -913,7 +908,6 @@ def main(argv=None):
     s.add_argument("--seed0", type=int, default=1)
     s.add_argument("--timeout", type=float, default=20.0)
     s.add_argument("--mn-seed", type=int, default=1)
-    s.add_argument("--unsafe-migrate", action="store_true")
 
     rp = sub.add_parser("repro"); rp.add_argument("seed", type=int)
     rp.add_argument("--mn-seed", type=int, default=None)
@@ -936,8 +930,7 @@ def main(argv=None):
         ms = None if args.mn_seed < 0 else args.mn_seed
         return worker_main(args.seed, ms, args.timeout, spec_file=args.spec_file)
     if args.cmd == "sweep":
-        return sweep(args.n, args.workers, args.seed0, args.timeout,
-                     args.mn_seed, unsafe_migrate=args.unsafe_migrate)
+        return sweep(args.n, args.workers, args.seed0, args.timeout, args.mn_seed)
     if args.cmd == "repro":
         f = run_worker_subprocess(args.seed, args.mn_seed, args.timeout)
         if f is None:

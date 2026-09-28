@@ -21,19 +21,18 @@ strand -> no hang), while the tight cross-thread contention races the abort
 branch.  The oracle is "every park completed and the workload exited cleanly"
 -- a lost wake would hang (caught by hang_guard), a UAF would crash.
 
-Env-gated regions (STACKWEAVE_DBG_EXCSTATE excobj validator; STACKWEAVE_NO_CTX_COPY
-immortal-context snap fast path; the multi-hub calibration-freeze race) run in
+Env-gated regions (STACKWEAVE_DBG_EXCSTATE excobj validator; the multi-hub
+calibration-freeze race) run in
 SUBPROCESSES that exit cleanly so gcov flushes their counters; a
 TimeoutExpired is treated as box contention (skip), not a bug.
 
 UNREACHABLE-from-a-test lines are NOT faked -- they are catalogued in the
-structured report's exclusions[]: the per-g-tstate teardown (STACKWEAVE_PER_G_TSTATE
-is GATED OFF behind STACKWEAVE_ALLOW_UNSAFE_MIGRATION, which the rules forbid),
-the OOM-cleanup branches with no fault hook, the Go-style abort()-on-panic and
-the corrupt-excobj abort() guard (crash-only / defensive), the thread-create-
-fail branch (no spawn fault hook reaches it), and the cross-thread
-runloom_sched_wake delivery between two independent single-thread run() loops
-(an unsupported topology that deadlock-detects rather than delivering).
+structured report's exclusions[]: the OOM-cleanup branches with no fault hook,
+the Go-style abort()-on-panic and the corrupt-excobj abort() guard (crash-only /
+defensive), the thread-create-fail branch (no spawn fault hook reaches it), and
+the cross-thread runloom_sched_wake delivery between two independent
+single-thread run() loops (an unsupported topology that deadlock-detects rather
+than delivering).
 """
 import os
 import subprocess
@@ -655,44 +654,6 @@ def test_exception_state_survives_park_single_thread():
         rc.fiber(f)
         rc.run()
     assert seen.get("msg") == "st-in-flight"
-
-
-# ==========================================================================
-# runloom_sched_pystate.c.inc -- the immortal-context snap fast path (L114-115:
-# ts->context immortal -> store the pointer, skip the atomic INCREF).  With the
-# default per-fiber contextvars copy each fiber's context is NON-immortal (the
-# L116-118 else branch).  Under STACKWEAVE_NO_CTX_COPY=1 fibers share the immortal
-# empty default context, so a park's snap takes the immortal fast path.
-# Subprocess: the env flag is read once + cached.
-# ==========================================================================
-_IMMORTAL_CTX = r'''
-import sys; sys.path.insert(0, "src")
-import stackweave, stackweave_c as rc
-from stackweave.sync import WaitGroup
-N = 16
-done = bytearray(N)
-def main():
-    wg = WaitGroup(); wg.add(N)
-    def f(i):
-        try:
-            # sched_sleep -> pystate_snap with the shared immortal default ctx
-            rc.sched_sleep(0.003)
-            done[i] = 1
-        finally:
-            wg.done()
-    for i in range(N):
-        rc.mn_fiber(lambda i=i: f(i))
-    wg.wait()
-stackweave.run(3, main)
-sys.stdout.write("IMMORTAL_OK %d\n" % sum(done))
-'''
-
-
-@mn
-def test_immortal_context_snap_fast_path_subprocess():
-    p = _spawn(_IMMORTAL_CTX, env_extra={"STACKWEAVE_NO_CTX_COPY": "1"})
-    assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1500:])
-    assert "IMMORTAL_OK 16" in p.stdout, (p.stdout[-400:], p.stderr[-800:])
 
 
 # ==========================================================================

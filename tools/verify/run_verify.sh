@@ -415,7 +415,7 @@ if have spin && have cc; then
     launch netpoll_commit check_spin netpoll_commit "netpoll park/wake commit (Go netpollblockcommit): no lost wake, resumed at most once"
     launch netpoll_rearm  check_spin netpoll_rearm  "netpoll register-once LEVEL arm (shipped scheme): LEVEL re-reports a still-ready fd so a late-linking parker is never edge-dropped -> no lost wake"
     launch netpoll_multipool check_spin netpoll_multipool "netpoll multi-pool dispatch: pool->sub lock hierarchy is deadlock-free, parker claimed once"
-    launch netpoll_pump_kick check_spin netpoll_pump_kick "cross-hub pump-wake DEDUP (STACKWEAVE_WAKE_DEDUP): coalesced kick never loses a wake (Dekker clear-then-recheck)"
+    launch netpoll_pump_kick check_spin netpoll_pump_kick "cross-hub pump-wake DEDUP: coalesced kick never loses a wake (Dekker clear-then-recheck)"
     launch hub_fanout     check_spin hub_fanout   "hub_submit 3-way waker-route fanout COMPOSITION: whichever wait mode (running/idle/ring/pump) the target hub is in, some route reaches it -- no lost wake"
     launch iouring_msclose check_spin iouring_msclose "io_uring multishot handle lifetime: no use-after-free under single-owner recv/close"
     launch iouring_msclose-cc check_spin_variant iouring_msclose BUG_CONCURRENT_CLOSE "handle refcount makes a CONCURRENT close-vs-parked-recv (shared conn) memory-safe -- no UAF"
@@ -576,7 +576,7 @@ cbmc_sched() {
 }
 
 cbmc_wakestate() {
-    # per-g wake_state FSM (STACKWEAVE_PER_G_TSTATE global runq): totality (every
+    # per-g wake_state FSM (the global run-queue every M:N wake takes): totality (every
     # ENABLED event has a defined transition) + no-lost-wake (a remembered wake
     # is always enqueued, never returns to PARKED unenqueued).  Teeth: the
     # -DBUG_LOSE_WAKE config drops a remembered wake at release and MUST fail.

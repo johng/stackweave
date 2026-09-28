@@ -50,7 +50,7 @@ map, and the few deepest-used ones are written up at the bottom.
 |------|------|-----|
 | [`dst/`](dst/) | Deterministic Simulation Testing on the single hub: real chan/select, seeded yield oracle (`UniformYield` / `PCTBounded`) | see [`dst/README.md`](dst/README.md) |
 | [`pct/`](pct/) | Probabilistic Concurrency Testing (single hub): random priorities + demotions, depth-bounded bug guarantee | see [`pct/README.md`](pct/README.md) |
-| [`mn_controlled/`](mn_controlled/) | the M:N analogue: baton-gated hub resumption (`STACKWEAVE_MN_SEED`) for reproducible multi-hub races | see [`mn_controlled/README.md`](mn_controlled/README.md) |
+| [`mn_controlled/`](mn_controlled/) | the M:N analogue: baton-gated hub resumption (`STACKWEAVE_MN_SEED`) for reproducible multi-hub races (disabled pending the seeded-scheduler TODO) | see [`mn_controlled/README.md`](mn_controlled/README.md) |
 
 ### Linearizability & model<->binary conformance
 | tool | what | run |
@@ -59,7 +59,7 @@ map, and the few deepest-used ones are written up at the bottom.
 | [`stw_trace_conform.py`](stw_trace_conform.py) + [`stw_trace_conform_demo.sh`](stw_trace_conform_demo.sh) | conform the REAL CPython stop-the-world (M2) handshake against `tools/verify/tla/RunloomCPythonSTW.tla` under TLC (needs the instrumented pydebug) | `tools/stw_trace_conform_demo.sh` |
 | [`stw_conform_ci.sh`](stw_conform_ci.sh) | the `ftconform` check_all phase: idempotently set up the pydebug oracle, then run the demo -- skip-clean where it isn't available | `scripts/check_all.sh ftconform` (in fast + extensive) |
 | [`tla_trace_conform.py`](tla_trace_conform.py) + [`trace_conform_demo.sh`](trace_conform_demo.sh) | conform the real gilstate-TSS lifecycle (M4) hub-tstate create/delete against `RunloomGilstate.tla` | `tools/trace_conform_demo.sh` (gated in `check_all` via `tools/verify/tla/run_trace_conform.sh`) |
-| [`mn_trace_conform.py`](mn_trace_conform.py) + [`mn_trace_conform_demo.sh`](mn_trace_conform_demo.sh) | conform the real controlled-M:N baton events against `RunloomMNControl.tla` | `tools/mn_trace_conform_demo.sh` (also gated in `check_all`) |
+| [`mn_trace_conform.py`](mn_trace_conform.py) + [`mn_trace_conform_demo.sh`](mn_trace_conform_demo.sh) | conform the real controlled-M:N baton events against `RunloomMNControl.tla` (skips while the seeded scheduler is disabled) | `tools/mn_trace_conform_demo.sh` (also gated in `check_all`) |
 
 ### Fault injection & robustness
 | tool | what | run |

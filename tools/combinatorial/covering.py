@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """covering.py -- t-way combinatorial interaction testing of stackweave's config matrix.
 
-stackweave has a combinatorial explosion of runtime knobs -- netpoll backend x
-P-handoff x preemption x sysmon x woken-stealing x ... -- and bugs love to hide
+stackweave has a combinatorial explosion of runtime knobs -- steal randomization x
+ready-ring fairness x idle backoff x sysmon x ... -- and bugs love to hide
 in *interactions* between them, not in any single setting. Testing the full
 cartesian product is wasteful; testing one-factor-at-a-time misses interactions
 entirely.
@@ -41,27 +41,20 @@ ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 # M:N scheduler is only real with the GIL off, and GIL=1 + unbuffered self-
 # select is a separately-tracked known deadlock, so we don't fold it in here.
 #
-# These are the *supported* knobs -- the gating matrix exercises interactions
-# among features that are meant to work, so it stays a clean regression gate.
+# These are the scheduler knobs that still change M:N behaviour.  Cross-hub
+# migration, preemption and the netpoll backend are no longer switchable, so the
+# matrix is built from what remains:
+#   SCHED_RANDOM        randomized steal victim + spawn placement (default off
+#                       in release, on under a sanitizer build)
+#   READY_STARVE_BOUND  0 = ready ring always before the deque; 64 = default
+#                       fairness turn after 64 ready-ring services
+#   IDLE_BACKOFF_MS     1 = no idle backoff (1ms re-pump); 32 = default cap
+#   SYSMON              sysmon always runs; this only toggles its WEDGED lines
 FACTORS = [
-    ("STACKWEAVE_NETPOLL", ["epoll", "select", "io_uring"]),
-    ("STACKWEAVE_PREEMPT", ["0", "1"]),
-    ("STACKWEAVE_SYSMON",  ["0", "1"]),
-]
-
-# Experimental/known-unstable knobs, added only with --include-experimental.
-# On the very FIRST run of this tool, the pairwise array over the supported set
-# plus STACKWEAVE_STEAL_WOKEN immediately isolated a single-factor SIGSEGV: every
-# failing config had STEAL_WOKEN=1, every passing one had =0.  That matches the
-# documented-dead "Fix B" cross-hub-migration path (mn_sched.c:317 "default
-# OFF, experimental"): the eval loop bakes the origin hub's tstate into the
-# stackful-coro frame, so migrating a live frame crashes.  STACKWEAVE_PER_G_TSTATE is
-# the sibling experimental migration mode with the same STW-protocol hazard.
-# They are excluded from the gate but available here for anyone working on them
-# -- a good demonstration of why interaction testing earns its keep.
-EXPERIMENTAL_FACTORS = [
-    ("STACKWEAVE_STEAL_WOKEN",  ["0", "1"]),
-    ("STACKWEAVE_PER_G_TSTATE", ["0", "1"]),
+    ("STACKWEAVE_SCHED_RANDOM",       ["0", "1"]),
+    ("STACKWEAVE_READY_STARVE_BOUND", ["0", "64"]),
+    ("STACKWEAVE_IDLE_BACKOFF_MS",    ["1", "32"]),
+    ("STACKWEAVE_SYSMON",             ["0", "1"]),
 ]
 
 
@@ -138,13 +131,6 @@ def run_config(values, iters, factors):
     env = dict(os.environ)
     env["PYTHON_GIL"] = "0"
     env["PYTHONPATH"] = os.path.join(ROOT, "src")
-    # The migratable modes (STACKWEAVE_PER_G_TSTATE / STACKWEAVE_STEAL_WOKEN) are gated
-    # OFF at runtime behind STACKWEAVE_ALLOW_UNSAFE_MIGRATION (a known mimalloc-
-    # migration crash; see docs/dev/STEAL_WOKEN_CLEANUP.md).  This fuzzer is
-    # exactly the "developing / fuzzing this" caller, so it sets the ack -- else
-    # its experimental configs would silently fall back to the default scheduler
-    # and the covering array would test nothing new.
-    env["STACKWEAVE_ALLOW_UNSAFE_MIGRATION"] = "1"
     for (name, _), v in zip(factors, values):
         env[name] = v
     cmd = [sys.executable, os.path.join(ROOT, "tools", "mn_stress.py"),
@@ -172,13 +158,9 @@ def main():
     ap.add_argument("--iters", type=int, default=50, help="mn_stress iters/config")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--list", action="store_true", help="print array + stats, don't run")
-    ap.add_argument("--include-experimental", action="store_true",
-                    help="add known-unstable knobs (STEAL_WOKEN, PER_G_TSTATE)")
     args = ap.parse_args()
 
     factors = list(FACTORS)
-    if args.include_experimental:
-        factors += EXPERIMENTAL_FACTORS
 
     rows, total_tuples = covering_array(factors, t=args.t, seed=args.seed)
     full = 1

@@ -4,7 +4,7 @@ and its mn_sched_*.c.inc fragments).
 Half the M:N scheduler's lines live behind env-gated modes the normal corpus
 never enables: the controlled-replay / PCT barrier, fiber_n bulk spawn, the sysmon
 stalled-hub detector, the DETACHED-tstate handoff rescue, ATTACHED preemption,
-the idle-condvar-vs-nanosleep wake, the stack-park idle sweep, world-yield,
+the idle-condvar-vs-nanosleep wake, a 1 ms stack-park idle sweep, world-yield,
 hub-affinity, the io_uring-as-loop backend, and the gated-off migratable-mode
 warn path.  Each `test_mn_mode_*` runs the shared diverse workload
 (tests/cov_workload.py) in a subprocess with that mode's env set, driving its C
@@ -34,17 +34,12 @@ _DEVNULL = os.open(os.devnull, os.O_WRONLY)
 # (label, extra-env) -- each drives a distinct gated path through mn_sched.c.
 MODES = [
     ("default",      {}),
-    ("barrier_pct",  {"STACKWEAVE_MN_BARRIER": "1", "STACKWEAVE_MN_SEED": "7", "STACKWEAVE_MN_PCT": "8"}),
+    # GON_BULK is ignored under migration (the bulk builder allocates no per-g
+    # tstate): this mode exercises the guard -- the workload must still finish.
     ("gon_bulk",     {"STACKWEAVE_GON_BULK": "1"}),
-    ("sysmon",       {"STACKWEAVE_SYSMON": "1", "STACKWEAVE_SYSMON_QUIET": "1",
+    ("sysmon",      {"STACKWEAVE_SYSMON": "1", "STACKWEAVE_SYSMON_QUIET": "1",
                       "STACKWEAVE_SYSMON_MS": "8", "STACKWEAVE_COV_CPU": "40000000"}),
-    ("preempt",      {"STACKWEAVE_PREEMPT": "1", "STACKWEAVE_SYSMON": "1", "STACKWEAVE_SYSMON_QUIET": "1",
-                      "STACKWEAVE_PREEMPT_MS": "8", "STACKWEAVE_COV_CPU": "40000000"}),
-    ("idle_wake_off", {"STACKWEAVE_HUB_IDLE_WAKE": "0"}),
-    ("stack_park_sweep", {"STACKWEAVE_STACK_PARK_SWEEP": "1", "STACKWEAVE_STACK_PARK_SWEEP_MS": "1"}),
-    ("world_yield",  {"STACKWEAVE_WORLD_YIELD_NS": "2000"}),
-    ("hub_affinity", {"STACKWEAVE_HUB_AFFINITY": "1"}),
-    ("perg_tstate_warn", {"STACKWEAVE_PER_G_TSTATE": "1"}),   # gated off -> warn + default sched
+    ("stack_park_sweep", {"STACKWEAVE_STACK_PARK_SWEEP_MS": "1"}),
     ("iouring_loop", {"STACKWEAVE_IOURING_LOOP": "1"}),
     ("deadlock_ms",  {"STACKWEAVE_DEADLOCK_MS": "50"}),
     ("ready_starve", {"STACKWEAVE_READY_STARVE_BOUND": "2"}),

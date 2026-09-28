@@ -117,8 +117,6 @@ static PyObject *runloom_hub_info_to_dict(const runloom_hub_info_t *o)
     SET("id",      PyLong_FromLong((long)o->id));
     SET("state",   PyUnicode_FromString(state));
     SET("pending", PyLong_FromLong(o->pending));
-    SET("preempt_requested", PyBool_FromLong(o->preempt_requested));
-    SET("instrumented",      PyBool_FromLong(o->instrumented));
 
     if (o->has_running_g) {
         SET("running_g", PyLong_FromUnsignedLongLong((unsigned long long)o->running_g));

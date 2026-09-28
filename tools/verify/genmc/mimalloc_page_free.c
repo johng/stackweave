@@ -6,7 +6,8 @@
  * deep surface "mimalloc page xthread_id / abandoned_pool"): the TLA spec proves
  * the abandon/adopt handshake PLACEMENT is necessary over an abstract owner; this
  * proves the actual DATA RACE the placement prevents -- the exact _mi_page_retire
- * corruption gated off in 70e6ddb (RUNLOOM_ALLOW_UNSAFE_MIGRATION).
+ * corruption gated off in 70e6ddb (since fixed by the src/patches CPython
+ * alloc-home + exec-home patches; migration is now always on).
  *
  * GROUND TRUTH (Objects/mimalloc free.c + page.c).  mi_free(p) reads the page's
  * xthread_id and branches: OWNER (page->xthread_id == _mi_thread_id()) takes

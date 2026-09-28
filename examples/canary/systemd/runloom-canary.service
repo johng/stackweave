@@ -9,7 +9,6 @@ After=network.target
 Type=simple
 WorkingDirectory=%h/projects/pygo
 Environment=PYTHON_GIL=0
-Environment=STACKWEAVE_WATCHDOG=120
 Environment=CANARY_CRASH_FILE=%h/runloom-canary-crash.txt
 # self-samples the soak CSV so the gauges are ledgerable; runs until stopped.
 ExecStart=%h/.pyenv/versions/3.14.4t/bin/python3 examples/canary/server.py \
@@ -17,7 +16,7 @@ ExecStart=%h/.pyenv/versions/3.14.4t/bin/python3 examples/canary/server.py \
 Restart=on-failure
 RestartSec=5
 # a deliberate restart (upgrade) is fine; an unplanned one is a finding -- the
-# crash file + watchdog artifact say which.
+# crash file + watchdog artifact say which (server.py arms both).
 
 [Install]
 WantedBy=default.target

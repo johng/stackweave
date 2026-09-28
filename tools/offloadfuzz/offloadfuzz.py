@@ -28,6 +28,10 @@ Usage:
   offloadfuzz.py run SEED [--timeout S]       run one program in-process (dev)
   offloadfuzz.py worker SEED MNSEED TIMEOUT   subprocess entry (internal)
   offloadfuzz.py sweep [N] [--workers W]      N isolated subprocesses -> corpus/
+
+`sweep` is disabled pending a TODO: it pins STACKWEAVE_MN_SEED per worker, and
+mn_init refuses a seeded run until the seeded M:N scheduler is re-implemented
+for migration.  `gen` and `run` still work.
 """
 import argparse
 import json

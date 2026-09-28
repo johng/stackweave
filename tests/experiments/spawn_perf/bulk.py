@@ -8,7 +8,11 @@ single contiguous block.
 
 Reports best-of-reps spawn/s (create), run/s (drain), total/s.  Toggle the path
 with env: STACKWEAVE_GON_BULK=1 (else fiber_n loops = per-g spawn), STACKWEAVE_GON_FRESH,
-STACKWEAVE_STACK_ARENA[_HUGE], STACKWEAVE_GON_POPULATE (Exp B pre-fault)."""
+STACKWEAVE_STACK_ARENA[_HUGE], STACKWEAVE_GON_POPULATE (Exp B pre-fault).
+
+BROKEN UNDER MIGRATION: STACKWEAVE_GON_BULK is ignored (the bulk builder allocates
+no per-g tstate; see tests/test_spawn_bulk_lifecycle.py), so fiber_n loops even
+with it set.  The stack arena still applies."""
 import argparse
 import json
 import os

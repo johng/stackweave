@@ -1368,7 +1368,6 @@ def test_fault_injection_always_backs_off_bounded():
 @mn_only
 @pytest.mark.parametrize("env", [
     {"STACKWEAVE_SYSMON": "1", "STACKWEAVE_SYSMON_QUIET": "1", "STACKWEAVE_SYSMON_MS": "8"},
-    {"STACKWEAVE_PREEMPT": "1", "STACKWEAVE_PREEMPT_MS": "8"},
     {"STACKWEAVE_HANDOFF": "1", "STACKWEAVE_HANDOFF_POOL": "2"},
 ])
 def test_monkey_lock_workload_under_env_gated_mode(env):
@@ -1404,40 +1403,7 @@ def test_monkey_lock_workload_under_env_gated_mode(env):
 
 
 # ==========================================================================
-# 15. Known-crash flags GATED OFF must warn + run the default scheduler, never
-#     crash (we never set STACKWEAVE_ALLOW_UNSAFE_MIGRATION).
-# ==========================================================================
-@mn_only
-@pytest.mark.parametrize("flag", ["STACKWEAVE_PER_G_TSTATE", "STACKWEAVE_STEAL_WOKEN"])
-def test_unsafe_migration_flag_gated_off_warns_not_crash(flag):
-    rc_, out = run_child("""
-        import threading
-        import stackweave, stackweave_c as rc
-        from stackweave.sync import WaitGroup
-        lk = threading.Lock()
-        counter = [0]
-        def main():
-            wg = WaitGroup(); wg.add(8)
-            def w():
-                try:
-                    for _ in range(300):
-                        with lk:
-                            counter[0] += 1
-                finally:
-                    wg.done()
-            for _ in range(8):
-                rc.mn_fiber(w)
-            wg.wait()
-        stackweave.run(4, main)
-        assert counter[0] == 8*300, counter[0]
-        print("OK", counter[0])
-    """, extra_env={flag: "1"}, timeout=60)   # NO STACKWEAVE_ALLOW_UNSAFE_MIGRATION
-    assert_no_signal_death(rc_, out, "gated-off-%s" % flag)
-    assert "OK" in out, out
-
-
-# ==========================================================================
-# 16. Heavy offload + compile cooperative correctness under the patch.
+# 15. Heavy offload + compile cooperative correctness under the patch.
 # ==========================================================================
 def test_heavy_hash_offload_yields_to_sibling():
     import hashlib

@@ -417,25 +417,33 @@ static runloom_iouring_ssize_t runloom_iouring_ring_do(runloom_iouring_ring_t *r
              * op.wait == PARKED, so the drainer's `prev == PARKED` test still
              * fires our wake; there is no INFLIGHT->PARKED CAS to redo.
              *
-             * SINGLE_ISSUER holds for the cancel: hub rings may only be
-             * submitted to by their owning hub thread, and this fiber IS
-             * running on that thread -- the same reason
-             * runloom_iouring_submit_cancel_for_op is safe when the hub drains
-             * its cancel mailbox.  (A CROSS-thread canceller cannot do this and
-             * must go through the mailbox; see runloom_iouring_cancel_g.) */
+             * SINGLE_ISSUER holds for the cancel only while this fiber is on
+             * the ring's owning hub thread -- the default mode's guarantee.  In
+             * per-g-tstate mode a woken fiber resumes on any hub, so the cancel
+             * is routed through the owner's mailbox when not at home (and
+             * retracted below if the op completes first: `op` is this frame). */
             {
                 runloom_iou_sigwaiter_t sw;
-                int cancelled = 0;
+                int cancelled = 0, deposited = 0;
                 runloom_iou_sigwaiter_link(&sw, op.g, hub);
                 do {
                     runloom_sched_park_current();
                     runloom_coro_yield();
                     if (sw.signaled && !cancelled) {
-                        cancelled = 1;
-                        runloom_iouring_submit_cancel_for_op(&op);
+                        if (runloom_mn_current_hub_opaque() == hub) {
+                            runloom_iouring_submit_cancel_for_op(&op);
+                            cancelled = 1;
+                        } else if (runloom_mn_hub_request_iouring_cancel(hub, &op)) {
+                            cancelled = 1;
+                            deposited = 1;
+                        }
+                        /* else: the single-slot mailbox is busy -- retry on
+                         * the next wake rather than dropping the cancel. */
                     }
                 } while (__atomic_load_n(&op.result, __ATOMIC_ACQUIRE)
                          == INT32_MIN);
+                if (deposited)
+                    (void)runloom_mn_hub_retract_iouring_cancel(hub, &op);
                 runloom_iou_sigwaiter_unlink(&sw);
                 if (op.g != NULL)
                     __atomic_store_n(&op.g->iouring_op, NULL, __ATOMIC_RELEASE);

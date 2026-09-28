@@ -51,7 +51,7 @@ extern "C" {
 struct runloom_g;
 typedef struct runloom_g runloom_g_t;
 
-/* Initialise the registry lock + read RUNLOOM_INTROSPECT_TIME.  Idempotent;
+/* Initialise the registry lock + read STACKWEAVE_MAX_GOROUTINES.  Idempotent;
  * called from PyInit_stackweave_c (Python path) and runloom_mn_init (C-harness
  * path), both single-threaded at the time of call. */
 void runloom_introspect_init(void);
@@ -78,12 +78,8 @@ void runloom_greg_unlink(runloom_g_t *g);
  * runloom_greg_lock (which a stopped mutator could be holding, deadlocking the
  * collector).  MUST NOT be called outside STW.  Reads NULL when the registry is
  * uninitialised.  The registry is memory-safety load-bearing while the anchor is
- * active: RUNLOOM_GREG_OFF must not blind it (see runloom_gcframes_init). */
+ * active: every spawned g must be linked (see runloom_gcframes_init). */
 runloom_g_t *runloom_greg_head_for_gc(void);
-
-/* True iff the registry is currently linked (not ablated via RUNLOOM_GREG_OFF).
- * The anchor consults this at init to refuse to run blind. */
-int runloom_greg_is_linked(void);
 
 /* ---- base-snap registry (GC visibility for the run() caller's frames) ----
  *
@@ -134,7 +130,7 @@ long runloom_count_deadlockable_fibers(const void *owner);
 int  runloom_quiescent(long *out_live, long *out_parked, long *out_inflight);
 
 /* Deadlock-detection mode: 0=off, 1=warn (print the fiber dump), 2=raise
- * a RuntimeError.  Default 1; also via RUNLOOM_DEADLOCK=off|warn|raise. */
+ * a RuntimeError.  Default 1 (warn). */
 int  runloom_deadlock_mode(void);
 void runloom_set_deadlock_mode(int mode);
 

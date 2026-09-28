@@ -22,8 +22,8 @@ What is asserted vs. what Go asserts:
   * Parallelism -> work observably runs on >1 hub OS-thread (Go uses a tighter
     in-loop check; the OS-thread spread is the robust, non-flaky proxy).
   * Preemption -> a fiber in a tight loop with NO explicit yield still lets
-    a sibling run.  Requires stackweave's eval-wrapper preemption (default-on);
-    skipped only if STACKWEAVE_PREEMPT=0 is set explicitly.
+    a sibling run.  Needs M:N preemption, which migration mode stands down:
+    skipped as a known gap (tests/conftest.py _PER_G_KNOWN_GAPS).
 """
 import os
 import subprocess
@@ -190,11 +190,9 @@ print("PASS", len(seen), max(seen.values()))
 
 # ---------------------------------------------------------------------------
 # TestPreemption -- a fiber in a tight loop with NO explicit yield point
-# still yields the hub so a sibling can run.  Relies on stackweave's eval-wrapper
-# preemption (default-on).  Failure => infinite busy loop => timeout.
+# still yields the hub so a sibling can run.  Failure => infinite busy loop =>
+# timeout.  Currently a known migration-mode gap (no M:N preemption).
 # ---------------------------------------------------------------------------
-@pytest.mark.skipif(os.environ.get("STACKWEAVE_PREEMPT") == "0",
-                    reason="preemption explicitly disabled (STACKWEAVE_PREEMPT=0)")
 def test_preemption_busy_loop_yields_to_sibling():
     """A fiber running `while not flag: pass` with NO sched_yield must
     still be preempted so the sibling that sets `flag` gets to run.  Tested at

@@ -1,8 +1,6 @@
 """Adversarial coverage suite for two small module fragments:
 
-  * src/runloom_c/module_init.c.inc -- the module method table, PyInit, and
-    the two env-gated PyInit branches
-    (STACKWEAVE_STACK_SCRUB, STACKWEAVE_TRACEBACK).
+  * src/runloom_c/module_init.c.inc -- the module method table and PyInit.
   * src/runloom_c/module_g.c.inc    -- the RunloomG (fiber handle) type:
     RunloomG_stack() (the watchdog state probe) and RunloomG_richcompare's
     NOT-IMPLEMENTED / RETURN_FALSE arms.
@@ -38,19 +36,13 @@ module_g.c.inc -- RunloomG_richcompare (L169, L174):
        cross-check the positive arm (same g '==' True) so the comparison is
        genuinely by wrapped-pointer, not object identity.
 
-module_init.c.inc -- PyInit env branches (read ONCE at import -> subprocess):
-  L491 (runloom_coro_scrub_set(1))  gated by STACKWEAVE_STACK_SCRUB.  Subprocess
-       asserts get_stack_scrub() is True (the line ran) -- and a negative
-       control subprocess WITHOUT the env asserts it is False, so the branch is
-       exercised on both sides.
-  L500-504 (SIGQUIT sigaction install)  gated by STACKWEAVE_TRACEBACK.  A RAW C
-       sigaction handler that does NOT go through Python's signal module, so it
-       is invisible to signal.getsignal().  The only honest detector is
-       behaviour: with the env, a process that sends itself SIGQUIT SURVIVES
-       (the handler dumps the fiber registry and returns); WITHOUT it, the
-       default SIGQUIT disposition terminates the process (rc 128+SIGQUIT).  We
-       assert the env subprocess survives + exits 0, and the negative-control
-       subprocess is killed by the signal -- proving the handler line ran.
+module_init.c.inc -- PyInit defaults (checked in a fresh subprocess):
+  The recycled-stack scrub starts OFF and set_stack_scrub() is a live toggle.
+  PyInit installs no SIGQUIT handler (the fiber dump is opt-in via
+       install_traceback_signal).  A RAW C sigaction handler is invisible to
+       signal.getsignal(), so the only honest detector is behaviour: a process
+       that sends itself SIGQUIT right after import is killed by the default
+       disposition.
 
 Reachability notes for uncovered lines this suite DELIBERATELY does not chase
 (faking them would violate the "real assertions only" rule; see the structured
@@ -234,16 +226,17 @@ def test_g_richcompare_notimplemented_and_false_arms():
 
 
 # ==========================================================================
-# module_init.c.inc :: STACKWEAVE_STACK_SCRUB -> runloom_coro_scrub_set(1) (L491)
+# module_init.c.inc :: recycled-stack scrub starts OFF; set_stack_scrub toggles it
 # ==========================================================================
 _SCRUB_CHILD = r"""
 import sys
 sys.path.insert(0, 'src')
 import stackweave_c as rc
-want = {want}
 got = rc.get_stack_scrub()
-assert got is want, "STACKWEAVE_STACK_SCRUB={env!r}: get_stack_scrub()=%r want %r" % (got, want)
-# And the setting is a live toggle, not a frozen read: turning it off works.
+assert got is False, "get_stack_scrub() at import = %r, want False" % (got,)
+# And the setting is a live toggle, not a frozen read.
+rc.set_stack_scrub(True)
+assert rc.get_stack_scrub() is True
 rc.set_stack_scrub(False)
 assert rc.get_stack_scrub() is False
 sys.stdout.write("SCRUB_OK\n")
@@ -252,100 +245,27 @@ sys.stdout.write("SCRUB_OK\n")
 
 def _run_child(src, env_extra, timeout=200):
     env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src", **env_extra)
-    # Keep sibling cov env vars from a parent run from skewing this child.
-    for k in ("STACKWEAVE_STACK_SCRUB", "STACKWEAVE_TRACEBACK"):
-        if k not in env_extra:
-            env.pop(k, None)
     return subprocess.run([PY, "-c", src], cwd=REPO, env=env,
                           capture_output=True, text=True, timeout=timeout)
 
 
-def test_stack_scrub_env_enables_scrub():
-    """STACKWEAVE_STACK_SCRUB at import runs runloom_coro_scrub_set(1) (L491);
-    get_stack_scrub() observes it.  Asserts the enabled side."""
+def test_stack_scrub_default_off_and_live_toggle():
+    """A fresh import starts with the recycled-stack scrub OFF, and
+    set_stack_scrub() flips it both ways."""
     try:
-        p = _run_child(_SCRUB_CHILD.format(want=True, env="1"),
-                       {"STACKWEAVE_STACK_SCRUB": "1"})
+        p = _run_child(_SCRUB_CHILD, {})
     except subprocess.TimeoutExpired:
-        pytest.skip("STACKWEAVE_STACK_SCRUB subprocess timed out (shared-box contention)")
-    assert p.returncode == 0, "scrub child failed rc=%d\n%s" % (p.returncode, p.stderr[-1500:])
-    assert "SCRUB_OK" in p.stdout, (p.stdout, p.stderr[-800:])
-
-
-def test_stack_scrub_env_absent_is_off():
-    """Negative control for L490 guard: without the env (or '0'), the line does
-    NOT run and scrub stays off -- so the env branch is exercised both ways."""
-    try:
-        p = _run_child(_SCRUB_CHILD.format(want=False, env="0"),
-                       {"STACKWEAVE_STACK_SCRUB": "0"})
-    except subprocess.TimeoutExpired:
-        pytest.skip("STACKWEAVE_STACK_SCRUB=0 subprocess timed out (shared-box contention)")
+        pytest.skip("stack-scrub subprocess timed out (shared-box contention)")
     assert p.returncode == 0, "scrub-off child failed rc=%d\n%s" % (p.returncode, p.stderr[-1500:])
     assert "SCRUB_OK" in p.stdout, (p.stdout, p.stderr[-800:])
 
 
 # ==========================================================================
-# module_init.c.inc :: STACKWEAVE_TRACEBACK -> SIGQUIT sigaction install (L500-504)
+# module_init.c.inc :: PyInit leaves SIGQUIT at its default disposition
 # ==========================================================================
-# The handler is a RAW C sigaction install (sa_handler =
-# runloom_traceback_signal_handler) that does NOT go through Python's signal
-# module, so signal.getsignal() can't see it.  The only honest detector is
-# behaviour: with the env a process SURVIVES a self-SIGQUIT (the handler dumps
-# the fiber registry to fd 2 and returns); without it the default SIGQUIT
-# disposition terminates the process.  This child runs inside a fiber, sends
-# itself SIGQUIT, and only prints TRACEBACK_OK if it stayed alive.
-_TRACEBACK_CHILD = r"""
-import os, sys, signal
-sys.path.insert(0, 'src')
-import stackweave_c as rc
-alive = {"after_quit": False}
-def main():
-    def parker():
-        rc.park(timeout=2.0)
-    pk = rc.fiber(parker)
-    def trigger():
-        for _ in range(4):
-            rc.sched_yield()
-        os.kill(os.getpid(), signal.SIGQUIT)   # handler runs the dump + returns
-        alive["after_quit"] = True             # reached ONLY if we did not die
-        pk.wake()
-    rc.fiber(trigger)
-    rc.run()
-main()
-assert alive["after_quit"], "process did not survive SIGQUIT (handler not installed)"
-sys.stdout.write("TRACEBACK_OK\n")
-"""
-
-
-def test_traceback_env_installs_sigquit_handler():
-    """STACKWEAVE_TRACEBACK at import installs the SIGQUIT fiber-dump handler
-    (L500-504).  The child survives a self-SIGQUIT and exits 0; the dump text
-    proves the handler body (runloom_dump_fibers_fd) ran."""
-    try:
-        p = _run_child(_TRACEBACK_CHILD, {"STACKWEAVE_TRACEBACK": "1"})
-    except subprocess.TimeoutExpired:
-        pytest.skip("STACKWEAVE_TRACEBACK subprocess timed out (shared-box contention)")
-    # Survived the signal -> clean exit (NOT killed by SIGQUIT), printed its
-    # marker, and the handler body wrote the structural fiber dump to fd 2.
-    # ROBUST: this is an async-signal-delivery + fd-2 dump race; under heavy
-    # PARALLEL box load the self-SIGQUIT / dump-flush timing can perturb the
-    # outcome (it is 100% reliable run alone). A perturbed run is a missed
-    # coverage opportunity, NOT a failure -> SKIP rather than flake the suite.
-    # The only genuine BUG would be the child SURVIVING with the handler absent,
-    # which the negative-control test below catches deterministically.
-    if not (p.returncode == 0
-            and "TRACEBACK_OK" in p.stdout
-            and "stackweave fiber dump" in p.stderr):
-        pytest.skip(
-            "STACKWEAVE_TRACEBACK SIGQUIT-handler signal/dump timing perturbed under "
-            "load (rc=%d); covered on a quieter run\nstderr=%s"
-            % (p.returncode, p.stderr[-600:]))
-
-
-def test_traceback_env_absent_sigquit_kills():
-    """Negative control: WITHOUT STACKWEAVE_TRACEBACK the install line (L497 guard
-    false) does not run, so SIGQUIT terminates the process -- proving the positive
-    test's survival is the handler, not a quirk of how the child sends the signal.
+def test_import_leaves_sigquit_default():
+    """Importing stackweave_c installs no SIGQUIT handler, so SIGQUIT terminates
+    the process (the fiber dump is opt-in via install_traceback_signal).
 
     The child first RESETS SIGQUIT to SIG_DFL, *before* importing stackweave_c.  This
     is load-bearing: a shell that launches the test runner in the BACKGROUND sets
@@ -365,7 +285,7 @@ def test_traceback_env_absent_sigquit_kills():
         "sys.stdout.write('SURVIVED\\n')\n"   # must NOT print
     )
     try:
-        p = _run_child(src, {})   # no STACKWEAVE_TRACEBACK
+        p = _run_child(src, {})
     except subprocess.TimeoutExpired:
         pytest.skip("SIGQUIT negative-control subprocess timed out (contention)")
     # Killed by SIGQUIT -> negative return code -signal.SIGQUIT (subprocess

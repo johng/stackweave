@@ -18,7 +18,12 @@ import sys
 
 import pytest
 
-from adv_util import needs_free_threading
+from adv_util import (IOURING_LOOP_BROKEN, assert_iouring_loop_ran,
+                      needs_free_threading)
+
+# The loop backend (and its migration guard) is compiled only on Linux.
+iouring_loop_broken = pytest.mark.xfail(sys.platform.startswith("linux"),
+                                        strict=True, reason=IOURING_LOOP_BROKEN)
 
 FT = needs_free_threading()
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -84,10 +89,12 @@ sys.stdout.write("ECHO_OK %d\n" % ok)
 
 
 @needs_iouring
+@iouring_loop_broken
 def test_iouring_loop_echo_exact_once():
     p = _run(_ECHO, {})
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1200:])
     assert "ECHO_OK 64" in p.stdout, (p.stdout[-400:], p.stderr[-800:])
+    assert_iouring_loop_ran(p)
 
 
 # --------------------------------------------------------------------------
@@ -125,10 +132,12 @@ sys.stdout.write("PYH_OK %d\n" % sum(1 for i in range(N) if got[i] == struct.pac
 
 
 @needs_iouring
+@iouring_loop_broken
 def test_iouring_loop_python_handler():
     p = _run(_PYHANDLER, {})
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1200:])
     assert "PYH_OK 40" in p.stdout, (p.stdout[-400:], p.stderr[-800:])
+    assert_iouring_loop_ran(p)
 
 
 # --------------------------------------------------------------------------
@@ -163,10 +172,12 @@ sys.stdout.write("TEARDOWN_OK %d\n" % total)
 
 
 @needs_iouring
+@iouring_loop_broken
 def test_iouring_loop_ring_create_destroy_cycles():
     p = _run(_TEARDOWN, {})
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1500:])
     assert "TEARDOWN_OK 32" in p.stdout, (p.stdout[-400:], p.stderr[-1000:])
+    assert_iouring_loop_ran(p)
 
 
 # --------------------------------------------------------------------------
@@ -219,12 +230,14 @@ sys.stdout.write("CANCEL rv=%r woke=%r\n" % (res.get("rv"), res.get("woke")))
 
 
 @needs_iouring
+@iouring_loop_broken
 def test_iouring_loop_cancel_parked_fiber():
     p = _run(_CANCEL, {})
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1500:])
     # the parked reader must have been woken (cancelled), not stranded
     assert "CANCEL rv=" in p.stdout and "woke=True" in p.stdout, (
         p.stdout[-400:], p.stderr[-800:])
+    assert_iouring_loop_ran(p)
 
 
 # --------------------------------------------------------------------------
@@ -255,10 +268,12 @@ sys.stdout.write("FILEIO_OK %d\n" % sum(ok))
 @needs_iouring
 @pytest.mark.skipif(not hasattr(__import__("stackweave_c"), "file_read"),
                     reason="file_read not built")
+@iouring_loop_broken
 def test_iouring_loop_file_io():
     p = _run(_FILEIO, {})
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1200:])
     assert "FILEIO_OK 24" in p.stdout, (p.stdout[-400:], p.stderr[-800:])
+    assert_iouring_loop_ran(p)
 
 
 if __name__ == "__main__":

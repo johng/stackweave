@@ -1,4 +1,4 @@
-"""Go-style local wake under migration mode (runloom_mn_woken_enqueue).
+"""Go-style local wake (runloom_mn_woken_enqueue).
 
 A wake performed ON a general hub thread pushes the woken fiber onto the
 waker's own Chase-Lev deque instead of the mutex-protected global run-queue.
@@ -14,11 +14,7 @@ the waker's hub unless an idle hub stole it first, and both are correct.
 
 Run directly:  PYTHON_GIL=0 PYTHONPATH=src python tests/test_local_wake.py
 """
-import os
 import threading
-
-# Read once at the first mn_init, so it has to be set before the runtime starts.
-os.environ.setdefault("STACKWEAVE_MIGRATION", "1")
 
 import pytest
 
@@ -28,8 +24,8 @@ import stackweave_c as rc
 from adv_util import needs_free_threading
 
 needs_migration = pytest.mark.skipif(
-    not (needs_free_threading() and stackweave.migration_available()),
-    reason="needs a free-threaded build carrying both CPython migration patches")
+    not needs_free_threading(),
+    reason="needs a free-threaded build (migration is the only M:N mode)")
 
 HUBS = 4
 
