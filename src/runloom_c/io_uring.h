@@ -303,6 +303,15 @@ void runloom_iouring_loop_hub_disarm(runloom_iouring_ring_t *r);
  * backend never ran. */
 unsigned long long runloom_iouring_loop_waits(void);
 
+/* Non-blocking per-round service of a hub ring (submit deferred SQEs, post +
+ * drain completions), run by hub_main whenever its local queues are empty and
+ * on a fixed cadence while busy -- the Go netpoll(0) step.  Returns the CQE
+ * count drained; *flags_out as for loop_wait.  Owner hub thread only. */
+int runloom_iouring_loop_poll(runloom_iouring_ring_t *r, int *flags_out);
+
+/* Per-round polls that drained >=1 CQE (stats()["iouring_loop_polls"]). */
+unsigned long long runloom_iouring_loop_polls(void);
+
 /* ---- Stage-3 multishot recv (RUNLOOM_IOURING_MS=1, requires the loop) ----
  *
  * ONE persistent IORING_OP_RECV | MULTISHOT | BUFFER_SELECT SQE per connection

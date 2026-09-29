@@ -51,6 +51,21 @@
  * connection; after a migration it wrote SQEs into another hub's ring from a
  * foreign thread, and a lost SQE left its fiber parked forever (a few percent
  * of echo runs at 2 and 4 hubs).
+ *
+ * Servicing.  The ring is serviced every scheduling round, never only at hub
+ * idle: hub_main calls runloom_iouring_loop_poll (submit deferred SQEs, post
+ * and drain completions, non-blocking) when its local queues run dry, BEFORE
+ * the global run-queue and stealing -- Go's netpoll(0) step in findrunnable --
+ * and every 64 turns while busy; loop_wait is only the blocking form of the
+ * same step for a hub with nothing at all to run.  Under M:N a hub fed by the
+ * global queue or by stealing rarely idles, so an idle-only service left this
+ * ring's ops unsubmitted and its completions unread for whole busy stretches
+ * (4-19x below epoll on the co-located p223 echo, worse with more hubs).
+ * Single-shot ops are also DIRECT-FIRST (loop_recv / loop_send): a plain
+ * non-blocking syscall, and the ring only when that would block, so the ring
+ * is the wait primitive with the data copied on completion rather than the
+ * carrier of every op.  Together these put the loop backend at epoll parity
+ * (single-shot) to slightly above it (multishot) on p223.
  */
 
 /* user_data sentinels for the persistent infrastructure polls.  Op records are
@@ -316,11 +331,14 @@ static void runloom_iouring_loop_flush(runloom_iouring_ring_t *r)
 /* Drain every CQE currently in the ring (single-reaper -- this hub only).
  * Sentinel CQEs set flags (and re-arm a dead multishot poll); op-record CQEs
  * publish their result and wake the parked fiber via the op->wait
- * handshake.  Advances the CQ head once for the whole batch. */
-static void runloom_iouring_loop_drain(runloom_iouring_ring_t *r, int *flags_out)
+ * handshake.  Advances the CQ head once for the whole batch.  Returns the
+ * number of OP completions (sentinel polls excluded): what loop_poll's caller
+ * uses to decide whether anything runnable may have landed. */
+static int runloom_iouring_loop_drain(runloom_iouring_ring_t *r, int *flags_out)
 {
     unsigned head, tail, i, seen = 0;
-    if (r == NULL) return;
+    int ops = 0;
+    if (r == NULL) return 0;
     head = __atomic_load_n(r->cq_head, __ATOMIC_ACQUIRE);
     tail = __atomic_load_n(r->cq_tail, __ATOMIC_ACQUIRE);
     /* The single-reaper CQE dispatch runs on the hub BETWEEN goroutines: it
@@ -371,6 +389,7 @@ static void runloom_iouring_loop_drain(runloom_iouring_ring_t *r, int *flags_out
          * gates the SINGLE wake so a not-yet-parked submitter (impossible
          * same-thread, but kept for the shared-ring safety contract) isn't
          * double-resumed. */
+        ops++;
         {
             runloom_iouring_op_t *op = (runloom_iouring_op_t *)(uintptr_t)ud;
             if (op != NULL && op->type == RUNLOOM_IOURING_OP_MULTISHOT) {
@@ -423,6 +442,7 @@ static void runloom_iouring_loop_drain(runloom_iouring_ring_t *r, int *flags_out
     }
     RUNLOOM_NOYIELD_END();
     if (seen) __atomic_store_n(r->cq_head, head + seen, __ATOMIC_RELEASE);
+    return ops;
 }
 
 /* Create the hub's wake eventfd and arm the two persistent multishot polls
@@ -496,14 +516,53 @@ void runloom_iouring_loop_wait(runloom_iouring_ring_t *r, long long timeout_ns,
     runloom_iouring_loop_drain(r, flags_out);
 }
 
+/* Per-round, NON-blocking service of the ring (the Go findrunnable order:
+ * netpoll(0) before the global queue / steal).  Submits every deferred SQE,
+ * asks the kernel to post pending completions only when there is reason to
+ * believe it has any (CQ non-empty in shared memory, or IORING_SQ_TASKRUN
+ * raised -- both plain loads), then drains what is there.  Returns the number
+ * of OP completions drained (the sentinel wake/epoll polls are not counted:
+ * they wake nothing by themselves, and a re-armed epoll poll on a still-
+ * readable fd would otherwise report progress every round and keep the hub
+ * out of its idle path, where netpoll deadlines and the stale-arm probe
+ * run).  Without this, a hub kept busy by the global queue / steal
+ * never reached loop_wait, so its ops sat unsubmitted and its completions
+ * unread until it idled -- the loop backend's 4-19x deficit vs epoll on p223.
+ * Owner thread only (SQ producer + DEFER_TASKRUN reaper). */
+int runloom_iouring_loop_poll(runloom_iouring_ring_t *r, int *flags_out)
+{
+    unsigned head, tail;
+    if (r == NULL) return 0;
+    runloom_iouring_loop_flush(r);
+    head = __atomic_load_n(r->cq_head, __ATOMIC_RELAXED);
+    tail = __atomic_load_n(r->cq_tail, __ATOMIC_ACQUIRE);
+    if (head == tail) {
+        /* Nothing posted.  Enter only when the kernel says it has deferred
+         * task work to run (TASKRUN); otherwise this poll cost two loads. */
+        if (!(__atomic_load_n(r->sq_flags, __ATOMIC_ACQUIRE) & IORING_SQ_TASKRUN))
+            return 0;
+        (void)sys_io_uring_enter(r->ring_fd, 0, 0, IORING_ENTER_GETEVENTS, NULL, 0);
+        head = __atomic_load_n(r->cq_head, __ATOMIC_RELAXED);
+        tail = __atomic_load_n(r->cq_tail, __ATOMIC_ACQUIRE);
+        if (head == tail) return 0;
+    }
+    {
+        int ops = runloom_iouring_loop_drain(r, flags_out);
+        if (ops > 0) r->loop_polls++;
+        return ops;
+    }
+}
+
 /* ---- Stage-2 proactor I/O: recv/send as ring ops (the throughput path) ----
  *
  * The data op runs in the kernel; the fiber parks until the CQE arrives,
- * drained inline by the hub's loop_wait -- no epoll bridge, no readiness round
- * trip.  Submission is DEFERRED (write the SQE, don't enter): loop_wait submits
- * the whole batch in its single submit_and_wait_timeout syscall, so N parked
- * connections' ops are submitted + reaped together (the gain/liburing batching
- * win).  The op record lives on the parked fiber's coro stack -- valid
+ * drained inline by the hub's loop_poll / loop_wait -- no epoll bridge, no
+ * readiness round trip.  Submission is DEFERRED (write the SQE, don't enter):
+ * the hub's next per-round loop_poll (or its idle loop_wait) submits the
+ * whole batch in one io_uring_enter, so the ops of every fiber that parked
+ * this round are submitted + reaped together (the gain/liburing batching
+ * win).  Ops reach here only when the direct-first syscall in loop_recv /
+ * loop_send would block.  The op record lives on the parked fiber's coro stack -- valid
  * across the park, and the kernel reads/writes the fiber's buffer only
  * while it is parked (single-reaper, same-thread), so there is no aliasing.
  * (These all-C echo fibers are not cancellable, so the completion-model
@@ -578,10 +637,37 @@ static runloom_iouring_ssize_t runloom_iouring_loop_io(struct io_uring_sqe sqe)
     }
 }
 
+/* STACKWEAVE_IOURING_LOOP_DIRECT (default ON): try the op as a plain
+ * non-blocking syscall first and use the ring only when it would block.  The
+ * ring's job is then to WAIT with the data copied on completion, not to carry
+ * every op: an echo reply's send never blocks, so it costs one syscall and no
+ * park, and a recv that finds data does the same.  Deferring every op to the
+ * ring instead put a whole scheduling round of latency in front of each one,
+ * which the co-located peer paid as an EAGAIN + park (p223: half the client
+ * reads).  Set to 0 to route every op through the ring (the old behaviour). */
+static int runloom_iouring_loop_direct(void)
+{
+    static int v = -1;
+    int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
+    if (cur < 0) {
+        const char *e = getenv("STACKWEAVE_IOURING_LOOP_DIRECT");
+        cur = (e != NULL && *e == '0') ? 0 : 1;
+        __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
+    }
+    return cur;
+}
+
 runloom_iouring_ssize_t runloom_iouring_loop_recv(int fd, void *buf, size_t n,
                                                   int flags)
 {
     struct io_uring_sqe sqe;
+    if (runloom_iouring_loop_direct()) {
+        ssize_t k;
+        do { k = recv(fd, buf, n, flags | MSG_DONTWAIT); }
+        while (k < 0 && errno == EINTR);
+        if (k >= 0 || (errno != EAGAIN && errno != EWOULDBLOCK))
+            return (runloom_iouring_ssize_t)k;
+    }
     memset(&sqe, 0, sizeof(sqe));
     sqe.opcode    = IORING_OP_RECV;
     sqe.fd        = fd;
@@ -595,6 +681,14 @@ runloom_iouring_ssize_t runloom_iouring_loop_send(int fd, const void *buf,
                                                   size_t n, int flags)
 {
     struct io_uring_sqe sqe;
+    if (runloom_iouring_loop_direct()) {
+        ssize_t k;
+        /* MSG_NOSIGNAL: the ring's SEND never raises SIGPIPE; match it. */
+        do { k = send(fd, buf, n, flags | MSG_DONTWAIT | MSG_NOSIGNAL); }
+        while (k < 0 && errno == EINTR);
+        if (k >= 0 || (errno != EAGAIN && errno != EWOULDBLOCK))
+            return (runloom_iouring_ssize_t)k;
+    }
     memset(&sqe, 0, sizeof(sqe));
     sqe.opcode    = IORING_OP_SEND;
     sqe.fd        = fd;
@@ -625,6 +719,15 @@ unsigned long long runloom_iouring_loop_waits(void)
     return __atomic_load_n(&runloom_iouring_loop_waits_total, __ATOMIC_RELAXED);
 }
 
+/* Process total of per-round polls that drained >=1 CQE (folded in at disarm):
+ * proof that completions were served between fibers, not only at hub idle. */
+static unsigned long long runloom_iouring_loop_polls_total = 0;
+
+unsigned long long runloom_iouring_loop_polls(void)
+{
+    return __atomic_load_n(&runloom_iouring_loop_polls_total, __ATOMIC_RELAXED);
+}
+
 /* Process total of buffers returned through the inbox, i.e. finished by a
  * fiber on a hub other than its handle's owner (folded in at ring disarm):
  * proof that multishot fibers migrated while their stream was open. */
@@ -642,9 +745,12 @@ void runloom_iouring_loop_hub_disarm(runloom_iouring_ring_t *r)
     if (r == NULL) return;
     __atomic_add_fetch(&runloom_iouring_loop_waits_total, r->loop_waits,
                        __ATOMIC_RELAXED);
+    __atomic_add_fetch(&runloom_iouring_loop_polls_total, r->loop_polls,
+                       __ATOMIC_RELAXED);
     __atomic_add_fetch(&runloom_iouring_loop_ms_remote_returns_total,
                        r->ms_remote_returns, __ATOMIC_RELAXED);
     r->loop_waits = 0;
+    r->loop_polls = 0;
     r->ms_remote_returns = 0;
     runloom_iouring_loop_ms_pbuf_teardown(r);   /* unregister + free the pool */
     if (r->loop_wake_fd >= 0) { close(r->loop_wake_fd); r->loop_wake_fd = -1; }

@@ -399,6 +399,8 @@ static PyObject *m_stats(PyObject *self, PyObject *unused)
     RUNLOOM_STATS_SET("iouring_inflight",  runloom_iouring_inflight());
     RUNLOOM_STATS_SET("iouring_loop_waits",
                       (Py_ssize_t)runloom_iouring_loop_waits());
+    RUNLOOM_STATS_SET("iouring_loop_polls",
+                      (Py_ssize_t)runloom_iouring_loop_polls());
     RUNLOOM_STATS_SET("iouring_loop_ms_remote_returns",
                       (Py_ssize_t)runloom_iouring_loop_ms_remote_returns());
     RUNLOOM_STATS_SET("foreign_park_inflight", runloom_foreign_park_inflight());

@@ -182,6 +182,18 @@ Full derivations for the invariants below: [docs/dev/RUNTIME_GOTCHAS.md](docs/de
   (`runloom_iouring_loop_inbox_drain`, at its loop top). Caching a ring across
   a park (the old all-C echo) lost SQEs and stranded fibers. Guard: `tests/test_cov100b_iouring.py::test_iouring_loop_echo_survives_fiber_migration`
   (and big_100 p223, which stalls within seconds without it).
+- **The loop backend's ring is serviced every scheduling round, never only at
+  hub idle.** `hub_main` calls `runloom_iouring_loop_poll` (submit deferred
+  SQEs, post + drain completions, non-blocking) when its local queues run dry,
+  BEFORE the global run-queue and stealing (Go's `netpoll(0)` in findrunnable),
+  and every 64 turns while busy; `loop_wait` is just the blocking form for a hub
+  with nothing to run. A hub fed by the global queue or stealing rarely idles,
+  so idle-only servicing left ops unsubmitted and completions unread for whole
+  busy stretches: 4-19x below epoll on p223, worse with more hubs. Single-shot
+  `loop_recv/send` are direct-first (plain non-blocking syscall, ring only on
+  EAGAIN; `STACKWEAVE_IOURING_LOOP_DIRECT=0` forces the ring), which is what
+  brought single-shot to epoll parity -- the poll alone fixed multishot only.
+  Guard: the same test asserts `stats()["iouring_loop_polls"] > 0`.
 
 ## aio bridge invariants (src/stackweave/aio/)
 - Layout: `_base.py` is the foundation (`_go_io`, `_wait_fd`, `_CURRENT_TASKS`);

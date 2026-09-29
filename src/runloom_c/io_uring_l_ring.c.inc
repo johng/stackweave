@@ -27,9 +27,9 @@ struct runloom_iouring_ring {
      * its iouring ops are outstanding. */
     volatile int inflight;
 
-    /* io_uring-as-loop backend (RUNLOOM_IOURING_LOOP=1).  When the hub blocks
-     * directly in this ring, SQEs are written but submission is BATCHED into
-     * the submit_and_wait_timeout call: sq_submitted_tail tracks how far the
+    /* io_uring-as-loop backend (RUNLOOM_IOURING_LOOP=1).  SQEs are written
+     * deferred and submission is BATCHED into the hub's per-round loop_poll
+     * or its idle loop_wait enter: sq_submitted_tail tracks how far the
      * kernel has consumed (everything < it is submitted, [it, sq_tail) is
      * pending).  loop_wake_fd / loop_epoll_fd are the fds armed as persistent
      * multishot POLL_ADDs on this ring (cached so a dead multishot poll can be
@@ -41,6 +41,7 @@ struct runloom_iouring_ring {
     int loop_wake_fd;
     int loop_epoll_fd;
     unsigned long long loop_waits;
+    unsigned long long loop_polls;   /* per-round polls that drained a CQE */
 
     /* Stage-3 multishot recv (RUNLOOM_IOURING_MS=1): a per-hub provided buffer
      * ring registered on THIS ring fd (bgid RUNLOOM_LOOP_MS_BGID).  The hub
@@ -84,7 +85,12 @@ runloom_iouring_ring_t *runloom_iouring_ring_create(int defer_taskrun)
 
     /* Attempt full flag set; downgrade on EINVAL. */
     flags = IORING_SETUP_SINGLE_ISSUER;
-    if (defer_taskrun) flags |= IORING_SETUP_DEFER_TASKRUN;
+    /* TASKRUN_FLAG: with DEFER_TASKRUN the kernel posts CQEs only when this
+     * thread enters; the flag makes it raise IORING_SQ_TASKRUN in the shared
+     * SQ flags word when it has work queued, so the per-round loop_poll can
+     * tell "an enter would produce CQEs" from "nothing to do" without a
+     * syscall (same kernel version as DEFER_TASKRUN, so no extra fallback). */
+    if (defer_taskrun) flags |= IORING_SETUP_DEFER_TASKRUN | IORING_SETUP_TASKRUN_FLAG;
     memset(&p, 0, sizeof(p));
     p.flags = flags;
     /* RUNLOOM_IOURING_ENTRIES (default 64) -- same tiny-ring override as the
@@ -249,7 +255,7 @@ static int runloom_iouring_ring_submit_sqe(runloom_iouring_ring_t *r,
 /* Defined later in the SAME translation unit (io_uring_l_loop.c.inc, #included
  * after this file); forward-declared so ring_drain can delegate a loop-armed
  * ring's drain to the sentinel-aware single-reaper. */
-static void runloom_iouring_loop_drain(runloom_iouring_ring_t *r, int *flags_out);
+static int runloom_iouring_loop_drain(runloom_iouring_ring_t *r, int *flags_out);
 void runloom_iouring_submit_cancel_for_op(void *opv);   /* defined below */
 
 void runloom_iouring_ring_drain(runloom_iouring_ring_t *r)

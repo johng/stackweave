@@ -498,8 +498,16 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
         if ((++self_pump_ctr & 0x3fu) == 0 &&
             (runloom_netpoll_parked_count() > 0 || runloom_iouring_inflight() > 0)) {
             (void)runloom_netpoll_pump(0);
-            if (h->iouring_ring != NULL)
+            if (h->loop_wake_fd >= 0) {
+                /* Loop backend: submit + reap, not just get_events -- a hub
+                 * that never drains its deque must still bound how long its
+                 * fibers' ops wait (the deque-empty poll below never runs). */
+                int lflags = 0;
+                (void)runloom_iouring_loop_poll(h->iouring_ring, &lflags);
+                if (lflags & RUNLOOM_LOOP_F_EPOLL) runloom_netpoll_pump(0);
+            } else if (h->iouring_ring != NULL) {
                 runloom_iouring_ring_get_events(h->iouring_ring);
+            }
         }
         /* Drain the submission list into the deque first.  Pushing to
          * the deque is owner-only, so we (the hub) move fresh gs from
@@ -747,6 +755,20 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                 if (g) gsrc = 3;   /* own-deque pop */
 #endif
             }
+        }
+        if (g == NULL && h->loop_wake_fd >= 0) {
+            /* Loop backend, Go findrunnable order: local queues empty ->
+             * service OUR ring (submit this round's deferred SQEs, reap what
+             * completed) BEFORE pulling from the global queue or stealing.
+             * Completions wake their fibers onto this hub's deque (local
+             * wake), so re-pick when anything landed.  Until this step the
+             * ring was served only at hub idle, which a hub fed by the
+             * global queue / steal never reached: ops sat unsubmitted and
+             * completions unread for the whole busy stretch. */
+            int lflags = 0;
+            int n = runloom_iouring_loop_poll(h->iouring_ring, &lflags);
+            if (lflags & RUNLOOM_LOOP_F_EPOLL) runloom_netpoll_pump(0);
+            if (n > 0) continue;
         }
         if (g == NULL) {
             /* Global run-queue: woken migratable gs (per-g-tstate) that any
