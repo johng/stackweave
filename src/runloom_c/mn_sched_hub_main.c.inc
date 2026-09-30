@@ -441,6 +441,14 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                 if (cop != 0) runloom_iouring_submit_cancel_for_op((void *)cop);
             }
         }
+        /* Drain the io_uring loop backend's multishot inbox: buffer returns,
+         * re-arms and closes that fibers now running on OTHER hubs posted for
+         * streams opened on this hub's ring, done here where we are the ring's
+         * sole issuer and the buffer ring's sole writer.  loop_wake_fd >= 0
+         * exactly when the loop backend armed this ring; the call is a relaxed
+         * peek when the inbox is empty. */
+        if (h->loop_wake_fd >= 0)
+            runloom_iouring_loop_inbox_drain(h->iouring_ring);
         /* Drain the cancel-by-fd mailbox (R7 item 1): TCPConn.close() deposited
          * dup'd fds targeting THIS hub's ring; submit an ASYNC_CANCEL_FD for each
          * here, where we are the ring's SINGLE issuer.  Cheap relaxed peek first
@@ -490,8 +498,16 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
         if ((++self_pump_ctr & 0x3fu) == 0 &&
             (runloom_netpoll_parked_count() > 0 || runloom_iouring_inflight() > 0)) {
             (void)runloom_netpoll_pump(0);
-            if (h->iouring_ring != NULL)
+            if (h->loop_wake_fd >= 0) {
+                /* Loop backend: submit + reap, not just get_events -- a hub
+                 * that never drains its deque must still bound how long its
+                 * fibers' ops wait (the deque-empty poll below never runs). */
+                int lflags = 0;
+                (void)runloom_iouring_loop_poll(h->iouring_ring, &lflags);
+                if (lflags & RUNLOOM_LOOP_F_EPOLL) runloom_netpoll_pump(0);
+            } else if (h->iouring_ring != NULL) {
                 runloom_iouring_ring_get_events(h->iouring_ring);
+            }
         }
         /* Drain the submission list into the deque first.  Pushing to
          * the deque is owner-only, so we (the hub) move fresh gs from
@@ -740,6 +756,20 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
 #endif
             }
         }
+        if (g == NULL && h->loop_wake_fd >= 0) {
+            /* Loop backend, Go findrunnable order: local queues empty ->
+             * service OUR ring (submit this round's deferred SQEs, reap what
+             * completed) BEFORE pulling from the global queue or stealing.
+             * Completions wake their fibers onto this hub's deque (local
+             * wake), so re-pick when anything landed.  Until this step the
+             * ring was served only at hub idle, which a hub fed by the
+             * global queue / steal never reached: ops sat unsubmitted and
+             * completions unread for the whole busy stretch. */
+            int lflags = 0;
+            int n = runloom_iouring_loop_poll(h->iouring_ring, &lflags);
+            if (lflags & RUNLOOM_LOOP_F_EPOLL) runloom_netpoll_pump(0);
+            if (n > 0) continue;
+        }
         if (g == NULL) {
             /* Global run-queue: woken migratable gs (per-g-tstate) that any
              * idle hub may run, so a hub stuck in a blocking C call can't
@@ -961,6 +991,11 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                     RUNLOOM_RLOCK(&h->sub_lock, RUNLOOM_RANK_HUB_SUB);
                     have_sub = (h->sub_head != NULL);
                     RUNLOOM_RUNLOCK(&h->sub_lock, RUNLOOM_RANK_HUB_SUB);
+                    /* Same Dekker for the multishot inbox: a fiber on another
+                     * hub pushes, fences, then kicks (runloom_loop_ms_post). */
+                    if (!have_sub &&
+                        runloom_iouring_loop_inbox_pending(h->iouring_ring))
+                        have_sub = 1;
                     if (!have_sub) {
                         if (idle_ns <= 0) idle_ns = 1;
                         saved = PyEval_SaveThread();
@@ -1412,6 +1447,10 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
          * drainer and all hubs are stopping, so drain to quiescence here:
          * GETEVENTS (flush DEFER_TASKRUN task work) then drain, bounded so a
          * (never-observed) stuck completion can't spin us forever. */
+        /* Multishot streams closed from other hubs may still sit in the inbox:
+         * take them now so their cancels are submitted and reaped below. */
+        if (h->loop_wake_fd >= 0)
+            runloom_iouring_loop_inbox_drain(h->iouring_ring);
         {
             int reap;
             for (reap = 0; reap < 64 &&

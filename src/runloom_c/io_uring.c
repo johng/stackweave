@@ -52,6 +52,7 @@
 #include <string.h>
 #include <sys/eventfd.h>
 #include <sys/mman.h>
+#include <sys/socket.h>   /* direct-first recv/send in the loop backend */
 #include <sys/syscall.h>
 #include <unistd.h>
 
@@ -367,23 +368,27 @@ void runloom_iouring_loop_wait(runloom_iouring_ring_t *r, long long timeout_ns,
 }
 void runloom_iouring_loop_wake(int wake_fd) { (void)wake_fd; }
 void runloom_iouring_loop_hub_disarm(runloom_iouring_ring_t *r) { (void)r; }
-runloom_iouring_ssize_t runloom_iouring_loop_recv(runloom_iouring_ring_t *r,
-                                                  int fd, void *buf, size_t n,
+unsigned long long runloom_iouring_loop_waits(void) { return 0; }
+int runloom_iouring_loop_poll(runloom_iouring_ring_t *r, int *flags_out)
+{
+    (void)r; (void)flags_out; return 0;
+}
+unsigned long long runloom_iouring_loop_polls(void) { return 0; }
+runloom_iouring_ssize_t runloom_iouring_loop_recv(int fd, void *buf, size_t n,
                                                   int flags)
 {
-    (void)r; (void)fd; (void)buf; (void)n; (void)flags;
+    (void)fd; (void)buf; (void)n; (void)flags;
     errno = ENOSYS; return -1;
 }
-runloom_iouring_ssize_t runloom_iouring_loop_send(runloom_iouring_ring_t *r,
-                                                  int fd, const void *buf,
+runloom_iouring_ssize_t runloom_iouring_loop_send(int fd, const void *buf,
                                                   size_t n, int flags)
 {
-    (void)r; (void)fd; (void)buf; (void)n; (void)flags;
+    (void)fd; (void)buf; (void)n; (void)flags;
     errno = ENOSYS; return -1;
 }
-void *runloom_iouring_loop_ms_open(runloom_iouring_ring_t *r, int fd)
+void *runloom_iouring_loop_ms_open(int fd)
 {
-    (void)r; (void)fd; return NULL;
+    (void)fd; return NULL;
 }
 runloom_iouring_ssize_t runloom_iouring_loop_ms_recv(void *handle,
                                                      void *buf, size_t n)
@@ -392,5 +397,11 @@ runloom_iouring_ssize_t runloom_iouring_loop_ms_recv(void *handle,
     errno = ENOSYS; return -1;
 }
 void runloom_iouring_loop_ms_close(void *handle) { (void)handle; }
+void runloom_iouring_loop_inbox_drain(runloom_iouring_ring_t *r) { (void)r; }
+int runloom_iouring_loop_inbox_pending(runloom_iouring_ring_t *r)
+{
+    (void)r; return 0;
+}
+unsigned long long runloom_iouring_loop_ms_remote_returns(void) { return 0; }
 
 #endif

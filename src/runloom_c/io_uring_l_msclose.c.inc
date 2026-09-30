@@ -108,4 +108,10 @@ runloom_iouring_ssize_t runloom_iouring_send(int fd, const void *buf, size_t n, 
 #ifndef IORING_SETUP_DEFER_TASKRUN
 #  define IORING_SETUP_DEFER_TASKRUN (1U << 13)
 #endif
+#ifndef IORING_SETUP_TASKRUN_FLAG
+#  define IORING_SETUP_TASKRUN_FLAG (1U << 9)
+#endif
+#ifndef IORING_SQ_TASKRUN
+#  define IORING_SQ_TASKRUN (1U << 2)
+#endif
 

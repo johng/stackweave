@@ -16,13 +16,14 @@ Gate: **every C file ≥ 95%**; highest-bug files (netpoll, mn_sched, sched) →
 
 > These figures predate the migration-only tree. That work deleted the
 > per-hub-tstate M:N path and most feature toggles, and made the per-g-tstate
-> path (formerly excluded as MIGRATION) the only M:N path. The io_uring loop
-> backend (`STACKWEAVE_IOURING_LOOP`) and the bulk `fiber_n` spawn path
-> (`STACKWEAVE_GON_BULK`) are kept but ignored in every M:N run because they are
-> broken under migration, so their lines are not coverable until they are
-> fixed; strict xfails track them. The exclusion manifest has dropped the
-> entries for deleted code, but its remaining line ranges have not been
-> re-anchored. Re-run `tools/cov_measure.sh` before quoting a number.
+> path (formerly excluded as MIGRATION) the only M:N path. The bulk `fiber_n`
+> spawn path (`STACKWEAVE_GON_BULK`) is kept but ignored in every M:N run
+> because it is broken under migration, so its lines are not coverable until it
+> is fixed; strict xfails track it. The io_uring loop backend
+> (`STACKWEAVE_IOURING_LOOP`) runs under migration again and its exclusions
+> were re-anchored. The exclusion manifest has dropped the entries for deleted
+> code, but its other line ranges have not been re-anchored. Re-run
+> `tools/cov_measure.sh` before quoting a number.
 
 | Translation unit | coverable | covered | %  | excl |
 |------------------|----------:|--------:|---:|-----:|
@@ -67,7 +68,7 @@ tools/cov_measure.sh                            # build + drive + gcov + report 
 python tools/cov_subsystem.py build/coverage    # re-report from existing gcov
 ```
 
-## Exclusion categories (`tools/coverage_exclusions.txt`, 186 entries)
+## Exclusion categories (`tools/coverage_exclusions.txt`, 185 entries)
 
 A line is excluded only if a clean-exiting test cannot reach it (gcov flushes
 only on clean process exit). Each entry carries fragment, line range, category,
@@ -75,7 +76,7 @@ and a concrete reason.
 
 | Category | n | meaning |
 |----------|--:|---------|
-| DEFENSIVE | 58 | "can't happen" corruption/invariant guards with no forge path |
+| DEFENSIVE | 57 | "can't happen" corruption/invariant guards with no forge path |
 | OOM | 50 | alloc-failure cleanup unreachable even via the `faultinj` LD_PRELOAD / `strace -e inject` harnesses (the failure path then crashes/aborts before gcov flushes) |
 | RACE | 31 | a free-threaded interleaving with no deterministic trigger; a `for(;;)` commit-CAS retry latch gcov counts only under contention (enclosing function fully covered); or a non-atomic `-O0` gcov line-counter race on a line **proven to execute** (cldeque steal/pop tails; crash disarm body) |
 | DEAD | 20 | defined/exported but zero callers (proven by grep + `nm`) |

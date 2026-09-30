@@ -9,8 +9,8 @@ mode, which this suite drives:
               hub thread creates its own ring (mn_sched_hub_main.c.inc:204) and
               the C echo handler / TCPConn iouring recv resolve the ring through
               this accessor (module_io.c.inc:158, io_uring_l_msclose.c.inc:63).
-              The loop backend is BROKEN under cross-hub migration and ignored in
-              every M:N run, so its test is a strict xfail (adv_util.py).
+              Each op re-resolves the ring at submit, since a fiber can resume
+              on another hub after any park.
     * L257-273 runloom_mn_hub_request_iouring_cancel(): cross-thread cancel of a
               fiber parked on a *hub-ring* (SINGLE_ISSUER) io_uring op.  The only
               ops with op->ring != NULL are hub-ring recv/send; a Python-reachable
@@ -37,12 +37,8 @@ import sys
 
 import pytest
 
-from adv_util import (IOURING_LOOP_BROKEN, assert_iouring_loop_ran,
+from adv_util import (IOURING_LOOP_TRAILER, assert_iouring_loop_ran,
                       needs_free_threading)
-
-# The loop backend (and its migration guard) is compiled only on Linux.
-iouring_loop_broken = pytest.mark.xfail(sys.platform.startswith("linux"),
-                                        strict=True, reason=IOURING_LOOP_BROKEN)
 
 FT = needs_free_threading()
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -53,6 +49,14 @@ LOOP_ENV = {"STACKWEAVE_IOURING_LOOP": "1"}
 LOOP_TCPCONN_ENV = {"STACKWEAVE_IOURING_LOOP": "1", "STACKWEAVE_TCPCONN_IOURING": "1"}
 
 pytestmark = pytest.mark.skipif(not FT, reason="M:N + io_uring loop need GIL-disabled build")
+
+
+def _iou_available():
+    try:
+        import stackweave_c
+        return bool(stackweave_c.iouring_available())
+    except Exception:
+        return False
 
 
 def _run(script, env_extra, timeout=240):
@@ -114,17 +118,17 @@ sys.stdout.write("CECHO_OK %d\n" % (1 if ok else 0))
 '''
 
 
-@iouring_loop_broken
 def test_iouring_loop_cecho_drives_current_ring_accessor():
     # Drives L39-42 (and the C echo recv/send through the hub ring).
-    p = _run(_SERVE_CECHO, LOOP_ENV)
+    p = _run(_SERVE_CECHO + IOURING_LOOP_TRAILER, LOOP_ENV)
     _no_crash(p, "iouring-loop C-echo")
     assert p.returncode == 0, "C-echo run failed rc=%d\nstderr=%s" % (
         p.returncode, p.stderr[-1500:])
     assert "CECHO_OK 1" in p.stdout, (
         "io_uring-loop C-echo did not round-trip every reply through the hub "
         "ring\nstdout=%s\nstderr=%s" % (p.stdout, p.stderr[-1200:]))
-    assert_iouring_loop_ran(p)
+    if _iou_available():      # without io_uring the echo takes the readiness path
+        assert_iouring_loop_ran(p)
 
 
 # ===========================================================================
@@ -239,6 +243,14 @@ def test_iouring_hubring_recv_cancel_routes_through_mailbox():
 # runloom_iouring_cancel_g returns 0 earlier at its PARKED check; both yield
 # False, so we assert the SECOND is False and the runtime stays correct: the
 # recv still unblocks with ECANCELED and no fiber is left stranded.)
+#
+# The reader and the canceller are both spawned pinned to hub 0
+# (mn_fiber(fn, hub=0)), so the hub that owns the ring op is busy running the
+# canceller across both calls and cannot drain its mailbox in between.
+# Unpinned, an idle owner hub under the io_uring loop backend drains the first
+# cancel within microseconds (the mailbox kick wakes its ring wait), the
+# mailbox is empty again, and the second cancel legitimately publishes too
+# (c2=True in ~5% of runs).
 _CANCEL_DOUBLE = r'''
 import sys, os, socket, errno
 sys.path.insert(0, "src")
@@ -247,9 +259,9 @@ import stackweave_c as rc
 from stackweave.sync import WaitGroup
 
 MSG_PEEK = socket.MSG_PEEK
-res = {"c1": None, "c2": None, "exc_errno": None}
+res = {"c1": None, "c2": None, "exc_errno": None, "hubs": set()}
 
-def main():
+def body():
     lconn = rc.TCPConn.listen("127.0.0.1", 0)
     so = socket.socket(fileno=os.dup(lconn.fileno()))
     port = so.getsockname()[1]; so.detach()
@@ -265,28 +277,38 @@ def main():
     def reader():
         holder["g"] = rc.current_g()
         try:
-            server_conn.recv(64, MSG_PEEK)
+            server_conn.recv(64, MSG_PEEK)   # parks on hub 0's ring op
         except OSError as e:
             res["exc_errno"] = e.errno
         finally:
             wg.done()
-    rc.mn_fiber(reader)
+    rc.mn_fiber(reader, hub=0)
     for _ in range(400):
         if "g" in holder: break
         stackweave.sleep(0.003)
     stackweave.sleep(0.05)
     g = holder["g"]
+    res["hubs"].add(rc.mn_current_hub())
     res["c1"] = g.cancel_wait_fd()           # publishes the cancel (True)
     res["c2"] = g.cancel_wait_fd()           # already pending / already cancelled -> False
+    res["hubs"].add(rc.mn_current_hub())
     wg.wait()
     server_conn.close(); client.close(); lconn.close()
+
+def main():
+    done = WaitGroup(); done.add(1)
+    def run_body():
+        try: body()
+        finally: done.done()
+    rc.mn_fiber(run_body, hub=0)             # canceller shares hub 0 with the reader
+    done.wait()
 
 import faulthandler; faulthandler.dump_traceback_later(40, exit=True)
 stackweave.run(2, main)
 faulthandler.cancel_dump_traceback_later()
-sys.stdout.write("DOUBLE_OK c1=%r c2=%r exc_errno=%r is_canceled=%r\n" %
+sys.stdout.write("DOUBLE_OK c1=%r c2=%r exc_errno=%r is_canceled=%r hubs=%r\n" %
                  (res["c1"], res["c2"], res["exc_errno"],
-                  res["exc_errno"] == errno.ECANCELED))
+                  res["exc_errno"] == errno.ECANCELED, sorted(res["hubs"])))
 '''
 
 
@@ -297,6 +319,9 @@ def test_iouring_hubring_double_cancel_is_idempotent():
     _no_crash(p, "hub-ring double cancel")
     assert p.returncode == 0, "double-cancel run failed rc=%d\nstderr=%s" % (
         p.returncode, p.stderr[-1500:])
+    assert "hubs=[0]" in p.stdout, (
+        "the canceller did not run on hub 0, the reader's hub\n"
+        "stdout=%s\nstderr=%s" % (p.stdout, p.stderr[-1200:]))
     assert "DOUBLE_OK c1=True c2=False" in p.stdout, (
         "double cancel was not idempotent (expected c1=True, c2=False)\n"
         "stdout=%s\nstderr=%s" % (p.stdout, p.stderr[-1200:]))

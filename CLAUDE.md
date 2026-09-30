@@ -6,16 +6,18 @@ Full derivations for the invariants below: [docs/dev/RUNTIME_GOTCHAS.md](docs/de
 - **Migration-only tree.** Cross-hub fiber migration is always on. The env
   vars that chose the old per-hub-tstate scheduler or only turned a default off
   are gone (numeric knobs and debug/fault/sim hooks remain). A few opt-in
-  features keep their env var: `STACKWEAVE_TCPCONN_IOURING` and
-  `STACKWEAVE_STACK_ARENA*` work under migration; `STACKWEAVE_IOURING_LOOP` and
-  `STACKWEAVE_GON_BULK` (+ `GON_*`) are **broken under migration** and ignored
-  in every M:N run with a one-time stderr note.
+  features keep their env var: `STACKWEAVE_TCPCONN_IOURING`,
+  `STACKWEAVE_IOURING_LOOP` (+ `IOURING_MS`) and `STACKWEAVE_STACK_ARENA*` work
+  under migration; `STACKWEAVE_GON_BULK` (+ `GON_*`) is **broken under
+  migration** and ignored in every M:N run with a one-time stderr note.
 - **Broken features are kept, not deleted.** A feature that does not work under
   migration keeps its code and env var, is guarded off with a one-time stderr
-  note, and has strict xfails that assert it actually ran (the note is absent:
-  `assert_iouring_loop_ran` in `tests/adv_util.py`; `[GON_TIMING]` for bulk
-  spawn), after the test's own correctness checks. Known gaps are xfail, never
-  skip (`tests/conftest.py`). Fixing one turns its xfails into XPASSes.
+  note, and has strict xfails that assert it actually ran (`[GON_TIMING]` for
+  bulk spawn), after the test's own correctness checks. Known gaps are xfail,
+  never skip (`tests/conftest.py`). Fixing one turns its xfails into XPASSes;
+  then drop the xfails and keep a positive it-ran check (the loop backend's
+  `assert_iouring_loop_ran` in `tests/adv_util.py` reads the hub ring-wait
+  count).
 - Migration is only sound on a free-threaded
   CPython built with BOTH `src/patches/` halves (alloc-home + exec-home), and
   nothing checks for them at runtime — on a stock interpreter it crashes under
@@ -169,6 +171,29 @@ Full derivations for the invariants below: [docs/dev/RUNTIME_GOTCHAS.md](docs/de
   be deterministic. The controller is compiled in behind `RUNLOOM_MN_CTRL`
   (default 0) until it is re-implemented; its tests are skipped via
   `_SEEDED_MN_TODO` in `tests/conftest.py`.
+- **A hub's io_uring ring has one producer: its own hub thread.** Under the
+  loop backend (`STACKWEAVE_IOURING_LOOP`) a fiber may write SQEs only into the
+  ring of the hub it runs on NOW, since every park is a possible migration.
+  Single-shot ops (`runloom_iouring_loop_recv/send`) look up the current hub's
+  ring at submit and take no ring argument. A multishot recv handle stays bound
+  to the ring that opened it while its fiber migrates: the fiber reads chunks
+  from any hub, and off the owner it posts buffer returns, re-arms and its close
+  to the ring's inbox, which only the owner drains
+  (`runloom_iouring_loop_inbox_drain`, at its loop top). Caching a ring across
+  a park (the old all-C echo) lost SQEs and stranded fibers. Guard: `tests/test_cov100b_iouring.py::test_iouring_loop_echo_survives_fiber_migration`
+  (and big_100 p223, which stalls within seconds without it).
+- **The loop backend's ring is serviced every scheduling round, never only at
+  hub idle.** `hub_main` calls `runloom_iouring_loop_poll` (submit deferred
+  SQEs, post + drain completions, non-blocking) when its local queues run dry,
+  BEFORE the global run-queue and stealing (Go's `netpoll(0)` in findrunnable),
+  and every 64 turns while busy; `loop_wait` is just the blocking form for a hub
+  with nothing to run. A hub fed by the global queue or stealing rarely idles,
+  so idle-only servicing left ops unsubmitted and completions unread for whole
+  busy stretches: 4-19x below epoll on p223, worse with more hubs. Single-shot
+  `loop_recv/send` are direct-first (plain non-blocking syscall, ring only on
+  EAGAIN; `STACKWEAVE_IOURING_LOOP_DIRECT=0` forces the ring), which is what
+  brought single-shot to epoll parity -- the poll alone fixed multishot only.
+  Guard: the same test asserts `stats()["iouring_loop_polls"] > 0`.
 
 ## aio bridge invariants (src/stackweave/aio/)
 - Layout: `_base.py` is the foundation (`_go_io`, `_wait_fd`, `_CURRENT_TASKS`);

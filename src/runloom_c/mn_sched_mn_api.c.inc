@@ -465,6 +465,12 @@ static void runloom_mn_kick_hub_all_modes(runloom_hub_t *h)
     runloom_netpoll_wake_pump((void *)h);
 }
 
+void runloom_mn_hub_kick(void *hub_opaque)
+{
+    if (hub_opaque != NULL)
+        runloom_mn_kick_hub_all_modes((runloom_hub_t *)hub_opaque);
+}
+
 #if defined(IORING_ASYNC_CANCEL_FD)
 /* Broadcast a cancel-by-fd to every live hub's ring (R7 item 1 /
  * DESIGN_mn_iouring_cancel_fd.md).  Called by TCPConn.close() BEFORE close()

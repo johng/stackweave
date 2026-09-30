@@ -50,12 +50,8 @@ import sys
 
 import pytest
 
-from adv_util import (IOURING_LOOP_BROKEN, assert_iouring_loop_ran,
+from adv_util import (IOURING_LOOP_TRAILER, assert_iouring_loop_ran,
                       needs_free_threading)
-
-# The loop backend (and its migration guard) is compiled only on Linux.
-iouring_loop_broken = pytest.mark.xfail(sys.platform.startswith("linux"),
-                                        strict=True, reason=IOURING_LOOP_BROKEN)
 
 FT = needs_free_threading()
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -465,9 +461,8 @@ sys.stdout.write("LOOPRECLAIM_FIRST %d\n" % sum(got_first))
 
 
 @needs_iouring
-@iouring_loop_broken
 def test_loop_ms_close_queued_buffer_reclaim():
-    p = _run(_LOOP_RECLAIM, {"STACKWEAVE_IOURING_LOOP": "1", "STACKWEAVE_IOURING_MS": "1"})
+    p = _run(_LOOP_RECLAIM + IOURING_LOOP_TRAILER, {"STACKWEAVE_IOURING_LOOP": "1", "STACKWEAVE_IOURING_MS": "1"})
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-2000:])
     assert "LOOPRECLAIM_FIRST 12" in p.stdout, (p.stdout[-400:], p.stderr[-1500:])
     assert_iouring_loop_ran(p)

@@ -278,40 +278,59 @@ int runloom_iouring_loop_hub_arm(runloom_iouring_ring_t *r, int epoll_fd);
 void runloom_iouring_loop_wait(runloom_iouring_ring_t *r, long long timeout_ns,
                                int *flags_out);
 
-/* Stage-2 proactor I/O: submit an IORING_OP_RECV/SEND on the current hub's
+/* Stage-2 proactor I/O: submit an IORING_OP_RECV/SEND on the CURRENT hub's
  * ring (deferred -- batched into the next loop_wait), park the fiber, and
- * return bytes (0 = EOF, -1 + errno on error).  Must run on a fiber whose
- * hub owns r.  Used by the all-C serve path under the loop backend. */
-runloom_iouring_ssize_t runloom_iouring_loop_recv(runloom_iouring_ring_t *r,
-                                                  int fd, void *buf, size_t n,
+ * return bytes (0 = EOF, -1 + errno on error).  The ring is looked up at
+ * submit, never passed in: a fiber may migrate at any park, and only the hub it
+ * runs on may write that hub's ring.  EINVAL when the current hub has no ring
+ * (check runloom_mn_current_iouring_ring() first and fall back to readiness
+ * I/O).  Used by the all-C serve path and the TCP C API under the loop
+ * backend. */
+runloom_iouring_ssize_t runloom_iouring_loop_recv(int fd, void *buf, size_t n,
                                                   int flags);
-runloom_iouring_ssize_t runloom_iouring_loop_send(runloom_iouring_ring_t *r,
-                                                  int fd, const void *buf,
+runloom_iouring_ssize_t runloom_iouring_loop_send(int fd, const void *buf,
                                                   size_t n, int flags);
 
 /* Write a hub's wake eventfd to interrupt its ring wait (cross-hub submit). */
 void runloom_iouring_loop_wake(int wake_fd);
 
-/* Close the wake eventfd (the polls die with the ring at destroy). */
+/* Close the wake eventfd (the polls die with the ring at destroy), and fold
+ * the ring's wait count into runloom_iouring_loop_waits(). */
 void runloom_iouring_loop_hub_disarm(runloom_iouring_ring_t *r);
+
+/* Hub ring waits served by the loop backend in this process, counted from
+ * every ring disarmed so far (stats()["iouring_loop_waits"]).  0 = the loop
+ * backend never ran. */
+unsigned long long runloom_iouring_loop_waits(void);
+
+/* Non-blocking per-round service of a hub ring (submit deferred SQEs, post +
+ * drain completions), run by hub_main whenever its local queues are empty and
+ * on a fixed cadence while busy -- the Go netpoll(0) step.  Returns the CQE
+ * count drained; *flags_out as for loop_wait.  Owner hub thread only. */
+int runloom_iouring_loop_poll(runloom_iouring_ring_t *r, int *flags_out);
+
+/* Per-round polls that drained >=1 CQE (stats()["iouring_loop_polls"]). */
+unsigned long long runloom_iouring_loop_polls(void);
 
 /* ---- Stage-3 multishot recv (RUNLOOM_IOURING_MS=1, requires the loop) ----
  *
  * ONE persistent IORING_OP_RECV | MULTISHOT | BUFFER_SELECT SQE per connection
  * delivers a CQE per chunk into the owning hub's provided buffer ring, with no
- * re-submit and no submit/park per recv.  Used by the all-C serve path.  Handle
- * access is single-hub-thread (the echo fiber is hub-pinned), so it is lock-free.
+ * re-submit and no submit/park per recv.  Used by the all-C serve path.  The
+ * stream belongs to the ring it was opened on; its fiber may migrate, and off
+ * that hub it hands buffer returns, re-arms and the close to the ring's owner
+ * through the ring's inbox, drained by runloom_iouring_loop_inbox_drain.
  */
 
 /* 1 if the multishot recv path is enabled (RUNLOOM_IOURING_MS set; read once). */
 int runloom_iouring_loop_ms_enabled(void);
 
-/* Open a multishot recv stream on fd on the current hub's ring r.  Returns an
- * opaque handle, or NULL if multishot isn't available (no per-hub buffer pool /
- * alloc failure) -- the caller then falls back to single-shot loop_recv.  Must
- * run on a fiber whose hub owns r; the fiber must stay on that hub for the
- * stream's lifetime (guaranteed: a woken fiber is hub-pinned). */
-void *runloom_iouring_loop_ms_open(runloom_iouring_ring_t *r, int fd);
+/* Open a multishot recv stream on fd on the current hub's ring, which owns the
+ * stream for its whole life (the calling fiber stays free to migrate).  Returns
+ * an opaque handle, or NULL if multishot isn't available (not on a hub with a
+ * ring, no per-hub buffer pool, alloc failure) -- the caller then falls back to
+ * single-shot loop_recv. */
+void *runloom_iouring_loop_ms_open(int fd);
 
 /* Cooperatively read up to n bytes from the stream into buf.  Returns bytes
  * (>0), 0 on EOF, or -1 with errno on error.  Parks the fiber until data
@@ -319,8 +338,20 @@ void *runloom_iouring_loop_ms_open(runloom_iouring_ring_t *r, int fd);
 runloom_iouring_ssize_t runloom_iouring_loop_ms_recv(void *handle,
                                                      void *buf, size_t n);
 
-/* Close the stream: cancel an armed SQE, wait for its terminal CQE, reclaim
- * held buffers, free the handle.  Do not touch the handle afterwards. */
+/* Close the stream by handing it to its owning hub, which returns its
+ * buffers, cancels an armed SQE and frees the handle at the terminal CQE.
+ * Returns at once; do not touch the handle afterwards. */
 void runloom_iouring_loop_ms_close(void *handle);
+
+/* Owning hub, at the top of each loop turn and before teardown: carry out the
+ * multishot work fibers on other hubs posted to this ring's inbox.  Cheap
+ * no-op when the inbox is empty. */
+void runloom_iouring_loop_inbox_drain(runloom_iouring_ring_t *r);
+/* 1 if the ring's inbox has posted work (hub_main's pre-wait check). */
+int runloom_iouring_loop_inbox_pending(runloom_iouring_ring_t *r);
+/* Buffers returned through an inbox in this process, from every ring disarmed
+ * so far (stats()["iouring_loop_ms_remote_returns"]): a multishot fiber
+ * finished them on a hub other than its stream's. */
+unsigned long long runloom_iouring_loop_ms_remote_returns(void);
 
 #endif

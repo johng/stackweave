@@ -24,6 +24,7 @@ thread even after `stackweave.monkey.patch()` has replaced `threading`.
 """
 import faulthandler
 import os
+import re
 import sys
 import time
 import threading
@@ -331,21 +332,22 @@ def pollable_pipe():
 
 
 # ---------------------------------------------------------------------------
-# The io_uring loop backend (STACKWEAVE_IOURING_LOOP) is BROKEN under cross-hub
-# migration: it pins a fiber to the SINGLE_ISSUER ring of the hub it submitted
-# on, and a migrated fiber lands on another hub's ring.  Migration is always on,
-# so the runtime ignores the flag in every M:N run and prints IOURING_LOOP_IGNORED
-# once.  A test of the backend itself runs its own checks, then
-# assert_iouring_loop_ran(p), and carries a strict xfail with this reason; a
-# migration-safe loop backend drops the note and turns those tests into XPASSes.
-IOURING_LOOP_IGNORED = "STACKWEAVE_IOURING_LOOP ignored"
-IOURING_LOOP_BROKEN = (
-    "io_uring loop backend is broken under cross-hub migration (hub-ring "
-    "affinity does not survive it), so STACKWEAVE_IOURING_LOOP is ignored")
+# The io_uring loop backend (STACKWEAVE_IOURING_LOOP): each hub blocks in its
+# own ring instead of the epoll pump.  A test of the backend appends
+# IOURING_LOOP_TRAILER to its child script, runs its own checks, then
+# assert_iouring_loop_ran(p): the trailer prints stats()["iouring_loop_waits"]
+# (hub ring waits, folded into a process total as each hub tears its ring down),
+# which stays 0 if the run fell back to the epoll pump.  The workloads' own
+# oracles pass on either backend, so this is what proves the loop ran.
+IOURING_LOOP_TRAILER = (
+    "\nimport stackweave_c as _rc_iou_trailer\n"
+    "print('IOURING_LOOP_WAITS %d' % _rc_iou_trailer.stats()['iouring_loop_waits'])\n")
 
 
 def assert_iouring_loop_ran(p):
-    """Fail if the child process `p` ran with the loop backend ignored."""
-    assert IOURING_LOOP_IGNORED not in p.stderr, (
-        "STACKWEAVE_IOURING_LOOP was ignored: the loop backend did not run\n"
-        + p.stderr[-800:])
+    """Fail unless the child process `p` (its script ending in
+    IOURING_LOOP_TRAILER) blocked in a hub io_uring ring at least once."""
+    m = re.search(r"IOURING_LOOP_WAITS (\d+)", p.stdout)
+    assert m is not None and int(m.group(1)) > 0, (
+        "the io_uring loop backend did not run (no hub ring wait)\n"
+        + p.stdout[-400:] + "\n" + p.stderr[-800:])

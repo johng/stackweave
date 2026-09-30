@@ -108,6 +108,3 @@ under the io_uring modes (`STACKWEAVE_TCPCONN_IOURING`, `STACKWEAVE_IOURING_LOOP
 or different tuning knobs: `STACKWEAVE_STACK_PARK_SWEEP_MS`,
 `STACKWEAVE_IDLE_BACKOFF_MS`, hub count via the workload's own env.  R2
 (`tools/soak/matrix.sh`) drives presets across durations and sanitizers.
-`STACKWEAVE_IOURING_LOOP` is broken under migration and ignored in M:N runs
-until it is fixed, so the `iouring-24h` preset currently soaks the default
-backend.
