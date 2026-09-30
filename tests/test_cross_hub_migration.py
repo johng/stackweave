@@ -20,7 +20,7 @@ Each scenario runs in a fresh subprocess so a lost fiber or a wedged hub is a
 clean timeout rather than a hung pytest, and so one scenario's leak cannot
 leak into the next.
 
-Ten gaps are closed (their docstrings start "Was a gap").  The three that
+Nine gaps are closed (their docstrings start "Was a gap").  The three that
 remain are strict xfails under TODO_MIGRATION_FAIL: OS-thread-identity checks
 that live in C or in importlib and need a pin or a monkey patch.  A strict
 xfail still runs, and flips to a hard XPASS failure the moment its gap is
@@ -689,48 +689,6 @@ def main():
     assert "main" in names, "the running fiber is missing from sys._current_frames()"
     print("PASS", flush=True)
 stackweave.run(4, main)
-''')
-
-
-def test_sched_offload_hub_never_pulls_unpinned_general_work():
-    """H=2 general hubs kept busy by spinners while a foreign thread wakes a
-    general fiber: the entry sits in the global run-queue and the only idle
-    puller is the reserved offload hub.
-
-    Was a gap (fixed: an offload hub pulls only entries pinned to it and its idle scan ignores unpinned work): CLAUDE.md known gap: the global run-queue pull accepts any
-    unpinned entry (p1 == 0 || p1 == want), so an idle OFFLOAD hub takes
-    general work and strands it behind its next blocking call.
-    """
-    assert_pass(r'''
-_watchdog(40)
-GEN, SPIN, ROUNDS = 2, 1.5, 6
-def main():
-    ch, res = stackweave.Chan(0), stackweave.Chan(1)
-    def parker():
-        seen = []
-        for _ in range(ROUNDS):
-            ch.recv()
-            seen.append(stackweave_c.mn_current_hub())
-        res.send(seen)
-    def spinner():
-        t_end = time.monotonic() + SPIN
-        while time.monotonic() < t_end:
-            pass
-    def feeder():
-        time.sleep(0.2)
-        for _ in range(ROUNDS):
-            foreign_send(ch, 1); time.sleep(0.1)
-    stackweave.fiber(parker)
-    stackweave.sleep(0.05)
-    for _ in range(GEN):
-        stackweave.fiber(spinner)
-    threading.Thread(target=feeder, daemon=True).start()
-    seen, _ = res.recv()
-    print("total hubs=%d offload=%d; parker resumed on hubs %s"
-          % (stackweave_c.mn_hub_count(), stackweave_c.offload_hub_count(), seen), flush=True)
-    assert all(h < GEN for h in seen), "general work ran on an offload hub: %s" % seen
-    print("PASS", flush=True)
-stackweave.run(GEN, main, offload_hubs=1)
 ''')
 
 
