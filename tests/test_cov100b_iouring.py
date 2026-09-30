@@ -163,9 +163,10 @@ def test_iouring_loop_echo_survives_fiber_migration(multishot):
         "stdout=%s\nstderr=%s" % (p.stdout[-400:], p.stderr[-2000:]))
     assert "MIGRATE_OK 48" in p.stdout, (p.stdout[-400:], p.stderr[-800:])
     assert_iouring_loop_ran(p)
-    # Completions must be served BETWEEN fibers (the per-round loop_poll), not
-    # only when a hub idles: with 4 hubs and 96 fibers the hubs rarely idle, so
-    # an idle-only service would leave ops waiting a whole busy stretch.
+    # Completions must be served BETWEEN fibers (the per-round loop_poll at
+    # the pick step or the 64-turn self-pump), not only when a hub idles: with
+    # 4 hubs and 96 fibers the hubs rarely idle, so an idle-only service would
+    # leave ops waiting a whole busy stretch.
     m = re.search(r"LOOP_POLLS (\d+)", p.stdout)
     assert m and int(m.group(1)) > 0, (
         "no per-round ring poll drained a completion\n" + p.stdout[-400:])
