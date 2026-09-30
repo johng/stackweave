@@ -290,6 +290,17 @@ int runloom_sim_conn_has_fd(int fd);
 long long runloom_netpoll_deadline_peek_ns(void);
 int runloom_pump_drain_expired_pub(long long now_ns);
 
+/* The same deadline plane for a hub that blocks somewhere OTHER than the pump
+ * (the io_uring loop backend blocks in its ring).  runloom_netpoll_pump does
+ * two things for timed parks that such a hub must do itself: clamp its wait to
+ * the earliest deadline across EVERY pool, and sweep the expired ones after
+ * the wait.  gap: ns until the earliest timed-park deadline in any pool, 0 if
+ * it has passed, -1 if there is none.  drain_expired_all: fire every timeout
+ * (and stale-arm probe tick) with deadline <= now across every pool; returns
+ * parkers woken.  Wall-clock; not for the sim plane. */
+long long runloom_netpoll_deadline_gap_ns(void);
+int runloom_netpoll_drain_expired_all(void);
+
 /* I5 settle-reap: reap every HUB-homed parker (cancel -1) at the settled
  * census; bump the reap tally (rc.sim_reap_count) by the reaped count. */
 int runloom_netpoll_drain_parked_mn(void);

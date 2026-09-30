@@ -910,6 +910,17 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                     if (gap_ns < 0) gap_ns = 0;
                     if (gap_ns < idle_ns) idle_ns = gap_ns;
                 }
+                /* And by the nearest netpoll TIMED-park deadline (wait_fd with a
+                 * timeout, the stale-arm probe tick) when this hub blocks in its
+                 * ring: the epoll pump clamps to that heap itself, the ring wait
+                 * does not, so without this a wait_fd timeout on an fd that
+                 * never becomes ready fired only at the next epoll edge -- for
+                 * a deadline_waker on the always-quiet wake fd, never (the
+                 * WithTimeout-under-loop failure).  Every pool, as the pump. */
+                if (h->loop_wake_fd >= 0 && !runloom_sim_enabled()) {
+                    long long gap_ns = runloom_netpoll_deadline_gap_ns();
+                    if (gap_ns >= 0 && gap_ns < idle_ns) idle_ns = gap_ns;
+                }
                 parked = runloom_netpoll_parked_count();
                 /* WAKEP (park double-check): idle_ns is now final.  Only a DEEP
                  * wait (past ~2ms, where re-poll is too slow to catch surplus on
@@ -1008,6 +1019,15 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                         PyEval_RestoreThread(saved);
                     }
                     __atomic_store_n(&h->ring_waiting, 0, __ATOMIC_RELEASE);
+                    /* The pump's post-wait expiry sweep, which this branch
+                     * otherwise skips (pump(0) below runs only on F_EPOLL, and
+                     * a timed park whose fd never becomes ready produces no
+                     * epoll edge): fire the timed parks whose deadline has
+                     * passed, and the stale-arm probe ticks, in every pool.
+                     * Woken gs land via mn_wake_g and are picked up at the
+                     * loop top.  Pairs with the deadline clamp on idle_ns. */
+                    if (!runloom_sim_enabled())
+                        (void)runloom_netpoll_drain_expired_all();
                     /* Drain the per-hub epoll when the ring's F_EPOLL poll fired.
                      * ROOT-CAUSED + FIXED: the poll-on-the-epoll-fd bridge used to
                      * MISS a socket-readable edge because a STANDING MULTISHOT poll
