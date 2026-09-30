@@ -152,49 +152,10 @@ True if the kernel supports io_uring (Linux 5.1+).
 
 See [Parallelism](parallelism.md).
 
-- `mn_init(n=0, offload_hubs=0)` -- start `n` hub threads (defaults to
-  `cpu_count`), plus `offload_hubs` reserved for blocking work (below).
+- `mn_init(n=0)` -- start `n` hub threads (defaults to `cpu_count`).
 - `mn_fiber(fn) → G` -- spawn on a round-robin hub.
 - `mn_run() → int` -- wait for all hubs to drain.
 - `mn_fini()` -- tear down the pool.
-
-#### Offload hubs
-
-`mn_init(n, offload_hubs=K)` reserves K **extra** hubs, added to `n` and never
-carved out of it, on which a blocking call may run as an ordinary fiber. The
-default is 0 (none).
-
-Offload hubs are excluded from general placement, from work-stealing in both
-directions, from `sysmon` preemption, and from the monopoly-yield scan -- so no
-general work can land on one and stall behind the block.
-
-- `offload_fiber(fn, stack_size=0)` -- spawn `fn` on a reserved offload hub.
-  Raises `RuntimeError` if none are reserved; it will **not** fall back to a
-  general hub, because a blocking call there strands every fiber woken on that
-  hub for the duration.
-- `offload_hub_count() → int` -- how many are reserved (`0` = off). Also the
-  bound on concurrent blocking calls: a blocked hub cannot run its scheduler
-  loop, so K hubs carry K of them.
-
-`stackweave.run(n, main_fn, offload_hubs=K)` threads the same argument through.
-Hubs past the 64 per-hub parker pools share the default pool, as they always
-have -- which costs offload hubs nothing, since they never park on an fd.
-
-The result comes back the ordinary way -- a channel or `WaitGroup` -- with the
-caller parked on its own (unblocked) hub:
-
-```python
-ch = stackweave.Chan(1)
-stackweave_c.offload_fiber(lambda: ch.send(some_blocking_call()))
-result, alive = ch.recv()      # recv() is (value, ok), not a bare value
-```
-
-The offload fiber is born and dies on its offload hub, so this scheme does not
-rely on cross-hub migration.
-
-`stackweave.monkey.offload()` routes through offload hubs automatically when any
-are reserved, and falls back to the thread pool otherwise -- see
-[Monkey-patching](monkey-patching.md).
 
 ### Preemption
 

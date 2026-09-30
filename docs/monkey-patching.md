@@ -177,15 +177,15 @@ for direct ring access.
 That executor is the same backend `stackweave.monkey.offload()` uses, and it is
 the mechanism described in the next section.
 
-### How offloading works, and where it is going
+### How offloading works
 
 A blocking call that stackweave cannot make cooperative -- buffered file
 `read`/`write`, a C-extension database driver, `socket.gethostbyaddr` (libc,
 and it takes no timeout), CPU-bound hashing -- has to run somewhere other than
 the fiber's hub, or it stops that hub's scheduler loop.
 
-**Today** that somewhere is a pool of bare OS threads
-(`monkey/_base.py`, `_ThreadPoolBackend`): worker threads block in a raw
+That somewhere is a pool of bare OS threads (`monkey/_base.py`,
+`_ThreadPoolBackend`): worker threads block in a raw
 `_queue.SimpleQueue.get()`, and each submitted task gets a self-pipe from a
 parker pool so the calling fiber can park on `wait_fd` until a worker writes a
 wake byte. It works, but those workers sit *outside* the scheduler entirely --
@@ -193,29 +193,8 @@ no fiber, no deque, no scheduler loop -- so submission, completion and wakeup
 are all hand-rolled, and that hand-rolled path is where this subsystem's bugs
 have historically lived.
 
-**The replacement**, live now, is offload hubs (see
-[API reference](api-reference.md#offload-hubs)): reserve K extra hubs with
-`stackweave.run(n, main, offload_hubs=K)`, run the blocking call there as an
-ordinary fiber, and let the result come back over a normal channel. Submit, completion and wake then reuse the same scheduler code
-every other fiber uses, and there is no completion protocol left to get wrong.
-
-Two consequences worth knowing:
-
-- The offload fiber is born and dies on its hub; the caller just parks on a
-  normal channel.
-- It does **not** raise blocking concurrency. A blocked hub cannot run its
-  scheduler loop, so K offload hubs carry K concurrent blocking calls, the same
-  arithmetic as the thread pool. The gain is correctness and maintainability,
-  not throughput.
-
-`monkey.offload()` routes through offload hubs automatically whenever any are
-reserved, and falls back to the thread pool when none are -- so the default
-build behaves exactly as before. Reserve them with
-`stackweave.run(n, main, offload_hubs=K)`.
-
-The pool is not going away: it is still the only route for a caller outside any
-fiber (foreign OS threads must never park a non-existent fiber), for a
-single-thread `run(1)`, and for anyone who reserves none.
+A caller outside any fiber skips the pool and runs the call inline, so a
+foreign OS thread never parks a non-existent fiber.
 
 ## Listing applied patches
 
