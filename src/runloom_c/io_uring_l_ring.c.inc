@@ -209,22 +209,37 @@ int runloom_iouring_ring_inflight(const runloom_iouring_ring_t *r)
     return __atomic_load_n(&r->inflight, __ATOMIC_ACQUIRE);
 }
 
+/* Defined in io_uring_l_loop.c.inc (same TU, #included after this file). */
+static void runloom_iouring_loop_flush(runloom_iouring_ring_t *r);
+
 /* Submit one SQE to a hub ring.  No submission mutex: the caller is
  * the SINGLE issuer (this ring's owning hub thread).  Returns 0 on
- * success, -1 with errno on failure. */
+ * success, -1 with errno on failure.
+ *
+ * On a LOOP-ARMED ring (loop_wake_fd >= 0) the SQ also holds deferred SQEs
+ * that loop_flush submits in batches, accounted by sq_submitted_tail.  An
+ * enter(to_submit=1) here would make the kernel consume the OLDEST pending
+ * SQE, not this one, and leave sq_submitted_tail one behind for good (every
+ * later loop_poll / loop_wait then pays an enter for nothing); and an SQ full
+ * of deferred, unsubmitted SQEs cannot drain, so the full-loop would spin.
+ * So on a loop ring this writes the SQE deferred and submits through
+ * loop_flush, which is the batch discipline every other writer uses. */
 static int runloom_iouring_ring_submit_sqe(runloom_iouring_ring_t *r,
                                         struct io_uring_sqe sqe_template,
                                         runloom_iouring_op_t *op)
 {
     unsigned tail, head, idx;
     int n;
+    const int loop_ring = (r->loop_wake_fd >= 0);
     while (1) {
         tail = __atomic_load_n(r->sq_tail, __ATOMIC_RELAXED);
         head = __atomic_load_n(r->sq_head, __ATOMIC_ACQUIRE);
         if ((tail - head) < r->sq_entries) break;
         /* SQ full.  Drain CQ to free SQEs (the SINGLE issuer assumption
          * also means we drain inline here without competing with anyone
-         * else). */
+         * else).  A loop ring must submit its deferred SQEs first, or the
+         * kernel has nothing to complete. */
+        if (loop_ring) runloom_iouring_loop_flush(r);
         runloom_iouring_ring_drain(r);
     }
     idx = tail & r->sq_mask;
@@ -232,6 +247,14 @@ static int runloom_iouring_ring_submit_sqe(runloom_iouring_ring_t *r,
     r->sqes[idx].user_data = (uint64_t)(uintptr_t)op;
     r->sq_array[idx] = idx;
     __atomic_store_n(r->sq_tail, tail + 1, __ATOMIC_RELEASE);
+    if (loop_ring) {
+        /* Deferred + batch-submitted; a transient enter failure leaves the
+         * SQE pending for the next flush rather than failing the op. */
+        runloom_iouring_loop_flush(r);
+        __atomic_add_fetch(&r->inflight, 1, __ATOMIC_ACQ_REL);
+        __atomic_add_fetch(&runloom_iouring_inflight_count, 1, __ATOMIC_ACQ_REL);
+        return 0;
+    }
     n = sys_io_uring_submit_eintr(r->ring_fd, 1);   /* retry on EINTR */
     if (n < 0) {
         /* Non-EINTR io_uring_enter failure (e.g. EAGAIN/EBUSY under resource

@@ -768,7 +768,11 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
             int lflags = 0;
             int n = runloom_iouring_loop_poll(h->iouring_ring, &lflags);
             if (lflags & RUNLOOM_LOOP_F_EPOLL) runloom_netpoll_pump(0);
-            if (n > 0) continue;
+            /* Re-pick after an op completion AND after an epoll pump: the
+             * pump wakes netpoll parkers onto THIS deque (local wake), and
+             * nothing below re-checks the deque before the idle wait -- the
+             * woken gs would sit there for a whole idle_ns tick. */
+            if (n > 0 || (lflags & RUNLOOM_LOOP_F_EPOLL)) continue;
         }
         if (g == NULL) {
             /* Global run-queue: woken migratable gs (per-g-tstate) that any

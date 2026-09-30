@@ -305,8 +305,9 @@ unsigned long long runloom_iouring_loop_waits(void);
 
 /* Non-blocking per-round service of a hub ring (submit deferred SQEs, post +
  * drain completions), run by hub_main whenever its local queues are empty and
- * on a fixed cadence while busy -- the Go netpoll(0) step.  Returns the CQE
- * count drained; *flags_out as for loop_wait.  Owner hub thread only. */
+ * on a fixed cadence while busy -- the Go netpoll(0) step.  Returns the number
+ * of OP completions drained (sentinel polls excluded: they wake nothing by
+ * themselves); *flags_out as for loop_wait.  Owner hub thread only. */
 int runloom_iouring_loop_poll(runloom_iouring_ring_t *r, int *flags_out);
 
 /* Per-round polls that drained >=1 CQE (stats()["iouring_loop_polls"]). */

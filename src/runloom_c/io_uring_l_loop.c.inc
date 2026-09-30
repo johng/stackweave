@@ -538,8 +538,12 @@ int runloom_iouring_loop_poll(runloom_iouring_ring_t *r, int *flags_out)
     tail = __atomic_load_n(r->cq_tail, __ATOMIC_ACQUIRE);
     if (head == tail) {
         /* Nothing posted.  Enter only when the kernel says it has deferred
-         * task work to run (TASKRUN); otherwise this poll cost two loads. */
-        if (!(__atomic_load_n(r->sq_flags, __ATOMIC_ACQUIRE) & IORING_SQ_TASKRUN))
+         * task work to run (TASKRUN) or CQEs parked on its overflow list
+         * (CQ_OVERFLOW: more completions than the CQ held in one enter; the
+         * task-work list is then EMPTY, so TASKRUN alone would leave them
+         * there until the hub idles).  Otherwise this poll cost two loads. */
+        if (!(__atomic_load_n(r->sq_flags, __ATOMIC_ACQUIRE) &
+              (IORING_SQ_TASKRUN | IORING_SQ_CQ_OVERFLOW)))
             return 0;
         (void)sys_io_uring_enter(r->ring_fd, 0, 0, IORING_ENTER_GETEVENTS, NULL, 0);
         head = __atomic_load_n(r->cq_head, __ATOMIC_RELAXED);
@@ -869,6 +873,11 @@ static int runloom_iouring_loop_ms_submit(runloom_loop_ms_t *h)
 static void runloom_loop_ms_submit_cancel(runloom_loop_ms_t *h)
 {
     runloom_iouring_ring_t *r = h->ring;
+    /* Taken BEFORE the SQ-full loop: its drain may reap this handle's own
+     * terminal CQE (the multishot ended on its own), and with h->closing set
+     * on_cqe frees h.  The cancel then targets a dead user_data (-ENOENT,
+     * discarded), which is harmless, but h must not be read after the loop. */
+    const uint64_t target = (uint64_t)(uintptr_t)&h->op;
     unsigned tail, head, idx;
     struct io_uring_sqe *sqe;
     for (;;) {
@@ -882,7 +891,7 @@ static void runloom_loop_ms_submit_cancel(runloom_loop_ms_t *h)
     sqe = &r->sqes[idx];
     memset(sqe, 0, sizeof(*sqe));
     sqe->opcode    = IORING_OP_ASYNC_CANCEL;
-    sqe->addr      = (uint64_t)(uintptr_t)&h->op;   /* cancel by user_data */
+    sqe->addr      = target;                         /* cancel by user_data */
     sqe->user_data = RUNLOOM_LOOP_UD_MSCANCEL;       /* drain discards it */
     r->sq_array[idx] = idx;
     __atomic_store_n(r->sq_tail, tail + 1, __ATOMIC_RELEASE);
