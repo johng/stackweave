@@ -20,11 +20,11 @@ Each scenario runs in a fresh subprocess so a lost fiber or a wedged hub is a
 clean timeout rather than a hung pytest, and so one scenario's leak cannot
 leak into the next.
 
-Twelve gaps are closed (their docstrings start "Was a gap").  The three that
-remain are strict xfails under TODO_MIGRATION_FAIL: OS-thread-identity checks
-that live in C or in importlib and need a pin or a monkey patch.  A strict
-xfail still runs, and flips to a hard XPASS failure the moment its gap is
-closed.  The cost of one PyThreadState per fiber (gc.collect() per parked
+Thirteen gaps are closed (their docstrings start "Was a gap").  The three
+that remain are strict xfails under TODO_MIGRATION_FAIL: OS-thread-identity
+checks that live in C or in importlib and need a pin or a monkey patch.  A
+strict xfail still runs, and flips to a hard XPASS failure the moment its gap
+is closed.  The cost of one PyThreadState per fiber (gc.collect() per parked
 fiber, RSS per parked fiber, spawn) was bounded against the per-hub
 scheduler while that scheduler existed; with migration the only mode there
 is no in-tree baseline, so those three comparisons are not carried here.
@@ -895,6 +895,113 @@ assert remote < max(100.0, 4 * own), (
     "the spawner's own hub" % (remote, own))
 print("PASS", flush=True)
 ''', timeout=90)
+
+
+def test_sched_local_wake_is_stolen_promptly_by_a_shallow_idle_hub(monkeypatch):
+    """Was a gap (fixed: an idle-condvar wait that is not registered for WAKEP
+    is capped at 200 us, STACKWEAVE_IDLE_UNREG_WAIT_US): a fiber pinned to
+    hub 0 wakes a receiver -- a local wake, so the receiver lands on hub 0's
+    deque -- and then spins 2 ms, so only a steal by the idle hub 1 can run
+    the receiver in time.  WAKEP kicks only hubs registered for a wait past
+    2 ms; with the idle backoff a hub spends its first ~3 ms of idleness in
+    UNREGISTERED waits of 0.4/0.8/1.6 ms that nothing interrupts for stealable
+    surplus, so hub 1 was always in one of them when the next wake landed.
+    The receiver has no sleeps or timers, so nothing else wakes hub 1.
+
+    What the cap buys depends on how promptly the machine's timers fire, so
+    the scenario runs with the cap and with it turned off
+    (STACKWEAVE_IDLE_UNREG_WAIT_US=0), twice each, interleaved.  The measure
+    is the mean STEAL DELAY: a stolen round counts its wake-to-run latency, a
+    round the idle hub never stole within the spin counts the whole 2 ms.  On
+    an M5 it is ~10 us capped vs 1.2-1.3 ms uncapped; with QoS timer
+    coalescing (taskpolicy -c utility, a 200 us sleep takes ~1.8 ms, like a
+    loaded 3-vCPU CI runner) ~0.9 ms vs 1.6-1.8 ms.  An absolute bound
+    (capped H=2 against an H=4 reference) failed on the 3-vCPU macOS CI
+    runner for that reason.  Where a 200 us sleep takes several ms (background
+    QoS: 8-10 ms) the cap cannot show and the test skips.
+    """
+    monkeypatch.setenv("STACKWEAVE_IDLE_BACKOFF_MS", "32")   # the cap needs the backoff
+    runs = {"capped": [], "uncapped": []}
+    for _ in range(2):
+        for kind in ("capped", "uncapped"):
+            if kind == "capped":
+                monkeypatch.delenv("STACKWEAVE_IDLE_UNREG_WAIT_US", raising=False)
+            else:
+                monkeypatch.setenv("STACKWEAVE_IDLE_UNREG_WAIT_US", "0")
+            rc, out, err = run_scenario(STEAL_DELAY, timeout=60)
+            m = re.search(r"DELAY=([0-9.]+) STOLEN=([0-9.]+) SLEEP200=([0-9.]+)", out)
+            if rc != 0 or m is None:
+                print("--- %s scenario stdout ---\n%s\n--- stderr ---\n%s" % (kind, out, err))
+                pytest.fail("%s run rc=%s: %s" % (kind, rc, _key_line(out, err)),
+                            pytrace=False)
+            runs[kind].append(tuple(float(x) for x in m.groups()))
+    capped = sum(r[0] for r in runs["capped"]) / 2
+    uncapped = sum(r[0] for r in runs["uncapped"]) / 2
+    stolen = min(r[1] for r in runs["capped"])
+    sleep200 = max(r[2] for kinds in runs.values() for r in kinds)
+    print("mean steal delay: capped %.0f us (stolen >= %.0f%%), uncapped %.0f us; "
+          "a 200 us sleep takes %.0f us here" % (capped, 100 * stolen, uncapped, sleep200))
+    if sleep200 > 4000:
+        pytest.skip("timers here are too coarse for the cap to show (a 200 us sleep "
+                    "takes %.1f ms)" % (sleep200 / 1e3))
+    # A FAILED steal is a regression too (a skip would hide it): with stealing
+    # broken the sender parks on its next send and hub 0 runs the receiver.
+    # 0.5, not 0.9, so a briefly starved hub thread on a loaded runner does not
+    # flake it.
+    assert stolen >= 0.5, (
+        "only %.0f%% of wakes were stolen by the idle hub with the cap" % (100 * stolen))
+    assert capped < 0.7 * uncapped, (
+        "mean steal delay %.0f us with the unregistered-wait cap vs %.0f us without: "
+        "the cap no longer shortens an idle hub's unregistered waits" % (capped, uncapped))
+
+
+STEAL_DELAY = r'''
+_watchdog(40)
+N, WARM, SPIN_US = 150, 20, 2000
+def sleep200_us():
+    """Median wall time of a 200 us sleep on a fresh thread: how coarse this
+    machine's timers are right now."""
+    out = []
+    def probe():
+        for _ in range(30):
+            t0 = time.perf_counter_ns()
+            time.sleep(0.0002)
+            out.append(time.perf_counter_ns() - t0)
+    t = threading.Thread(target=probe)
+    t.start()
+    t.join()
+    out.sort()
+    return out[len(out) // 2] / 1e3
+def steal_delay_us():
+    ch, lat, where = stackweave_c.Chan(0), [], []
+    def sender():
+        for _ in range(N + WARM):
+            ch.send(time.perf_counter_ns())
+            end = time.perf_counter_ns() + SPIN_US * 1000
+            while time.perf_counter_ns() < end:
+                pass
+        ch.send(None)
+    def receiver():
+        while True:
+            t0, _ = ch.recv()
+            if t0 is None:
+                return
+            lat.append(time.perf_counter_ns() - t0)
+            where.append(stackweave_c.mn_current_hub())
+    stackweave_c.mn_init(2)
+    stackweave_c.mn_fiber(sender, hub=0)
+    stackweave_c.mn_fiber(receiver)
+    stackweave_c.mn_run()
+    stackweave_c.mn_fini()
+    lat, where = lat[WARM:], where[WARM:]
+    # A round hub 1 did not steal ran on hub 0 once the sender parked on its
+    # next send: the idle hub missed the whole spin, so charge it the spin.
+    delay = [l / 1e3 if h != 0 else SPIN_US for l, h in zip(lat, where)]
+    return sum(delay) / len(delay), sum(h != 0 for h in where) / len(where)
+slept = sleep200_us()
+delay, stolen = steal_delay_us()
+print("DELAY=%.1f STOLEN=%.3f SLEEP200=%.0f" % (delay, stolen, slept), flush=True)
+'''
 
 
 def test_sched_foreign_thread_wake_reaches_a_shallow_idle_hub_promptly():

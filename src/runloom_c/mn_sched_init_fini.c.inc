@@ -135,6 +135,23 @@ int runloom_mn_init(int n_threads)
         PyErr_NoMemory();
         return -1;
     }
+    /* Each hub's idle_cond is its one TIMED wait, so runloom_cond_init gives it
+     * the clock runloom_cond_timedwait_ns measures against (MONOTONIC where
+     * clock selection exists), and can fail doing so.  Initialise them all
+     * before anything else is set up so a failure unwinds to nothing: never
+     * run a hub on a failed condvar, and never fall back to a default
+     * (REALTIME) one, which a MONOTONIC deadline would turn into a busy loop. */
+    for (i = 0; i < n_threads; i++) {
+        int crc = runloom_cond_init(&runloom_hubs[i].idle_cond);
+        if (crc != 0) {
+            while (--i >= 0) runloom_cond_destroy(&runloom_hubs[i].idle_cond);
+            PyMem_Free(runloom_hubs);
+            runloom_hubs = NULL;
+            errno = crc;
+            PyErr_SetFromErrno(PyExc_OSError);
+            return -1;
+        }
+    }
     runloom_hub_count = n_threads;
     main_ts = PyThreadState_Get();
     interp = main_ts->interp;
@@ -160,6 +177,8 @@ int runloom_mn_init(int n_threads)
     if (runloom_sim_enabled() && !runloom_mn_ctrl_controlled()) {
         const char *simmn = getenv("STACKWEAVE_SIM_MN");
         if (simmn != NULL && simmn[0] != '\0' && simmn[0] != '0') {
+            for (i = 0; i < n_threads; i++)
+                runloom_cond_destroy(&runloom_hubs[i].idle_cond);
             PyMem_Free(runloom_hubs);
             runloom_hubs = NULL;
             runloom_hub_count = 0;
@@ -190,7 +209,7 @@ int runloom_mn_init(int n_threads)
         /* BUG #10 per-hub idle wake (see mn_sched.c sub_gen). */
         h->sub_gen = 0;
         runloom_mutex_init(&h->idle_lock);
-        runloom_cond_init(&h->idle_cond);
+        /* h->idle_cond was initialised (and checked) right after the alloc. */
         h->idle_waiting = 0;
         /* Cancel-by-fd mailbox (R7 item 1). */
         runloom_mutex_init(&h->cancel_fd_lock);

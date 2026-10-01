@@ -25,6 +25,9 @@ static int pthread_cond_wait(pthread_cond_t *c, void *m);
 static int pthread_cond_timedwait(pthread_cond_t *c, void *m, void *ts);
 static int pthread_cond_signal(pthread_cond_t *c);
 static int pthread_cond_broadcast(pthread_cond_t *c);
+/* No pthread_condattr_* in that model either: keep plat_compat.h's condvar
+ * helpers on the attribute-free (REALTIME-deadline) path. */
+#define RUNLOOM_COND_MONOTONIC 0
 
 #define RUNLOOM_CLDEQUE_CAP 4
 #include "cldeque.h"

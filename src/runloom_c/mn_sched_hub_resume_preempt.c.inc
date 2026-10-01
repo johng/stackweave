@@ -604,8 +604,17 @@ static void runloom_mn_ctrl_init(int n)
         PyMem_Free(runloom_mn_ctrl.offload); runloom_mn_ctrl.offload = NULL;
         return;                                 /* OOM -> stay disabled */
     }
+    /* runloom_cond_init can fail (the MONOTONIC clock attribute, see
+     * plat_compat.h).  Handle it like the OOM above: stay disabled, so the
+     * baton condvar is never waited on.  mn_init's effective-state check then
+     * refuses a native mn-sim run, exactly as for OOM. */
+    if (runloom_cond_init(&runloom_mn_ctrl.cond) != 0) {
+        PyMem_Free(runloom_mn_ctrl.want);    runloom_mn_ctrl.want = NULL;
+        PyMem_Free(runloom_mn_ctrl.seen);    runloom_mn_ctrl.seen = NULL;
+        PyMem_Free(runloom_mn_ctrl.offload); runloom_mn_ctrl.offload = NULL;
+        return;
+    }
     runloom_mutex_init(&runloom_mn_ctrl.lock);
-    runloom_cond_init(&runloom_mn_ctrl.cond);
     runloom_mn_ctrl.n = n;
     runloom_mn_ctrl.current = -1;
     runloom_mn_ctrl.armed = 0;                  /* mn_run arms after initial placement */
