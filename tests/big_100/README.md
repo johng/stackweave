@@ -25,30 +25,33 @@ requirements:
 
 ## Requirements
 
-- Free-threaded CPython 3.14t built with the extension:
-  `~/.pyenv/versions/3.14.4t/bin/python3`, `PYTHON_GIL=0`.
-- Build the extension once: `python setup.py build_ext --inplace` (repo root).
+- Free-threaded CPython 3.14t built with both `src/patches/` halves:
+  `~/.pyenv/versions/3.14.4t-mig/bin/python3.14t`, `PYTHON_GIL=0`. M:N is
+  migration-only, and a stock 3.14t crashes under churn at `--hubs` ≥ 2.
+- Build the extension once with that interpreter (repo root):
+  `STACKWEAVE_EXTRA_CFLAGS="-DPy_TSTATE_ALLOC_HOME -DPy_TSTATE_EXEC_HOME" python setup.py build_ext --inplace`.
 - The harness auto-raises `RLIMIT_NOFILE` (via `sudo -n prlimit`) so socket
   projects can open tens of thousands of fds.
 
 ## Run one project
 
 ```
-PYTHON_GIL=0 ~/.pyenv/versions/3.14.4t/bin/python3 big_100/p01_tcp_echo.py \
+PYTHON_GIL=0 ~/.pyenv/versions/3.14.4t-mig/bin/python3.14t big_100/p01_tcp_echo.py \
     --duration 60 --hubs 8 --funcs 10000
 ```
 
 ## Run many in parallel (use the whole box)
 
-`run_all.py` runs projects concurrently as subprocesses. The default packs the
-64-core machine: 16 projects at a time × 4 hubs each ≈ 64 cores.
+`run_all.py` runs projects concurrently as subprocesses, under the interpreter
+that runs it (override with `--python` or `STACKWEAVE_PYTHON`). The default packs
+the 64-core machine: 16 projects at a time × 4 hubs each ≈ 64 cores.
 
 ```
-PYTHON_GIL=0 ~/.pyenv/versions/3.14.4t/bin/python3 big_100/run_all.py \
-    --jobs 16 --hubs 4 --duration 3600
+PY=~/.pyenv/versions/3.14.4t-mig/bin/python3.14t   # both src/patches/ halves
+PYTHON_GIL=0 $PY big_100/run_all.py --jobs 16 --hubs 4 --duration 3600
 # a subset / a quick smoke:
-big_100/run_all.py --only 1,3,7,36 --duration 30 --hubs 4
-big_100/run_all.py --from 1 --to 20 --duration 600 --jobs 10 --hubs 6
+PYTHON_GIL=0 $PY big_100/run_all.py --only 1,3,7,36 --duration 30 --hubs 4
+PYTHON_GIL=0 $PY big_100/run_all.py --from 1 --to 20 --duration 600 --jobs 10 --hubs 6
 ```
 
 Per-project logs land in `big_100/logs/pNN.log`; a summary table prints at the
@@ -61,15 +64,14 @@ extension. The full writeups (FINDINGS.md) were not carried into this tree.
 Headlines, as recorded at the time:
 
 > **Note (2026-10-01):** the handoff rescue behind #2 was removed (cbd40067),
-> so `--handoff` / `STACKWEAVE_HANDOFF` no longer do anything. M:N has since
+> and the harness's `--handoff` flag with it. M:N has since
 > become migration-only (#23); re-check a finding against the current tree
 > before relying on it.
 
 - **#1 (fixed):** `monkey.patch()` broke every `stackweave.fiber()` (the wrapper
   dropped the stack-size positional arg). Fixed in `src/stackweave/monkey/`.
 - **#2:** the handoff rescue corrupts memory under high socket concurrency
-  (SIGSEGV/SIGBUS). The harness disables it by default (`STACKWEAVE_HANDOFF=0`);
-  pass `--handoff` to reproduce.
+  (SIGSEGV/SIGBUS).
 - **#4:** high-rate `stackweave.blocking` / subprocess offload deadlocks (a lost
   wakeup in the offload-result wait); worked around with `procutil`.
 - **#5:** `close()` doesn't wake a goroutine parked in `accept()` (latent server
@@ -82,8 +84,8 @@ Headlines, as recorded at the time:
   same-module imports false-deadlock; a cooperative lock in `__del__` aborts.
 
 Several of these share one root cause: M:N parallelism breaks CPython's
-one-thread-per-unit-of-concurrency assumption. The bug-reproducing knobs are
-preserved (e.g. `--handoff`, higher `--funcs`) so each finding stays
+one-thread-per-unit-of-concurrency assumption. The bug-reproducing knobs that
+still apply are preserved (e.g. higher `--funcs`) so each finding stays
 demonstrable.
 
 **Running the orchestrator at high `--jobs` is the strongest BUG #4 reproducer**

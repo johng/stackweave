@@ -718,7 +718,7 @@ def test_simplequeue_foreign_producer_fiber_consumer():
 
 # ==========================================================================
 # 7. multiprocessing.Queue _feed-thread corpus -- spawn AND forkserver ONLY
-#    (fork deadlocks under M:N per RUNTIME_GOTCHAS).  Run in a subprocess so a
+#    (fork deadlocks under M:N).  Run in a subprocess so a
 #    crash is contained; the feed thread is a foreign daemon thread taking
 #    patched SemLock/Condition.
 # ==========================================================================

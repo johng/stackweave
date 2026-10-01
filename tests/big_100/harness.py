@@ -75,8 +75,8 @@ for _ in range(6):
     _d = _parent
 
 # Quiet the per-wedge SYSMON diagnostic spam by default (the detector +
-# handoff + preemption stay fully ON -- this only suppresses the WEDGED/
-# RECOVERED stderr lines that otherwise flood a multi-hour log).  Override
+# preemption stay fully ON -- this only suppresses the WEDGED/RECOVERED
+# stderr lines that otherwise flood a multi-hour log).  Override
 # with STACKWEAVE_SYSMON_QUIET=0 to see them.  Must be set before mn_init().
 os.environ.setdefault("STACKWEAVE_SYSMON_QUIET", "1")
 
@@ -391,11 +391,6 @@ class Harness(object):
                         help="stop on first invariant violation (default on)")
         ap.add_argument("--no-fail-fast", dest="fail_fast",
                         action="store_false")
-        ap.add_argument("--handoff", action="store_true", default=False,
-                        help="enable the STACKWEAVE_HANDOFF rescue (default OFF: "
-                             "the campaign found it corrupts memory under high "
-                             "socket concurrency -- see FINDINGS.md BUG #2; "
-                             "pass this to reproduce that crash)")
         ap.add_argument("--max-concurrent", type=int, default=None,
                         metavar="K",
                         help="limit goroutines per run_pool call to K.  "
@@ -604,13 +599,6 @@ class Harness(object):
                 stackweave_c.set_stack_size(self.stack_kb * 1024)
             except Exception:
                 pass
-
-        # BUG #2 workaround (see FINDINGS.md): the handoff rescue corrupts
-        # memory under high socket concurrency.  Default it OFF so the whole
-        # campaign can soak; --handoff turns it back on to reproduce.  Must be
-        # set before mn_init() reads it (stackweave.run, below).
-        self.handoff = self.args.handoff
-        os.environ["STACKWEAVE_HANDOFF"] = "1" if self.handoff else "0"
 
     # ---------------- determinism ----------------
     def derive(self, *parts):
@@ -913,12 +901,10 @@ class Harness(object):
         last_ops = 0
         last_t = self.now()
         self.log("start  hubs={0} funcs={1} seed={2} duration={3:.0f}s "
-                 "netpoll={4} backend={5} gil={6} nofile={7} stack={8}KB "
-                 "handoff={9}".format(
+                 "netpoll={4} backend={5} gil={6} nofile={7} stack={8}KB".format(
                      self.hubs, self.funcs, self.seed, self.duration,
                      stackweave_c.netpoll_backend(), stackweave_c.backend(),
-                     sys._is_gil_enabled(), self.fd_limit, self.stack_kb,
-                     "on" if self.handoff else "off"))
+                     sys._is_gil_enabled(), self.fd_limit, self.stack_kb))
         while self.running():
             target = self.now() + self.log_interval
             while self.running() and self.now() < target:

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# audit_wheels.sh -- post-build wheel/ABI conformance gate (local; NO hosted CI).
+# audit_wheels.sh -- post-build wheel/ABI conformance gate (local).
 #
 # stackweave links a handful of CPython INTERNAL/private symbols (e.g.
 # _Py_SetImmortalUntracked) by design, and ships a separate cp31Xt (free-threaded)

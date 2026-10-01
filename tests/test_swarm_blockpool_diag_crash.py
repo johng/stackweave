@@ -1154,8 +1154,8 @@ class TestDeadlockDiagnostics:
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="no os.fork")
 class TestForkReset:
     def test_child_resets_and_runs_single_thread(self):
-        # Fork from a CLEAN state (no live M:N runtime -- fork deadlocks under one
-        # per RUNTIME_GOTCHAS).  The child calls reset_after_fork() then drives a
+        # Fork from a CLEAN state (no live M:N runtime -- fork deadlocks under
+        # one).  The child calls reset_after_fork() then drives a
         # small scheduler workload and _exit(0); the parent asserts a clean exit.
         pid = os.fork()
         if pid == 0:

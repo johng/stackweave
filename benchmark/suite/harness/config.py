@@ -96,7 +96,11 @@ PLATEAU_PATIENCE = 2
 # Interpreters (decision #4 + #7)
 # ---------------------------------------------------------------------------
 PYENV = os.path.expanduser("~/.pyenv/versions")
-FT_PYTHON = os.path.join(PYENV, "3.14.4t", "bin", "python3")   # stackweave (GIL off)
+# stackweave (GIL off).  M:N is migration-only, so this must be a free-threaded
+# 3.14t built with both src/patches/ halves; a stock 3.14t crashes under churn
+# at hubs >= 2.  STACKWEAVE_PYTHON overrides it, as in tools/.
+FT_PYTHON = (os.environ.get("STACKWEAVE_PYTHON")
+             or os.path.join(PYENV, "3.14.4t-mig", "bin", "python3.14t"))
 GIL_PYTHON = os.path.join(PYENV, "3.13.13", "bin", "python3")   # asyncio/uvloop/gevent best-case
 
 # Repo paths

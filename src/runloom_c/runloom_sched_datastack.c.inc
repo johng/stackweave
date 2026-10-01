@@ -813,10 +813,13 @@ double runloom_sched_timer_next_deadline(runloom_sched_t *s)
  * address space, not memory.  Calibration adapts UP for stack-hungry programs (freeze to next_pow2(max_hwm * RUNLOOM_CAL_SAFETY)
  * after RUNLOOM_CAL_TARGET completions) but is FLOORED at this default -- it never
  * auto-shrinks below the safe size and re-exposes the deep cases.  Reclaiming the
- * tail for huge fiber counts is the per-kind auto-sizer's job (opt-in
- * "grow down"; runloom.inspect.enable_stack_autosize), not calibration's.  A true
- * outlier deeper than 512 KB is a clean guard-page crash + a one-line pin
- * (runloom.fiber(fn, stack_size=...)), never corruption.
+ * tail for huge fiber counts is the job of the M:N grow-down (default-on,
+ * stackweave/runtime.py) and the opt-in per-kind auto-sizer
+ * (stackweave.inspect.enable_stack_autosize), not calibration's; neither goes
+ * below RUNLOOM_FT314_MIN_STACK_SIZE (256 KB, runloom_sched.h), the floor on
+ * every fiber stack.  A true outlier deeper than 512 KB is a clean guard-page
+ * crash + a one-line pin (stackweave.fiber(fn, stack_size=...)), never
+ * corruption.
  *
  * Reads/writes are plain (single-threaded scheduler in v0); when
  * Phase C arrives these will move under the scheduler lock. */

@@ -1,6 +1,6 @@
 # stackweave — project guidance
 
-Full derivations for the invariants below: [docs/dev/RUNTIME_GOTCHAS.md](docs/dev/RUNTIME_GOTCHAS.md).
+The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds other design notes.
 
 ## Build & test
 - **Migration-only tree.** Cross-hub fiber migration is always on. The env

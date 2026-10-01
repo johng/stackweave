@@ -21,8 +21,12 @@ The original spec and every scoping decision are archived verbatim in
 
 ## Prerequisites
 
-- Free-threaded CPython 3.14t with the stackweave C extension built
-  (`python setup.py build_ext --inplace` from the repo root) and Cython 3.x.
+- Free-threaded CPython 3.14t built with both `src/patches/` halves, with
+  Cython 3.x. The suite runs stackweave on
+  `~/.pyenv/versions/3.14.4t-mig/bin/python3.14t`; set `STACKWEAVE_PYTHON` to
+  use another (a stock 3.14t crashes under M:N churn). Build the C extension
+  with it from the repo root:
+  `STACKWEAVE_EXTRA_CFLAGS="-DPy_TSTATE_ALLOC_HOME -DPy_TSTATE_EXEC_HOME" python setup.py build_ext --inplace`.
 - The GIL build of 3.13 with `uvloop` + `gevent` (the single-threaded baselines
   run there — their best case).
 - `go`, passwordless `sudo` (for `ip netns` + `prlimit`), `taskset`, `liburing`.

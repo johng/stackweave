@@ -250,16 +250,24 @@ stackweave.run(1, main)
 Semaphores support weighted permits (default 1):
 
 ```python
-sem = stackweave.sync.Semaphore(10)
-sem.acquire(3)   # acquire 3 permits
-sem.release(3)
+def main():
+    sem = stackweave.sync.Semaphore(10)
+    sem.acquire(3)   # acquire 3 permits
+    sem.release(3)
+
+stackweave.run(1, main)
 ```
 
 Optional timeout on `acquire()`:
 
 ```python
-ok = sem.acquire(timeout=1.0)  # False if not acquired in time
-try_ok = sem.try_acquire()     # returns True/False without blocking
+def main():
+    sem = stackweave.sync.Semaphore(1)
+    ok = sem.acquire(timeout=1.0)  # False if not acquired in time
+    try_ok = sem.try_acquire()     # returns True/False without blocking
+    print(ok, try_ok)              # True False: the one permit is held
+
+stackweave.run(1, main)
 ```
 
 ### Once: run-once initialization
