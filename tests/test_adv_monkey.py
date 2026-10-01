@@ -33,9 +33,9 @@ import stackweave
 import stackweave_c as rc
 from adv_util import hang_guard, needs_free_threading
 
-# A genuinely-foreign OS thread: the monkey go-wrapper marks fiber context
-# via a thread-local counter, so a thread we start that NEVER runs a fiber
-# stays foreign.  threading.Thread is patched, but it still spawns a real OS
+# A genuinely-foreign OS thread: the monkey shims ask the runtime
+# (stackweave_c.in_fiber()) whether the caller is a fiber, so a thread we
+# start that NEVER runs a fiber stays foreign.  threading.Thread is patched, but it still spawns a real OS
 # thread (monkey runs "threads" as OS threads, not fibers, unless they run
 # fiber work) -- which is exactly the foreign caller we want.
 import _thread as _real_thread_mod
