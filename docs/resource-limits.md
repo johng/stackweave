@@ -93,9 +93,11 @@ sudo sysctl -w net.core.somaxconn=65535
 VMAs and fds run out before RAM, but size memory too:
 
 - **Virtual address space per fiber:** the default stack reservation is **512 KiB**
-  (`RUNLOOM_DEFAULT_STACK_SIZE`), but it is *virtual* — only the pages a fiber
-  actually touches become resident (it grows down from the top). A trivial fiber
-  costs a few KB of RSS, not 512 KB.
+  (`RUNLOOM_DEFAULT_STACK_SIZE`, a compile-time constant) and never less than
+  **256 KiB** (`RUNLOOM_FT314_MIN_STACK_SIZE`, the free-threaded 3.14 floor, which
+  is what the M:N grow-down auto-sizer gives shallow functions). It is *virtual* —
+  only the pages a fiber actually touches become resident (it grows down from the
+  top). A trivial fiber costs a few KB of RSS, not 512 KB.
 - **RSS per fiber (C handler):** ~2–7 KB of touched stack + scheduler bookkeeping.
   The README's measured matrix: **2,000,000 C-handler connections ≈ 14.3 GB,
   ~4 M VMAs.**
@@ -109,11 +111,11 @@ VMAs and fds run out before RAM, but size memory too:
 
 ## Stackweave tuning knobs
 
-These environment variables interact with the limits above:
+These knobs interact with the limits above:
 
-| Env var | Default | Effect on limits |
+| Knob | Default | Effect on limits |
 |---|---|---|
-| `RUNLOOM_DEFAULT_STACK_SIZE` | `524288` (512 KiB) | bigger stacks → more virtual space + RSS per fiber |
+| `stackweave_c.set_stack_size(bytes)` | `524288` (512 KiB, `RUNLOOM_DEFAULT_STACK_SIZE`); clamped to 256 KiB–8 MiB | bigger stacks → more virtual space + RSS per fiber |
 | `STACKWEAVE_STACK_DEPOT_CAP` | auto: max(1.5 × the decaying live-stack high-water mark, 1024), clamped to a VMA/RAM-derived safe maximum (1024 until sysmon's first tick, and outside M:N) | retained pooled stacks → **VMAs held when idle**; raise it (near your peak) only alongside `vm.max_map_count` |
 | `prewarm(n, ...)` / `prewarm_keep(target, ...)` | — | pre-maps `n`/`target` stacks → consumes `~2n` VMAs; needs `vm.max_map_count` + `STACKWEAVE_STACK_DEPOT_CAP` budgeted for it (see [stack-sizing.md](stack-sizing.md#prewarming-the-stack-pool-burst-servers)) |
 
