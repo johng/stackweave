@@ -17,8 +17,8 @@ GH96704 = ("gh-96704: the bridge runs the exception handler in the outer context
            "not the failing task/handle's contextvars Context (accepted default-"
            "bridge behavior; the loop_core fix was reverted as low-applicability)")
 
-# Reasons shared by several test_events entries (stated once, here).  The three
-# selector-variant classes (EPoll/Poll/Select) are identical runs once conftest
+# Reasons shared by several test_events entries (stated once, here).  The four
+# selector-variant classes (EPoll/Poll/Kqueue/Select) are identical runs once conftest
 # makes create_event_loop() return StackweaveEventLoop(): the loop drives its own
 # netpoll and ignores the selector.  SelectEventLoopTests is the canonical one.
 EV_SELECTOR_REDUNDANT = ("redundant selector variant -- identical to "
