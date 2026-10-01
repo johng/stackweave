@@ -65,7 +65,7 @@ stackweave.grow_down_enabled()      # -> current state
 A per-call `stackweave.fiber(fn, stack_size=N)` pin always wins regardless -- use it to
 opt a single function out and choose its exact size. The grow-down also steps
 aside automatically when you explicitly enable the opt-in C auto-sizer
-([below](#letting-runloom-size-them-for-you)) -- the sizer you turned on by hand
+([below](#letting-stackweave-size-them-for-you)) -- the sizer you turned on by hand
 wins, since it may *deliberately* over-reserve (the crypto prescan's 1 MiB
 margin) where grow-down would measure-and-shrink.
 

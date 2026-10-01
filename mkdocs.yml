@@ -64,7 +64,14 @@ nav:
       - Stack sizing & memory: stack-sizing.md
       - Time-sliced preemption: preemption.md
       - M:N parallelism: parallelism.md
+      - Tuning (optimize): optimize.md
+      - Hot handlers: hot-handlers.md
+      - Resource limits & kernel tuning: resource-limits.md
       - Debugging & introspection: debugging.md
+      - Reporting a crash or hang: reporting-crashes.md
   - Reference:
       - Cookbook: cookbook.md
       - API reference: api-reference.md
+      - Cooperative stdlib coverage: cooperative_stdlib_coverage.md
+      - Glossary: glossary.md
+      - "Research: native code from a fiber": research-native-code.md
