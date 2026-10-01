@@ -168,7 +168,7 @@ stderr and lets the process continue.  The underlying primitive is
 `stackweave_c.dump_fibers(fd)`, which is async-signal-safe-ish (it
 try-locks the registry and uses only `write(2)`).
 
-## Crash reporting (`SIGSEGV` / `SIGBUS`)
+## Crash reporting (`SIGSEGV`, `SIGBUS`)
 
 A fiber runs on a small, fixed C stack with a `PROT_NONE` **guard page**
 just below it, so the commonest hard crash in stackweave is a **fiber stack

@@ -147,24 +147,23 @@ exception (by spawn order).
 
 ### gather: async-style concurrent result collection
 
-`gather(*futures_or_values)` waits for all futures to complete and returns
-their results in order (like `asyncio.gather`):
+`gather(*callables)` runs each callable as a fiber, waits for all of them,
+and returns their results in argument order (like `asyncio.gather`):
 
 ```python
 def main():
-    f1 = stackweave.sync.Future()
-    f2 = stackweave.sync.Future()
-    
-    stackweave.fiber(lambda: f1.set_result(10))
-    stackweave.fiber(lambda: f2.set_result(20))
-    
-    results = stackweave.sync.gather(f1, f2)
+    def fetch(n):
+        stackweave.sleep(0.01)
+        return n * 10
+
+    results = stackweave.sync.gather(lambda: fetch(1), lambda: fetch(2))
     print(results)  # [10, 20]
 
 stackweave.run(1, main)
 ```
 
-Non-future values are passed through as-is.
+If any callable raises, the first exception (by argument order) is re-raised
+once all of them have finished.
 
 ### WaitGroup: fiber barrier
 
@@ -290,23 +289,28 @@ def main():
 stackweave.run(1, main)
 ```
 
-Use `once_value(fn)` to get a result that's computed once and cached:
+Use `once_value(fn)` to get a 0-arg callable whose result is computed once and
+cached:
 
 ```python
 expensive_result = stackweave.sync.once_value(lambda: compute_something())
-# First call computes; subsequent calls return the cached result
+# First expensive_result() computes; later calls return the cached result
 ```
 
-Use `once_func(fn)` to decorate a function for one-time execution:
+Use `once_func(fn)` to decorate a function for one-time execution.  As with
+`Once.do`, the first call must come from a fiber:
 
 ```python
 @stackweave.sync.once_func
 def setup():
     print("setup")
 
-setup()  # prints "setup"
-setup()  # no-op
-setup()  # no-op
+def main():
+    setup()  # prints "setup"
+    setup()  # no-op
+    setup()  # no-op
+
+stackweave.run(1, main)
 ```
 
 ### Group (singleflight): deduplication
@@ -325,8 +329,8 @@ def main():
         return "result for " + key
     
     def caller(key):
-        result = group.do(key, expensive, key)
-        print(result)
+        result, shared = group.do(key, lambda: expensive(key))
+        print(result, "(shared)" if shared else "(ran it)")
     
     # All 5 calls with the same key share one execution
     for i in range(5):
@@ -338,8 +342,9 @@ def main():
 stackweave.run(1, main)
 ```
 
-`group.do(key, fn, *args, **kwargs)` runs `fn(*args, **kwargs)` if it's the
-first call for `key`; subsequent concurrent calls wait for the result.
+`group.do(key, fn)` runs `fn()` if it's the first call for `key` and returns
+`(value, False)`; concurrent calls for the same key wait and get
+`(value, True)`.  The first call for a key must come from a fiber.
 Different keys execute independently. Call `group.forget(key)` to allow the
 next call to `key` to re-execute.
 

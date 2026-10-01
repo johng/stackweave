@@ -89,21 +89,15 @@ This is the same limitation Go has with cgo: while you're in C, the
 scheduler can't preempt you.  Most stdlib functions release frequently
 enough that this isn't noticeable in practice.
 
-### Free-threaded only
+### Main-thread scheduler only
 
-stackweave only builds on free-threaded CPython 3.14+.  The preemption
-path relies on the M:N hub model and `Py_AddPendingCall` having a
-fast path that's safe across hubs.  If the GIL has been re-enabled at
-runtime (`PYTHON_GIL=1`) and you want time-slicing anyway, sprinkle
-`stackweave.yield_now()` calls into your hot loops.  Crude
-but works.
-
-### Per-thread, not per-process
-
-`preempt_init` configures preemption for the calling OS thread's
-scheduler.  Under the M:N hub model you don't call it at all: M:N runs
-are preempted by the sysmon watchdog instead (see
-[Combining with M:N](#combining-with-mn)).
+`preempt_init` starts one process-wide timer, and `Py_AddPendingCall`
+runs its callbacks on the main thread only, so it time-slices the
+single-thread scheduler driven from the main thread -- with the GIL off
+or re-enabled at runtime (`PYTHON_GIL=1`) -- but not a `run(1)` on
+another thread, and never M:N hub threads.  Under the M:N hub model you
+don't call it at all: M:N runs are preempted by the sysmon watchdog
+instead (see [Combining with M:N](#combining-with-mn)).
 
 ## Stopping preemption
 

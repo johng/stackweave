@@ -142,7 +142,7 @@ signal cancellation.
 ```python
 import stackweave
 
-def worker(done):
+def worker(done, out):
     while True:
         idx, _ = stackweave.select([
             ("recv", done),         # case 0: cancellation
@@ -155,7 +155,7 @@ def worker(done):
 def main():
     done = stackweave.Chan(0)        # unbuffered; close to broadcast
     out = stackweave.Chan(10)
-    stackweave.fiber(lambda: worker(done))
+    stackweave.fiber(lambda: worker(done, out))
 
     # ... do stuff with out ...
     stackweave.sleep(0.05)

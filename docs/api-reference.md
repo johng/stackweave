@@ -165,12 +165,12 @@ See [Parallelism](parallelism.md).
 
 See [Preemption](preemption.md).
 
-- `preempt_init(quantum_us=10000)` -- start the per-thread quantum timer.
+- `preempt_init(quantum_us=10000, /)` -- start the process-wide quantum timer (time-slices the main thread's single-thread scheduler; M:N runs are preempted by sysmon).
 - `preempt_fini()` -- stop the timer.
 
 ### Pre-warming
 
-#### `warmup(n, stack_size=131072)`
+#### `warmup(n, stack_size=131072, /)`
 
 Pre-allocate `n` fiber stacks so the first `n` spawns skip mmap.
 
@@ -269,7 +269,7 @@ Park-age tracking (enables the `age` field + `stackweave.inspect.leaked()`).
 ### Crash reporting & stack tuning
 
 Exposed as friendlier wrappers on `stackweave.inspect` (also as raw `stackweave_c`
-functions).  See the [Debugging guide](debugging.md#crash-reporting-sigsegv--sigbus)
+functions).  See the [Debugging guide](debugging.md#crash-reporting-sigsegv-sigbus)
 and [Stack sizing](stack-sizing.md).
 
 #### `inspect.install_crash_handler(level=None, file=None)` / `uninstall_crash_handler()` / `crash_handler_installed() → bool`
@@ -323,8 +323,8 @@ Goroutine handle.  Attributes:
 - `exception` -- exception object if the fiber raised, else `None`.
 - `wake()` -- re-queue a parked fiber; race-safe with
   `park_self()`.
-- `stack(limit=None)` -- return a list of `(filename, lineno, name)`
-  frames for the fiber's current Python stack.
+- `stack()` -- a small state dict, `{'state': ..., 'has_snap': bool}`;
+  for the Python frames use `fiber_stack(id)`.
 
 #### `Coro`
 
@@ -383,7 +383,7 @@ Asyncio bridge.  See [stackweave.aio](asyncio.md).
 stackweave.aio.run(coro)                     # equivalent of asyncio.run
 stackweave.aio.install()                     # set StackweaveEventLoopPolicy globally
 stackweave.aio.open_connection(host, port)   # async (reader, writer)
-stackweave.aio.start_server(cb, host, port)  # async server with serve_forever()
+stackweave.aio.start_server(cb, host, port)  # async server: .close(), .sockets
 ```
 
 Classes:
@@ -448,15 +448,19 @@ Cooperative sleep.  Same as `stackweave.sleep`.
 
 #### `After(seconds) → Chan`
 
-Returns a channel that will receive the current time after `seconds`.
-Equivalent of Go's `time.After`.
+Returns a 1-buffered channel that receives `seconds` once, after `seconds`
+seconds, then closes.  Equivalent of Go's `time.After`.
 
 ```python
+import stackweave
 import stackweave.time as t
 
-after = t.After(1.0)
-# ... do work ...
-after.recv()           # blocks until the timer fires
+def main():
+    after = t.After(1.0)
+    # ... do work ...
+    after.recv()           # blocks until the timer fires
+
+stackweave.run(1, main)
 ```
 
 #### `NewTimer(seconds) → Timer`

@@ -222,8 +222,9 @@ scheduler that replays an exact interleaving. Work-stealing and wall-clock
 ordering are disabled while armed, since either would make replay
 non-deterministic. The M:N controller is currently disabled: woken fibers run
 from the global runq, which the seeded baton does not order, so `mn_init`
-refuses a seeded run (`STACKWEAVE_MN_SEED` / `STACKWEAVE_SIM_MN`) and the
-controller only compiles with `RUNLOOM_MN_CTRL`.
+refuses a seeded run (`STACKWEAVE_MN_SEED` / `STACKWEAVE_SIM_MN`). The
+controller stays compiled in but disabled (`RUNLOOM_MN_CTRL` defaults to 0);
+build with `-DRUNLOOM_MN_CTRL=1` to work on it.
 
 **lincheck** *(inferred from the phase name)* — linearizability checking of the
 concurrent data structures.

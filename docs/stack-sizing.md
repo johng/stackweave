@@ -188,7 +188,7 @@ Three forms, smallest commitment first:
 import stackweave
 
 # 1. One-shot, per-hub (synchronous): fills the CALLING thread's cache.
-stackweave.warmup(50_000, stack_size=512 * 1024)
+stackweave.warmup(50_000, 512 * 1024)        # (n, stack_size), positional only
 
 # 2. One-shot, GLOBAL (cross-hub).  background=True (default) fills it on a
 #    detached helper thread and returns instantly -- prefetch ahead of demand.
@@ -332,7 +332,7 @@ protection the main thread gets, scaled to the fiber's smaller stack:
   (`stackweave.inspect.install_crash_handler()`) that fault
   is turned into a classified message that *names the overflowing fiber and
   its stack size* instead of a bare segfault -- see
-  [Crash reporting](debugging.md#crash-reporting-sigsegv--sigbus).
+  [Crash reporting](debugging.md#crash-reporting-sigsegv-sigbus).
 - **CPython's stack-hungry error paths fit.** A missing-attribute lookup on a
   module makes CPython reserve two path buffers (~32 KB on Linux, ~8 KB on
   macOS) to build a "did you shadow a stdlib module?" hint.  That used to

@@ -141,7 +141,7 @@ by four different hub threads simultaneously (subject to scheduling).
 
 - **Spawn**: `mn_fiber` is ~250 ns on 3.13t -- submission to the per-hub
   MPSC queue + work-steal-eligible push.  Comparable to single-thread
-  `go`.
+  `fiber`.
 - **Yield**: per-hub yield is the same ~80 ns swap.  No cross-thread
   synchronisation on yield: a yielded fiber goes back on its current
   hub's local FIFO.

@@ -108,8 +108,10 @@ async def handler(reader, writer):
 
 async def main():
     server = await stackweave.aio.start_server(handler, "127.0.0.1", 9000)
-    async with server:
-        await server.serve_forever()
+    try:
+        await asyncio.Event().wait()     # serve until cancelled
+    finally:
+        server.close()
 
 stackweave.aio.run(main())
 ```
@@ -320,6 +322,7 @@ result = await trivial()
 ```python
 import stackweave
 stackweave.monkey.patch()    # makes socket / time / ssl cooperative
+import requests              # imported after patch(), so it sees cooperative sockets
 
 async def main():
     # This blocks the fiber, not the OS thread:

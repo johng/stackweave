@@ -184,8 +184,10 @@ async def handler(reader, writer):
 
 async def main():
     server = await stackweave.aio.start_server(handler, "127.0.0.1", 9000)
-    async with server:
-        await server.serve_forever()
+    try:
+        await asyncio.Event().wait()     # serve until cancelled
+    finally:
+        server.close()
 
 stackweave.aio.run(main())
 ```

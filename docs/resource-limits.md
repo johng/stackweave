@@ -114,7 +114,7 @@ These environment variables interact with the limits above:
 | Env var | Default | Effect on limits |
 |---|---|---|
 | `RUNLOOM_DEFAULT_STACK_SIZE` | `524288` (512 KiB) | bigger stacks → more virtual space + RSS per fiber |
-| `STACKWEAVE_STACK_DEPOT_CAP` | auto: ~1.5× the live-stack high-water mark (1024 until sysmon's first tick, and outside M:N) | retained pooled stacks → **VMAs held when idle**; raise it (near your peak) only alongside `vm.max_map_count` |
+| `STACKWEAVE_STACK_DEPOT_CAP` | auto: max(1.5 × the decaying live-stack high-water mark, 1024), clamped to a VMA/RAM-derived safe maximum (1024 until sysmon's first tick, and outside M:N) | retained pooled stacks → **VMAs held when idle**; raise it (near your peak) only alongside `vm.max_map_count` |
 | `prewarm(n, ...)` / `prewarm_keep(target, ...)` | — | pre-maps `n`/`target` stacks → consumes `~2n` VMAs; needs `vm.max_map_count` + `STACKWEAVE_STACK_DEPOT_CAP` budgeted for it (see [stack-sizing.md](stack-sizing.md#prewarming-the-stack-pool-burst-servers)) |
 
 ---
