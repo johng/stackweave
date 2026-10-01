@@ -21,7 +21,18 @@
  * either lands in sub_head (the hub sees it on re-check) or observes the hint
  * (the submitter signals).  epoll/idle hubs re-drain sub_head before blocking too.
  *
+ * The four modes are the WHOLE set: hub_main's idle path is the io_uring ring
+ * wait, else the netpoll pump, else the announced idle_cond wait.  Until the
+ * drifted-pending fix there was a fifth -- an uninterruptible nap taken instead
+ * of the idle_cond wait whenever the hub's own per-hub `pending` read <= 0, which
+ * under migration it does on hubs that DO have work aimed at them.  It made no
+ * announce and no route reached it, so a submit (spawn, mn_fiber(hub=N)) or a
+ * pinned wake sat out its 100-500us timeout; -DBUG_NAP_MODE restores it.
+ *
  * PROVEN: the pushed work is ALWAYS processed -- no wait mode loses the submit.
+ * (Untimed: the C waits are also TIMED, so a lost route there is a latency bug
+ * bounded by the timeout; here it is a lost wake, which is what makes each
+ * route's necessity checkable.)
  *
  * Negative controls (each proves a route is load-bearing, not redundant):
  *   -DBUG_NO_PUMP     : drop the UNCONDITIONAL pump kick -> a PUMP-mode hub (no
@@ -29,9 +40,12 @@
  *   -DBUG_NO_IDLE_SIG : never fire the idle_cond signal -> an IDLE-mode hub is
  *                       stranded (the pump kick does NOT reach a condvar wait) --
  *                       so idle_cond is REQUIRED, not just a latency optimization.
+ *   -DBUG_NAP_MODE    : the pre-fix fifth mode, the bare nap -> a NAP-mode hub is
+ *                       stranded: with no announce and no route, only its timeout
+ *                       ends the wait.
  */
 
-mtype = { RUNNING, IDLE, RING, PUMP };
+mtype = { RUNNING, IDLE, RING, PUMP, NAP };
 
 bit work      = 0;   /* the submit pushed to the target hub's sub_head */
 bit idle_wait = 0;   /* hub announced it is about to block on idle_cond */
@@ -39,6 +53,7 @@ bit ring_wait = 0;   /* hub announced it is about to block in io_uring */
 bit idle_sig  = 0;   /* idle_cond signal delivered */
 bit ring_sig  = 0;   /* io_uring loop wake eventfd byte */
 bit pump_kick = 0;   /* shared netpoll pump eventfd byte */
+bit nap_end   = 0;   /* BUG_NAP_MODE: nothing ever sets it (no route) */
 bit processed = 0;   /* the hub drained the work -- the no-lost-wake goal */
 
 /* The submitter: push, then fan out per the announced hints + the unconditional
@@ -72,6 +87,9 @@ proctype hub()
     :: mode = IDLE
     :: mode = RING
     :: mode = PUMP
+#ifdef BUG_NAP_MODE
+    :: mode = NAP
+#endif
     fi;
 
     if
@@ -106,6 +124,12 @@ proctype hub()
             (pump_kick) -> pump_kick = 0;
             work = 0; processed = 1
         fi
+
+    :: mode == NAP ->
+        /* BUG_NAP_MODE only: decided after the loop-top drain with no announce
+         * and no re-check, and no submitter route sets nap_end -- only the
+         * timeout (absent here) ever ended the nap. */
+        (nap_end) -> work = 0; processed = 1
     fi
 }
 

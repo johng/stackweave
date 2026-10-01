@@ -140,8 +140,8 @@ int runloom_netpoll_pump(long long timeout_ns)
          * per-thread sched (the probe-P4 silent corruption).  Not a bare
          * return 0: the hub_main:~1085 pump call IS the netpoll-branch hub's
          * bounded idle wait, so returning instantly would busy-spin H hubs on
-         * the ctrl mutex; nap detached (STW-safe) like the bare-nanosleep
-         * idle path, capped at 500us.  Interior pump(0) calls stay instant.
+         * the ctrl mutex; nap detached (STW-safe), capped at 500us.
+         * Interior pump(0) calls stay instant.
          * Wall-clock only -- ordering is decided at the census, so this wait
          * stretches nothing but latency.  (kqueue note, mirror-in-step: the
          * wake_pump self-pipe is written but never drained under this gate; a

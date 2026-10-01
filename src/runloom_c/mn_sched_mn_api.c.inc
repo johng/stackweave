@@ -207,9 +207,9 @@ static void runloom_mn_hub_submit(runloom_hub_t *h, runloom_g_t *g)
     if (runloom_mnwake_trace_active() && g->snap.valid)
         runloom_mnwake_trace_event("FOREIGN_WAKE", (unsigned long)(uintptr_t)g, 0);
     /* BUG #10 throughput: bump the submit generation, then signal the target hub
-     * if it is parked in its idle condvar (it owns parked gs and nothing else to
-     * run), so the woken g is drained in ~us instead of stranded for idle_ns
-     * (~100us).  RELEASE bump pairs with the waiter's predicate re-read.  The
+     * if it is parked in its idle condvar (nothing to run and no netpoll/iouring
+     * work -- whatever its per-hub pending reads), so the submitted g is drained
+     * in ~us instead of stranded for idle_ns (~100us).  RELEASE bump pairs with the waiter's predicate re-read.  The
      * idle_waiting hint is a lock-free fast path: when the hub is NOT waiting
      * (the common busy case) we skip the lock entirely.  A signal that races the
      * hub entering/leaving the wait is harmless -- the wait is TIMED, so a

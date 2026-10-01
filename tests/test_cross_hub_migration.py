@@ -20,15 +20,13 @@ Each scenario runs in a fresh subprocess so a lost fiber or a wedged hub is a
 clean timeout rather than a hung pytest, and so one scenario's leak cannot
 leak into the next.
 
-Nine gaps are closed (their docstrings start "Was a gap").  The five that
+Eleven gaps are closed (their docstrings start "Was a gap").  The four that
 remain are strict xfails under TODO_MIGRATION_FAIL: three OS-thread-identity
-checks that live in C or in importlib and need a pin or a monkey patch, one
-refcount loss (a memoryview's managed buffer released while still referenced
-after the fiber holding it migrates), and one wake-latency gap (a hub whose
-per-hub pending count has drifted to <= 0 naps through the wakes aimed at
-it).  A strict
-xfail still runs, and flips to a hard XPASS failure the moment its gap is
-closed.  The cost of one PyThreadState per fiber (gc.collect() per parked
+checks that live in C or in importlib and need a pin or a monkey patch, and
+one refcount loss (a memoryview's managed buffer released while still
+referenced after the fiber holding it migrates).  A strict xfail still runs,
+and flips to a hard XPASS failure the moment its gap is closed.  The cost of
+one PyThreadState per fiber (gc.collect() per parked
 fiber, RSS per parked fiber, spawn) was bounded against the per-hub
 scheduler while that scheduler existed; with migration the only mode there
 is no in-tree baseline, so those three comparisons are not carried here.
@@ -764,19 +762,17 @@ stackweave.run(4, main)
 ''')
 
 
-@TODO_MIGRATION_FAIL(
-    'per-hub pending drifts under migration (spawn +1 on the placement hub, completion '
-    '-1 wherever the fiber finished); an idle hub whose own count is <= 0 takes the '
-    'bare uninterruptible nap in hub_main instead of the signalled idle-condvar wait, '
-    'so a pinned wake / mn_fiber(hub=N) aimed at it waits out the 100-500 us nap')
 def test_sched_pinned_wake_is_prompt_after_pending_drifts():
-    """Known gap: after one unpinned workload the per-hub `pending` counters
-    no longer describe what each hub owns (only their SUM is exact), and a hub
-    whose own count is <= 0 idles in runloom_sleep_ns, which neither
-    hub_submit's idle_cond signal nor the pump kick can interrupt.  A ping-pong
-    between fibers pinned to hubs 0 and 1 is ~20x slower on such a pool than on
-    a fresh one (7.5k vs 140k round-trips/s on an M5).  Compared against a
-    fresh pool in the same process so a slow runner shifts both sides.
+    """Was a gap (fixed: every idle hub without netpoll/iouring work waits in
+    the announced, signalled idle-condvar wait, whatever its own `pending`
+    reads): after one unpinned workload the per-hub `pending` counters no
+    longer describe what each hub owns (only their SUM is exact), and a hub
+    whose own count was <= 0 idled in an uninterruptible runloom_sleep_ns nap
+    that neither hub_submit's idle_cond signal nor the run-queue kick could
+    reach.  A ping-pong between fibers pinned to hubs 0 and 1 was ~17x slower
+    on such a pool than on a fresh one (7.4k vs 130k round-trips/s on an M5).
+    Compared against a fresh pool in the same process so a slow runner shifts
+    both sides.
     """
     assert_pass(r'''
 _watchdog(50)
@@ -826,6 +822,45 @@ require_migration(pending[1] < 0)
 assert drifted < max(50.0, 3 * fresh), (
     "pinned cross-hub round-trip p50 %.0f us on a drifted pool vs %.0f us fresh"
     % (drifted, fresh))
+print("PASS", flush=True)
+''', timeout=90)
+
+
+def test_sched_spawn_onto_an_idle_remote_hub_runs_promptly():
+    """Was a gap (the same fix as the drifted-pending one above): a hub that
+    owns nothing yet -- the target of mn_fiber(fn, hub=N) while it idles --
+    took the uninterruptible nap, so the spawn's hub_submit signal missed it
+    and the new fiber's first run waited out the 100-500 us nap: ~250 us p50
+    against ~5 us for a spawn onto the spawner's own hub (M5).  Compared
+    against own-hub spawns in the same process so a slow runner shifts both
+    sides; the spawner sleeps between spawns so the target hub is idle again
+    each time.
+    """
+    assert_pass(r'''
+_watchdog(50)
+def spawn_p50_us(target, n=300, gap_s=0.0003):
+    lat = []
+    def spawner():
+        for _ in range(n):
+            t0 = time.perf_counter_ns()
+            def first_run(t0=t0):
+                lat.append(time.perf_counter_ns() - t0)
+            stackweave_c.mn_fiber(first_run, hub=target)
+            stackweave_c.sched_sleep(gap_s)
+    stackweave_c.mn_fiber(spawner, hub=0)
+    stackweave_c.mn_run()
+    assert len(lat) == n, (len(lat), n)
+    lat.sort()
+    return lat[len(lat) // 2] / 1e3
+stackweave_c.mn_init(4)
+own = spawn_p50_us(0)
+remote = spawn_p50_us(1)
+stackweave_c.mn_fini()
+print("spawn->first-run p50: own hub %.1f us, idle remote hub %.1f us"
+      % (own, remote), flush=True)
+assert remote < max(100.0, 4 * own), (
+    "spawn onto an idle remote hub first ran after %.0f us p50 vs %.0f us on "
+    "the spawner's own hub" % (remote, own))
 print("PASS", flush=True)
 ''', timeout=90)
 

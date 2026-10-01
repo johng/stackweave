@@ -116,7 +116,8 @@ static int runloom_idle_backoff_cap_ms(void)
         /* DEFAULT ON at 32ms: the validated full idle-CPU win (io_uring idle
          * 30%/core -> ~3%/core, ~11x) with no measured throughput/latency
          * regression and no cooperative-wake regression, and hang-proof at ANY
-         * value via the wakep + the 500us uninterruptible-wait cap.  Set
+         * value: every idle wait is TIMED and woken by the wakep and by the
+         * submit / run-queue kicks (there is no uninterruptible idle nap).  Set
          * RUNLOOM_IDLE_BACKOFF_MS=1 to disable (the wakep then goes fully dormant),
          * or higher for a deeper idle sleep at the cost of cooperative-wake tail. */
         const char *e = getenv("STACKWEAVE_IDLE_BACKOFF_MS");
@@ -823,6 +824,7 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                 int j;
                 PyThreadState *saved;
                 int parked;
+                int wakep_registered = 0;
                 long long idle_ns;
                 /* No fiber to run: check in as IDLE for the controlled-
                  * scheduler census round so the barrier-rendezvous grant isn't
@@ -841,8 +843,8 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                 idle_ns = (total == 0) ? 500000LL : 100000LL;
                 /* One idle iteration: drive the adaptive idle-pump backoff
                  * (reset to 0 at the resume site).  Common to ALL idle branches
-                 * below (io_uring loop_wait, the epoll pump, the condvar, the
-                 * bare sleep) so the whole idle path backs off together. */
+                 * below (io_uring loop_wait, the epoll pump, the idle condvar)
+                 * so the whole idle path backs off together. */
                 idle_streak++;
                 /* Grow the base idle wait as this hub keeps idling so an idle
                  * server doesn't burn ~8%/core (epoll) to ~30%/core (io_uring)
@@ -900,9 +902,14 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                  * Register, then re-scan: if stealable work raced in between our
                  * failed steal above and the flag-set, do a non-blocking pass
                  * (idle_ns=0) and re-loop to run it.  Pairs with a producer's
-                 * deque-publish via the SEQ_CST fences in park_enter/wakep_one. */
-                if (idle_ns > 2000000LL && runloom_mn_park_enter(h))
-                    idle_ns = 0;
+                 * deque-publish via the SEQ_CST fences in park_enter/wakep_one.
+                 * wakep_registered records that we stay registered into the
+                 * wait below, so the idle-condvar wait can tell a wakep kick
+                 * it missed (see the re-check there). */
+                if (idle_ns > 2000000LL) {
+                    if (runloom_mn_park_enter(h)) idle_ns = 0;
+                    else                          wakep_registered = 1;
+                }
                 /* Hub-idle dwell-based stack reclaim (threshold ms via
                  * RUNLOOM_STACK_PARK_SWEEP_MS, default 100).  Always on: it
                  * delivers -32% idle RSS at no robustly-measurable p99 cost
@@ -1118,81 +1125,103 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                         runloom_netpoll_pump(pump_ns);
                         runloom_mnwake_trace_event("HUB_UNBLOCK", 0, 0);
                     } else {
+                        int waited = 0;
+                        int have_sub;
                         if (idle_ns <= 0) idle_ns = 1;
-                        /* BUG #10 throughput: this hub has no netpoll/iouring work
-                         * but OWNS parked gs (pending>0) -- cooperative-lock /
-                         * channel waiters a cross-hub unlock will hub_submit to
-                         * us.  Wait on our per-hub idle condvar (TIMED at idle_ns)
-                         * instead of a plain nanosleep, so that submit signals us
-                         * awake in ~us rather than stranding the woken g for
-                         * idle_ns (the ~100us cap that held the contended
-                         * cooperative Lock at ~10K ops/s).  Per-hub condvar =>
-                         * targeted wake, no shared-pump thundering herd; TIMED =>
-                         * a missed signal degrades to the old idle_ns latency for
-                         * one hand-off, never a hang. */
-                        long hub_pending = __atomic_load_n(&h->pending,
-                                                           __ATOMIC_RELAXED);
-                        if (hub_pending > 0) {
-                            int waited = 0;
-                            RUNLOOM_RLOCK(&h->idle_lock, RUNLOOM_RANK_HUB_IDLE);
-                            /* Announce BEFORE the final sub_head re-check so a
-                             * submit that races our announce either lands in
-                             * sub_head (we see it -> skip the wait) or observes
-                             * idle_waiting=1 (it signals us).  The push in
-                             * hub_submit happens-before its sub_gen bump + signal;
-                             * we hold idle_lock across the check+wait so a signal
-                             * can't slip into the gap. */
-                            __atomic_store_n(&h->idle_waiting, 1, __ATOMIC_RELEASE);
-                            int have_sub;
-                            RUNLOOM_RLOCK(&h->sub_lock, RUNLOOM_RANK_HUB_SUB);
-                            have_sub = (h->sub_head != NULL);
-                            RUNLOOM_RUNLOCK(&h->sub_lock, RUNLOOM_RANK_HUB_SUB);
-                            /* Same handshake for the GLOBAL run-queue: a push
-                             * there kicks one announcing hub (runloom_mn_kick_for_
-                             * runq_entry) after its own SEQ_CST fence, so with this
-                             * fence between our announce and the re-check, either
-                             * we see the entry here or the pusher sees our announce. */
-                            __atomic_thread_fence(__ATOMIC_SEQ_CST);
-                            if (!have_sub &&
-                                (__atomic_load_n(&runloom_global_runq_unpinned_len,
-                                                 __ATOMIC_ACQUIRE) > 0 ||
-                                 __atomic_load_n(&h->runq_pinned_n, __ATOMIC_ACQUIRE) > 0))
-                                have_sub = 1;
-                            if (!have_sub) {
-                                /* Detach BEFORE the wait so a concurrent
-                                 * stop-the-world sees this hub already stopped and
-                                 * the cond wait holds no tstate. */
-                                saved = PyEval_SaveThread();
-                                /* MNWAKE-TRACE: idle hub blocks on its per-hub
-                                 * idle_cond, a BOUNDED timed wait (idle_ns) -- model
-                                 * HubDrainEmpty->HubDecide->HubBlock; cap=1 = bounded. */
-                                runloom_mnwake_trace_event("HUB_BLOCK", 0, 1);
-                                runloom_cond_timedwait_ns(&h->idle_cond,
-                                                          &h->idle_lock, idle_ns);
-                                runloom_mnwake_trace_event("HUB_UNBLOCK", 0, 0);
-                                waited = 1;
-                            }
-                            __atomic_store_n(&h->idle_waiting, 0, __ATOMIC_RELEASE);
-                            RUNLOOM_RUNLOCK(&h->idle_lock, RUNLOOM_RANK_HUB_IDLE);
-                            /* Re-attach OUTSIDE idle_lock.  PyEval_RestoreThread
-                             * blocks until any in-progress stop-the-world ends;
-                             * holding idle_lock across that block would stall a
-                             * hub_submit trying to signal us and could wedge STW
-                             * progress (test_gc_stw_under_fiber_churn hung
-                             * ~2/3 with the re-attach inside the lock). */
-                            if (waited) PyEval_RestoreThread(saved);
-                        } else {
-                            /* Nothing parked on this hub: a short bare nap.
-                             * Nothing can interrupt it, so it never carries the
-                             * idle backoff -- capped at the short base so the hub
-                             * re-polls within ~one base tick and a submit/steal
-                             * is seen promptly. */
-                            long long nap_ns = (idle_ns > 500000LL)
-                                               ? 500000LL : idle_ns;
+                        /* No netpoll/iouring work: wait on this hub's idle
+                         * condvar, TIMED at idle_ns and ANNOUNCED via
+                         * idle_waiting, so every route that can hand this hub
+                         * work signals it awake in ~us instead of stranding that
+                         * work for idle_ns: hub_submit (spawn placement,
+                         * mn_fiber(hub=N), bulk spawn), the global-runq push kick
+                         * (runloom_mn_kick_for_runq_entry: pinned and foreign
+                         * wakes), WAKEP (stealable surplus, once registered above)
+                         * and mn_fini's stop.  Per-hub condvar => targeted wake,
+                         * no shared-pump thundering herd; TIMED => a missed signal
+                         * degrades to one idle_ns of latency, never a hang.
+                         *
+                         * This is the ONLY non-pump idle wait, whatever this hub's
+                         * own `pending` reads.  It used to be taken only when
+                         * pending > 0, with an uninterruptible runloom_sleep_ns
+                         * nap (capped at 500us) otherwise.  But under migration
+                         * per-hub pending is not what a hub owns -- spawn counts
+                         * +1 on the placement hub, completion -1 on whichever hub
+                         * finished (only the SUM is exact; see the runq header) --
+                         * so it drifts to <= 0 on hubs that do have work aimed at
+                         * them, and a fresh mn_fiber(fn, hub=N) target owns
+                         * nothing yet.  Every pinned wake or spawn aimed at such a
+                         * hub waited out the nap: a pinned cross-hub ping-pong ran
+                         * ~17x slower on a drifted pool (7.4k vs 130k round
+                         * trips/s on an M5) and spawn->first-run onto an idle
+                         * remote hub took ~250us p50.  The nap's 500us cap existed
+                         * only because nothing could interrupt it; this wait is
+                         * interruptible, so it carries the idle backoff like the
+                         * pump does. */
+                        RUNLOOM_RLOCK(&h->idle_lock, RUNLOOM_RANK_HUB_IDLE);
+                        /* Announce BEFORE the final sub_head re-check so a
+                         * submit that races our announce either lands in
+                         * sub_head (we see it -> skip the wait) or observes
+                         * idle_waiting=1 (it signals us).  The push in
+                         * hub_submit happens-before its sub_gen bump + signal;
+                         * we hold idle_lock across the check+wait so a signal
+                         * can't slip into the gap. */
+                        __atomic_store_n(&h->idle_waiting, 1, __ATOMIC_RELEASE);
+                        RUNLOOM_RLOCK(&h->sub_lock, RUNLOOM_RANK_HUB_SUB);
+                        have_sub = (h->sub_head != NULL);
+                        RUNLOOM_RUNLOCK(&h->sub_lock, RUNLOOM_RANK_HUB_SUB);
+                        /* Same handshake for the GLOBAL run-queue: a push
+                         * there kicks one announcing hub (runloom_mn_kick_for_
+                         * runq_entry) after its own SEQ_CST fence, so with this
+                         * fence between our announce and the re-check, either
+                         * we see the entry here or the pusher sees our announce. */
+                        __atomic_thread_fence(__ATOMIC_SEQ_CST);
+                        if (!have_sub &&
+                            (__atomic_load_n(&runloom_global_runq_unpinned_len,
+                                             __ATOMIC_ACQUIRE) > 0 ||
+                             __atomic_load_n(&h->runq_pinned_n, __ATOMIC_ACQUIRE) > 0))
+                            have_sub = 1;
+                        /* The two signallers that do NOT read idle_waiting set
+                         * a flag first and then signal under idle_lock, so
+                         * re-checking their flag here, under that lock, means
+                         * neither signal can land in the gap before the wait (a
+                         * condvar signal to a hub not yet waiting is lost):
+                         *   - mn_fini stores `stopping`, then signals: seen
+                         *     here, or we are already waiting when it signals
+                         *     (the check-under-lock handshake RunloomMnFini.tla
+                         *     models);
+                         *   - a WAKEP producer CASes idle_parked 1->0, then
+                         *     signals (runloom_mn_wakep_kick): if we registered
+                         *     above and the flag is already 0, a producer has
+                         *     claimed us for stealable surplus -- re-loop and
+                         *     steal it rather than sleep through it. */
+                        if (!have_sub &&
+                            (__atomic_load_n(&h->stopping, __ATOMIC_ACQUIRE) ||
+                             (wakep_registered &&
+                              __atomic_load_n(&h->idle_parked, __ATOMIC_ACQUIRE) == 0)))
+                            have_sub = 1;
+                        if (!have_sub) {
+                            /* Detach BEFORE the wait so a concurrent
+                             * stop-the-world sees this hub already stopped and
+                             * the cond wait holds no tstate. */
                             saved = PyEval_SaveThread();
-                            runloom_sleep_ns(nap_ns);
-                            PyEval_RestoreThread(saved);
+                            /* MNWAKE-TRACE: idle hub blocks on its per-hub
+                             * idle_cond, a BOUNDED timed wait (idle_ns) -- model
+                             * HubDrainEmpty->HubDecide->HubBlock; cap=1 = bounded. */
+                            runloom_mnwake_trace_event("HUB_BLOCK", 0, 1);
+                            runloom_cond_timedwait_ns(&h->idle_cond,
+                                                      &h->idle_lock, idle_ns);
+                            runloom_mnwake_trace_event("HUB_UNBLOCK", 0, 0);
+                            waited = 1;
                         }
+                        __atomic_store_n(&h->idle_waiting, 0, __ATOMIC_RELEASE);
+                        RUNLOOM_RUNLOCK(&h->idle_lock, RUNLOOM_RANK_HUB_IDLE);
+                        /* Re-attach OUTSIDE idle_lock.  PyEval_RestoreThread
+                         * blocks until any in-progress stop-the-world ends;
+                         * holding idle_lock across that block would stall a
+                         * hub_submit trying to signal us and could wedge STW
+                         * progress (test_gc_stw_under_fiber_churn hung
+                         * ~2/3 with the re-attach inside the lock). */
+                        if (waited) PyEval_RestoreThread(saved);
                     }
                 }
                 (void)saved;

@@ -140,9 +140,10 @@ static void runloom_mn_kick_hub_waits(runloom_hub_t *h)
  * (the default) nothing woke anyone and the g waited for the next 1 ms idle
  * pump of whichever hub pulled it: p99 380-600 us for a foreign-thread wake at
  * a sub-2 ms cadence, against ~30 us for the per-hub scheduler.  Kick ONE hub:
- * the pinned target, else the first hub announcing an idle-condvar wait, else
- * the g's owner hub (it has this g pending, so it is in a timed pump wait
- * rather than a bare nap).  Not the hot path: local wakes never come here. */
+ * the pinned target, else the first hub announcing an idle-condvar wait,
+ * else the g's owner hub (no hub is in the condvar wait, so every idle hub is
+ * in its pump or ring wait, which the kick also reaches).  Not the hot path:
+ * local wakes never come here. */
 static void runloom_mn_kick_for_runq_entry(runloom_g_t *g, int pin1)
 {
     runloom_hub_t *h = NULL;
