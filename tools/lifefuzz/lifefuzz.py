@@ -725,12 +725,16 @@ def run_grammar_program(spec, timeout=20.0):
 # The default-safe scheduler config knobs (from tools/combinatorial/covering.py).
 # Folding them into the per-seed env makes every run a distinct point in
 # workload x schedule x CONFIG space -- where interaction bugs hide -- and stays
-# replayable because the choice is a pure function of the seed.
+# replayable because the choice is a pure function of the seed.  New factors go
+# at the END so a seed keeps its earlier knob values; a seed recorded before a
+# factor was added ran with that knob at its default (IDLE_UNREG_WAIT_US: 200,
+# added 2026-10-01), so replay such a finding with the factor pinned to it.
 KNOB_FACTORS = (
     ("STACKWEAVE_SCHED_RANDOM",       ["0", "1"]),
     ("STACKWEAVE_READY_STARVE_BOUND", ["0", "64"]),
     ("STACKWEAVE_IDLE_BACKOFF_MS",    ["1", "32"]),
     ("STACKWEAVE_SYSMON",             ["0", "1"]),
+    ("STACKWEAVE_IDLE_UNREG_WAIT_US", ["0", "200"]),
 )
 
 
