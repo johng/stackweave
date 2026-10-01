@@ -246,10 +246,27 @@ static void runloom_io_c_close(int fd)
     close(fd);
 }
 
+/* Echo buffer, on the fiber's C stack (every fiber stack is >= 256 KB).  The
+ * readiness path reads the WHOLE buffer per recv().  It used to read 8 bytes --
+ * the payload of the 8-byte ping-pong this echo was written against -- which
+ * split any larger message into 8-byte recv/send pairs: a 64-byte round trip
+ * cost 8 recv + 8 send (and 8 TCP_NODELAY segments) instead of 1 + 1, half the
+ * throughput of a Python handler's conn.recv(4096) on the same serve()
+ * scaffold.  2 KiB, not 4: a parked echo fiber keeps the buffer's stack page
+ * resident, and with 4 KiB pages a 4 KiB buffer measured +3.9 KB RSS per idle
+ * connection (24.7 vs 20.8 KB/conn, ~+19%) while 1-3 KiB measured the same as
+ * the old 64-byte buffer.  Messages up to 2 KiB still take 1 recv + 1 send. */
+#define RUNLOOM_IO_C_ECHO_BUF 2048
+/* The io_uring loop paths (Linux, STACKWEAVE_IOURING_LOOP=1, with or without
+ * multishot) still move 8 bytes per op.  The same change very likely helps
+ * them, but it has not been measured on that backend, so they are left as
+ * they were until a Linux run validates it. */
+#define RUNLOOM_IO_C_ECHO_RING_CHUNK 8
+
 static void runloom_io_c_echo(void *arg)
 {
     int fd = (int)(intptr_t)arg;
-    char buf[64];
+    char buf[RUNLOOM_IO_C_ECHO_BUF];
     /* Under the io_uring-as-loop backend, drive recv/send as proactor ring ops
      * (IORING_OP_RECV/SEND on the current hub's ring): the data op runs in the
      * kernel and the fiber parks until the CQE arrives, drained inline by the
@@ -270,14 +287,14 @@ static void runloom_io_c_echo(void *arg)
     for (;;) {
         ssize_t n;
         if (ms != NULL) {
-            n = runloom_iouring_loop_ms_recv(ms, buf, 8);
+            n = runloom_iouring_loop_ms_recv(ms, buf, RUNLOOM_IO_C_ECHO_RING_CHUNK);
             if (n < 0) { runloom_iouring_loop_ms_close(ms); runloom_io_c_close(fd); return; }
         } else if (loop && runloom_mn_current_iouring_ring() != NULL) {
-            n = runloom_iouring_loop_recv(fd, buf, 8, 0);
+            n = runloom_iouring_loop_recv(fd, buf, RUNLOOM_IO_C_ECHO_RING_CHUNK, 0);
             if (n < 0) { runloom_io_c_close(fd); return; }    /* errno set; hard error */
         } else {
             for (;;) {
-                n = recv(fd, buf, 8, 0);
+                n = recv(fd, buf, sizeof buf, 0);
                 RUNLOOM_IO_NOTE(RUNLOOM_IO_RECV,
                                 runloom_io_classify(RUNLOOM_IO_RECV, (long long)n, errno));
                 if (n >= 0) break;
