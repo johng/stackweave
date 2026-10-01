@@ -22,6 +22,9 @@ measurement you can compare across days or use as a regression gate.
 | `harness.py` | env capture + CPU pinning + warmup/samples + median/MAD/min + bootstrap-CI median + JSON writer |
 | `micro.py` | single-hub scheduler microbenchmarks (spawn, yield, chan ping-pong, buffered chan) |
 | `mn.py` | M:N CPU-bound core-scaling (1..N hubs on 3.13t) |
+| `mnsched.py` | M:N scheduler under migration: park/wake routing (local wake, pinned, cross-hub, busy and drifted pools), spawn / yield / pairs / fan-out / Mutex / WaitGroup / select / `blocking()`, 64-pair hub scaling, and latency percentiles (foreign-thread and cross-hub wakes, spawn-to-first-run, timer lateness) |
+| `echo.py` | in-process TCP echo round-trips (all-C and Python handlers, `TCPConn` clients) at 2/4/8 hubs -- measures whichever I/O path the environment selects |
+| `features.py` | feature matrix: runs suites once per opt-in switch (`STACK_ARENA`, `optimize("throughput")`, and on Linux `TCPCONN_IOURING` / the io_uring loop +/- multishot) and per build (`--build NAME=SRC`), in interleaved passes, with a delta-vs-default summary |
 | `results/*.json` | committed baselines; the regression gate diffs against these |
 | `profile/` | profiling drivers (cProfile, perf stat/record, perf c2c, bpftrace, memory) |
 | `../scripts/bench.sh` | one-shot driver: cleanest-env run of the whole suite + report |
@@ -49,7 +52,27 @@ scripts/bench.sh
 
 # a single suite by hand
 PYTHONPATH=src ~/.pyenv/versions/3.14.4t/bin/python -m bench.micro
+
+# the M:N suites need the patched interpreter (migration is the only M:N mode)
+PY=~/.pyenv/versions/3.14.4t-mig/bin/python3.14t
+PYTHONPATH=src:benchmark PYTHON_GIL=0 $PY -m bench.mnsched      # --quick for a smoke run
+PYTHONPATH=src:benchmark PYTHON_GIL=0 $PY -m bench.echo --hubs 2,4,8
+
+# every opt-in feature vs default, two interleaved passes (A B C / C B A);
+# a second build (e.g. -O3) is just another src/ tree
+PYTHONPATH=src:benchmark PYTHON_GIL=0 $PY -m bench.features --passes 2 \
+    --build O2=src --build O3=/path/to/O3-tree/src
 ```
+
+`mnsched` and `echo` check that every fiber did its work (completion counts,
+checksums, echoed bytes), so a silently failing fiber cannot pass as a fast
+one.  Result files record the optimisation state that matters for a number:
+the interpreter's configure args (PGO/LTO), whether TLBC is on, every
+`STACKWEAVE_*` switch in force, and a free-text `STACKWEAVE_BENCH_BUILD`
+label for the extension build.  Latency distributions go under `"latency"` in
+the JSON, not `"results"`, so `regress.py` never gates a tail as a throughput.
+Feature-matrix runs land in `results/features/<stamp>/` (`summary.md` +
+one JSON and log per suite/build/config/pass).
 
 ## Campaign phases
 

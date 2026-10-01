@@ -71,7 +71,10 @@ def git_sha():
 
 
 def git_dirty():
-    return bool(cmd_output(["git", "-C", REPO_ROOT, "status", "--porcelain"]))
+    # Tracked changes only: a run writing its own result files into the tree
+    # must not mark itself dirty.
+    return bool(cmd_output(["git", "-C", REPO_ROOT, "status", "--porcelain",
+                            "--untracked-files=no"]))
 
 
 # --------------------------------------------------------------------
@@ -102,6 +105,8 @@ def default_pin_set(n=8, node=1):
         cpus = numa_cpulist(nd)
         if cpus:
             return cpus[:n]
+    if not hasattr(os, "sched_getaffinity"):   # macOS: no affinity API; pin() no-ops
+        return list(range(min(n, os.cpu_count() or n)))
     return sorted(os.sched_getaffinity(0))[:n]
 
 
@@ -117,6 +122,20 @@ def pin(cpus):
         return None
 
 
+def apply_bench_optimize():
+    """STACKWEAVE_BENCH_OPTIMIZE=goal[,goal...] -> stackweave.optimize(*goals),
+    so a feature matrix can A/B an optimize() preset without editing a suite.
+    Returns {"goals": [...], "effective": {...}} or None when unset."""
+    goals = [g for g in os.environ.get("STACKWEAVE_BENCH_OPTIMIZE", "").split(",") if g]
+    if not goals:
+        return None
+    import stackweave
+    eff = stackweave.optimize(*goals)
+    return {"goals": goals,
+            "effective": {k: (v if isinstance(v, (int, float, str, bool)) or v is None
+                              else repr(v)) for k, v in dict(eff).items()}}
+
+
 # --------------------------------------------------------------------
 # Environment capture -- recorded into every result file so a number is
 # never orphaned from the machine state that produced it.
@@ -129,8 +148,11 @@ def capture_env(pinned=None):
         backend = stackweave_c.backend()
         netpoll = stackweave_c.netpoll_backend()
         so = getattr(stackweave_c, "__file__", "")
+        gc_frames = int(stackweave_c.gc_frames_active)
+        iouring = bool(stackweave_c.iouring_available())
     except Exception as e:  # pragma: no cover - import is the whole point
         backend = netpoll = so = "import-failed: %r" % (e,)
+        gc_frames = iouring = None
 
     gil = None
     if hasattr(sys, "_is_gil_enabled"):
@@ -139,6 +161,10 @@ def capture_env(pinned=None):
     # cpufreq governor is absent on this VM; record whatever is (or isn't)
     # there so a future run on bare metal is comparable.
     gov = read_text("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor") or "n/a (virtualized)"
+    try:
+        load = ["%.2f" % x for x in os.getloadavg()]
+    except OSError:
+        load = read_text("/proc/loadavg").split(" ")[:3]
 
     return {
         "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -146,16 +172,34 @@ def capture_env(pinned=None):
         "kernel": platform.release(),
         "cpu_model": cpu_model_str(),
         "nproc": os.cpu_count(),
+        # Apple silicon: performance + efficiency cores.  Nothing pins hub
+        # threads on macOS, and a hub on an E-core runs ~2.4x slower.
+        "cpu_perflevels": cpu_perflevels(),
         "numa_nodes": numa_node_count(),
         "governor": gov,
         "aslr": read_text("/proc/sys/kernel/randomize_va_space") or "?",
         "perf_event_paranoid": read_text("/proc/sys/kernel/perf_event_paranoid") or "?",
-        "loadavg": read_text("/proc/loadavg").split(" ")[:3],
+        "loadavg": load,
         "python": platform.python_version(),
         "python_impl": platform.python_implementation(),
         "gil_enabled": gil,
         "python_build": " ".join(platform.python_build()),
         "py_cflags": (sysconfig.get_config_var("CFLAGS") or "")[:200],
+        # PGO / LTO / tail-call interp show up here, not in CFLAGS.
+        "py_config_args": (sysconfig.get_config_var("CONFIG_ARGS") or "")[:400],
+        # TLBC (the specializing interpreter under free threading) stays on
+        # only while the parked-frame GC anchor is active; PYTHON_TLBC=0
+        # silently costs a lot of Python-side throughput.
+        "gc_frames_active": gc_frames,
+        "python_tlbc_env": os.environ.get("PYTHON_TLBC"),
+        "iouring_available": iouring,
+        # Which stackweave knobs were in force: the explicit env (the
+        # io_uring loop backend, blocking-pool size, ...) plus a free-text
+        # build label, because the extension's -O level / defines are not
+        # recoverable from the .so at runtime.
+        "stackweave_env": {k: v for k, v in sorted(os.environ.items())
+                           if k.startswith("STACKWEAVE_")},
+        "build_label": os.environ.get("STACKWEAVE_BENCH_BUILD", ""),
         "runloom_backend": backend,
         "runloom_netpoll": netpoll,
         "runloom_so": so,
@@ -169,7 +213,20 @@ def cpu_model_str():
     for line in read_text("/proc/cpuinfo").splitlines():
         if line.startswith("model name"):
             return line.split(":", 1)[1].strip()
+    if sys.platform == "darwin":
+        brand = cmd_output(["sysctl", "-n", "machdep.cpu.brand_string"])
+        if brand:
+            return brand
     return platform.processor() or "unknown"
+
+
+def cpu_perflevels():
+    """'6P+12E' on Apple silicon (from hw.perflevelN), else None."""
+    if sys.platform != "darwin":
+        return None
+    p = cmd_output(["sysctl", "-n", "hw.perflevel0.physicalcpu"])
+    e = cmd_output(["sysctl", "-n", "hw.perflevel1.physicalcpu"])
+    return ("%sP+%sE" % (p, e)) if p and e else None
 
 
 def numa_node_count():
@@ -239,8 +296,12 @@ class Suite:
         assert_nogil("Suite(%r) construction" % name)
         cpus = pin_cpus if pin_cpus is not None else default_pin_set()
         self.pinned = pin(cpus)
+        # Before any hub starts: optimize() sets env knobs read at startup.
+        optimized = apply_bench_optimize()
         self.env = capture_env(self.pinned)
+        self.env["optimize"] = optimized
         self.results = []
+        self.latency_results = []
 
     def bench(self, name, fn, *, inner=1, samples=None, warmup=None, note="",
               setup=None, teardown=None):
@@ -292,6 +353,34 @@ class Suite:
         self.print_row(stats)
         return stats
 
+    def latency(self, name, samples_ns, *, note=""):
+        """Record a latency DISTRIBUTION (one value per event, ns) as
+        percentiles.  Kept apart from ``results``: a tail is not a
+        throughput, and the regression gate's min_s makes no sense for it."""
+        xs = sorted(samples_ns)
+        if not xs:
+            raise ValueError("latency(%r): no samples" % name)
+
+        def pct(p):
+            return xs[min(len(xs) - 1, int(len(xs) * p))] / 1e3
+
+        stats = {
+            "name": name,
+            "note": note,
+            "count": len(xs),
+            "p50_us": pct(0.50),
+            "p90_us": pct(0.90),
+            "p99_us": pct(0.99),
+            "p999_us": pct(0.999),
+            "max_us": xs[-1] / 1e3,
+            "mean_us": statistics.fmean(xs) / 1e3,
+        }
+        self.latency_results.append(stats)
+        print("  %-34s p50=%8.1fus  p90=%8.1fus  p99=%8.1fus  max=%9.1fus  n=%d"
+              % (name, stats["p50_us"], stats["p90_us"], stats["p99_us"],
+                 stats["max_us"], stats["count"]))
+        return stats
+
     def print_row(self, s):
         print("  %-34s %10.1f ops/s  %10.1f ns/op  med=%8.3fms  rsd=%4.1f%%"
               % (s["name"], s["ops_per_s"], s["per_op_ns"],
@@ -309,6 +398,8 @@ class Suite:
             "results": [{k: v for k, v in r.items() if k != "raw_s"}
                         for r in self.results],
         }
+        if self.latency_results:
+            doc["latency"] = self.latency_results
         with open(path, "w") as f:
             json.dump(doc, f, indent=2, sort_keys=True)
             f.write("\n")
@@ -327,6 +418,11 @@ class Suite:
               % (e["cpu_model"], e["nproc"], e["numa_nodes"],
                  fmt_cpus(e["pinned_cpus"]), e["aslr"],
                  "/".join(e["loadavg"])))
+        print("tlbc: %s (gc_frames_active=%s, PYTHON_TLBC=%s)  | build: %s  | env: %s"
+              % ("off" if e["python_tlbc_env"] == "0" or not e["gc_frames_active"]
+                 else "on", e["gc_frames_active"], e["python_tlbc_env"],
+                 e["build_label"] or "-",
+                 " ".join("%s=%s" % kv for kv in e["stackweave_env"].items()) or "-"))
         print("=" * 78)
 
 
@@ -336,5 +432,6 @@ def fmt_cpus(cpus):
     return "%d cpus [%d..%d]" % (len(cpus), cpus[0], cpus[-1])
 
 
-__all__ = ["Suite", "summarize", "capture_env", "pin", "default_pin_set",
+__all__ = ["Suite", "summarize", "capture_env", "apply_bench_optimize",
+           "pin", "default_pin_set",
            "numa_cpulist", "git_sha", "REPO_ROOT", "SRC_DIR", "RESULTS_DIR"]
