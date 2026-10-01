@@ -304,14 +304,18 @@ message instead of failing.
 
 The array.array instance: `ob_exports` in `Modules/arraymodule.c` is bumped by
 `array_buffer_getbuf` and dropped by `array_buffer_relbuf`, a plain `++`/`--`
-with no critical section (still on main; python/cpython#157759, for
-gh-154524, proposes the same atomics). A fiber holding `memoryview(arr)` across
+with no critical section (still on main; python/cpython#157759, filed under
+gh-154524, proposes the same fix). A fiber holding `memoryview(arr)` across
 a park and dropping it on another hub has the old hub run the release while it
 takes the next view. A lost decrement pins the array for good (`BufferError:
 cannot resize an array that is exporting buffers`); a lost increment lets it
 resize, and free its items, under a live view. The hunk makes the count atomic
 under the flag; the three "is it exporting?" checks before a resize read it
-relaxed. Measured, 64 ping-pong pairs each holding a view of its own array
+with acquire, so the resize is ordered after the release it saw. It fixes lost
+updates only: `array_buffer_getbuf` reads `ob_item` before it counts the
+export, so a resize on another thread in between can still leave a new view on
+freed memory. Closing that needs a critical section, which arraymodule.c does
+not have; migration cannot reach it, since one fiber does both steps. Measured, 64 ping-pong pairs each holding a view of its own array
 across a park, batches to ~3000 OS-thread moves per run at H=8: without it
 186–261 of 2112–2688 arrays lost an update per run (149–215 pinned, 37–49
 resizable under a live view); with it, none over 10 runs. Guard:

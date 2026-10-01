@@ -114,12 +114,13 @@
 #
 # The array.array instance: ob_exports is bumped by array_buffer_getbuf and
 # dropped by array_buffer_relbuf with no critical section (still on main;
-# python/cpython#157759, gh-154524, proposes the same atomics).  A fiber
+# python/cpython#157759, filed under gh-154524, proposes the same fix).  A fiber
 # holding `memoryview(arr)` across a park and dropping it on another hub has
 # the old hub run the release while it takes the next view.  A lost decrement
 # pins the array ("cannot resize an array that is exporting buffers"), a lost
 # increment lets it resize under a live view.  The hunk makes the count atomic
-# under the flag (the three "is it exporting?" checks read it relaxed).
+# under the flag (the three "is it exporting?" checks read it with acquire,
+# so a resize is ordered after the release it saw).
 # Measured, 64 ping-pong pairs each holding a view of its own array across a
 # park, batches to ~3000 OS-thread moves per run at H=8 (arm64 Darwin, no
 # LTO/PGO): without it 186-261 of 2112-2688 arrays lost an update per run
@@ -407,9 +408,9 @@
 +   array that is exporting buffers"), a lost increment lets it resize or free
 +   its items under a live view.  A fiber that migrates between OS threads hits
 +   it on its own unshared arrays.  Upstream (still on main) this count is a
-+   plain ++/--; python/cpython#157759 (gh-154524) proposes these atomics. */
++   plain ++/--; python/cpython#157759 proposes the same fix. */
 +#if defined(Py_GIL_DISABLED) && defined(Py_TSTATE_EXEC_HOME)
-+#  define ARRAY_EXPORTS_GET(a) _Py_atomic_load_ssize_relaxed(&(a)->ob_exports)
++#  define ARRAY_EXPORTS_GET(a) _Py_atomic_load_ssize_acquire(&(a)->ob_exports)
 +#  define ARRAY_EXPORTS_INC(a) ((void)_Py_atomic_add_ssize(&(a)->ob_exports, 1))
 +#  define ARRAY_EXPORTS_DEC(a) ((void)_Py_atomic_add_ssize(&(a)->ob_exports, -1))
 +#else

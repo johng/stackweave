@@ -272,9 +272,9 @@
 +   array that is exporting buffers"), a lost increment lets it resize or free
 +   its items under a live view.  A fiber that migrates between OS threads hits
 +   it on its own unshared arrays.  Upstream (still on main) this count is a
-+   plain ++/--; python/cpython#157759 (gh-154524) proposes these atomics. */
++   plain ++/--; python/cpython#157759 proposes the same fix. */
 +#if defined(Py_GIL_DISABLED) && defined(Py_TSTATE_EXEC_HOME)
-+#  define ARRAY_EXPORTS_GET(a) _Py_atomic_load_ssize_relaxed(&(a)->ob_exports)
++#  define ARRAY_EXPORTS_GET(a) _Py_atomic_load_ssize_acquire(&(a)->ob_exports)
 +#  define ARRAY_EXPORTS_INC(a) ((void)_Py_atomic_add_ssize(&(a)->ob_exports, 1))
 +#  define ARRAY_EXPORTS_DEC(a) ((void)_Py_atomic_add_ssize(&(a)->ob_exports, -1))
 +#else
