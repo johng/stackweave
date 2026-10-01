@@ -24,11 +24,19 @@ def blocking(fn: Callable[..., _T], *args: Any, **kwargs: Any) -> _T:
     ...
 
 class Goroutine:
-    """Opaque handle returned by fiber().  Has no public methods today --
-    join / cancel arrive via the stackweave.context module."""
+    """Handle returned by fiber() on the single-thread scheduler.  Read-only
+    views of the underlying stackweave_c.G; no join or cancel methods
+    (cancel cooperatively via stackweave.context)."""
 
     name: str
-    coro: Any  # stackweave_c.Coro
+    @property
+    def done(self) -> bool: ...
+    @property
+    def result(self) -> Any: ...
+    @property
+    def exception(self) -> BaseException | None: ...
+    @property
+    def coro(self) -> Goroutine: ...  # compat alias: returns self
 
 def fiber(
     callable_: Callable[..., _T],
