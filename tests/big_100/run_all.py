@@ -4,9 +4,10 @@ Runs the 100 stress projects concurrently as subprocesses so the whole 64-core
 box is busy.  Each project itself uses --hubs M:N hub threads; the default
 packs the machine as jobs * hubs ~= cores (16 jobs * 4 hubs = 64).
 
-    PYTHON_GIL=0 python3.14t big_100/run_all.py --jobs 16 --hubs 4 --duration 3600
-    big_100/run_all.py --only 1,3,7 --duration 30 --hubs 4
-    big_100/run_all.py --from 1 --to 20 --duration 600 --jobs 10 --hubs 6
+    PY=~/.pyenv/versions/3.14.4t-mig/bin/python3.14t   # both src/patches/ halves
+    PYTHON_GIL=0 $PY big_100/run_all.py --jobs 16 --hubs 4 --duration 3600
+    PYTHON_GIL=0 $PY big_100/run_all.py --only 1,3,7 --duration 30 --hubs 4
+    PYTHON_GIL=0 $PY big_100/run_all.py --from 1 --to 20 --duration 600 --jobs 10 --hubs 6
 
 Per-project stderr/stdout go to big_100/logs/pNN.log.  A summary table prints
 at the end; the orchestrator exits nonzero if any project failed.
@@ -26,7 +27,7 @@ LOGDIR = os.path.join(HERE, "logs")
 # tests/run_isolated.py; STACKWEAVE_PYTHON or --python overrides it.  M:N is
 # migration-only, so it must be a free-threaded 3.14t built with both
 # src/patches/ halves -- a stock 3.14t crashes under churn at hubs >= 2.
-DEFAULT_PY = os.environ.get("STACKWEAVE_PYTHON", sys.executable)
+DEFAULT_PY = os.environ.get("STACKWEAVE_PYTHON") or sys.executable
 
 VERDICT_RE = re.compile(r"VERDICT\s*:\s*(\w+)\s*\(exit\s*(\d+)\)")
 

@@ -12,7 +12,7 @@
 # Needs sudo (perf + sysctl). Output: results/anomaly_*.txt
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-PY=/home/x/.pyenv/versions/3.14.4t/bin/python3
+PY="${STACKWEAVE_PYTHON:-/home/x/.pyenv/versions/3.14.4t-mig/bin/python3.14t}"
 SRC=/home/x/projects/pygo-bench/src
 LOADGEN="$HERE/clients/loadgen"
 RES=/home/x/projects/pygo-bench/benchmark/results

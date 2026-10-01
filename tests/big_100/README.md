@@ -47,11 +47,11 @@ that runs it (override with `--python` or `STACKWEAVE_PYTHON`). The default pack
 the 64-core machine: 16 projects at a time × 4 hubs each ≈ 64 cores.
 
 ```
-PYTHON_GIL=0 ~/.pyenv/versions/3.14.4t-mig/bin/python3.14t big_100/run_all.py \
-    --jobs 16 --hubs 4 --duration 3600
+PY=~/.pyenv/versions/3.14.4t-mig/bin/python3.14t   # both src/patches/ halves
+PYTHON_GIL=0 $PY big_100/run_all.py --jobs 16 --hubs 4 --duration 3600
 # a subset / a quick smoke:
-big_100/run_all.py --only 1,3,7,36 --duration 30 --hubs 4
-big_100/run_all.py --from 1 --to 20 --duration 600 --jobs 10 --hubs 6
+PYTHON_GIL=0 $PY big_100/run_all.py --only 1,3,7,36 --duration 30 --hubs 4
+PYTHON_GIL=0 $PY big_100/run_all.py --from 1 --to 20 --duration 600 --jobs 10 --hubs 6
 ```
 
 Per-project logs land in `big_100/logs/pNN.log`; a summary table prints at the

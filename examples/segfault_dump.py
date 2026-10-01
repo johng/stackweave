@@ -13,8 +13,8 @@ or why.
 ``stackweave.inspect.install_crash_handler()`` installs a fatal-signal handler
 that turns it into a *classified* dump: it names the overflowing fiber and its
 stack size and tells you what to do about it.
-The fault is unrecoverable -- a SIGSEGV can't be turned into a catchable Python
-exception, so the process still dies -- but now it dies *informatively*, instead
+The fault is unrecoverable -- a SIGSEGV (SIGBUS on macOS) can't be turned into a
+catchable Python exception, so the process still dies -- but now it dies *informatively*, instead
 of leaving you staring at a bare "Segmentation fault".
 
 In your own program you just call ``install_crash_handler()`` once at startup.
