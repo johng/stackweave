@@ -1,0 +1,153 @@
+{
+  "env": {
+    "aslr": "?",
+    "build_label": "",
+    "cpu_model": "Apple M5 Max",
+    "cpu_perflevels": "6P+12E",
+    "gc_frames_active": 1,
+    "gil_enabled": false,
+    "git_dirty": false,
+    "git_sha": "f5a9c255",
+    "governor": "n/a (virtualized)",
+    "host": "M5-Max-Mar-2026",
+    "iouring_available": false,
+    "kernel": "25.3.0",
+    "loadavg": [
+      "4.42",
+      "4.22",
+      "4.46"
+    ],
+    "nproc": 18,
+    "numa_nodes": 1,
+    "optimize": {
+      "effective": {
+        "STACKWEAVE_BLOCKPOOL_WORKERS": "16",
+        "spawn": "fast"
+      },
+      "goals": [
+        "throughput"
+      ]
+    },
+    "perf_event_paranoid": "?",
+    "pinned_cpus": null,
+    "py_cflags": "-fno-strict-overflow -Wsign-compare -Wunreachable-code -DNDEBUG -g -O3 -Wall",
+    "py_config_args": "'--prefix=/Users/johng/.pyenv/versions/3.14.4t-mig' '--disable-gil' '--enable-optimizations' '--with-tail-call-interp' '--with-lto=thin' '--with-openssl=/opt/homebrew/opt/openssl@3' 'CPPFLAGS=-DPy_TSTATE_ALLOC_HOME -DPy_TSTATE_EXEC_HOME -I/opt/homebrew/include' 'LDFLAGS=-L/opt/homebrew/lib'",
+    "python": "3.14.4",
+    "python_build": "main Sep 14 2026 21:33:01",
+    "python_impl": "CPython",
+    "python_tlbc_env": null,
+    "runloom_backend": "fcontext-asm",
+    "runloom_netpoll": "kqueue",
+    "runloom_so": "/Users/johng/repos/runloom/.claude/worktrees/perf-suite/src/stackweave_c.cpython-314t-darwin.so",
+    "stackweave_env": {
+      "STACKWEAVE_BENCH_OPTIMIZE": "throughput",
+      "STACKWEAVE_BLOCKPOOL_WORKERS": "16"
+    },
+    "timestamp": "2026-10-01T07:44:20+00:00"
+  },
+  "results": [
+    {
+      "ci95_hi_s": 0.4402223745,
+      "ci95_lo_s": 0.439150292,
+      "inner": 32000,
+      "mad_s": 0.0005267290000000036,
+      "mean_s": 0.4405762333,
+      "median_s": 0.439730729,
+      "min_s": 0.438987375,
+      "name": "c-echo @2h",
+      "note": "64 conns x 500 x 64B round-trips, 2 hubs",
+      "ops_per_s": 72771.8075850005,
+      "per_op_ns": 13741.58528125,
+      "per_op_s": 1.374158528125e-05,
+      "rsd_pct": 0.6452748980274199,
+      "samples": 10,
+      "stdev_s": 0.0028429278401596227
+    },
+    {
+      "ci95_hi_s": 0.214446417,
+      "ci95_lo_s": 0.213471042,
+      "inner": 32000,
+      "mad_s": 0.00047360400000000247,
+      "mean_s": 0.2138965211,
+      "median_s": 0.21366500049999998,
+      "min_s": 0.2128865,
+      "name": "py-echo @2h",
+      "note": "64 conns x 500 x 64B round-trips, 2 hubs",
+      "ops_per_s": 149767.1585197221,
+      "per_op_ns": 6677.031265624999,
+      "per_op_s": 6.677031265624999e-06,
+      "rsd_pct": 0.292128872431017,
+      "samples": 10,
+      "stdev_s": 0.0006248534952586022
+    },
+    {
+      "ci95_hi_s": 0.35280052100000003,
+      "ci95_lo_s": 0.351162042,
+      "inner": 32000,
+      "mad_s": 0.000425792499999994,
+      "mean_s": 0.35230062100000004,
+      "median_s": 0.3516170415,
+      "min_s": 0.350788,
+      "name": "c-echo @4h",
+      "note": "64 conns x 500 x 64B round-trips, 4 hubs",
+      "ops_per_s": 91008.10320082282,
+      "per_op_ns": 10988.032546875002,
+      "per_op_s": 1.0988032546875001e-05,
+      "rsd_pct": 0.5585977722323147,
+      "samples": 10,
+      "stdev_s": 0.00196794342046661
+    },
+    {
+      "ci95_hi_s": 0.184774709,
+      "ci95_lo_s": 0.184088854,
+      "inner": 32000,
+      "mad_s": 0.00026681300000000463,
+      "mean_s": 0.184451021,
+      "median_s": 0.1844623125,
+      "min_s": 0.183684375,
+      "name": "py-echo @4h",
+      "note": "64 conns x 500 x 64B round-trips, 4 hubs",
+      "ops_per_s": 173477.17030274138,
+      "per_op_ns": 5764.447265625,
+      "per_op_s": 5.764447265625e-06,
+      "rsd_pct": 0.22935565843909977,
+      "samples": 10,
+      "stdev_s": 0.00042304885371219217
+    },
+    {
+      "ci95_hi_s": 0.590074,
+      "ci95_lo_s": 0.587925417,
+      "inner": 32000,
+      "mad_s": 0.0010715210000000197,
+      "mean_s": 0.588707525,
+      "median_s": 0.5887045625,
+      "min_s": 0.584099916,
+      "name": "c-echo @8h",
+      "note": "64 conns x 500 x 64B round-trips, 8 hubs",
+      "ops_per_s": 54356.63665338078,
+      "per_op_ns": 18397.017578125,
+      "per_op_s": 1.8397017578125e-05,
+      "rsd_pct": 0.31990338268194196,
+      "samples": 10,
+      "stdev_s": 0.001883295286578139
+    },
+    {
+      "ci95_hi_s": 0.259837396,
+      "ci95_lo_s": 0.256782917,
+      "inner": 32000,
+      "mad_s": 0.0016529164999999901,
+      "mean_s": 0.2581201542,
+      "median_s": 0.259041167,
+      "min_s": 0.253432209,
+      "name": "py-echo @8h",
+      "note": "64 conns x 500 x 64B round-trips, 8 hubs",
+      "ops_per_s": 123532.4885638737,
+      "per_op_ns": 8095.036468750001,
+      "per_op_s": 8.095036468750001e-06,
+      "rsd_pct": 0.9339611551462388,
+      "samples": 10,
+      "stdev_s": 0.0024107419738315728
+    }
+  ],
+  "suite": "echo"
+}
