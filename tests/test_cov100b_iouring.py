@@ -352,5 +352,59 @@ def test_iouring_loop_file_io():
     assert_iouring_loop_ran(p)
 
 
+# --------------------------------------------------------------------------
+# 6. netpoll TIMED parks expire under the loop backend.  The hub blocks in its
+#    ring, not in the epoll pump, and the pump is where a wait_fd deadline is
+#    both waited-for (the pump clamps its epoll_wait to the deadline heap) and
+#    fired (its post-wait sweep).  Without the ring branch doing the same, a
+#    timed park on an fd that never becomes ready -- a plain wait_fd(timeout)
+#    on a quiet pipe, or context.WithTimeout's deadline_waker on the always-
+#    quiet wake fd -- produced no epoll edge and so never timed out: the
+#    fiber hung until unrelated readiness woke the hub.  Both shapes here; the
+#    in-child watchdog turns the hang into a FAIL (a sleeper does wake the
+#    hub: the ring wait is clamped to the sleep heap, only not to netpoll's).
+# --------------------------------------------------------------------------
+_TIMED_PARK = r'''
+import os, sys, time; sys.path.insert(0, "src")
+import stackweave, stackweave_c as rc
+import stackweave.context as ctx
+READ = 1
+out = {}
+def watchdog():
+    stackweave.sleep(3.0)
+    if "done" not in out:
+        sys.stdout.write("HUNG %r\n" % (out,)); sys.stdout.flush(); os._exit(3)
+def main():
+    rc.mn_fiber(watchdog)
+    r, w = os.pipe()                       # no writer: readiness never comes
+    t0 = time.monotonic()
+    rv = rc.wait_fd(r, READ, 50)
+    out["wait_fd"] = (rv, time.monotonic() - t0)
+    rc.netpoll_unregister(r); os.close(r); os.close(w)
+    c, _cancel = ctx.WithTimeout(ctx.Background(), 0.02)
+    stackweave.sleep(0.2)
+    out["ctx_err"] = c.err()
+    out["done"] = 1
+stackweave.run(2, main)      # run() tears the hub rings down, which folds the loop-waits stat
+rv, took = out["wait_fd"]
+print("TIMED_PARK rv=%d took=%.3f ctx=%r" % (rv, took, out["ctx_err"]))
+'''
+
+
+@needs_iouring
+def test_iouring_loop_timed_park_expires():
+    p = _run(_TIMED_PARK + IOURING_LOOP_TRAILER, {})
+    assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1200:])
+    m = re.search(r"TIMED_PARK rv=(\d+) took=([\d.]+) ctx=(\S+)", p.stdout)
+    assert m is not None, (p.stdout[-400:], p.stderr[-800:])
+    rv, took, err = int(m.group(1)), float(m.group(2)), m.group(3)
+    assert rv == 0, "wait_fd on a quiet pipe must time out (rv=%d)" % rv
+    # 50 ms asked; allow a loaded box, but not the 3 s watchdog or a 500 ms
+    # idle tick.  Unfixed, this never returned at all.
+    assert 0.045 <= took < 1.0, "wait_fd(50ms) took %.3fs" % took
+    assert err != "None", "WithTimeout deadline never fired"
+    assert_iouring_loop_ran(p)
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

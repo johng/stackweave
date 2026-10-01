@@ -7,14 +7,28 @@ p223 echo, single-shot is at epoll parity and multishot with a full buffer
 pool is ~10% above it at 2-16 hubs. It is opt-in. This file lists the work
 that would let it earn a default.
 
-## 1. Fix the two open failures with the flag on
+## 1. Fix the two open failures with the flag on (done)
 
 `tests/test_mn_compat_fixes.py::TestTimeContextMN::test_withtimeout_deadline_fires`
 and `tests/test_swarm_netpoll_epoll.py::test_stale_arm_probe_heals_under_mn_subprocess`
-fail under `STACKWEAVE_IOURING_LOOP=1` and pass with it off. Both sit where
-netpoll deadlines / the stale-arm probe meet the ring wait. They predate #27.
-Nothing below should land before these do, because every step below widens
-the set of runs that hit them.
+failed under `STACKWEAVE_IOURING_LOOP=1` and passed with it off. One cause:
+netpoll TIMED parks (`wait_fd` with a timeout, and the stale-arm probe tick,
+which rides the same deadline heap) are both waited-for and fired by the
+epoll pump, which clamps its `epoll_wait` to the earliest deadline and sweeps
+the expired parkers after every wait. The loop backend's hub blocks in its
+ring instead and only pumped on an epoll edge, so a timed park on an fd that
+never became ready (context's deadline_waker on the always-quiet wake fd)
+never timed out. The ring branch of `hub_main` now clamps its wait to
+`runloom_netpoll_deadline_gap_ns()` and runs
+`runloom_netpoll_drain_expired_all()` after it, the pump's two halves.
+Regression: `test_cov100b_iouring.py::test_iouring_loop_timed_park_expires`.
+
+Not in this family, though first mistaken for it: the soak server
+(`tools/soak/net_echo_server_forever.py`) ignoring SIGTERM. Its handler only
+set a flag that root checked between `sched_sleep(3600)` calls, and a handler
+that does not raise never cuts a fiber sleep short (the runtime matches
+CPython's `time.sleep` here, PEP 475), so `kill` took up to an hour on every
+backend. Fixed on the server side with a wake pipe (fork PR #31).
 
 ## 2. Route Python-level sockets through the ring
 

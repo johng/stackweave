@@ -817,6 +817,13 @@ static void runloom_stack_release(void *stack, size_t size)
             runloom_stack_madv_reclaim((char *)stack + page, size - page);
         }
     }
+    /* A stack arriving from a pooled coro (coro_destroy poisons the WHOLE
+     * stack, header bytes included, while the coro waits in its pool; the
+     * coro-pool overflow path of runloom_coro_global_flush releases it here
+     * without reacquiring) is still poisoned, so writing the pool header
+     * below is a use-after-poison to ASan -- p223's hub teardown aborted on
+     * it.  Our memory, our bookkeeping: lift the poison off the header. */
+    RUNLOOM_UNPOISON(stack, 16);
     hdr = (void **)stack;
     hdr[RUNLOOM_STACK_HDR_NEXT] = (void *)runloom_tls_stack_pool;
     hdr[RUNLOOM_STACK_HDR_SIZE] = (void *)size;

@@ -351,3 +351,21 @@ static int runloom_netpoll_wait_failed(int n)
     }
     return 1;
 }
+
+/* Deadline plane for a hub that blocks outside the pump (the io_uring loop
+ * backend's ring wait; see netpoll.h).  Every pool, like the pump itself:
+ * hub parkers live in per-hub pools and the sweep wakes cross-hub through
+ * mn_wake_g, exactly as the epoll pump's post-wait sweep does. */
+long long runloom_netpoll_deadline_gap_ns(void)
+{
+    long long dl = runloom_dh_peek_deadline_global();
+    long long gap;
+    if (dl < 0) return -1;
+    gap = dl - monotonic_ns();
+    return gap < 0 ? 0 : gap;
+}
+
+int runloom_netpoll_drain_expired_all(void)
+{
+    return runloom_pump_drain_expired(monotonic_ns());
+}
