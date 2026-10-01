@@ -149,13 +149,6 @@ NATIVE_ONLY = {
 # a real exposure in a narrow case.  Only stale uses of the listed variables
 # are accepted, so anything new in the same function still fails.
 ACCEPTED = {
-    "_runloom_sched_drain": (
-        {"_runloom_chunk_pool", "_runloom_chunk_pool_size"},
-        "the single-thread drain runs on its caller's stack, which is a fiber "
-        "only for run(1) nested in an M:N goroutine; the goroutine parks there "
-        "only if Python code the drain runs (a finalizer, a signal handler) "
-        "parks it, and the drain's per-thread scheduler pointer has the same "
-        "exposure"),
     "_runloom_sim_dispatch_due_plane": (
         {"_runloom_sim_due_scratch"},
         "deterministic-simulation mode only: reached on a fiber through "
@@ -1224,6 +1217,8 @@ def check(so, image_path, verbose):
         n = sum(1 for x in accepted if x.func.name == name)
         print("  accepted: %d stale use(s) in %s -- %s"
               % (n, name.lstrip("_"), ACCEPTED[name][1]))
+    for name in sorted(set(ACCEPTED) & names - {x.func.name for x in accepted}):
+        print("  note: ACCEPTED %s matched nothing in this build" % name)
     if verbose:
         for fn, off, callee, tv in an.passed_fresh:
             print("  note: %s+0x%x passes a TLS address [%s] to %s, which "

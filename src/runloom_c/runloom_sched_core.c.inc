@@ -221,7 +221,9 @@ static RUNLOOM_TLS runloom_sched_t *runloom_tls_sched = NULL;
  * stays exactly as before, with no eventfd in the shared epoll. */
 static volatile int runloom_sched_count = 0;
 
-runloom_sched_t *runloom_sched_get(void)
+/* Out of line (RUNLOOM_NOINLINE): the park paths call it again after the
+ * fiber resumes, possibly on another thread. */
+RUNLOOM_NOINLINE runloom_sched_t *runloom_sched_get(void)
 {
     runloom_sched_t *s = runloom_tls_sched;
     if (__builtin_expect(s != NULL, 1)) return s;
@@ -576,7 +578,10 @@ void runloom_g_global_reset_after_fork(void)
     runloom_g_global_size = 0;
 }
 
-runloom_g_t *runloom_g_slab_alloc(void)
+/* The slab is per-thread: alloc and free stay out of line (RUNLOOM_NOINLINE)
+ * because spawn_common can decref -- and so run a finalizer that parks --
+ * between its alloc and the free on its error path. */
+RUNLOOM_NOINLINE runloom_g_t *runloom_g_slab_alloc(void)
 {
     runloom_g_t *g = runloom_g_slab;
     /* OOM fault injection (test-only; inert unless RUNLOOM_FAULT_SPAWN_G is set):
@@ -643,7 +648,7 @@ runloom_g_t *runloom_g_slab_alloc(void)
     return g;
 }
 
-void runloom_g_slab_free(runloom_g_t *g)
+RUNLOOM_NOINLINE void runloom_g_slab_free(runloom_g_t *g)
 {
 #ifdef RUNLOOM_DBG_BADCORO
     g->magic = 0xDEADu;   /* source-hunt: freed-g marker (distinguishes UAF from reuse) */
