@@ -230,7 +230,7 @@ def summarize_dir(args):
     key_name = {k: (k[1] if len(builds) == 1 else "%s/%s" % k) for k in keys}
     stamp = os.path.basename(os.path.normpath(d))
     write_summary(d, stamp, runs, suites, keys, key_name, keys[0],
-                  [(b, "(from %s)" % d) for b in builds], [k[1] for k in keys],
+                  [(b, "") for b in builds], [k[1] for k in keys],
                   passes or 0, args.note, None)
 
 
@@ -250,7 +250,7 @@ def write_summary(out_dir, stamp, runs, suites, keys, key_name, base_key, builds
                  first["git_sha"], "-dirty" if first["git_dirty"] else "",
                  first["runloom_netpoll"],
                  "on" if first["gc_frames_active"] and first["python_tlbc_env"] != "0" else "off"),
-             "- builds: %s" % ", ".join("%s=%s" % b for b in builds),
+             "- builds: %s" % ", ".join(("%s=%s" % b) if b[1] else b[0] for b in builds),
              "- 1-min load average across the runs: %s" % (
                  "%.1f .. %.1f" % (loads[0], loads[-1]) if loads else "?"),
              "- %d interleaved pass(es); cells are the median over passes; the delta is "
