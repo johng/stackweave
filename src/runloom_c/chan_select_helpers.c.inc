@@ -16,7 +16,8 @@
  * one tlv_get_addr at entry, spilled), and the select_retry draws after
  * runloom_coro_yield then advanced the ORIGIN hub's PRNG state whenever the
  * fiber had migrated -- racing that hub's own selects (TSan finding A2,
- * docs/dev/TSAN.md). */
+ * docs/dev/TSAN.md).  tools/ci/check_tls_after_park.py checks the built .so
+ * for this class. */
 static RUNLOOM_TLS uint64_t runloom_select_rng = 0;
 
 static __attribute__((noinline)) uint64_t runloom_select_rand(void)

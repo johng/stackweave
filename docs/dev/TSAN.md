@@ -251,8 +251,72 @@ wrong-thread refcount path.
   already `__atomic`) are invisible unless something like the oracle makes one
   side plain.
 - **Darwin TLS caching (A2)** shows up only when two hubs actually touch the
-  same TLS block. The static scan in A2 is the systematic check, and it needs a
-  lint.
+  same TLS block. The systematic check is the lint below.
+
+## The TLS-after-park lint
+
+`tools/ci/check_tls_after_park.py [-v] [EXTENSION.so]` (arm64 macOS; default:
+the extension built into `src/`) reads the release extension's machine code
+and fails when a thread-local's address, or the thread pointer, is used after a
+call that can park the fiber. That is A2's class, and B1's for the inlined
+`_Py_ThreadId()` reads. It runs in about 2 s. `tests/test_tls_after_park_lint.py`
+runs it on the built extension and on four small fixtures that must flip its
+verdict (a reused TLS address, a noinline accessor, and the thread pointer read
+with and without `volatile`), so it runs in the `tests` phase of
+`scripts/check_all_fast.sh` on a Mac.
+
+How it decides, in short (the module docstring has the details):
+
+- **Sources**: a call through a `__thread_vars` TLV descriptor, a
+  `mrs TPIDRRO_EL0`, or a call to an image function that returns a TLS address.
+- **May-park calls**: anything that reaches `runloom_coro_yield`, the only
+  fiber-side suspension (every `runloom_asm_swap` caller is checked against a
+  fixed set); an indirect call; a Python C API call (it can run Python code: a
+  finalizer, a callback, the preemption hook), except a short reviewed list
+  that cannot; a libc call that calls back into the image.
+- **Uses**: a forward data-flow pass follows the address through registers,
+  FP/SIMD registers, stack slots and pointer arithmetic. After a may-park call
+  it is stale, and a stale value reaching an address, a compare, a call
+  argument, a store or a return value is a finding. A fresh address stored to
+  non-stack memory or passed to a may-park call is a finding too, because the
+  check cannot follow it.
+- **Exit 2** when it cannot vouch: not arm64 Darwin, a stripped image, an
+  instruction, jump table or TLV form it does not model in a function that
+  touches TLS, or no TLS access found in `runloom_mn_tls_current_g`.
+
+Results on the release build (`-O2`, Apple clang 21): before the A2 fix it
+reports four stale uses in `runloom_chan_select` (`runloom_select_rng`, loaded
+and stored after `runloom_coro_yield`) and exits 1; after it, it exits 0, as it
+does on the `STACKWEAVE_DEBUG=1` (`-O0`) and `STACKWEAVE_TSAN=1` builds. Two
+reviewed lists keep it at zero:
+
+- `NATIVE_ONLY`: `runloom_hub_main` and `py_blocking_worker_thread_fini` run
+  only on their own OS thread's stack, so nothing they call can move their
+  frame. `hub_main` alone has 18 reuses that would otherwise be reported. The
+  check fails if either gains a direct caller.
+- `ACCEPTED`, keyed by function and variable, so anything new there still
+  fails:
+  - `runloom_sched_drain` reuses the `runloom_chunk_pool` addresses after
+    `runloom_pystate_load`, whose decrefs can run a finalizer. The drain is on
+    a fiber only for `run(1)` nested in an M:N goroutine, and its per-thread
+    scheduler pointer `s` has the same exposure there.
+  - `runloom_sim_dispatch_due_plane` re-reads `runloom_sim_due_scratch` after
+    each dispatch. That is simulation mode only, reached on a fiber through
+    `netpoll_poll()`, and parks only if a woken g's last decref runs a
+    finalizer that parks.
+
+  Both are real only in those narrow cases and are left as they are.
+
+`runloom_netpoll_wait_fd` passes today because the inliner did not inline
+`runloom_parker_pool_release` on the path after `runloom_coro_yield`. If it
+does one day, the parker would go back onto the origin hub's TLS freelist from
+another thread; the lint is what would catch that.
+
+Limits: pointer arithmetic other than add/sub, and/orr/bic, madd and selects is
+assumed to produce a non-pointer. It follows data flow, not equalities (after
+`if (x == tid)` the compiler may use `x` for `tid`). A TLS address passed to a
+call that cannot park is not followed into the callee (`-v` lists those calls),
+and nothing inside the Python C API or libc is checked.
 
 ## Not covered by this run
 

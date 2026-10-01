@@ -110,6 +110,13 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   `runloom_tstate_in_destruction` and defer (trigger stays armed); yielding inside
   a `tp_dealloc` freezes a half-dead object across a GC-safe point → UAF. Don't
   reroute via the eval-breaker.
+- **A thread-local's address never survives a park.** clang computes it once
+  per function (Darwin: one `tlv_get_addr`, kept in a register or spilled) and
+  reuses it after calls; after a park that may have migrated the fiber, the
+  reuse touches the ORIGIN hub's copy (TSan A2: the select PRNG). A TLS access
+  after a park goes through an out-of-line accessor (`noinline`, or another TU
+  like `runloom_mn_tls_current_g()`). Guard: `tools/ci/check_tls_after_park.py`
+  on the release .so (`tests/test_tls_after_park_lint.py`).
 - **Cooperative primitives are foreign-OS-thread-safe.** A non-goroutine thread
   (a patched `Lock` in an mp.Queue `_feed` thread) must detect no-goroutine (TLS
   peek NULL) and block on the real OS — never park a non-existent g, never lazily
