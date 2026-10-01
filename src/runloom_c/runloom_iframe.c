@@ -82,6 +82,107 @@ void runloom_iframe_borrow_alloc_home(PyThreadState *exec, PyThreadState *home)
 #endif
 }
 
+/* See runloom_iframe.h.  Free-threaded CPython keeps the object freelists
+ * (ints, floats, tuples, lists, dicts, ...) per thread state, and
+ * PyThreadState_Clear drains the CURRENT thread state's freelists
+ * (_Py_freelists_GET()), not those of the state being cleared -- CPython's
+ * own threads always clear themselves.  A per-g tstate is cleared by whichever
+ * thread drops the last g ref, with that thread's state current, so whatever
+ * the fiber had cached in its freelists was never freed: every block stayed
+ * "used" in the hub heap it came from, and once that hub's heap was abandoned
+ * at mn_fini its segments could never be reclaimed.  The interpreter's
+ * abandoned-segment pool then only grew, and every later PyThreadState_Clear
+ * (one per fiber) re-walks that pool -- the per-fiber cost behind the
+ * process-wide spawn->run slowdown after a fiber-heavy load.
+ *
+ * Move the dead state's entries onto the matching lists of the current state
+ * instead; the Clear that follows then frees them with the right per-type
+ * deallocator.  Generic over `struct _Py_freelists` (an array of
+ * `struct _Py_freelist`, linked through each block's first word), so it needs
+ * no table of deallocators.  Should CPython ever drain the cleared state's own
+ * lists instead, the spliced entries simply stay cached on the current state
+ * (reused, or freed when it clears) -- never leaked either way. */
+void runloom_iframe_hand_over_freelists(PyThreadState *dead)
+{
+#if defined(RUNLOOM_DESTRUCT_HAVE)
+    PyThreadState *cur = PyThreadState_GetUnchecked();
+    struct _Py_freelist *src, *dst;
+    size_t i, n;
+    _Static_assert(sizeof(struct _Py_freelists) % sizeof(struct _Py_freelist) == 0,
+                   "struct _Py_freelists is no longer a plain array of _Py_freelist");
+    if (dead == NULL || cur == NULL || cur == dead) return;
+    src = (struct _Py_freelist *)&((_PyThreadStateImpl *)dead)->freelists;
+    dst = (struct _Py_freelist *)&((_PyThreadStateImpl *)cur)->freelists;
+    n = sizeof(struct _Py_freelists) / sizeof(struct _Py_freelist);
+    for (i = 0; i < n; i++) {
+        void *head = src[i].freelist, *tail = head;
+        Py_ssize_t k = 1;
+        if (head == NULL) continue;
+        while (*(void **)tail != NULL) {
+            tail = *(void **)tail;
+            k++;
+        }
+        *(void **)tail = dst[i].freelist;
+        dst[i].freelist = head;
+        /* size -1 marks a list disabled by an earlier Clear on this thread;
+         * entries on it are still drained by the next clear. */
+        dst[i].size = (dst[i].size > 0 ? dst[i].size : 0) + k;
+        src[i].freelist = NULL;
+        src[i].size = 0;
+    }
+#else
+    (void)dead;
+#endif
+}
+
+/* See runloom_iframe.h.  PyThreadState_Clear ends by abandoning the cleared
+ * state's four mimalloc heaps, and each abandon also sweeps the interpreter's
+ * abandoned-segment pool on behalf of other threads (_mi_abandoned_collect:
+ * pop a segment, walk all its pages, free it if empty, else park it on the
+ * visited list -- up to 1024 times per heap, cycling the visited list back
+ * in, so a single segment that still holds live blocks costs the full 1024
+ * walks).  CPython pays that once per OS-thread exit.  A per-g tstate pays it
+ * once per FIBER, and the pool is never empty for long under M:N: every
+ * mn_fini abandons the hub heaps, and anything still alive that a fiber
+ * allocated keeps its segment there.  A quiet hub then spends 70-95 us tearing
+ * down each trivial fiber instead of ~5 us, for the rest of the process.
+ *
+ * A borrower tstate (alloc-home: it allocates on the running hub's heap) owns
+ * no segment and no page, so abandoning its heaps has nothing of its own to
+ * do -- only the pool sweep, which the threads that do allocate still perform
+ * whenever they need memory (mimalloc's reclaim-on-allocate) and on their
+ * exit.  So when the state provably owns nothing, point its segment tld at an
+ * empty private pool for the duration of the Clear.  Checked against the
+ * mimalloc 2.1.2 that CPython 3.14 and 3.15 vendor (3.15.0rc1/rc2's
+ * Objects/mimalloc/segment.c, mi_abandoned_pool_t and pycore_mimalloc.h are
+ * byte-identical to 3.14.4's); other versions keep the plain Clear until
+ * checked. */
+void runloom_iframe_clear_fiber_tstate(PyThreadState *ts)
+{
+    runloom_iframe_hand_over_freelists(ts);
+#if defined(RUNLOOM_DESTRUCT_HAVE) && PY_VERSION_HEX < 0x03100000
+    {
+        struct _mimalloc_thread_state *m = &((_PyThreadStateImpl *)ts)->mimalloc;
+        int i, owns_nothing = m->tld.segments.count == 0;
+        for (i = 0; i < _Py_MIMALLOC_HEAP_COUNT && owns_nothing; i++) {
+            owns_nothing = m->heaps[i].page_count == 0
+                && __atomic_load_n((void **)&m->heaps[i].thread_delayed_free,
+                                   __ATOMIC_ACQUIRE) == NULL;
+        }
+        if (owns_nothing) {
+            mi_abandoned_pool_t empty;
+            mi_abandoned_pool_t *shared = m->tld.segments.abandoned;
+            memset(&empty, 0, sizeof(empty));
+            m->tld.segments.abandoned = &empty;
+            PyThreadState_Clear(ts);
+            m->tld.segments.abandoned = shared;
+            return;
+        }
+    }
+#endif
+    PyThreadState_Clear(ts);
+}
+
 int runloom_iframe_service_merge_queue(PyThreadState *ts)
 {
     int rounds = 0;
