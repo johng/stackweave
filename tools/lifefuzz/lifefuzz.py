@@ -731,6 +731,7 @@ KNOB_FACTORS = (
     ("STACKWEAVE_READY_STARVE_BOUND", ["0", "64"]),
     ("STACKWEAVE_IDLE_BACKOFF_MS",    ["1", "32"]),
     ("STACKWEAVE_SYSMON",             ["0", "1"]),
+    ("STACKWEAVE_IDLE_UNREG_WAIT_US", ["0", "200"]),
 )
 
 

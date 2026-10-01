@@ -50,11 +50,14 @@ ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 #                       fairness turn after 64 ready-ring services
 #   IDLE_BACKOFF_MS     1 = no idle backoff (1ms re-pump); 32 = default cap
 #   SYSMON              sysmon always runs; this only toggles its WEDGED lines
+#   IDLE_UNREG_WAIT_US  0 = an unregistered idle wait runs its full backoff step;
+#                       200 = default cap on it (us)
 FACTORS = [
     ("STACKWEAVE_SCHED_RANDOM",       ["0", "1"]),
     ("STACKWEAVE_READY_STARVE_BOUND", ["0", "64"]),
     ("STACKWEAVE_IDLE_BACKOFF_MS",    ["1", "32"]),
     ("STACKWEAVE_SYSMON",             ["0", "1"]),
+    ("STACKWEAVE_IDLE_UNREG_WAIT_US", ["0", "200"]),
 ]
 
 
