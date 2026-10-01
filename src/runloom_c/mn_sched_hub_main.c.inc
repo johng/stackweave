@@ -904,9 +904,15 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                 parked = runloom_netpoll_parked_count();
                 /* WAKEP (park double-check): idle_ns is now final.  Only a DEEP
                  * wait (past ~2ms, where re-poll is too slow to catch surplus on
-                 * its own) needs the registry; a short poll re-scans soon enough
-                 * (the idle-condvar wait caps an unregistered wait at
-                 * RUNLOOM_IDLE_UNREG_WAIT_NS so that stays true under backoff).
+                 * its own) needs the registry; a short poll is meant to re-scan
+                 * soon enough.  Under the backoff that holds only for the
+                 * idle-condvar wait, which caps an unregistered wait at
+                 * RUNLOOM_IDLE_UNREG_WAIT_NS.  The other two idle waits are NOT
+                 * capped and stay deaf to stealable surplus while unregistered:
+                 * the netpoll pump waits pump_ns = 1ms << idle_streak (4/8/16ms
+                 * while idle_ns is still <= 2ms; unchanged from before the
+                 * condvar became the only non-pump wait), and the io_uring loop
+                 * wait takes idle_ns uncapped (0.4/0.8/1.6ms).
                  * Register, then re-scan: if stealable work raced in between our
                  * failed steal above and the flag-set, do a non-blocking pass
                  * (idle_ns=0) and re-loop to run it.  Pairs with a producer's

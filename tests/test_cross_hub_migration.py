@@ -20,11 +20,11 @@ Each scenario runs in a fresh subprocess so a lost fiber or a wedged hub is a
 clean timeout rather than a hung pytest, and so one scenario's leak cannot
 leak into the next.
 
-Twelve gaps are closed (their docstrings start "Was a gap").  The three that
-remain are strict xfails under TODO_MIGRATION_FAIL: OS-thread-identity checks
-that live in C or in importlib and need a pin or a monkey patch.  A strict
-xfail still runs, and flips to a hard XPASS failure the moment its gap is
-closed.  The cost of one PyThreadState per fiber (gc.collect() per parked
+Thirteen gaps are closed (their docstrings start "Was a gap").  The three
+that remain are strict xfails under TODO_MIGRATION_FAIL: OS-thread-identity
+checks that live in C or in importlib and need a pin or a monkey patch.  A
+strict xfail still runs, and flips to a hard XPASS failure the moment its gap
+is closed.  The cost of one PyThreadState per fiber (gc.collect() per parked
 fiber, RSS per parked fiber, spawn) was bounded against the per-hub
 scheduler while that scheduler existed; with migration the only mode there
 is no in-tree baseline, so those three comparisons are not carried here.
@@ -895,6 +895,58 @@ assert remote < max(100.0, 4 * own), (
     "the spawner's own hub" % (remote, own))
 print("PASS", flush=True)
 ''', timeout=90)
+
+
+def test_sched_local_wake_is_stolen_promptly_by_a_shallow_idle_hub():
+    """Was a gap (fixed: an idle-condvar wait that is not registered for WAKEP
+    is capped at RUNLOOM_IDLE_UNREG_WAIT_NS, 200 us): a fiber pinned to hub 0
+    wakes a receiver -- a local wake, so the receiver lands on hub 0's deque
+    -- and then keeps running, so only a steal by an idle hub can run the
+    receiver.  WAKEP kicks only hubs registered for a wait past 2 ms; with the
+    idle backoff a hub spends its first ~3 ms of idleness in UNREGISTERED
+    waits of 0.4/0.8/1.6 ms that nothing interrupts for stealable surplus.  At
+    H=2 the only idle hub is always in one of them when the next wake lands
+    (the sender spins 2 ms between sends), so the steal waited ~400 us p50
+    (p90 ~1.9 ms) against ~8 us at H=4, where the extra idle hubs are deep,
+    registered and kicked.  The receiver has no sleeps or timers, so nothing
+    else wakes hub 1.  H=4 in the same process is the reference so a slow
+    runner shifts both sides.
+    """
+    assert_pass(r'''
+_watchdog(40)
+def steal_p50_us(hubs, n=150, spin_us=2000, warm=20):
+    ch, lat, where = stackweave_c.Chan(0), [], []
+    def sender():
+        for _ in range(n + warm):
+            ch.send(time.perf_counter_ns())
+            end = time.perf_counter_ns() + spin_us * 1000
+            while time.perf_counter_ns() < end:
+                pass
+        ch.send(None)
+    def receiver():
+        while True:
+            t0, _ = ch.recv()
+            if t0 is None:
+                return
+            lat.append(time.perf_counter_ns() - t0)
+            where.append(stackweave_c.mn_current_hub())
+    stackweave_c.mn_init(hubs)
+    stackweave_c.mn_fiber(sender, hub=0)
+    stackweave_c.mn_fiber(receiver)
+    stackweave_c.mn_run()
+    stackweave_c.mn_fini()
+    lat, where = sorted(lat[warm:]), where[warm:]
+    return lat[len(lat) // 2] / 1e3, sum(h != 0 for h in where) / len(where)
+ref, _ = steal_p50_us(4)
+p50, stolen = steal_p50_us(2)
+print("steal p50: H=2 %.0f us (stolen %.0f%%), H=4 %.0f us"
+      % (p50, 100 * stolen, ref), flush=True)
+require_migration(stolen >= 0.9)
+assert p50 < max(150.0, 10 * ref), (
+    "a local wake left on a busy hub was stolen after %.0f us p50 at H=2 vs "
+    "%.0f us at H=4" % (p50, ref))
+print("PASS", flush=True)
+''', timeout=60)
 
 
 def test_sched_foreign_thread_wake_reaches_a_shallow_idle_hub_promptly():

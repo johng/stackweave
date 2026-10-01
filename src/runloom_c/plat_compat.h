@@ -78,23 +78,32 @@ RUNLOOM_INLINE int runloom_thread_join(runloom_thread_t t) {
  * idle_cond (the one TIMED waiter).  Callers runloom_cond_init() once; there
  * is no static initializer, so every runloom_cond_t gets the clock below.
  *
- * Timed waits run on the MONOTONIC clock.  A default pthread condvar measures
- * pthread_cond_timedwait's absolute deadline on CLOCK_REALTIME, so on glibc
- * and musl a backward wall-clock step (an NTP step, settimeofday) stretches an
- * in-progress wait by the size of the step.  The hub idle wait
+ * Timed waits avoid the wall clock.  A default pthread condvar measures
+ * pthread_cond_timedwait's absolute deadline on CLOCK_REALTIME.  glibc hands
+ * that deadline to the kernel as an absolute CLOCK_REALTIME futex timeout, so
+ * a backward wall-clock step (an NTP step, settimeofday) stretches an
+ * in-progress wait by the size of the step.  (musl, like macOS, turns the
+ * deadline into a relative timeout when the wait starts, so there a step only
+ * matters in the instant between the two clock reads.)  The hub idle wait
  * backs off to 32 ms (longer under STACKWEAVE_IDLE_BACKOFF_MS) and is also
  * how a hub fires its own sleepers and timed parks, which nothing else
- * signals, so a step would make them fire late by the step.
- *   - Where POSIX clock selection exists (Linux glibc/musl, the BSDs) every
- *     condvar is initialised with pthread_condattr_setclock(CLOCK_MONOTONIC)
- *     and runloom_cond_timedwait_ns computes its deadline on CLOCK_MONOTONIC.
- *     The clock only affects timed waits, so untimed users are unchanged.
+ * signals, so on glibc a step would make them fire late by the step.
+ *   - Where <unistd.h> advertises POSIX clock selection (_POSIX_CLOCK_SELECTION
+ *     > 0: Linux glibc and musl) every condvar is initialised with
+ *     pthread_condattr_setclock(CLOCK_MONOTONIC) and runloom_cond_timedwait_ns
+ *     computes its deadline on CLOCK_MONOTONIC.  The clock only affects timed
+ *     waits, so untimed users are unchanged.
  *   - macOS has no pthread_condattr_setclock; it waits with
  *     pthread_cond_timedwait_relative_np, a relative timeout the kernel
  *     measures on mach absolute time, which a wall-clock step does not move.
  *     (Its plain timedwait already converts the deadline to a relative one at
  *     call time, so this only drops the round trip through the wall clock.)
- *   - Anything else keeps the REALTIME deadline.
+ *   - Anything else keeps the REALTIME deadline, init and wait agreeing.  That
+ *     includes FreeBSD and OpenBSD, whose <unistd.h> defines
+ *     _POSIX_CLOCK_SELECTION as -1 although they implement setclock.
+ * runloom_cond_init can fail on the setclock path; callers must check it and
+ * never fall back to a default (REALTIME) condvar, which a MONOTONIC deadline
+ * would turn into a busy loop.
  * RUNLOOM_COND_MONOTONIC may be predefined to 0 by a checker harness whose
  * pthread model has no condvar attributes (tools/verify/genmc). */
 #ifndef RUNLOOM_COND_MONOTONIC
