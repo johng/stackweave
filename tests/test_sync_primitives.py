@@ -308,7 +308,16 @@ def test_singleflight_dedupes_and_shares():
 
         def fn():
             calls["n"] += 1
-            stackweave.sleep(0.02)
+            # Hold the call open until the other 19 callers have JOINED it
+            # (parked on its Future).  A fixed sleep here is load-dependent: on a
+            # 3-vCPU runner, spawning 20 fibers across 8 hubs can outlast it, so a
+            # late caller finds the call finished and starts a second one
+            # (`assert 2 == 1`, macos-14 CI).  The deadline only bounds a hang if
+            # dedupe is broken -- the n == 1 assert below then reports it.
+            fut = g._calls["k"]
+            deadline = time.monotonic() + 5
+            while len(fut._waiters) < 19 and time.monotonic() < deadline:
+                stackweave.sleep(0.001)
             return "val-%d" % calls["n"]
 
         def caller():
