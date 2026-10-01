@@ -133,15 +133,15 @@ I/O where available, versus dispatching to a worker thread.
 
 **blocking call** — something stackweave cannot make cooperative: buffered file
 `read`/`write`, a C-extension DB driver, `socket.gethostbyaddr` (libc, and it
-takes no timeout), CPU-bound hashing. It must not run on a general hub, or that
-hub's scheduler loop stops.
+takes no timeout), CPU-bound hashing. It must not run directly on a hub, or
+that hub's scheduler loop stops.
 
 **offload** (`stackweave.monkey.offload`) — the sanctioned escape hatch for
 running one.
 
-**backend thread pool** (`_ThreadPoolBackend`) — the original offload
-mechanism: bare OS threads blocking in a raw `SimpleQueue.get()`, outside the
-scheduler entirely. Because those workers are not fibers, submission,
+**backend thread pool** (`_ThreadPoolBackend`) — the offload mechanism behind
+`monkey.offload()`: bare OS threads blocking in a raw `SimpleQueue.get()`,
+outside the scheduler entirely. Because those workers are not fibers, submission,
 completion and wakeup are all hand-rolled — which is where that subsystem's
 bugs have historically lived.
 
@@ -149,11 +149,6 @@ bugs have historically lived.
 gives each task a self-pipe (carries signal-interrupts into the call, ~10
 syscalls); the inmem parker uses none (faster, but off the netpoll). Chosen
 adaptively by queue backlog.
-
-**offload hub** — a hub reserved to run blocking calls as *ordinary fibers*
-(`offload_hubs=K`). Excluded from general placement and work-stealing (both
-directions), so no general work can land on one and stall. The offload fiber is
-spawned on its hub and the caller parks on a normal channel.
 
 ---
 

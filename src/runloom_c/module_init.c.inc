@@ -260,10 +260,7 @@ static PyMethodDef module_methods[] = {
     {"get_stack_scrub", m_get_stack_scrub, METH_NOARGS,
      "Return whether recycled-stack scrubbing is enabled."},
     {"mn_init",     (PyCFunction)m_mn_init, METH_VARARGS | METH_KEYWORDS,
-     "mn_init(n=cpus, offload_hubs=0): start N hub threads.  Returns the "
-     "total hub count.  offload_hubs reserves that many EXTRA hubs (added to "
-     "N, never carved out of it) on which a blocking call may run as an "
-     "ordinary fiber -- see offload_fiber."},
+     "mn_init(n=cpus): start N hub threads.  Returns the hub count."},
     {"mn_fiber",       (PyCFunction)m_mn_fiber, METH_VARARGS | METH_KEYWORDS,
      "mn_fiber(callable, stack_size=0, hub=-1): spawn a fiber on a round-robin "
      "hub.  stack_size>0 overrides the hub's small default C-stack (bytes) for "
@@ -271,8 +268,7 @@ static PyMethodDef module_methods[] = {
      "v1 only supports run-to-completion gs (no yield).\n\n"
      "hub=N spawns on hub N and keeps it there: the fiber is NOT stealable, so "
      "it runs only when hub N does and starves if N blocks (a determinism knob "
-     "for tests, not affinity).  N may name a reserved offload hub; on a busy "
-     "one the fiber strands behind its blocking call."},
+     "for tests, not affinity)."},
     {"mn_current_hub", m_mn_current_hub, METH_NOARGS,
      "mn_current_hub() -> int | None.  Dense id of the hub running the calling "
      "fiber, or None off-hub (single-thread scheduler / foreign OS thread)."},
@@ -292,17 +288,6 @@ static PyMethodDef module_methods[] = {
      "mn_hub_count(): number of M:N hubs currently running (0 if mn_init "
      "was never called or after mn_fini).  Lets the stackweave.fiber() wrapper "
      "dispatch to mn_fiber inside an M:N run."},
-    {"offload_fiber",  (PyCFunction)m_mn_offload_fiber, METH_VARARGS | METH_KEYWORDS,
-     "offload_fiber(fn, stack_size=0): spawn fn on a RESERVED OFFLOAD hub -- a "
-     "hub excluded from general placement and work-stealing, so fn may make a "
-     "blocking call without stranding fibers woken on a general hub.  The "
-     "result comes back the ordinary way (channel/WaitGroup), so no bespoke "
-     "completion protocol is involved.  Raises RuntimeError if no offload hubs "
-     "are reserved -- pass offload_hubs=K to mn_init."},
-    {"offload_hub_count", m_mn_offload_hub_count, METH_NOARGS,
-     "offload_hub_count(): how many hubs are reserved for blocking offload "
-     "(0 = feature off).  Also the bound on concurrent blocking calls: a "
-     "blocked hub cannot run its scheduler loop, so K hubs carry K of them."},
     {"mn_hub_states", m_mn_hub_states, METH_NOARGS,
      "mn_hub_states() -> list[dict].  A snapshot of every M:N hub: id, state "
      "('detached'/'attached'/'suspended'), running_g (goid being resumed, or "

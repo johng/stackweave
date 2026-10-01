@@ -129,32 +129,9 @@ Full derivations for the invariants below: [docs/dev/RUNTIME_GOTCHAS.md](docs/de
   user thread. Guard: `tests/test_tlbc_parked_frame_gc.py` (+ p565/p524 as the
   TLBC-on ground-truth oracle).
 
-- **Offload hubs must stay invisible to general work.** `mn_init(offload_hubs=K)`
-  (default 0 = off) reserves K hubs at the **tail** of `runloom_hubs[]` to run
-  blocking calls as ordinary fibers, so `offload` can reuse the scheduler
-  instead of the bespoke thread pool + self-pipe + result-box in
-  `monkey/_base.py`. The design rests on one invariant — *no general work
-  lands on an offload hub*, or it waits behind a blocking call. Two exclusions
-  enforce it (`runloom_general_hub_count()` bounds each; it equals
-  `runloom_hub_count` when off): (1) spawn placement in `runloom_mn_fiber_core`;
-  (2) steal rotation in `hub_main` — an offload hub never steals, and general
-  hubs never take it as a victim, which fail differently. `any_stealable_work`
-  / `wakep_one` are bounded for the same reason. Offload spawns are PINNED to
-  their hub (`pin_hub1`, honoured by the global run-queue pull and by
-  `runloom_mn_woken_enqueue`), so a woken offload fiber never resumes on a
-  general hub. KNOWN GAP: the pull is `p1 == 0 || p1 == want`, so an idle
-  offload hub can still take an UNPINNED general fiber from the global
-  run-queue and strand it behind its next blocking call. New spawn paths must
-  route through `runloom_mn_fiber_core(..., force_hub)`, never a second path, or
-  the parked-frame GC blind spot above reopens. The ONE sanctioned breach is
-  `mn_fiber(hub=N)`, bounded by `runloom_hub_count` not
-  `runloom_general_hub_count()`, so a test can force general work onto an
-  offload hub and assert the exclusions from the inside. Liveness only — pinned
-  to a BUSY offload hub the fiber strands. Guard: `tests/test_offload_hubs.py`.
-
 - **A hub-thread wake lands on the waker's OWN deque (Go-style local
   wake), not the global run-queue.** `runloom_mn_woken_enqueue`
-  is the single routing point: general-hub waker + unpinned g + not replay +
+  is the single routing point: hub-thread waker + unpinned g + not replay +
   deque not full -> owner push onto `cur->deque`; anything else -> global
   run-queue. Two consequences are load-bearing: (1) a deque can now hold a
   g in `wake_state == QUEUED` carrying a queue ref, so hub_main's pick step

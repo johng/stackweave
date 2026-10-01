@@ -451,7 +451,7 @@ _mn_lock = threading.Lock()
 _mn_active = False
 
 
-def run(n, main_fn=None, offload_hubs=0):
+def run(n, main_fn=None):
     """Run the scheduler on n OS-thread hubs until every fiber finishes.
 
     The one and only entry point:
@@ -471,17 +471,6 @@ def run(n, main_fn=None, offload_hubs=0):
     main_fn, when given, is the root fiber and may fiber() more (those dispatch
     to the hubs automatically).  Collapses the raw mn_init / mn_fiber / mn_run /
     mn_fini envelope.  Returns the number of fibers completed.
-
-    offload_hubs reserves that many EXTRA hubs -- added to n, never carved out
-    of it -- on which a blocking call may run as an ordinary fiber via
-    stackweave_c.offload_fiber, without stranding the fibers woken on a general
-    hub.  The default is 0 (none).
-
-    Total OS threads become n + offload_hubs.  That can exceed the core count,
-    which is fine here: an offload hub is blocked essentially all of the time
-    by construction, so it is not competing for CPU.  It is also the bound on
-    concurrent blocking calls -- a blocked hub cannot run its scheduler loop,
-    so K of them carry K.
     """
     # On free-threaded 3.14+ this re-execs the process with TLBC disabled (a
     # CPython thread-local-bytecode bug SIGSEGVs under stackweave's stackful many-hub
@@ -538,7 +527,7 @@ def run(n, main_fn=None, offload_hubs=0):
                 "multi-core parallelism with n>1."
                 .format(n))
         prewarm_stdlib()
-        stackweave_c.mn_init(n, offload_hubs=offload_hubs)
+        stackweave_c.mn_init(n)
         try:
             if main_fn is not None:
                 stackweave_c.mn_fiber(main_fn)

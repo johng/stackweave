@@ -8,14 +8,6 @@ int runloom_mn_hub_count(void)
     return runloom_hub_count;
 }
 
-/* How many of runloom_hub_count are RESERVED OFFLOAD hubs (the array tail).
- * 0 means the feature is off and every hub is general.  Callers use this to
- * decide whether offload_fiber is available before reaching for it. */
-int runloom_mn_offload_hub_count(void)
-{
-    return __atomic_load_n(&runloom_offload_hub_count, __ATOMIC_RELAXED);
-}
-
 /* R0 gauges: per-hub census over runloom_hubs[].  Lock-free, following the
  * sysmon walk pattern (mn_sched_sysmon.c.inc): the array is PyMem_Calloc'd
  * once at mn_init and never realloc'd within a run, so snapshotting
@@ -296,19 +288,16 @@ int runloom_mn_pin_for_wake(runloom_g_t *g, int hub_id)
 /* Enqueue a woken migratable g (wake_state QUEUED, holding its queue ref) where
  * a hub will find it soonest.
  *
- * GO-STYLE LOCAL WAKE.  When the waker is itself a GENERAL hub thread, the g
- * goes onto the waker's OWN Chase-Lev deque: a legal owner push (same OS
- * thread, no lock), and the data the waker just touched is what the g reads
- * next.  The waker's hub picks it up at its next pick step; any idle general
- * hub may steal it meanwhile (wakep_one kicks one).  The global run-queue then
- * serves only the wakes with nowhere local to go:
+ * GO-STYLE LOCAL WAKE.  When the waker is itself a hub thread, the g goes
+ * onto the waker's OWN Chase-Lev deque: a legal owner push (same OS thread, no
+ * lock), and the data the waker just touched is what the g reads next.  The
+ * waker's hub picks it up at its next pick step; any idle hub may steal it
+ * meanwhile (wakep_one kicks one).  The global run-queue then serves only the
+ * wakes with nowhere local to go:
  *   - a FOREIGN (non-hub) waker -- main-thread signal delivery, the asyncio
  *     bridge, an mp feeder thread -- has no deque of its own;
- *   - an OFFLOAD hub as waker: general work must never sit on an offload hub
- *     (RUNLOOM_OFFLOAD_HUBS exclusions 1+2) and general hubs never steal from
- *     one, so it would strand behind the hub's next blocking call;
- *   - a PINNED g: a deque is stealable by ANY general hub, so only the global
- *     queue (whose pull honours pin_hub1) can confine it;
+ *   - a PINNED g: a deque is stealable by ANY hub, so only the global queue
+ *     (whose pull honours pin_hub1) can confine it;
  *   - controlled replay (no-steal): a deque-resident woken g would wait for
  *     the waker's fiber to yield, a schedule the replay model does not have;
  *   - the waker's deque is full.
@@ -323,7 +312,6 @@ static void runloom_mn_woken_enqueue(runloom_g_t *g)
 {
     runloom_hub_t *cur = runloom_tls_hub;
     if (cur != NULL && runloom_hubs != NULL &&
-        !runloom_hub_is_offload(cur->id) &&
         !runloom_mn_ctrl_no_steal() &&
         __atomic_load_n(&g->pin_hub1, __ATOMIC_ACQUIRE) == 0 &&
         runloom_cldeque_push(&cur->deque, g) == 0) {

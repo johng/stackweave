@@ -4,6 +4,9 @@ Status: analysis, 2026-09-15. Written against `fibre-hubs` (de94a1e5).
 Update 2026-09-25: migration is now the ONLY M:N mode (PR #23), so the opt-in
 wording below is historical; sections 0b, 1, 2 and the sleeper gap in 4 are
 still open and tracked in that PR's review.
+Update 2026-10-01: offload hubs have been removed, so the old section 0 (an
+offload hub pulling unpinned work from the global run queue) and the
+offload-hub bullet in section 4 have been dropped.
 Nothing here is implemented unless a later section says so.
 
 Migration mode (`STACKWEAVE_MIGRATION=1` / `stackweave.enable_migration()`) gives
@@ -14,22 +17,6 @@ exec-home). This note asks: if it became the default, what would we change?
 The short answer: the queues stop being the hot path and the thread-state
 handling becomes it. Three costs dominate, one correctness gap must close
 first, and several structures become simpler or redundant.
-
-## 0. Close first: offload hubs can pull from the global run queue
-
-The neighbour-steal block in `mn_sched_hub_main.c.inc` is fenced against
-offload hubs in both directions (exclusion 2 of the `RUNLOOM_OFFLOAD_HUBS`
-design). The global run-queue pull just above it is not: it runs for every
-hub, offload hubs included.
-
-In default mode this is harmless because the global queue is always empty.
-With migration on, an offload hub between blocking calls pulls any unpinned
-woken fiber. If that fiber then yields cooperatively or is preempted it lands
-on the offload hub's local ready ring and strands behind the next blocking
-call, which is exactly the strand the four exclusions exist to prevent.
-
-The pull needs a guard so that an offload hub only takes entries pinned to
-itself. This is a prerequisite, not an optimisation.
 
 ## 0b. Close first: the deadlock census is inert under migration
 
@@ -153,10 +140,6 @@ Two steps, in order:
   frames now live on a real tstate the collector already walks. That anchor
   is memory-safety load-bearing (see CLAUDE.md), so do not touch it without
   `tests/test_tlbc_parked_frame_gc.py` as the oracle.
-- **Offload hubs** lose their "nothing migrates" rationale but keep their
-  purpose. They reduce to hubs excluded from placement and steal, with
-  offload fibers as pinned fibers, which is roughly the shape the
-  `fibre-hubs` pinning work already builds toward.
 
 ## Measurement order
 

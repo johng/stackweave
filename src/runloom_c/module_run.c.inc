@@ -465,14 +465,13 @@ static PyObject *m_get_stack_scrub(PyObject *self, PyObject *unused)
 /* ---- M:N scheduler bindings (Phase C) ---- */
 static PyObject *m_mn_init(PyObject *self, PyObject *args, PyObject *kw)
 {
-    static char *kwlist[] = {"n", "offload_hubs", NULL};
+    static char *kwlist[] = {"n", NULL};
     int n = 0;
-    int offload_hubs = 0;       /* extra hubs reserved for blocking offload */
     (void)self;
-    if (!PyArg_ParseTupleAndKeywords(args, kw, "|ii", kwlist, &n, &offload_hubs))
+    if (!PyArg_ParseTupleAndKeywords(args, kw, "|i", kwlist, &n))
         return NULL;
     {
-        int got = runloom_mn_init(n, offload_hubs);
+        int got = runloom_mn_init(n);
         if (got < 0) return NULL;
         return PyLong_FromLong(got);
     }
@@ -591,32 +590,6 @@ static PyObject *m_mn_hub_count(PyObject *self, PyObject *unused)
 {
     (void)self; (void)unused;
     return PyLong_FromLong(runloom_mn_hub_count());
-}
-
-/* offload_fiber(fn, stack_size=0): spawn fn on a reserved OFFLOAD hub, where a
- * blocking call may run without stranding anyone.  See the offload-hubs
- * block in mn_sched.c. */
-static PyObject *m_mn_offload_fiber(PyObject *self, PyObject *args, PyObject *kw)
-{
-    static char *kwlist[] = {"fn", "stack_size", NULL};
-    PyObject *callable;
-    Py_ssize_t stack_size = 0;
-    (void)self;
-    if (!PyArg_ParseTupleAndKeywords(args, kw, "O|n", kwlist,
-                                     &callable, &stack_size)) {
-        return NULL;
-    }
-    if (!PyCallable_Check(callable)) {
-        PyErr_SetString(PyExc_TypeError, "offload_fiber(): callable required");
-        return NULL;
-    }
-    return runloom_mn_offload_fiber(callable, stack_size > 0 ? (size_t)stack_size : 0);
-}
-
-static PyObject *m_mn_offload_hub_count(PyObject *self, PyObject *unused)
-{
-    (void)self; (void)unused;
-    return PyLong_FromLong(runloom_mn_offload_hub_count());
 }
 
 /* ---- fiber() fast entry --------------------------------------------------
