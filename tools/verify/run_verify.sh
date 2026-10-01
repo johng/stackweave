@@ -446,6 +446,7 @@ if have spin && have cc; then
     launch netpoll_pump_kick-neg check_spin_must_fail netpoll_pump_kick BUG_NO_RECHECK "pump parks WITHOUT re-checking sub_head after clearing wake_pending -> a coalesced kick is lost (hub blocks forever)"
     launch hub_fanout-neg-pump check_spin_must_fail hub_fanout BUG_NO_PUMP "drop the unconditional pump kick -> a PUMP-mode hub is stranded (the backstop route is load-bearing)"
     launch hub_fanout-neg-idle check_spin_must_fail hub_fanout BUG_NO_IDLE_SIG "never signal idle_cond -> an IDLE-mode hub is stranded (the pump kick can't reach a condvar wait)"
+    launch hub_fanout-neg-nap check_spin_must_fail hub_fanout BUG_NAP_MODE "restore the bare idle nap (taken when the hub's own pending <= 0) -> a NAP-mode hub is stranded (no announce, no route reaches it)"
     launch iouring_msclose-neg check_spin_must_fail iouring_msclose BUG_NO_REFCOUNT "drop the handle refcount (old code) -> the closing CQE frees while a recv is parked -> the woken recv re-locks freed memory (use-after-free)"
     launch netpoll_iouring_loop-neg check_spin_must_fail netpoll_iouring_loop BUG_NO_FENCE      "drop the SEQ_CST Dekker fences -> StoreLoad reorder loses the cross-hub kick"
     launch netpoll_iouring_loop-neg2 check_spin_must_fail netpoll_iouring_loop BUG_NO_RECHECK    "drop the sub_head re-check -> announce/submit race loses the wake even with the fence"

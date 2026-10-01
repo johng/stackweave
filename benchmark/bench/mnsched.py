@@ -101,9 +101,10 @@ def drift_pending(n=16):
     """Leave hub 1 the way unpinned workloads leave hubs at random.  Under
     migration a spawn counts +1 on its placement hub and a completion -1 on
     whichever hub finished it, so per-hub `pending` drifts apart (only the SUM
-    is kept exact).  An idle hub whose own pending is <= 0 takes the bare,
-    uninterruptible nap instead of the signalled idle-condvar wait, so a
-    submit or pinned wake aimed at it sits out that nap.
+    is kept exact).  An idle hub whose own pending was <= 0 used to take a
+    bare, uninterruptible nap instead of the signalled idle-condvar wait, so a
+    submit or pinned wake aimed at it sat out that nap; every idle hub now
+    takes the signalled wait, and this entry guards that it stays so.
 
     Deterministic, so every run measures the drifted case: n fibers are
     spawned on hub 0, re-pin themselves to hub 1 and park; the wake honours
@@ -595,8 +596,8 @@ def plan(H, quick, scale):
           "pinned to hubs 0 and 1: global run-queue + kick into an idle hub")
     bench("park/wake routing", "pingpong cross-hub pinned drifted",
           lambda: make_pingpong(2_000 // q, 0, 1), 2_000 // q,
-          "as above after per-hub pending has drifted (hub 1 < 0): the "
-          "target hub naps uninterruptibly", pool=Pool(H, drift=True))
+          "as above after per-hub pending has drifted (hub 1 < 0); should "
+          "match the fresh pool", pool=Pool(H, drift=True))
     bench("park/wake routing", "pingpong cross-hub busy",
           lambda: make_pingpong(1_000 // q, 0, 1, (0, 1)), 1_000 // q,
           "as above, both hubs busy in a sched_yield loop: runq reached only "
