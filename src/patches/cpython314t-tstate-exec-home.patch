@@ -115,9 +115,15 @@
 # to stock.  No ABI change (unlike alloc-home, no struct field is added).
 #
 # CAVEATS
-#   * Do NOT build with --with-lto / --enable-optimizations: the fix depends on
-#     _PyThreadState_GetCurrent() staying a real cross-TU call, and LTO can fold
-#     it back.  Py_NO_INLINE covers only the same-TU case.
+#   * Do NOT build with --with-lto (or -flto): LTO inlines pystate.c's direct
+#     _Py_tss_tstate readers and writers (PyThreadState_Get(),
+#     _PyThreadState_Attach/Detach, PyEval_SaveThread, ...) into ~400 callers
+#     across the interpreter, each then holding a cacheable slot address.
+#     Py_NO_INLINE keeps _PyThreadState_GetCurrent() itself out of line even
+#     under LTO; it is the other accessors that leak.  PGO alone
+#     (--enable-optimizations) does no cross-TU inlining and is safe.  Check a
+#     build with tools/ci/check_exec_home_tls.py (src/patches/README.md,
+#     "Build flags").
 #   * Do NOT annotate _PyThreadState_GetCurrent() pure/const -- it looks eligible
 #     and would silently re-license the folding this prevents.
 #   * APPLY EVERY HUNK.  Py_TSTATE_EXEC_HOME is armed in pyconfig.h independently

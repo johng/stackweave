@@ -8,8 +8,9 @@
 #
 # Same feature, flag, and _Py_TID_ASM witness as the 3.14 patch -- see
 # cpython314t-tstate-exec-home.patch for the full WHAT/WHY, codegen evidence,
-# measured cost, and caveats (no LTO; do not annotate _PyThreadState_GetCurrent()
-# pure/const; MSVC intrinsics not covered).  All of it applies here unchanged.
+# measured cost, and caveats (no LTO -- PGO alone is fine; do not annotate
+# _PyThreadState_GetCurrent() pure/const; MSVC intrinsics not covered).  All of
+# it applies here unchanged.
 #
 # WHAT CHANGED vs the 3.14 patch -- purely structural, no semantic change:
 #

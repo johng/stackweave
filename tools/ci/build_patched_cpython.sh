@@ -14,8 +14,13 @@
 #   2. THE FEATURE MUST REACH EXTENSION MODULES.  CPPFLAGS covers only CPython's
 #      own build; extensions include the INSTALLED pyconfig.h.  alloc-home adds a
 #      field to _PyThreadStateImpl, so a mismatch shifts struct offsets SILENTLY.
-#   3. NO LTO, NO PGO.  exec-home keeps _PyThreadState_GetCurrent() a real
-#      cross-TU call; LTO inlines it back and reintroduces the UAF with no error.
+#   3. NO LTO (and, in CI, no PGO).  exec-home keeps every _Py_tss_tstate read
+#      behind a call into Python/pystate.c; LTO inlines pystate.c's direct
+#      readers and writers (PyThreadState_Get(), _PyThreadState_Attach/Detach,
+#      PyEval_SaveThread, ...) into ~400 callers and
+#      reintroduces the UAF with no error.  PGO alone is safe but CI builds the
+#      non-PGO interpreter its tests were measured on.  See
+#      src/patches/README.md, "Build flags".
 #   4. THE PATCH MUST ACTUALLY BE IN THERE.  Flags are armed in pyconfig.h
 #      regardless of whether hunks landed; compile-time witnesses are grepped.
 #
