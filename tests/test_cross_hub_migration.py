@@ -1061,9 +1061,14 @@ def test_sched_local_wake_is_stolen_promptly_by_a_shallow_idle_hub(monkeypatch):
     stolen = min(r[1] for r in runs["capped"])
     sleep200 = max(r[2] for kinds in runs.values() for r in kinds)
     cpu = min(r[3] for kinds in runs.values() for r in kinds)
-    print("mean steal delay: capped %.0f us (stolen >= %.0f%%), uncapped %.0f us; "
-          "a 200 us sleep takes %.0f us, a spinning thread gets %.0f%% of a core here"
-          % (capped, 100 * stolen, uncapped, sleep200, 100 * cpu))
+    # Every failure message carries all of this (and each run's numbers): a CI
+    # log shows the assertion line, not the captured stdout.
+    measured = ("capped %.0f us (stolen >= %.0f%%), uncapped %.0f us; a 200 us sleep "
+                "takes %.0f us, a spinning thread gets %.0f%% of a core; runs %s"
+                % (capped, 100 * stolen, uncapped, sleep200, 100 * cpu,
+                   {k: [tuple(round(x, 2) for x in r) for r in v]
+                    for k, v in runs.items()}))
+    print("mean steal delay: " + measured)
     if sleep200 > 4000:
         pytest.skip("timers here are too coarse for the cap to show (a 200 us sleep "
                     "takes %.1f ms)" % (sleep200 / 1e3))
@@ -1078,10 +1083,10 @@ def test_sched_local_wake_is_stolen_promptly_by_a_shallow_idle_hub(monkeypatch):
     # 0.5, not 0.9, so a briefly starved hub thread on a loaded runner does not
     # flake it.
     assert stolen >= 0.5, (
-        "only %.0f%% of wakes were stolen by the idle hub with the cap" % (100 * stolen))
+        "only %.0f%% of wakes were stolen by the idle hub with the cap -- %s"
+        % (100 * stolen, measured))
     assert capped < 0.7 * uncapped, (
-        "mean steal delay %.0f us with the unregistered-wait cap vs %.0f us without: "
-        "the cap no longer shortens an idle hub's unregistered waits" % (capped, uncapped))
+        "the cap no longer shortens an idle hub's unregistered waits -- %s" % measured)
 
 
 STEAL_DELAY = r'''
