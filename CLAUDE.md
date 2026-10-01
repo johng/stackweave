@@ -89,6 +89,17 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   raising during a cooperative wait propagates out of *that call*; the idle
   scheduler carries one out of `run()` only when nothing is parked. Path:
   `runloom_netpoll_signal_wake` + the `RUNLOOM_NETPOLL_SIGNALED` sentinel.
+- **Only a hub's own thread edits its sleep heap.** A signal-woken io sleeper
+  (`sched_sleep_io`: CoPoll, no-fd `select`) resumes through the global
+  run-queue on any hub, so it never removes its own entry: the entry is
+  abandoned, and the hub it parked on drops it (`runloom_sched_sleep_purge` via
+  the `sleep_purge` mailbox, or the pop at the deadline). Three things make an
+  abandoned entry harmless, and all must hold: entries are by value (the heap
+  never reads `g->wake_at`); each carries its sleep's `g->sleep_ticket`, a
+  per-sleep generation, so it cannot claim the fiber's next sleep; and on a hub
+  heap each holds a g ref, so it never points at a recycled g. Guard:
+  `STACKWEAVE_DEBUG=sleepheap` (aborts on an off-owner edit) +
+  `tests/test_cross_hub_migration.py -k sleep`.
 - **Future-completion wakes are call_soon-FIFO.** `wake_safe` keeps its
   same-thread fast-path (ready-ring push), detected by PEEKing `runloom_tls_sched`
   — never `runloom_sched_get()` (mallocs on a foreign waker). Guard:
