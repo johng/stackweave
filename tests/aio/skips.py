@@ -49,12 +49,13 @@ SKIPS = {
     },
     "test_events": {
         # --- Redundant selector-variant classes ------------------------------
-        # EPoll/Poll/Select all inherit EventLoopTestsMixin and differ only in
+        # EPoll/Poll/Kqueue/Select all inherit EventLoopTestsMixin and differ only in
         # the selector passed to create_event_loop(); conftest replaces that
         # with StackweaveEventLoop() regardless, so they run identically.  Keep
         # SelectEventLoopTests (always present) as canonical; skip the others.
         "EPollEventLoopTests.*": EV_SELECTOR_REDUNDANT,
         "PollEventLoopTests.*": EV_SELECTOR_REDUNDANT,
+        "KqueueEventLoopTests.*": EV_SELECTOR_REDUNDANT,    # macOS / BSD only
 
         # --- Canonical class (SelectEventLoopTests) remaining divergences -----
         # These few tests reach into asyncio-internal structure the stackweave loop
