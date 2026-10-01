@@ -1385,7 +1385,7 @@ static int runloom_mn_liveness_pending_cb(void *arg)
  * prev), so leaving it installed between sessions is correct and cheap. */
 static void runloom_preempt_install(PyInterpreterState *interp)
 {
-    if (!runloom_preempt_enabled) return;
+    if (!__atomic_load_n(&runloom_preempt_enabled, __ATOMIC_RELAXED)) return;
     if (runloom_preempt_installed) return;   /* install once; never re-swap */
     /* Release-store so the eval hook's acquire-load sees a fully-published
      * prev pointer; pairs with the load in runloom_preempt_eval_frame. */

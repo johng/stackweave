@@ -871,7 +871,7 @@ static PyObject *spawn_common(runloom_sched_t *s, PyObject *callable,
                               int noyield, size_t stack_size, size_t advice_key)
 {
     runloom_g_t *g;
-    if (__builtin_expect(!runloom_pct.inited, 0))
+    if (__builtin_expect(!__atomic_load_n(&runloom_pct.inited, __ATOMIC_RELAXED), 0))
         runloom_pct_init();   /* read RUNLOOM_PCT_SEED once, before any ready-pop */
     /* Backpressure: admit under the max-fibers limit before allocating.
      * adm: 0 rejected, 1 admitted (no limit), 2 admitted+counted. */

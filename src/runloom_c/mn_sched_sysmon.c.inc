@@ -12,7 +12,8 @@
 void runloom_sched_freeze_for_crash(void)
 {
     __atomic_store_n(&runloom_sysmon_stop, 1, __ATOMIC_RELEASE);
-    runloom_preempt_enabled = 0;
+    /* Relaxed atomic store (TSan C3): a plain str, async-signal-safe. */
+    __atomic_store_n(&runloom_preempt_enabled, 0, __ATOMIC_RELAXED);
 }
 
 /* ---- Reading the RUNNING tstate's attach state from the sysmon thread ----
@@ -144,9 +145,10 @@ static RUNLOOM_THREAD_RET runloom_sysmon_main(void *arg)
              * it on each yield), giving periodic time-slicing.  (A DETACHED wedge
              * needs no dispatch: work-stealing already drains its fresh fibers to
              * idle hubs.) */
-            if (runloom_preempt_enabled && start != 0 &&
+            if (start != 0 &&
                 (now - start) > runloom_sysmon_preempt_ns &&
-                tss == RUNLOOM_TS_ATTACHED) {
+                tss == RUNLOOM_TS_ATTACHED &&
+                __atomic_load_n(&runloom_preempt_enabled, __ATOMIC_RELAXED)) {
                 __atomic_store_n(&h->preempt_requested, 1, __ATOMIC_RELAXED);
                 /* Single-frame liveness backstop: the eval-frame flag above only
                  * fires at a Python FRAME boundary, so it cannot break a
