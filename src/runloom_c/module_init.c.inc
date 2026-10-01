@@ -263,9 +263,8 @@ static PyMethodDef module_methods[] = {
      "mn_init(n=cpus): start N hub threads.  Returns the hub count."},
     {"mn_fiber",       (PyCFunction)m_mn_fiber, METH_VARARGS | METH_KEYWORDS,
      "mn_fiber(callable, stack_size=0, hub=-1): spawn a fiber on a round-robin "
-     "hub.  stack_size>0 overrides the hub's small default C-stack (bytes) for "
-     "a g that runs a deep non-yielding C burst.  "
-     "v1 only supports run-to-completion gs (no yield).\n\n"
+     "hub.  Returns None (no join handle).  stack_size>0 overrides the default "
+     "C-stack (bytes) for a g that runs a deep non-yielding C burst.\n\n"
      "hub=N spawns on hub N and keeps it there: the fiber is NOT stealable, so "
      "it runs only when hub N does and starves if N blocks (a determinism knob "
      "for tests, not affinity)."},
@@ -330,8 +329,7 @@ static PyMethodDef module_methods[] = {
     {"fiber_stack", m_fiber_stack, METH_O,
      "fiber_stack(id) -> (callable_repr, [(file, line, func), ...]).  "
      "Best-effort reconstructed Python stack of one fiber (deepest "
-     "first).  Full stack under per-g-tstate; top frame under the single-"
-     "thread (stackweave.aio) loop; empty under default M:N (no safe claim).  "
+     "first), under the single-thread (stackweave.aio) loop and M:N alike.  "
      "Safe: the fiber is pinned + claimed so it can't resume/free "
      "mid-walk."},
     {"set_introspect_timestamps", m_introspect_timestamps, METH_O,
@@ -374,7 +372,7 @@ static PyMethodDef module_methods[] = {
      "WHY it is blocked.  No-op off a fiber.  Diagnostic only."},
     {"set_max_fibers", m_set_max_fibers, METH_O,
      "set_max_fibers(n): cap the number of live fibers (0 = unlimited, "
-     "the default).  Over the cap, go()/spawn raises RuntimeError -- an "
+     "the default).  Over the cap, fiber()/spawn raises RuntimeError -- an "
      "admission gate so an unbounded spawn loop can't OOM the process.  Zero "
      "hot-path cost when unset.  Also via STACKWEAVE_MAX_GOROUTINES."},
     {"get_max_fibers", m_get_max_fibers, METH_NOARGS,
