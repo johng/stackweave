@@ -1,9 +1,14 @@
 """Catching a segfault -- classified crash dumps for a fiber stack overflow.
 
-A fiber runs on a small, fixed C stack.  Deep C-level recursion -- a big
-``json.dumps``, an OpenSSL handshake, a recursive protocol callback -- can run
-off the end of it and segfault.  Normally that's an opaque ``Segmentation
-fault`` with no clue which fiber or why.
+Every fiber runs on its own fixed C stack with a guard page below it.  Most
+deep recursion never reaches that page: CPython 3.14's overflow check is
+pointed at each fiber's stack, so runaway Python recursion and recursion in
+stdlib C code (``json``, ``pickle``, ``repr``) raises a catchable
+``RecursionError`` instead.  Native code that recurses without consulting that
+check, such as a third-party C extension, can still run off the end of the
+stack.  That hits the guard page and the process dies with a
+bare ``Segmentation fault`` (``Bus error`` on macOS), with no clue which fiber
+or why.
 
 ``stackweave.inspect.install_crash_handler()`` installs a fatal-signal handler
 that turns it into a *classified* dump: it names the overflowing fiber and its
@@ -19,40 +24,33 @@ it produces and then exit cleanly.
 Run:
     python3 examples/segfault_dump.py
 """
+import signal
 import subprocess
 import sys
 import textwrap
 
-# What the child does: install the handler, then overflow a deliberately tiny
-# fiber stack with deep C-level json recursion.
+# What the child does: install the handler, then overflow a fiber's stack with
+# native recursion that bypasses CPython's overflow check.
 CHILD = textwrap.dedent("""
-    import json
+    import faulthandler
     import stackweave
     import stackweave_c
 
     stackweave.inspect.install_crash_handler()      # classify fatal signals
 
-    # A 400-deep nested list: the C json encoder recurses once per level, which
-    # is far more C stack than the 16 KiB fiber below can hold.
-    nested = []
-    cur = nested
-    for _ in range(400):
-        nxt = []
-        cur.append(nxt)
-        cur = nxt
+    def recurse_in_c():
+        # CPython's own test helper: C recursion with a 4 KiB frame per level
+        # and no RecursionError check, standing in for a C extension that
+        # recurses without one.  It runs off the end of any fiber stack.
+        faulthandler._stack_overflow()
 
-    def encode_on_a_tiny_stack():
-        json.dumps(nested)                       # runs off the end of the stack
-
-    # 16 KiB is deliberately too small.  A real bug is usually a default-stack
-    # fiber that just happens to recurse deeper than expected.
-    stackweave_c.fiber(encode_on_a_tiny_stack, 16 * 1024)
+    stackweave_c.fiber(recurse_in_c)
     stackweave_c.run()
 """)
 
 
 def main():
-    print("Spawning a fiber that overflows a 16 KiB C stack on purpose...\n")
+    print("Spawning a fiber that overflows its C stack on purpose...\n")
     proc = subprocess.run([sys.executable, "-c", CHILD],
                           capture_output=True, text=True)
 
@@ -62,8 +60,8 @@ def main():
 
     sig = -proc.returncode if proc.returncode < 0 else None
     if sig is not None:
-        print("\n[child died from signal {0} (SIGSEGV) -- but now you know "
-              "exactly which fiber and why]".format(sig))
+        print("\n[child died from {0} -- but now you know exactly which "
+              "fiber and why]".format(signal.Signals(sig).name))
     else:
         # Some platforms / sanitizer builds report it differently; the dump
         # above is the point.
