@@ -82,6 +82,59 @@ void runloom_iframe_borrow_alloc_home(PyThreadState *exec, PyThreadState *home)
 #endif
 }
 
+/* See runloom_iframe.h.  Free-threaded CPython keeps the object freelists
+ * (ints, floats, tuples, lists, dicts, ...) per thread state, and
+ * PyThreadState_Clear drains the CURRENT thread state's freelists
+ * (_Py_freelists_GET()), not those of the state being cleared -- CPython's
+ * own threads always clear themselves.  A per-g tstate is cleared by whichever
+ * thread drops the last g ref, with that thread's state current, so whatever
+ * the fiber had cached in its freelists was never freed: every block stayed
+ * "used" in the hub heap it came from, and once that hub's heap was abandoned
+ * at mn_fini its segments could never be reclaimed.  The interpreter's
+ * abandoned-segment pool then only grew, and every later PyThreadState_Clear
+ * (one per fiber) re-walks that pool -- the per-fiber cost behind the
+ * process-wide spawn->run slowdown after a fiber-heavy load.
+ *
+ * Move the dead state's entries onto the matching lists of the current state
+ * instead; the Clear that follows then frees them with the right per-type
+ * deallocator.  Generic over `struct _Py_freelists` (an array of
+ * `struct _Py_freelist`, linked through each block's first word), so it needs
+ * no table of deallocators.  Should CPython ever drain the cleared state's own
+ * lists instead, the spliced entries simply stay cached on the current state
+ * (reused, or freed when it clears) -- never leaked either way. */
+void runloom_iframe_hand_over_freelists(PyThreadState *dead)
+{
+#if defined(RUNLOOM_DESTRUCT_HAVE)
+    PyThreadState *cur = PyThreadState_GetUnchecked();
+    struct _Py_freelist *src, *dst;
+    size_t i, n;
+    _Static_assert(sizeof(struct _Py_freelists) % sizeof(struct _Py_freelist) == 0,
+                   "struct _Py_freelists is no longer a plain array of _Py_freelist");
+    if (dead == NULL || cur == NULL || cur == dead) return;
+    src = (struct _Py_freelist *)&((_PyThreadStateImpl *)dead)->freelists;
+    dst = (struct _Py_freelist *)&((_PyThreadStateImpl *)cur)->freelists;
+    n = sizeof(struct _Py_freelists) / sizeof(struct _Py_freelist);
+    for (i = 0; i < n; i++) {
+        void *head = src[i].freelist, *tail = head;
+        Py_ssize_t k = 1;
+        if (head == NULL) continue;
+        while (*(void **)tail != NULL) {
+            tail = *(void **)tail;
+            k++;
+        }
+        *(void **)tail = dst[i].freelist;
+        dst[i].freelist = head;
+        /* size -1 marks a list disabled by an earlier Clear on this thread;
+         * entries on it are still drained by the next clear. */
+        dst[i].size = (dst[i].size > 0 ? dst[i].size : 0) + k;
+        src[i].freelist = NULL;
+        src[i].size = 0;
+    }
+#else
+    (void)dead;
+#endif
+}
+
 int runloom_iframe_service_merge_queue(PyThreadState *ts)
 {
     int rounds = 0;

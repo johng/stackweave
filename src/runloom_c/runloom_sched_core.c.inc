@@ -821,6 +821,10 @@ void runloom_g_decref(runloom_g_t *g)
                 g->tstate = NULL;
             } else {
                 runloom_sysmon_tstate_retire_wait(g->tstate);   /* sysmon may be reading it */
+                /* Clear frees the CURRENT tstate's freelists, not g->tstate's:
+                 * hand the fiber's cached objects over first, or they leak and
+                 * pin their hub's heap segments forever once it is abandoned. */
+                runloom_iframe_hand_over_freelists(g->tstate);
                 PyThreadState_Clear(g->tstate);
                 PyThreadState_Delete(g->tstate);
                 g->tstate = NULL;
