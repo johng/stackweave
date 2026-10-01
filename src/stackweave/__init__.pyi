@@ -4,6 +4,7 @@ from typing import Any, TypeVar
 
 # Core primitives re-exported from the C extension so `import stackweave` suffices.
 from stackweave_c import (
+    G as G,
     Chan as Chan,
     select as select,
     mn_init as mn_init,
@@ -31,6 +32,7 @@ class Goroutine:
 
 def fiber(
     callable_: Callable[..., _T],
+    /,
     *args: Any,
     **kwargs: Any,
 ) -> Goroutine | None:
@@ -66,9 +68,9 @@ def run(n: int, main_fn: Callable[[], Any] | None = ...) -> int:
     number of goroutines completed."""
     ...
 
-def current() -> Goroutine | None:
-    """Return the currently-running Goroutine handle, or None when
-    called from outside any goroutine."""
+def current() -> G | None:
+    """Return the currently-running goroutine's stackweave_c.G handle, or
+    None when called from outside any goroutine."""
     ...
 
 def backend() -> str:

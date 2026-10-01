@@ -72,7 +72,7 @@ static PyMethodDef module_methods[] = {
      "True if the io_uring kernel interface is usable (Linux 5.1+)."},
     /* C-scheduler fast path. */
     {"fiber",          (PyCFunction)m_fiber, METH_VARARGS | METH_KEYWORDS,
-     "fiber(fn, stack_size=None): spawn a fiber via the C scheduler.\n"
+     "fiber(fn, stack_size=0): spawn a fiber via the C scheduler.\n"
      "Returns a G handle.  stack_size overrides the scheduler default\n"
      "(post-calibration) for this one fiber -- use when the entry\n"
      "function is known to recurse deeply or call into a C extension\n"
