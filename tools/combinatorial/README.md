@@ -30,7 +30,9 @@ The matrix covers the scheduler knobs that still change M:N behaviour:
 `STACKWEAVE_SCHED_RANDOM` (randomized steal victim and spawn placement),
 `STACKWEAVE_READY_STARVE_BOUND` (`0` = ready ring always first, `64` = default
 fairness turn), `STACKWEAVE_IDLE_BACKOFF_MS` (`1` = no idle backoff, `32` =
-default) and `STACKWEAVE_SYSMON` (logging only; sysmon always runs). The
+default), `STACKWEAVE_SYSMON` (logging only; sysmon always runs) and
+`STACKWEAVE_IDLE_UNREG_WAIT_US` (`0` = an unregistered idle wait runs its whole
+backoff step, `200` = default cap; it only applies with the backoff on). The
 cartesian config space is reduced to a small pairwise covering array.
 
 Cross-hub migration, preemption and the netpoll backend used to be factors

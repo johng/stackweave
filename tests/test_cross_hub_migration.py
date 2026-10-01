@@ -919,9 +919,9 @@ def test_sched_local_wake_is_stolen_promptly_by_a_shallow_idle_hub(monkeypatch):
     (capped H=2 against an H=4 reference) failed on the 3-vCPU macOS CI
     runner for that reason.  Where a 200 us sleep takes several ms (background
     QoS: 8-10 ms) the cap cannot show and the test skips.  It also skips,
-    instead of failing, when the process was starved of CPU (two spinning
-    threads got under half a core each, e.g. utility QoS under default-QoS
-    CPU hogs: 34-40% stolen, capped ~ uncapped); an unstarved run still
+    instead of failing, when the process was starved of CPU (a spinning
+    thread got under 30% of a core, e.g. utility QoS under default-QoS CPU
+    hogs: 34-40% stolen, capped ~ uncapped); an unstarved run still
     asserts, so a real regression fails wherever the CPU is there to show it.
     """
     monkeypatch.setenv("STACKWEAVE_IDLE_BACKOFF_MS", "32")   # the cap needs the backoff
@@ -951,7 +951,10 @@ def test_sched_local_wake_is_stolen_promptly_by_a_shallow_idle_hub(monkeypatch):
     if sleep200 > 4000:
         pytest.skip("timers here are too coarse for the cap to show (a 200 us sleep "
                     "takes %.1f ms)" % (sleep200 / 1e3))
-    if (stolen < 0.5 or capped >= 0.7 * uncapped) and cpu < 0.5:
+    # 0.3, not 0.5: equal-QoS oversubscription keeps the probe near 1 on
+    # macOS, but Linux CFS gives a fresh thread ~1/N of a core, so 0.5 would
+    # skip a real regression on a 2x-oversubscribed ubuntu runner.
+    if (stolen < 0.5 or capped >= 0.7 * uncapped) and cpu < 0.3:
         pytest.skip("the process was starved of CPU (a spinning thread got %.0f%% of a "
                     "core), so the idle hub could not steal in time" % (100 * cpu))
     # A FAILED steal is a regression too (a skip would hide it): with stealing
