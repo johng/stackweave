@@ -135,6 +135,52 @@ void runloom_iframe_hand_over_freelists(PyThreadState *dead)
 #endif
 }
 
+/* See runloom_iframe.h.  PyThreadState_Clear ends by abandoning the cleared
+ * state's four mimalloc heaps, and each abandon also sweeps the interpreter's
+ * abandoned-segment pool on behalf of other threads (_mi_abandoned_collect:
+ * pop a segment, walk all its pages, free it if empty, else park it on the
+ * visited list -- up to 1024 times per heap, cycling the visited list back
+ * in, so a single segment that still holds live blocks costs the full 1024
+ * walks).  CPython pays that once per OS-thread exit.  A per-g tstate pays it
+ * once per FIBER, and the pool is never empty for long under M:N: every
+ * mn_fini abandons the hub heaps, and anything still alive that a fiber
+ * allocated keeps its segment there.  A quiet hub then spends 70-95 us tearing
+ * down each trivial fiber instead of ~5 us, for the rest of the process.
+ *
+ * A borrower tstate (alloc-home: it allocates on the running hub's heap) owns
+ * no segment and no page, so abandoning its heaps has nothing of its own to
+ * do -- only the pool sweep, which the threads that do allocate still perform
+ * whenever they need memory (mimalloc's reclaim-on-allocate) and on their
+ * exit.  So when the state provably owns nothing, point its segment tld at an
+ * empty private pool for the duration of the Clear.  Checked against the
+ * mimalloc 2.1.2 that CPython 3.14 vendors; other versions keep the plain
+ * Clear until checked. */
+void runloom_iframe_clear_fiber_tstate(PyThreadState *ts)
+{
+    runloom_iframe_hand_over_freelists(ts);
+#if defined(RUNLOOM_DESTRUCT_HAVE) && PY_VERSION_HEX < 0x030F0000
+    {
+        struct _mimalloc_thread_state *m = &((_PyThreadStateImpl *)ts)->mimalloc;
+        int i, owns_nothing = m->tld.segments.count == 0;
+        for (i = 0; i < _Py_MIMALLOC_HEAP_COUNT && owns_nothing; i++) {
+            owns_nothing = m->heaps[i].page_count == 0
+                && __atomic_load_n((void **)&m->heaps[i].thread_delayed_free,
+                                   __ATOMIC_ACQUIRE) == NULL;
+        }
+        if (owns_nothing) {
+            mi_abandoned_pool_t empty;
+            mi_abandoned_pool_t *shared = m->tld.segments.abandoned;
+            memset(&empty, 0, sizeof(empty));
+            m->tld.segments.abandoned = &empty;
+            PyThreadState_Clear(ts);
+            m->tld.segments.abandoned = shared;
+            return;
+        }
+    }
+#endif
+    PyThreadState_Clear(ts);
+}
+
 int runloom_iframe_service_merge_queue(PyThreadState *ts)
 {
     int rounds = 0;

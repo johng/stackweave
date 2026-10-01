@@ -111,6 +111,13 @@ void runloom_iframe_borrow_alloc_home(PyThreadState *exec, PyThreadState *home);
  * attached current thread state; a no-op if there is none or it is `dead`. */
 void runloom_iframe_hand_over_freelists(PyThreadState *dead);
 
+/* PyThreadState_Clear for a finished fiber's per-g tstate, cleared while some
+ * OTHER thread state is current: hands its freelists over (above), and, when
+ * it provably owns no mimalloc segment or page (alloc-home borrower), skips
+ * the per-Clear sweep of the interpreter's abandoned-segment pool that would
+ * otherwise cost every fiber teardown a walk of every abandoned segment. */
+void runloom_iframe_clear_fiber_tstate(PyThreadState *ts);
+
 /* Drain the biased-refcount merge queue that free-threaded CPython attached to
  * THIS thread state, if any.  Every object is allocated on the running hub's
  * thread id (alloc-home), so a last decref from another hub is queued -- by
