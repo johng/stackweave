@@ -210,10 +210,10 @@ park.  The rule that matters is "no direct `_Py_tss_tstate` read outside
 `pystate.c`", and only cross-TU inlining can break it.  Measured on arm64 Darwin
 (clang 21, 3.14.4 + both patches, `tools/ci/check_exec_home_tls.py <python>`):
 
-| configure | functions reading `_Py_tss_tstate` directly | `_PyThreadState_GetCurrent()` call sites | `PyThreadState_Get()` call sites |
+| configure | functions reading `_Py_tss_tstate` (directly or via an outlined helper) | `_PyThreadState_GetCurrent()` call sites | `PyThreadState_Get()` call sites |
 |---|---:|---:|---:|
 | (none) | 28, all in `pystate.c` | 2059 | 473 |
-| `--enable-optimizations` | 17, all in `pystate.c` | 1802 | 485 |
+| `--enable-optimizations` | 26, all in `pystate.c` | 1802 | 485 |
 | `--enable-optimizations --with-lto=thin` | **413** | 5508 | **7** |
 
 `Py_NO_INLINE` holds under LTO: `_PyThreadState_GetCurrent()` itself is never
@@ -228,8 +228,12 @@ confined to `pystate.c`; the cross-hub migration, parked-frame GC and swarm
 scheduler tests pass on such a build.  CI builds without either
 (`tools/ci/lib.sh` `rl_reject_lto` refuses both there: CI gains nothing from
 PGO, and refusing it keeps the CI interpreter identical to the one the tests
-were measured on).  Check any build with the script above: more than a few
-dozen direct readers, or any outside `pystate.c`, means the build is unsafe.
+were measured on).  Check any build with the script above: it attributes every
+reader to its object file through the debug map (`nm -pa`) and fails on any
+reader outside `pystate.o` -- which every LTO build gets, since LTO places even
+pystate.c's functions in ThinLTO partition objects.  A stripped binary has no
+debug map, and the script falls back to a count (more than a few dozen readers
+is unsafe).
 
 An earlier revision of this section said LTO "inlines
 `_PyThreadState_GetCurrent()` back into its callers"; the measurement above shows
