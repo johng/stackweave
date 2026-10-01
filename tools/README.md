@@ -27,7 +27,8 @@ map, and the few deepest-used ones are written up at the bottom.
 | [`run_pydebug.sh`](run_pydebug.sh) | stackweave under a `--with-pydebug` CPython so the host's OWN internal asserts (tstate/STW/gilstate/mimalloc) are the oracle | `tools/run_pydebug.sh [iters]` |
 | [`run_msan.sh`](run_msan.sh) | `stackweave_c` under MemorySanitizer vs an MSan-instrumented CPython -- uninitialised reads | `tools/run_msan.sh` |
 | [`build_msan_cpython.sh`](build_msan_cpython.sh) | build a free-threaded CPython under MSan (clang, `-fsanitize=memory`) -- prereq for `run_msan.sh` | `tools/build_msan_cpython.sh` |
-| [`build_tsan_cpython.sh`](build_tsan_cpython.sh) | build a fully TSan-instrumented CPython (gold standard -- interpreter + ext both instrumented) | `tools/build_tsan_cpython.sh` |
+| [`build_tsan_cpython.sh`](build_tsan_cpython.sh) | build a fully TSan-instrumented free-threaded CPython with both migration patches (gold standard -- interpreter + ext both instrumented); Linux + macOS; `ORACLE=1` adds the `ob_ref_local` oracle | `tools/build_tsan_cpython.sh` -- see [`../docs/dev/TSAN.md`](../docs/dev/TSAN.md) |
+| [`run_tsan_gold.sh`](run_tsan_gold.sh) | the gold lane with migration on: `STACKWEAVE_TSAN=1` ext, planted-race teeth, test files one per process, reports marked KNOWN / NEW against [`verify/tsan_gold_known.txt`](verify/tsan_gold_known.txt) | `STACKWEAVE_TSAN_PYTHON=... tools/run_tsan_gold.sh` -- see [`../docs/dev/TSAN.md`](../docs/dev/TSAN.md) |
 | [`build_patched_rr.sh`](build_patched_rr.sh) | build + install `rr` with the vPMU min-period clamp so record/replay works on VMware vPMU | `tools/build_patched_rr.sh` -- see [`../docs/dev/rr_vpmu_status.md`](../docs/dev/rr_vpmu_status.md) |
 
 ### Static analysis
@@ -174,8 +175,9 @@ TSan instruments only the ext (exactly stackweave's C, incl. inlined `Py_INCREF`
 the few races inside the uninstrumented interpreter are filtered by
 [`tsan_suppressions.txt`](tsan_suppressions.txt) (CPython-only -- never
 suppress a `src/runloom_c/*` frame). The fully-instrumented interpreter
-([`build_tsan_cpython.sh`](build_tsan_cpython.sh)) is the gold standard but
-is currently blocked upstream; this preload path needs no patched CPython.
+([`build_tsan_cpython.sh`](build_tsan_cpython.sh) +
+[`run_tsan_gold.sh`](run_tsan_gold.sh), [`../docs/dev/TSAN.md`](../docs/dev/TSAN.md))
+is the gold standard; this preload path needs no patched CPython.
 
 This harness found and fixed five real scheduler/chan/netpoll data races on
 its first runs (see Findings C below).
