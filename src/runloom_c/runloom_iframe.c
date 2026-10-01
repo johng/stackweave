@@ -372,6 +372,23 @@ int runloom_iframe_walk(void *top, int max, runloom_iframe_cb cb, void *ctx)
  * the deepest single non-yielding CPython call burst, clamped so the window never
  * inverts on a tiny stack. */
 #define RUNLOOM_STACKPROT_RESERVE_MIN ((size_t)96 * 1024)   /* >= one chunk-alloc burst */
+
+/* PyUnstable_ThreadState_SetStackProtection fails (-1, ValueError set on the
+ * CURRENT tstate) only for a window below _PyOS_MIN_STACK_SIZE -- and that
+ * minimum belongs to the INTERPRETER's build, not to this extension's headers:
+ * a TSan-built CPython raises it from 48 KB to 192 KB, so the reserved window of
+ * a 256 KB fiber stack (160 KB) is refused there.  Ignoring the -1 left the
+ * ValueError pending, and the fiber's first Python call then failed with
+ * "SystemError: ... returned a result with an exception set".  Clear it and
+ * report failure so the caller can fall back. */
+static int runloom_set_stackprot(PyThreadState *ts, void *base, size_t size)
+{
+    if (PyUnstable_ThreadState_SetStackProtection(ts, base, size) == 0)
+        return 0;
+    PyErr_Clear();
+    return -1;
+}
+
 void runloom_arm_fiber_stackprot(PyThreadState *ts, runloom_coro_t *c)
 {
     void  *base;
@@ -386,14 +403,14 @@ void runloom_arm_fiber_stackprot(PyThreadState *ts, runloom_coro_t *c)
     if (reserve < RUNLOOM_STACKPROT_RESERVE_MIN) reserve = RUNLOOM_STACKPROT_RESERVE_MIN;
     if (reserve > size / 2) reserve = size / 2;
     eff = size - reserve;
-    if (eff < RUNLOOM_STACKPROT_RESERVE_MIN) {
-        /* Stack too small to reserve usefully: raw arm against the real geometry
-         * (still bounds the check -- better than leaving it stale). */
-        PyUnstable_ThreadState_SetStackProtection(ts, base, size);
+    if (eff >= RUNLOOM_STACKPROT_RESERVE_MIN
+        && runloom_set_stackprot(ts, (void *)((char *)base + reserve), eff) == 0)
         return;
-    }
-    PyUnstable_ThreadState_SetStackProtection(ts,
-        (void *)((char *)base + reserve), eff);
+    /* Stack too small to reserve usefully (or the reserved window is below the
+     * interpreter's minimum): raw arm against the real geometry -- still bounds
+     * the check, better than leaving it stale.  If even that is refused the old
+     * limits stay, as before, but no exception leaks. */
+    (void)runloom_set_stackprot(ts, base, size);
 }
 
 /* offsetof(PyGenObject, gi_exc_state) -- computed in THIS Py_BUILD_CORE-isolated TU,
