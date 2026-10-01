@@ -68,6 +68,12 @@ s = s.replace("_Py_atomic_load_uint32_relaxed(&ob->ob_ref_local)", "_Py_REFLOCAL
 s = s.replace("_Py_atomic_load_uint32_relaxed(&op->ob_ref_local)", "_Py_REFLOCAL_PEEK(op)")
 s, n3 = re.subn(r"_Py_atomic_store_uint32_relaxed\(&op->ob_ref_local, (\w+)\)",
                 r"_Py_REFLOCAL_OWNER_STORE(op, \1)", s)
+# 3.14.4: _Py_REFCNT reads via `ob`; _Py_IsImmortal, Py_INCREF and both Py_DECREF
+# variants via `op`; three owner-path stores.  Any other count means CPython moved
+# a refcount path and the oracle would silently miss it.
+if (n1, n2, n3) != (1, 4, 3):
+    raise SystemExit("%s: expected peek ob=1 op=4, owner stores=3; found %d/%d/%d"
+                     % (p, n1, n2, n3))
 open(p, "w").write(s)
 print("refcount.h: peek ob=%d op=%d, owner stores=%d" % (n1, n2, n3))
 

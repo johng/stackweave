@@ -39,24 +39,31 @@ ba = bytearray(64)
 
 
 def race():
-    tids = []
-    done = stackweave.Chan(2)
+    # Both writers can land on one hub (then the first spins out its deadline and
+    # they run one after the other, which is no race).  Retry until they run on
+    # two OS threads at once; the harness requires "cross-hub".
+    for _attempt in range(8):
+        tids = []
+        done = stackweave.Chan(2)
 
-    def writer(value):
-        mv = memoryview(ba)          # this fiber's own view: no shared refcount
-        tids.append(threading.get_ident())
-        deadline = time.monotonic() + 2.0
-        while len(tids) < 2 and time.monotonic() < deadline:
-            pass                     # both writers live before either writes
-        for _ in range(100000):
-            mv[0] = value
-        mv.release()
-        done.send(1)
+        def writer(value):
+            mv = memoryview(ba)      # this fiber's own view: no shared refcount
+            tids.append(threading.get_ident())
+            deadline = time.monotonic() + 2.0
+            while len(tids) < 2 and time.monotonic() < deadline:
+                pass                 # both writers live before either writes
+            if len(set(tids)) == 2:
+                for _ in range(100000):
+                    mv[0] = value
+            mv.release()
+            done.send(1)
 
-    stackweave.fiber(writer, 65)
-    stackweave.fiber(writer, 66)
-    done.recv()
-    done.recv()
+        stackweave.fiber(writer, 65)
+        stackweave.fiber(writer, 66)
+        done.recv()
+        done.recv()
+        if len(set(tids)) == 2:
+            break
     print("TEETH race ran%s" % (" cross-hub" if len(set(tids)) == 2 else ""),
           flush=True)
 
@@ -96,8 +103,10 @@ def clean():
     # and so must the hand-off to the next round's poker thread.
     ch = stackweave.Chan(0)
     mv = memoryview(ba)
-    moved = False
-    for i in range(40):
+    moved = 0
+    for i in range(400):             # until a few wakes resumed on another hub
+        if moved >= 3:
+            break
         before = threading.get_ident()
         mv[0] = 67
 
@@ -116,7 +125,7 @@ def clean():
         t.join()
         mv[0] = 68
         if threading.get_ident() != before:
-            moved = True
+            moved += 1
     mv.release()
     print("TEETH clean ran%s" % (" cross-hub" if moved else ""), flush=True)
 

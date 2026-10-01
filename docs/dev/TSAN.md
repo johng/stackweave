@@ -49,17 +49,33 @@ both `src/patches/` halves with `-F0`. It configures with `--disable-gil
 `tools/ci/check_exec_home_tls.py` passes on the result (every `_Py_tss_tstate`
 reader is in `pystate.o`).
 
-`run_tsan_gold.sh` builds the extension with **`STACKWEAVE_TSAN=1`**, the
-setup.py knob that adds `-fsanitize=thread -g -O1 -fno-omit-frame-pointer` to
-compile and link. With the knob off, the build is unchanged. The fiber
-annotations switch on from `__has_feature(thread_sanitizer)`. The runner then:
+`run_tsan_gold.sh` never touches the checkout. It copies the working tree
+(tracked files plus untracked, non-ignored ones) to `$LOGDIR/tree` and builds the
+extension there with **`STACKWEAVE_TSAN=1`**, the setup.py knob that adds
+`-fsanitize=thread -g -O1 -fno-omit-frame-pointer` to compile and link. (A
+separate build directory on `PYTHONPATH` would not do: several tests put `src`
+first on `sys.path` in their subprocesses, and the checkout's normal `.so` would
+silently win.) With the knob off, the build is unchanged. The fiber annotations
+switch on from `__has_feature(thread_sanitizer)`. The runner then:
 
-1. runs the teeth, `tools/verify/tsan_teeth.py race|clean`, and exits 2 if
-   either control misbehaves;
-2. runs each test file in its own process, under `perl -e 'alarm N'`;
-3. prints every report's `SUMMARY` line, marked **KNOWN** (triaged in
-   `tools/verify/tsan_gold_known.txt`) or **NEW**, and exits 1 on any NEW
-   report.
+1. checks the `.so` is instrumented (`nm -u` shows `__tsan_func_entry`);
+2. runs the teeth, `tools/verify/tsan_teeth.py race|clean`. The planted race
+   must be reported in `pack_single`, the clean control must stay silent, and
+   both must really run cross-hub;
+3. runs each test file in its own process, under `perl -e 'alarm N'`;
+4. prints every report's `SUMMARY` line, marked **KNOWN** (triaged in
+   `tools/verify/tsan_gold_known.txt`) or **NEW**.
+
+It exits **2** if the lane is broken (build, instrumentation or teeth) or any
+file did not run normally. That covers a crash or other signal (rc ≥ 128), the
+alarm (142), a pytest usage error or empty collection (4/5), an interrupted run
+or internal error (2/3), a TSan `FATAL` / `CHECK failed` in any log, an
+untriaged TSan deadly-signal report (`SEGV`, `stack-overflow`, ...), or a failing
+test that is not on `tools/verify/tsan_gold_expected_fail.txt`. The log checks
+matter because `exitcode=0` makes TSan exit 0 after a fatal report or a SEGV it
+handled itself, so the return code alone shows nothing. Otherwise it exits **1** on any NEW
+report and **0** when everything is KNOWN. The instrumented tree stays in the log
+directory, so a single test can be rerun from it by hand.
 
 Nothing in `src/runloom_c` is suppressed (`tools/tsan_suppressions.txt` explains
 why). The only suppressions are CPython's own free-threading list.
@@ -103,15 +119,23 @@ TSan):
   TSan catches the deliberate guard-page overflow, prints its own
   `stack-overflow` report and exits with `exitcode`, which is 0 here.
 
+All five are listed in `tools/verify/tsan_gold_expected_fail.txt`, so the
+runner tolerates them. Any other failing test fails the lane.
+
 ## Findings (2026-10-01, 3.14.4 + both patches, macOS arm64)
 
 Found at main @ 879fc099, then re-run after rebasing onto 9597d20c (#37, #40,
 #41). The re-run reproduced the findings; C3 and C4 are intermittent, absent from
-that run and present in earlier ones. The oracle runs were at 879fc099. `tools/verify/tsan_gold_known.txt` pins
-two entries to a line number (the `runloom_hub_main` and
-`runloom_sched_sleep_until_ex` sites, whose functions have other, untriaged
-accesses). When that code moves, the report comes back as NEW, which errs in the
-safe direction: update the line.
+that run and present in earlier ones. The oracle runs were at 879fc099.
+
+`tools/verify/tsan_gold_known.txt` pins three entries to a line number: the
+`runloom_hub_main`, `runloom_sched_sleep_until_ex` and `runloom_sched_ready_pop`
+sites, whose functions have other, untriaged accesses. When that code moves, the
+report comes back as NEW, which errs in the safe direction: update the line.
+The pinned `file:line in function` keys were taken from macOS (`atos`)
+symbolisation. On Linux, llvm-symbolizer prints full paths, which suffix
+matching tolerates, but it may attribute inlined code to a different line. The
+bare `in <function>` keys are portable.
 
 Categories: **(a)** real data race in stackweave's C; **(b)** CPython race
 reachable only because of migration; **(c)** benign or intentional; **(d)**
@@ -119,7 +143,7 @@ false positive or a TSan-environment problem.
 
 | id | cat | where | what | severity | proposed fix |
 |---|---|---|---|---|---|
-| A1 | a | `runloom_sched_parkwake.c.inc` `runloom_sched_sleep_until_ex` (io path) -> `runloom_sleep_remove(target, g)` | A signal-woken io sleeper (CoPoll / `select` reprobe) is woken from the main thread through the global run-queue, so it can resume on another hub. It then removes itself from its **origin** hub's sleep heap (`target->sleep_heap[]`, `sleep_size`). That races the origin hub's `runloom_sched_sleep_pop` (hub_main:610), its `sleep_size` / heap-top peek (hub_main:606), and `runloom_sleep_push` from the origin hub's fibers. The code comment says this is safe because "the heap's only other mutator is this same hub thread" — but that assumes the fiber resumes on its own hub, which migration breaks. This is the PR #23 review item 7.5 #6, previously "confirmed by reading only"; TSan reports it in every run of `test_cross_hub_migration.py`. In one of seven direct TSan runs of that test's scenario, 6 sleepers were left about 59 s past their deadline and never woken. That is what a lost heap entry looks like, but it was not traced to this race, and the release build did not hang in 20 runs. | **High**, but rare: it corrupts the heap with plain stores on any architecture. A g can be duplicated (resumed twice) or lost (a sleeper never wakes). It needs a raising signal handler delivered into a parked io-sleeper. | Never touch another hub's heap. Either lazily delete (leave the node; `sleep_claimed` already arbitrates, so the origin hub's pop discards a claimed node, with a per-sleep generation so a re-sleep is not confused with the stale node), or route the signal wake to the origin hub (`park_hub` inbox) so the fiber resumes there. |
+| A1 | a | `runloom_sched_parkwake.c.inc` `runloom_sched_sleep_until_ex` (io path) -> `runloom_sleep_remove(target, g)` | A signal-woken io sleeper (CoPoll / `select` reprobe) is woken from the main thread through the global run-queue, so it can resume on another hub. It then removes itself from its **origin** hub's sleep heap (`target->sleep_heap[]`, `sleep_size`). That races the origin hub's `runloom_sched_sleep_pop` (hub_main:632), its `sleep_size` / heap-top peek (hub_main:628), and `runloom_sleep_push` from the origin hub's fibers. The code comment says this is safe because "the heap's only other mutator is this same hub thread" — but that assumes the fiber resumes on its own hub, which migration breaks. This is the PR #23 review item 7.5 #6, previously "confirmed by reading only"; TSan reports it in every run of `test_cross_hub_migration.py`. In one of seven direct TSan runs of that test's scenario, 6 sleepers were left about 59 s past their deadline and never woken. That is what a lost heap entry looks like, but it was not traced to this race, and the release build did not hang in 20 runs. | **High**, but rare: it corrupts the heap with plain stores on any architecture. A g can be duplicated (resumed twice) or lost (a sleeper never wakes). It needs a raising signal handler delivered into a parked io-sleeper. | Never touch another hub's heap. Either lazily delete (leave the node; `sleep_claimed` already arbitrates, so the origin hub's pop discards a claimed node, with a per-sleep generation so a re-sleep is not confused with the stale node), or route the signal wake to the origin hub (`park_hub` inbox) so the fiber resumes there. |
 | A2 | a | `chan_select_helpers.c.inc` `runloom_select_rng` (RUNLOOM_TLS), inlined into `runloom_chan_select` | Darwin computes a thread-local's address once per function. In the **release** `-O2` .so, `runloom_chan_select` makes one `tlv_get_addr` call at entry, spills the address to `[sp,#0x10]`, and reuses it on the `select_retry` path after `runloom_coro_yield`. After a migration, the fiber advances the **origin** hub's PRNG state, racing that hub's own selects (two fibers on two hubs, same address, unsynchronised). This is the exec-home bug class, in stackweave's own C. | **Low**: the value is PRNG state only. There is no memory-safety impact and no tearing on arm64. Select fairness is not measurably affected. | Read and write the state through a `noinline` accessor, or keep it per-g. Add a lint: a static scan of the release .so (functions that resolve a TLS address and also call something that can park) found 12 candidates, and this is the only one that reuses the address after the park; the rest touch TLS before the park only, or through out-of-line accessors such as `runloom_mn_tls_current_g()`. |
 | C1 | c | `runloom_sched_drain.c.inc` `runloom_sched_logical_enabled` (`runloom_sched_logical_on`) | Lazy getenv cache, written and read as a plain int from any thread. | benign | relaxed `__atomic_load_n` / `__atomic_store_n` |
 | C2 | c | `runloom_sched_preempt.c.inc` `runloom_preempt_init` / `_fini` vs `runloom_preempt_main` | The time-slicer stop flag `runloom_preempt_running` and `runloom_preempt_quantum_us` are plain ints read in another thread's loop. | benign (the loop calls an opaque sleep, so the read is not hoisted) | relaxed atomics |
@@ -128,9 +152,9 @@ false positive or a TSan-environment problem.
 | C5 | c | `runloom_introspect.c` `runloom_fiber_snapshot` vs `runloom_sched_sleep_until_ex:857` | The introspection read of `g->wake_at` is gated on an acquire-load of the state, but the state can be stale while the fiber is already writing its next deadline. | benign (an aligned double, diagnostic) | `__atomic_load` / `__atomic_store` (relaxed, generic form) on `wake_at` at both sites |
 | C6 | c | `runloom_sched_datastack.c.inc` `runloom_pct_init` vs `runloom_sched_ready_pop:375` | PCT's lazy init (test-only scheduler) writes `runloom_pct.*` while a hub's `ready_pop` reads `runloom_pct.enabled`. It shows up when a single-thread scheduler runs while M:N is live. | benign with PCT off | `pthread_once`, or publish `enabled` with release |
 | B1 | b | CPython `zip_next` (`Python/bltinmodule.c`), **only without exec-home's `volatile` `_Py_ThreadId()`** | See the oracle section: a wrong-thread non-atomic `ob_ref_local` write after a fiber migrates inside `tp_iternext`. | high on such a build | none needed: the shipped exec-home patch is clean. Keep the `volatile`. |
-| D1 | d | `runloom_fiber_san_impl.h` (fixed here) | A pooled coro reused its TSan fiber across goroutine lifetimes. `runloom_asm_entry` never returns, so each lifetime left one frame on that fiber's shadow stack. Report stacks filled with repeated `runloom_asm_trampoline` frames, and after about 64K reuses of one coro TSan would write past the end of the shadow stack. | lane bug | Fixed: `runloom_fibersan_left` retires the fiber when the goroutine is done, and `enter()` creates a fresh one. |
-| D2 | d | `runloom_sched.h` (fixed here) | A 256 KB fiber is too small under a TSan interpreter, whose frames are inflated and whose stack margin doubles: a deep import chain in a fiber raises `RecursionError: Stack overflow (used 144 kB)`. | lane bug | Fixed: sanitizer builds floor fiber stacks at 1 MiB. |
-| E1 | — | `runloom_iframe.c` `runloom_arm_fiber_stackprot` (fixed here, separate commit) | `PyUnstable_ThreadState_SetStackProtection` returns -1 and sets `ValueError` when the window is below the **interpreter's** `_PyOS_MIN_STACK_SIZE` (192 KB on a TSan CPython, 48 KB on a release one). The return value was ignored, so the error leaked into the fiber's next C call as `SystemError: ... returned a result with an exception set`. It hung `test_once_executor_sees_exception_others_dont`. Not a race. | default build unaffected (its windows are always above 48 KB) | Fixed: clear the error and fall back to the raw arm. |
+| D1 | d | `runloom_fiber_san_impl.h`, `coro.c` (fixed here) | A pooled coro reused its TSan fiber across goroutine lifetimes. `runloom_asm_entry` never returns, so each lifetime left one frame on that fiber's shadow stack. Report stacks filled with repeated `runloom_asm_trampoline` frames, and after about 64K reuses of one coro TSan would write past the end of the shadow stack. | lane bug | Fixed: one TSan fiber per goroutine lifetime. `runloom_fibersan_left` retires it when the goroutine is done, `runloom_coro_destroy` retires it on the pool-recycle path as well (a Python-level `Coro` deallocated or re-initialised mid-body is pooled unfinished), and `enter()` creates a fresh one. |
+| D2 | d | `runloom_sched.h` (fixed here) | A 256 KB fiber is too small under a TSan interpreter, whose frames are inflated and whose stack margin doubles: a deep import chain in a fiber raises `RecursionError: Stack overflow (used 144 kB)`. | lane bug | Fixed: sanitizer builds floor fiber stacks at 1 MiB. The gate is `RUNLOOM_SANITIZED` (plat.h), which ASan sets too, so the ASan lane gets the same 1 MiB floor. |
+| E1 | — | `runloom_iframe.c` `runloom_arm_fiber_stackprot` (fixed in #43) | `PyUnstable_ThreadState_SetStackProtection` returns -1 and sets `ValueError` when the window is below the **interpreter's** `_PyOS_MIN_STACK_SIZE` (192 KB on a TSan CPython, 48 KB on a release one). The return value was ignored, so the error leaked into the fiber's next C call as `SystemError: ... returned a result with an exception set`. It hung `test_once_executor_sees_exception_others_dont`. Not a race. | default build unaffected (its windows are always above 48 KB) | Fixed: clear the error and fall back to the raw arm. |
 
 No category (b) report appeared with the shipped patches: no CPython-internal
 race was reachable because of migration. Every CPython-side report the lane

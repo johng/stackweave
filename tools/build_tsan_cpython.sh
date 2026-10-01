@@ -70,9 +70,11 @@ P_EXEC="$ROOT/src/patches/$PATCHTAG-tstate-exec-home.patch"
 . "$_RLT/fetch_pinned.sh"
 PY_SHA256="$(rl_cpython_require_pin "$VER")" || exit 1
 TGZ="${PY_TARBALL:-${TMPDIR:-/tmp}/py-$VER.tgz}"
+# `|| rc=$?`: under set -e a bare failing call would exit before the case.
+rc=0
 rl_fetch_pinned "https://www.python.org/ftp/python/$VER/Python-$VER.tgz" \
-                "$PY_SHA256" "$TGZ"
-case $? in
+                "$PY_SHA256" "$TGZ" || rc=$?
+case $rc in
     0) : ;;
     1) echo "could not download CPython $VER (offline?)" >&2; exit 1 ;;
     2) exit 1 ;;
