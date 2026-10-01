@@ -60,12 +60,13 @@ stackweave.optimize("memory")       # stackweave.fiber -> small right-sized stac
 ## Install
 
 stackweave installs only onto a free-threaded CPython built with its migration
-patches — see [src/patches/](src/patches/README.md) (`tools/ci/build_patched_cpython.sh 314`
-builds one). `pip install` refuses a stock interpreter. Install with the patched
-interpreter's pip:
+patches — see [src/patches/](src/patches/README.md) (`tools/ci/build_patched_cpython.sh 3.14.4`
+builds one). `pip install` refuses a stock interpreter. stackweave is not on PyPI
+yet, so install it from GitHub (or `pip install -e .` from a clone) with the
+patched interpreter's pip:
 
 ```bash
-/path/to/patched/bin/python3.14 -m pip install stackweave
+/path/to/patched/bin/python3.14 -m pip install git+https://github.com/johng/stackweave
 ```
 
 ```python

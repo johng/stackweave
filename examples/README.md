@@ -7,8 +7,9 @@ off** — stackweave is a free-threaded runtime, and `run(n>1)` deliberately rai
 when the GIL is on rather than pretend.
 
 Install stackweave first with a patched interpreter's pip (see
-[Install](../README.md#install)) — `pip install stackweave`, or `pip install -e .`
-from a clone — then run any example with the GIL off:
+[Install](../README.md#install)) — `pip install git+https://github.com/johng/stackweave`,
+or `pip install -e .` from a clone; it is not on PyPI yet — then run any example
+with the GIL off:
 
 ```bash
 PYTHON_GIL=0 /path/to/patched/bin/python3.14 examples/hello_fibers.py

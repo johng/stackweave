@@ -1,8 +1,10 @@
 # Installation
 
-stackweave is a C extension that needs a compiler at build time.
-`pip install stackweave` builds it from source: there are no prebuilt
-wheels (see [below](#prebuilt-wheels)).
+stackweave is a C extension that needs a compiler at build time.  It is
+not on PyPI yet: install it from a clone ([below](#editable-install)) or
+with `pip install git+https://github.com/johng/stackweave`.  Either way pip
+builds it from source; there are no prebuilt wheels (see
+[below](#prebuilt-wheels)).
 
 ## Requirements
 
@@ -12,7 +14,7 @@ wheels (see [below](#prebuilt-wheels)).
   C sources have no other code paths.
 - **Built with stackweave's migration patches** (alloc-home + exec-home) --
   see [src/patches/](https://github.com/johng/stackweave/blob/main/src/patches/README.md)
-  (`tools/ci/build_patched_cpython.sh 314` builds one).  M:N runs are not
+  (`tools/ci/build_patched_cpython.sh 3.14.4` builds one).  M:N runs are not
   sound without them, so `pip install` refuses a stock interpreter.
 - A C compiler.  Anything reasonably modern works: GCC 4.7+ or Clang
   3.5+.
@@ -156,7 +158,7 @@ Windows is not supported.
 free-threaded CPython 3.14+ (`cp314t`) on:
 
 - Linux x86_64 + aarch64 (manylinux\_2\_28)
-- macOS universal2 (arm64 + x86_64)
+- macOS arm64 and x86_64 (one wheel per arch, not universal2)
 
 but no wheels are published.  The patched and stock interpreters share the
 `cp314t` wheel tag, so pip could not keep a prebuilt wheel off stock
