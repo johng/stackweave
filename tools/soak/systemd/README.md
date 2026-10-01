@@ -3,8 +3,8 @@
 _docs/dev/RELIABILITY_PROGRAM.md R4._  These `systemd --user` units run
 `tools/soak/duty_cycle.sh` once a night: a load-gated, niced rotation of
 `hang_hunter` → `lifefuzz` → (weekly) a soak-matrix preset, filing every finding
-into `docs/dev/soak/INBOX.md`.  **No hosted CI** — this is how fuzz-hours and
-stress-hours accrue locally when nobody is at the keyboard.
+into `docs/dev/soak/INBOX.md`.  Hosted CI does not run these rotations — this
+is how fuzz-hours and stress-hours accrue locally when nobody is at the keyboard.
 
 **The repo does NOT install or enable these.** They consume real CPU for hours.
 Enable them only on a box whose owner has agreed (they *are* load-gated and

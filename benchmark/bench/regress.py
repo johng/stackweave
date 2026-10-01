@@ -6,7 +6,7 @@ Reads two harness JSON files (bench/results/<suite>.json) and, per bench
 on a shared box, so a flagged regression is much more likely real than noise.
 
 Exit status is non-zero if any bench regressed past the tolerance, so this
-can gate a local pre-merge check (we have no hosted CI -- see CLAUDE.md).
+can gate a local pre-merge check.
 
 Usage:
     # compare a fresh run against the committed baseline

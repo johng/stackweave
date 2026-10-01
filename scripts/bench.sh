@@ -1,8 +1,8 @@
 #!/usr/bin/env sh
 # bench.sh -- run the stackweave benchmark suite in the cleanest env this box allows,
 # write JSON + a dated report, and gate each suite against its committed
-# baseline. This is the LOCAL perf gate (we have no hosted CI -- see CLAUDE.md),
-# the perf-side analogue of scripts/check_all.sh.
+# baseline. This is the LOCAL perf gate, the perf-side analogue of
+# scripts/check_all.sh.
 #
 # Free-threaded 3.13t with the GIL forced off; ASLR off (setarch -R, inherited
 # across the harness's gil=0 re-exec) for layout-stable numbers; the harness

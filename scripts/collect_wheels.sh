@@ -3,10 +3,11 @@
 # git checkout and gather them, plus the sdist, into ./dist for one
 # `twine upload dist/*`.
 #
-# No hosted CI: this orchestrates cibuildwheel locally (this machine's platform)
-# and over SSH on your other build hosts (e.g. a Mac), then copies their
-# wheels back here.  cibuildwheel cannot cross-build macOS from Linux, so each
-# OS builds its own -- this just automates the shovelling.
+# Hosted CI does not build wheels: this orchestrates cibuildwheel locally
+# (this machine's platform) and over SSH on your other build hosts (e.g. a
+# Mac), then copies their wheels back here.  cibuildwheel cannot cross-build
+# macOS from Linux, so each OS builds its own -- this just automates the
+# shovelling.
 #
 # Every host builds from a FRESH `git clone` (of a configurable repo URL + ref)
 # in a unique throwaway dir that is deleted on exit -- wheels always come from

@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 # build_wheels.sh -- build redistributable wheels + sdist locally.
 #
-# This project uses NO hosted CI, so prebuilt wheels (the "pip install just
+# Hosted CI does not build wheels, so prebuilt wheels (the "pip install just
 # works, no compiler" experience) are built by hand.  Run this ONCE PER
 # PLATFORM you want wheels for; each run builds the whole CPython matrix
 # (3.11-3.14) for the platform it runs on:
