@@ -258,8 +258,7 @@ static PyMethodDef RunloomG_methods[] = {
      "pin(hub): confine this fiber's next and later resumes to `hub`; "
      "pin(None) unpins.  A fiber can pin ITSELF before parking: "
      "current_g().pin(3) then an ordinary channel recv resumes it on hub 3.  "
-     "Pinning to a hub other than the fiber's own raises RuntimeError unless "
-     "the runtime was started with migration enabled.\n\n"
+     "Raises RuntimeError outside an M:N run.\n\n"
      "A pinned fiber is NOT stealable: it runs only when `hub` does and "
      "starves if that hub blocks.  A determinism knob for tests, not affinity."},
     {"wake", (PyCFunction)RunloomG_wake, METH_NOARGS,

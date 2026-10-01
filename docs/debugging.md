@@ -8,7 +8,7 @@ from your own code or a watchdog.
 ## Quick look
 
 ```python
-import stackweave
+import stackweave.inspect as gi
 
 gi.count()                 # how many fibers are live
 print(gi.format(stacks=True))   # a formatted dump (string) -> log it
@@ -136,7 +136,7 @@ Each dict has:
 **`blocked_at` is best-effort.** It is read from another hub's thread-state, so
 it only fills for a hub that is *stably* DETACHED (a fiber parked in a
 blocking syscall — the owner thread won't touch its frames until the call
-returns) and only when the handoff rescue isn't mid-adoption of that hub. For an
+returns). For an
 **ATTACHED** (CPU) wedge, or when the read can't be taken safely, it is `None` —
 fall back to `stack_cmd`. `py-spy` reads the process out-of-process, so it
 always works and gives the **complete** C + Python stack of *every* thread (the
@@ -165,10 +165,10 @@ kill -QUIT <pid>
 writes a structural dump (state histogram + per-fiber line, no Python
 stacks — touching Python objects from a signal handler is not safe) to
 stderr and lets the process continue.  The underlying primitive is
-`stackweave.dump_fibers(fd)`, which is async-signal-safe-ish (it
+`stackweave_c.dump_fibers(fd)`, which is async-signal-safe-ish (it
 try-locks the registry and uses only `write(2)`).
 
-## Crash reporting (`SIGSEGV` / `SIGBUS`)
+## Crash reporting (`SIGSEGV`, `SIGBUS`)
 
 A fiber runs on a small, fixed C stack with a `PROT_NONE` **guard page**
 just below it, so the commonest hard crash in stackweave is a **fiber stack
@@ -189,11 +189,13 @@ On a fault it maps the faulting address onto the guard pages and prints, e.g.:
 ======================== stackweave crash ========================
 [stackweave] fatal SIGSEGV at address 0x7622eca18f30  (pid 48681, thread 0x7622ebbff6c0)
 [stackweave] >>> GOROUTINE STACK OVERFLOW <<<
-[stackweave]     fiber g1 ran off the low end of its 128 KiB C stack
-[stackweave]     (the fault hit the guard page just below it).
-[stackweave]     Fix: give it a bigger stack -- stackweave_c.fiber(fn, stack_size=N), ...
+[stackweave]     fiber g1 ran off the low end of its 512 KiB C stack
+[stackweave]     -- the fault hit the guard page just below it: a CLEAN trap,
+[stackweave]     not memory corruption.
+[stackweave]     Fix: pin a bigger stack with stackweave.fiber(fn, stack_size=N)
+[stackweave]     ...
 [stackweave] this thread was executing fiber g1.
-=== stackweave fiber dump: 1 live (default stack 128 KiB) ===
+=== stackweave fiber dump: 1 live (default stack 512 KiB) ===
   ...
 ```
 
@@ -228,7 +230,7 @@ unless asked.
 
 Go reports `fatal error: all fibers are asleep - deadlock!` when the
 scheduler runs out of runnable work but fibers are still blocked on each
-other.  stackweave does the same: if the single-thread scheduler quiesces — nothing
+other.  stackweave does the same: if the scheduler quiesces — nothing
 runnable, no timers, no I/O, no offload in flight — while fibers are still
 parked on a channel or a `park`, those fibers can never be woken, so it
 reports the deadlock with a fiber dump:
@@ -246,13 +248,14 @@ fiber 2 [chan-wait] ...
 Three modes (default **warn**):
 
 ```python
-import stackweave
+import stackweave.inspect as gi
 gi.set_deadlock_mode("warn")    # print the dump, keep going (default)
 gi.set_deadlock_mode("raise")   # raise RuntimeError out of run()
 gi.set_deadlock_mode("off")     # do nothing
 ```
 
-This applies to the single-thread scheduler (which `stackweave.aio` uses).  A clean `stackweave.aio` shutdown
+This applies to the single-thread scheduler (which `stackweave.aio` uses) and to
+M:N runs, where `mn_run()` takes the same census across every hub.  A clean `stackweave.aio` shutdown
 goes through `sched_stop`, which is **excluded**, so a normal loop teardown
 with pending background tasks never trips the detector — only a genuine
 "everyone is blocked, nothing can make progress" quiescence does.
@@ -265,7 +268,7 @@ flood) can still exhaust memory.  An optional admission gate caps the number
 of live fibers:
 
 ```python
-import stackweave
+import stackweave.inspect as gi
 gi.set_max_fibers(100_000)   # 0 = unlimited (default); env STACKWEAVE_MAX_GOROUTINES
 ```
 

@@ -34,9 +34,10 @@ fibers.
 
 ## What you get
 
-- **Cheap fibers.**  A fiber is ~16 KB of C stack + ~150 B
-  metadata after [calibration](stack-sizing.md).  50 000 idle
-  fibers on one OS thread is normal; 200 000 has been tested.
+- **Cheap fibers.**  A fiber's C stack is demand-paged: it reserves
+  256-512 KB of address space, but only the pages it touches cost RAM
+  (see [stack sizing](stack-sizing.md)), plus ~150 B of metadata.  50 000
+  idle fibers on one OS thread is normal; 200 000 has been tested.
 - **Two programming styles.**  Use `stackweave.fiber(fn)` for plain
   Go-style code, or `stackweave.aio.run(coro)` to drive existing `async def`
   code on the same scheduler.  See the [asyncio bridge](asyncio.md).

@@ -65,7 +65,7 @@ stackweave.grow_down_enabled()      # -> current state
 A per-call `stackweave.fiber(fn, stack_size=N)` pin always wins regardless -- use it to
 opt a single function out and choose its exact size. The grow-down also steps
 aside automatically when you explicitly enable the opt-in C auto-sizer
-([below](#letting-runloom-size-them-for-you)) -- the sizer you turned on by hand
+([below](#letting-stackweave-size-them-for-you)) -- the sizer you turned on by hand
 wins, since it may *deliberately* over-reserve (the crypto prescan's 1 MiB
 margin) where grow-down would measure-and-shrink.
 
@@ -188,7 +188,7 @@ Three forms, smallest commitment first:
 import stackweave
 
 # 1. One-shot, per-hub (synchronous): fills the CALLING thread's cache.
-stackweave.warmup(50_000, stack_size=512 * 1024)
+stackweave.warmup(50_000, 512 * 1024)        # (n, stack_size), positional only
 
 # 2. One-shot, GLOBAL (cross-hub).  background=True (default) fills it on a
 #    detached helper thread and returns instantly -- prefetch ahead of demand.
@@ -244,10 +244,10 @@ default's virtual footprint? Lock a smaller size up-front (an explicit size
 overrides the default and its floor, down to the 256 KB minimum):
 
 ```python
-import stackweave
+import stackweave, stackweave_c
 
 # Before any stackweave.fiber() call:
-stackweave.set_stack_size(256 * 1024)
+stackweave_c.set_stack_size(256 * 1024)
 
 # Subsequent fibers use exactly 256 KB:
 stackweave.fiber(worker)
@@ -263,9 +263,9 @@ and disables painting (no per-spawn overhead).  Use this when:
 - You're running a benchmark and want the size to not drift.
 
 ```python
-import stackweave
+import stackweave_c
 
-print(stackweave.get_stack_size())   # current default
+print(stackweave_c.get_stack_size())   # current default
 ```
 
 Bounds: `[256 KB, 8 MB]`.  Below or above is silently clamped.
@@ -332,7 +332,7 @@ protection the main thread gets, scaled to the fiber's smaller stack:
   (`stackweave.inspect.install_crash_handler()`) that fault
   is turned into a classified message that *names the overflowing fiber and
   its stack size* instead of a bare segfault -- see
-  [Crash reporting](debugging.md#crash-reporting-sigsegv--sigbus).
+  [Crash reporting](debugging.md#crash-reporting-sigsegv-sigbus).
 - **CPython's stack-hungry error paths fit.** A missing-attribute lookup on a
   module makes CPython reserve two path buffers (~32 KB on Linux, ~8 KB on
   macOS) to build a "did you shadow a stdlib module?" hint.  That used to
@@ -351,7 +351,7 @@ guard; a non-probing extension could corrupt. If you have such a fiber,
 give it a bigger stack up front:
 
 ```python
-stackweave.set_stack_size(1024 * 1024)       # process-wide default
+stackweave_c.set_stack_size(1024 * 1024)     # process-wide default
 # or just the suspicious fiber:
 stackweave.fiber(work, stack_size=512 * 1024)
 ```
@@ -522,10 +522,10 @@ auto-sizer) or offload the deep call.
 For a production service:
 
 ```python
-import stackweave
+import stackweave, stackweave_c
 
 # Optional: pre-calibrate during a dry-run, then lock for production
-stackweave.set_stack_size(32 * 1024)        # whatever your dry-run found
+stackweave_c.set_stack_size(256 * 1024)     # whatever your dry-run found
 
 # Spawn workers
 for i in range(10000):

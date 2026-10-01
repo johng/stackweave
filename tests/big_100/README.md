@@ -2,7 +2,7 @@
 
 100 self-contained workloads that hammer the `stackweave` Go-style-coroutine
 extension in **M:N parallel mode** (`run(n>1)`, GIL off, free-threaded CPython
-3.13t), blocking-style code over `monkey.patch()` — **no `async`/`await`, no
+3.14t), blocking-style code over `monkey.patch()` — **no `async`/`await`, no
 aio bridge**. Each one fields tens of thousands of lightweight goroutines and
 exercises one corner of the runtime (sockets, files, subprocess, scheduler,
 sync primitives, cancellation, exception/finalizer machinery, …).
@@ -25,7 +25,7 @@ requirements:
 
 ## Requirements
 
-- Free-threaded CPython 3.13t built with the extension:
+- Free-threaded CPython 3.14t built with the extension:
   `~/.pyenv/versions/3.14.4t/bin/python3`, `PYTHON_GIL=0`.
 - Build the extension once: `python setup.py build_ext --inplace` (repo root).
 - The harness auto-raises `RLIMIT_NOFILE` (via `sudo -n prlimit`) so socket
@@ -57,8 +57,13 @@ end and the orchestrator exits nonzero if any project failed.
 ## Findings
 
 Building and running the campaign surfaced **10 real bugs/limitations** in the
-extension — see [FINDINGS.md](FINDINGS.md) for the full writeups with repros.
-Headlines:
+extension. The full writeups (FINDINGS.md) were not carried into this tree.
+Headlines, as recorded at the time:
+
+> **Note (2026-10-01):** the handoff rescue behind #2 was removed (cbd40067),
+> so `--handoff` / `STACKWEAVE_HANDOFF` no longer do anything. M:N has since
+> become migration-only (#23); re-check a finding against the current tree
+> before relying on it.
 
 - **#1 (fixed):** `monkey.patch()` broke every `stackweave.fiber()` (the wrapper
   dropped the stack-size positional arg). Fixed in `src/stackweave/monkey/`.

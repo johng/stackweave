@@ -6,7 +6,10 @@ wording below is historical; sections 0b, 1, 2 and the sleeper gap in 4 are
 still open and tracked in that PR's review.
 Update 2026-10-01: offload hubs have been removed, so the old section 0 (an
 offload hub pulling unpinned work from the global run queue) and the
-offload-hub bullet in section 4 have been dropped.
+offload-hub bullet in section 4 have been dropped. Section 0b is also closed:
+#23 made sysmon always on (its resume instrumentation no longer depends on
+preemption) and kept the migration-safe preempt dispatch from #26, and
+`tests/test_swarm_mn_sched.py::test_mn_deadlock_raises_under_mn_run` passes.
 Nothing here is implemented unless a later section says so.
 
 Migration mode (`STACKWEAVE_MIGRATION=1` / `stackweave.enable_migration()`) gives

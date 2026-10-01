@@ -50,8 +50,7 @@ with Go and beats it on raw spawn** — a stackful coroutine runtime on CPython
 matching a compiled language even with a Python handler (596 k vs 603 k req/s at
 saturation; a C handler beats Go). The one honest gap left is **memory**: a
 suspended fiber carries a CPython eval frame, ~3.3× Go's per-fiber RSS.
-Full cross-runtime numbers + cold spawn-vs-N curves: **[benchmark report](https://github.com/johng/stackweave/blob/main/benchmark/report.html)**
-· [perf summary](https://github.com/johng/stackweave/blob/main/docs/dev/PERF_SUMMARY.md).
+Full cross-runtime numbers + cold spawn-vs-N curves: **[benchmark report](https://github.com/johng/stackweave/blob/main/benchmark/report.html)**.
 
 ```python
 stackweave.optimize("throughput")   # stackweave.fiber -> max spawn rate (fiber_fast)
@@ -61,12 +60,13 @@ stackweave.optimize("memory")       # stackweave.fiber -> small right-sized stac
 ## Install
 
 stackweave installs only onto a free-threaded CPython built with its migration
-patches — see [src/patches/](src/patches/README.md) (`tools/ci/build_patched_cpython.sh 314`
-builds one). `pip install` refuses a stock interpreter. Install with the patched
-interpreter's pip:
+patches — see [src/patches/](src/patches/README.md) (`tools/ci/build_patched_cpython.sh 3.14.4`
+builds one). `pip install` refuses a stock interpreter. stackweave is not on PyPI
+yet, so install it from GitHub (or `pip install -e .` from a clone) with the
+patched interpreter's pip:
 
 ```bash
-/path/to/patched/bin/python3.14 -m pip install stackweave
+/path/to/patched/bin/python3.14 -m pip install git+https://github.com/johng/stackweave
 ```
 
 ```python
@@ -82,7 +82,8 @@ off stock CPython. **No runtime dependencies.**
 - **Hand-rolled asm context switch** (x86_64 SysV, aarch64) — ~80 ns/swap, no
   syscall; POSIX `ucontext` fallback.
 - **M:N work-stealing scheduler** — Chase-Lev deque per hub, per-hub MPSC
-  submission, woken goroutines routed back to their origin hub.
+  submission; a woken goroutine lands on its waker's deque (Go-style local
+  wake) or a global run-queue and resumes on whichever hub takes it.
 - **Per-goroutine `PyThreadState` snapshot** — cframe, datastack, exc_info,
   contextvars, recursion; a million yielded goroutines share their hub threads
   with no frame-chain cliff.

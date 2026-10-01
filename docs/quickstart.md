@@ -21,7 +21,7 @@ Output:
 hello from a fiber!
 ```
 
-`go(fn)` queues `fn` for execution on the stackweave scheduler.  Nothing
+`fiber(fn)` queues `fn` for execution on the stackweave scheduler.  Nothing
 runs until you call `stackweave.run(1)` -- that's the scheduler's main
 loop, equivalent of Go's program-startup runtime.
 
@@ -53,7 +53,7 @@ closures over a loop variable.  Each fiber captures its own `i`.
 
 ## Cooperative sleep
 
-`stackweave.sched_sleep(seconds)` suspends the current fiber for at
+`stackweave.sleep(seconds)` suspends the current fiber for at
 least `seconds`, letting other fibers run in the meantime.  This is
 not `time.sleep` -- `time.sleep` would block the whole OS thread.
 
@@ -62,7 +62,7 @@ import time, stackweave
 
 def slow():
     print("start", time.time())
-    stackweave.sched_sleep(0.5)
+    stackweave.sleep(0.5)
     print("end  ", time.time())
 
 # Spawn three sleeps concurrently; they all wake at ~the same time.
@@ -184,8 +184,10 @@ async def handler(reader, writer):
 
 async def main():
     server = await stackweave.aio.start_server(handler, "127.0.0.1", 9000)
-    async with server:
-        await server.serve_forever()
+    try:
+        await asyncio.Event().wait()     # serve until cancelled
+    finally:
+        server.close()
 
 stackweave.aio.run(main())
 ```

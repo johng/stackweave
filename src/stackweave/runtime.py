@@ -315,8 +315,8 @@ def _fiber_full(callable_, *args, **kwargs):
     Dispatches on the active scheduler so the same call works in both modes:
       - single-thread (run(1, ...)): spawns on this thread's scheduler and
         returns a Goroutine handle.
-      - M:N (run(n > 1, ...)): spawns onto a hub via mn_fiber.  M:N v1 is
-        run-to-completion with no join handle, so this returns None.
+      - M:N (run(n > 1, ...)): spawns onto a hub via mn_fiber, which
+        returns no join handle, so this returns None.
 
     The dispatch uses stackweave_c.mn_hub_count() rather than a mode flag, so a
     fiber() called from anywhere -- inside a hub fiber or from the main

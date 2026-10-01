@@ -1,8 +1,10 @@
 # Installation
 
-stackweave is a C extension that needs a compiler at build time.  Once
-prebuilt wheels are uploaded (see roadmap), the simplest install path
-will be plain `pip install stackweave`; until then build from source.
+stackweave is a C extension that needs a compiler at build time.  It is
+not on PyPI yet: install it from a clone ([below](#editable-install)) or
+with `pip install git+https://github.com/johng/stackweave`.  Either way pip
+builds it from source; there are no prebuilt wheels (see
+[below](#prebuilt-wheels)).
 
 ## Requirements
 
@@ -10,21 +12,29 @@ will be plain `pip install stackweave`; until then build from source.
   refuses GIL builds and older versions: the fiber stack floor, the per-fiber
   stack-overflow check and the parked-frame GC anchor all depend on it, and the
   C sources have no other code paths.
+- **Built with stackweave's migration patches** (alloc-home + exec-home) --
+  see [src/patches/](https://github.com/johng/stackweave/blob/main/src/patches/README.md)
+  (`tools/ci/build_patched_cpython.sh 3.14.4` builds one).  M:N runs are not
+  sound without them, so `pip install` refuses a stock interpreter.
 - A C compiler.  Anything reasonably modern works: GCC 4.7+ or Clang
   3.5+.
 
 ## Editable install
 
+Use the patched interpreter's pip:
+
 ```bash
 git clone https://github.com/johng/stackweave
 cd stackweave
-pip install -e .
+/path/to/patched/bin/python3.14 -m pip install -e .
 ```
 
-On free-threaded 3.14t:
+On a stock free-threaded 3.14t, pip refuses the install.  To build and run
+the test suite there anyway, build in place and run with `PYTHONPATH=src`
+(or set `STACKWEAVE_ALLOW_STOCK_CPYTHON=1` to let pip through):
 
 ```bash
-~/.pyenv/versions/3.14.4t/bin/python3.14 -m pip install -e .
+python3.14t setup.py build_ext --inplace
 ```
 
 ## No compiler? Bootstrap helpers
@@ -106,17 +116,17 @@ The resolution is an interlock rather than a blanket disable, in
 `stackweave/runtime.py` (`_tlbc_reexec_if_needed`): the GC-frames anchor makes
 parked fiber frames visible to the collector, and TLBC stays **on** whenever
 that anchor is active — the default. Only when the anchor is
-unavailable (e.g. `STACKWEAVE_GC_FRAMES=0`) does stackweave re-exec with `PYTHON_TLBC=0`, which
+unavailable (an anchor init failure, or a build where the fix compiled out) does stackweave re-exec with `PYTHON_TLBC=0`, which
 keeps the crashy combination unreachable. Opt out entirely with
 `PYTHON_TLBC=0` / `-X tlbc=0`.
 
 ## Verifying the install
 
 ```python
-import stackweave
+import stackweave, stackweave_c
 print("backend:", stackweave.backend())            # e.g. fcontext-asm
 print("netpoll:", stackweave.netpoll_backend())    # e.g. epoll
-print("stack default:", stackweave.get_stack_size(), "bytes")
+print("stack default:", stackweave_c.get_stack_size(), "bytes")
 
 def hello():
     print("hello from a fiber!")
@@ -134,8 +144,8 @@ ns per context switch).  `"ucontext"` is the POSIX fallback.
 | Linux x86_64 (Debian 13, Fedora 39) | fcontext-asm | epoll | yes |
 | Linux aarch64 | fcontext-asm | epoll | qemu-aarch64 |
 | macOS Big Sur x86_64 | fcontext-asm | kqueue | yes |
-| macOS arm64 (Apple Silicon) | fcontext-asm | kqueue | code review |
-| FreeBSD 14.3 / GhostBSD x86_64 | fcontext-asm | kqueue | yes |
+| macOS arm64 (Apple Silicon) | fcontext-asm | kqueue | yes (CI: macos-14) |
+| FreeBSD 14.3 / GhostBSD x86_64 | fcontext-asm | kqueue | on 3.12 only -- not yet re-validated on 3.14t |
 | OpenBSD / NetBSD / DragonFly | fcontext-asm | kqueue | code review |
 | Solaris / illumos | ucontext | select | code review |
 | Android (Termux) | fcontext-asm | epoll | code review |
@@ -144,11 +154,14 @@ Windows is not supported.
 
 ## Prebuilt wheels
 
-`pyproject.toml` ships a `[tool.cibuildwheel]` matrix covering free-threaded
-CPython 3.14+ (`cp314t`) on:
+`pyproject.toml` still carries a `[tool.cibuildwheel]` matrix covering
+free-threaded CPython 3.14+ (`cp314t`) on:
 
 - Linux x86_64 + aarch64 (manylinux\_2\_28)
-- macOS universal2 (arm64 + x86_64)
+- macOS arm64 and x86_64 (one wheel per arch, not universal2)
 
-Run `cibuildwheel --output-dir wheels` from a CI runner (or locally
-with Docker) to populate `wheels/` for upload to PyPI.
+but no wheels are published.  The patched and stock interpreters share the
+`cp314t` wheel tag, so pip could not keep a prebuilt wheel off stock
+CPython; and `bdist_wheel` -- which cibuildwheel drives -- is behind the
+same install gate as `pip install`, so it refuses a stock build interpreter
+unless `STACKWEAVE_ALLOW_STOCK_CPYTHON=1` is set.

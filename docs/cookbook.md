@@ -142,7 +142,7 @@ signal cancellation.
 ```python
 import stackweave
 
-def worker(done):
+def worker(done, out):
     while True:
         idx, _ = stackweave.select([
             ("recv", done),         # case 0: cancellation
@@ -155,10 +155,10 @@ def worker(done):
 def main():
     done = stackweave.Chan(0)        # unbuffered; close to broadcast
     out = stackweave.Chan(10)
-    stackweave.fiber(lambda: worker(done))
+    stackweave.fiber(lambda: worker(done, out))
 
     # ... do stuff with out ...
-    stackweave.sched_sleep(0.05)
+    stackweave.sleep(0.05)
     done.close()                    # wakes every recv on done
 
 stackweave.fiber(main)
@@ -177,7 +177,7 @@ import threading
 def with_timeout(ch, seconds):
     timer = stackweave.Chan(1)
     def fire():
-        stackweave.sched_sleep(seconds)
+        stackweave.sleep(seconds)
         timer.send(None)
     stackweave.fiber(fire)
 
@@ -282,7 +282,7 @@ def slow_op():
     sem.recv()                      # acquire (blocks if no token)
     try:
         # ... slow thing ...
-        stackweave.sched_sleep(0.5)
+        stackweave.sleep(0.5)
     finally:
         sem.send(None)              # release
 
@@ -381,7 +381,8 @@ import stackweave
 g = stackweave.fiber(worker)             # plus stackweave.run(1) at top level
 ```
 
-You go from 8 MB per thread (Linux default) to ~16 KB per fiber.
+You go from an 8 MB stack per thread (Linux default) to a 512 KB one per
+fiber (both demand-paged, so only touched pages cost RAM).
 Spawn rate goes from ~10k/sec to ~1.7M/sec.
 
 ## Bridging stackweave with `asyncio` libraries
@@ -395,7 +396,7 @@ import asyncio, stackweave
 def background_worker():
     while True:
         # ... cooperative work ...
-        stackweave.sched_sleep(1.0)
+        stackweave.sleep(1.0)
 
 async def main():
     stackweave.fiber(background_worker)

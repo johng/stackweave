@@ -5,16 +5,25 @@ from typing import Any, Literal, overload
 # ---- Coroutine handle (raw, no scheduler) -----------------------------
 
 class Coro:
-    """A raw stackful coroutine.  Most users want go()/run() instead."""
+    """A raw stackful coroutine.  Most users want fiber()/run() instead."""
     done: bool
-    def __init__(self, fn: Callable[..., Any], stack_size: int = ...) -> None: ...
+    def __init__(self, callable: Callable[..., Any], stack_size: int = ...) -> None: ...
     def resume(self) -> Any: ...
 
 # ---- Goroutine handle (scheduler-aware) -------------------------------
 
 class G:
-    """Opaque goroutine handle returned by go() / mn_go()."""
-    ...
+    """Goroutine handle returned by fiber() and current_g()."""
+    @property
+    def done(self) -> bool: ...
+    @property
+    def result(self) -> Any: ...
+    @property
+    def exception(self) -> BaseException | None: ...
+    def wake(self) -> None: ...
+    def stack(self) -> dict[str, Any]: ...
+    def pin(self, hub: int | None) -> None: ...
+    def cancel_wait_fd(self) -> bool: ...
 
 # ---- Channel ---------------------------------------------------------
 
@@ -33,11 +42,12 @@ class Chan:
 
 # ---- Single-thread scheduler -----------------------------------------
 
-def go(callable_: Callable[[], Any]) -> G:
-    """Spawn a goroutine on the single-thread C scheduler.  Returns handle."""
+def fiber(fn: Callable[[], Any], stack_size: int = ...) -> G:
+    """Spawn a goroutine on the single-thread C scheduler.  Returns handle.
+    stack_size > 0 overrides the default C stack for this one fiber."""
     ...
 
-def go_noyield(callable_: Callable[[], Any]) -> G:
+def fiber_noyield(callable_: Callable[[], Any], /) -> G:
     """Spawn a goroutine the caller PROMISES runs to completion without
     yielding.  Skips per-g snap/load dance.  150-400 ns/g faster.
     Undefined behaviour if the callable yields."""
@@ -55,7 +65,7 @@ def sched_yield_classic() -> None:
     """Yield the current goroutine.  Slower form for benchmarking."""
     ...
 
-def sched_sleep(seconds: float) -> None:
+def sched_sleep(seconds: float, /) -> None:
     """Sleep the current goroutine N seconds.  Scheduler-aware."""
     ...
 
@@ -71,7 +81,7 @@ def netpoll_backend() -> Literal["epoll", "kqueue", "select"]:
 
 # ---- netpoll -----------------------------------------------------------
 
-def wait_fd(fd: int, events: int, timeout_ms: int = ...) -> int:
+def wait_fd(fd: int, events: int, timeout_ms: int = ..., /) -> int:
     """Park the current goroutine until fd is ready.  events bitmask:
     1=read, 2=write.  Returns the readiness mask."""
     ...
@@ -88,11 +98,13 @@ def select(
 
 # ---- C-level socket fast path ----------------------------------------
 
-def tcp_recv(fd: int, buffer: bytearray | memoryview, n: int) -> int:
+def tcp_recv(fd: int, buffer: bytearray | memoryview, n: int,
+             flags: int = ..., /) -> int:
     """recv into buffer; returns bytes received.  Cooperative blocking."""
     ...
 
-def tcp_send(fd: int, data: bytes | bytearray | memoryview) -> int:
+def tcp_send(fd: int, data: bytes | bytearray | memoryview,
+             flags: int = ..., /) -> int:
     """sendall; returns bytes_sent.  Cooperative blocking."""
     ...
 
@@ -106,24 +118,28 @@ def thread_fini() -> None:
     """Per-thread teardown."""
     ...
 
-def warmup(n: int, stack_size: int = ...) -> int:
+def warmup(n: int, stack_size: int = ..., /) -> int:
     """Pre-allocate n stacks of stack_size bytes for the per-thread
     stack pool.  Returns actual count.  Eliminates first-spawn mmap
     latency on server workloads."""
     ...
 
-# ---- M:N scheduler (3.13t) -------------------------------------------
+# ---- M:N scheduler -----------------------------------------------------
 
 def mn_init(n: int = ...) -> int:
     """Start N hub threads (default: nproc).  Returns count."""
     ...
 
-def mn_go(callable_: Callable[[], Any], stack_size: int = 0) -> G:
-    """Spawn on a round-robin hub.  v1: run-to-completion only.
+def mn_fiber(fn: Callable[[], Any], stack_size: int = 0,
+             hub: int = -1) -> None:
+    """Spawn on a round-robin hub.  Returns no handle.
 
-    stack_size>0 overrides the hub's small default C-stack (bytes) for a
+    stack_size>0 overrides the default C-stack (bytes) for a
     goroutine that runs a deep, non-yielding C burst (cold imports,
     terminfo/OpenSSL init) that the resume-boundary copy-grow can't rescue.
+
+    hub=N spawns on hub N and keeps it there (not stealable) -- a
+    determinism knob for tests, not affinity.
     """
     ...
 
@@ -135,10 +151,14 @@ def mn_fini() -> None:
     """Tear down the hub pool."""
     ...
 
-# ---- Preemption (3.13t) ----------------------------------------------
+def mn_hub_count() -> int:
+    """Number of M:N hubs currently running (0 outside an M:N run)."""
+    ...
 
-def preempt_init(quantum_us: int = ...) -> None:
-    """Start the time-sliced preemption timer.  3.13t only."""
+# ---- Preemption ------------------------------------------------------
+
+def preempt_init(quantum_us: int = ..., /) -> None:
+    """Start the time-sliced preemption timer."""
     ...
 
 def preempt_fini() -> None:

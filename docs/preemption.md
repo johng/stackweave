@@ -1,6 +1,7 @@
 # Time-sliced preemption
 
-By default, stackweave fibers are **cooperative** -- they yield only when
+Under the single-thread scheduler (`run(1)`), stackweave fibers are
+**cooperative** by default -- they yield only when
 they explicitly call `sched_yield`, sleep, or block on I/O.  If you
 write a tight CPU loop with no yield, that fiber monopolises the
 scheduler until it returns.
@@ -11,7 +12,7 @@ when you mix in libraries that don't expect to be cooperative -- a
 long `numpy` matmul or a 10-million-iteration arithmetic loop will
 starve every other fiber.
 
-`stackweave.preempt_init(quantum_us=10_000)` solves this on
+`stackweave.preempt_init(10_000)` (the quantum, in µs) solves this on
 **free-threaded Python** (the GIL-disabled build).  A timer
 thread posts a `Py_AddPendingCall` every quantum; CPython's
 `eval_breaker` check -- already done between bytecodes -- invokes our
@@ -22,7 +23,7 @@ callback, which calls `runloom_sched_yield()` on the running fiber.
 ```python
 import stackweave
 
-stackweave.preempt_init(quantum_us=10_000)    # 10 ms slices
+stackweave.preempt_init(10_000)    # quantum_us: 10 ms slices
 
 def hog():
     total = 0
@@ -33,7 +34,7 @@ def hog():
 def chatty():
     for i in range(50):
         print("chatty tick", i)
-        stackweave.sched_sleep(0.01)
+        stackweave.sleep(0.01)
 
 stackweave.fiber(hog)
 stackweave.fiber(chatty)
@@ -88,21 +89,15 @@ This is the same limitation Go has with cgo: while you're in C, the
 scheduler can't preempt you.  Most stdlib functions release frequently
 enough that this isn't noticeable in practice.
 
-### Free-threaded only
+### Main-thread scheduler only
 
-stackweave only builds on free-threaded CPython 3.14+.  The preemption
-path relies on the M:N hub model and `Py_AddPendingCall` having a
-fast path that's safe across hubs.  If the GIL has been re-enabled at
-runtime (`PYTHON_GIL=1`) and you want time-slicing anyway, sprinkle
-`stackweave.sched_yield_classic()` calls into your hot loops.  Crude
-but works.
-
-### Per-thread, not per-process
-
-`preempt_init` configures preemption for the calling OS thread's
-scheduler.  Under the M:N hub model, each hub thread runs its own
-scheduler; preemption needs to be initialised on each.  The
-`mn_init`/`mn_fiber` path handles this automatically.
+`preempt_init` starts one process-wide timer, and `Py_AddPendingCall`
+runs its callbacks on the main thread only, so it time-slices the
+single-thread scheduler driven from the main thread -- with the GIL off
+or re-enabled at runtime (`PYTHON_GIL=1`) -- but not a `run(1)` on
+another thread, and never M:N hub threads.  Under the M:N hub model you
+don't call it at all: M:N runs are preempted by the sysmon watchdog
+instead (see [Combining with M:N](#combining-with-mn)).
 
 ## Stopping preemption
 
@@ -126,7 +121,7 @@ leave it on after `preempt_init`.
   fibers.
 
 ```python
-stackweave.preempt_init(quantum_us=1_000)
+stackweave.preempt_init(1_000)     # quantum_us (positional only)
 ```
 
 ## When to use preemption
@@ -145,13 +140,18 @@ stackweave.preempt_init(quantum_us=1_000)
 - You're benchmarking the cooperative baseline and don't want the
   jitter from quantum-driven yields.
 
-The default for stackweave is *no preemption*, which matches Go's behaviour
-pre-1.14.  Opt into preemption when you actually need it.
+The single-thread default is *no preemption*, which matches Go's behaviour
+pre-1.14.  Opt into preemption when you actually need it.  (M:N always
+preempts -- see below.)
 
 ## Combining with M:N
 
-If you've called `mn_init(8)` to run 8 hub threads, preemption
-applies per-hub.  Each hub's currently-running fiber gets
+Under M:N (`run(8, ...)`, or `mn_init(8)`) preemption is always on,
+with no opt-out, and `preempt_init` is not involved -- its timer does
+not preempt fibers on hub threads.  The sysmon watchdog thread preempts
+any fiber that has been running Python on its hub for longer than the
+time slice, `STACKWEAVE_PREEMPT_MS` (default: the 50 ms sysmon wedge
+budget, `STACKWEAVE_SYSMON_MS`).  Each hub's currently-running fiber gets
 preempted independently.  Two CPU-bound fibers on different hubs
 will both make progress without needing to yield to each other
 (they're on different OS threads); preemption keeps any single hub
