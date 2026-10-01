@@ -20,9 +20,13 @@ Each scenario runs in a fresh subprocess so a lost fiber or a wedged hub is a
 clean timeout rather than a hung pytest, and so one scenario's leak cannot
 leak into the next.
 
-Nine gaps are closed (their docstrings start "Was a gap").  The three that
-remain are strict xfails under TODO_MIGRATION_FAIL: OS-thread-identity checks
-that live in C or in importlib and need a pin or a monkey patch.  A strict
+Nine gaps are closed (their docstrings start "Was a gap").  The five that
+remain are strict xfails under TODO_MIGRATION_FAIL: three OS-thread-identity
+checks that live in C or in importlib and need a pin or a monkey patch, one
+refcount loss (a memoryview's managed buffer released while still referenced
+after the fiber holding it migrates), and one wake-latency gap (a hub whose
+per-hub pending count has drifted to <= 0 naps through the wakes aimed at
+it).  A strict
 xfail still runs, and flips to a hard XPASS failure the moment its gap is
 closed.  The cost of one PyThreadState per fiber (gc.collect() per parked
 fiber, RSS per parked fiber, spawn) was bounded against the per-hub
@@ -632,6 +636,74 @@ stackweave.run(4, main)
 
 
 @TODO_MIGRATION_FAIL(
+    'a memoryview slice held across a park in a migrating fiber finds the view\'s '
+    'managed buffer already released: a lost incref / extra decref on migration '
+    '(~1 per 30-50 cross-hub moves at H=8 on arm64 macOS); root cause open')
+def test_memory_memoryview_slice_survives_a_migration():
+    """Known gap: 64 ping-pong pairs at H=8; each pinger holds `view[0:]` of
+    its own memoryview across the channel park, then drops it.  After enough
+    cross-hub moves one of them finds `view` unusable ("operation forbidden on
+    released memoryview object"): the _PyManagedBuffer both views share hit
+    refcount zero while `view` still referenced it -- a use-after-free, which
+    the RELEASED flag merely makes visible.  No I/O, no GC needed (it
+    reproduces with gc disabled and with PYTHON_TLBC=0), and none at H=2
+    where no fiber moves.  Runs batches until MOVES_WANTED OS-thread moves
+    were seen so a pass means the gap is really closed, not unexercised.
+    """
+    assert_pass(r'''
+_watchdog(50)
+PAIRS, ROUNDS, MOVES_WANTED, BUDGET_S = 64, 4000, 3000, 30
+state = {"errors": [], "moves": 0}
+def batch():
+    wg = stackweave.WaitGroup()
+    wg.add(PAIRS)
+    for _ in range(PAIRS):
+        a, b = stackweave_c.Chan(0), stackweave_c.Chan(0)
+        def ponger(a=a, b=b):
+            while True:
+                v, ok = a.recv()
+                if not ok:
+                    return
+                b.send(v)
+        def pinger(a=a, b=b):
+            view = memoryview(bytearray(64))
+            tid = threading.get_ident()
+            try:
+                for r in range(ROUNDS):
+                    sl = view[0:]
+                    a.send(r)
+                    b.recv()
+                    del sl
+                    t = threading.get_ident()
+                    if t != tid:
+                        state["moves"] += 1
+                        tid = t
+            except ValueError as e:
+                state["errors"].append("round %d: %s" % (r, e))
+            finally:
+                a.close()
+                wg.done()
+        stackweave.fiber(ponger)
+        stackweave.fiber(pinger)
+    wg.wait()
+def main():
+    t0 = time.monotonic()
+    while (not state["errors"] and state["moves"] < MOVES_WANTED
+           and time.monotonic() - t0 < BUDGET_S):
+        batch()
+    print("moves=%d errors=%d %s" % (state["moves"], len(state["errors"]),
+                                      state["errors"][:1]), flush=True)
+    # A released view only ever follows a move, so an error proves migration.
+    require_migration(state["errors"] or state["moves"] >= 100)
+    assert not state["errors"], (
+        "%d pinger(s) found their memoryview released after a migration: %s"
+        % (len(state["errors"]), state["errors"][0]))
+    print("PASS", flush=True)
+stackweave.run(8, main)
+''', timeout=90)
+
+
+@TODO_MIGRATION_FAIL(
     'importlib._ModuleLock keys on _thread.get_ident() at Python level; fix is a fiber-aware get_ident behind monkey.patch() (gevent-style)')
 def test_identity_module_import_lock_releases_after_a_migration():
     """Known gap: importlib's _ModuleLock keys its owner on
@@ -690,6 +762,72 @@ def main():
     print("PASS", flush=True)
 stackweave.run(4, main)
 ''')
+
+
+@TODO_MIGRATION_FAIL(
+    'per-hub pending drifts under migration (spawn +1 on the placement hub, completion '
+    '-1 wherever the fiber finished); an idle hub whose own count is <= 0 takes the '
+    'bare uninterruptible nap in hub_main instead of the signalled idle-condvar wait, '
+    'so a pinned wake / mn_fiber(hub=N) aimed at it waits out the 100-500 us nap')
+def test_sched_pinned_wake_is_prompt_after_pending_drifts():
+    """Known gap: after one unpinned workload the per-hub `pending` counters
+    no longer describe what each hub owns (only their SUM is exact), and a hub
+    whose own count is <= 0 idles in runloom_sleep_ns, which neither
+    hub_submit's idle_cond signal nor the pump kick can interrupt.  A ping-pong
+    between fibers pinned to hubs 0 and 1 is ~20x slower on such a pool than on
+    a fresh one (7.5k vs 140k round-trips/s on an M5).  Compared against a
+    fresh pool in the same process so a slow runner shifts both sides.
+    """
+    assert_pass(r'''
+_watchdog(50)
+def pingpong_p50_us(n):
+    a, b = stackweave_c.Chan(0), stackweave_c.Chan(0)
+    lat = []
+    def pinger():
+        for i in range(n):
+            t0 = time.perf_counter_ns()
+            a.send(i)
+            b.recv()
+            lat.append(time.perf_counter_ns() - t0)
+    def ponger():
+        for _ in range(n):
+            v, _ = a.recv()
+            b.send(v)
+    stackweave_c.mn_fiber(pinger, hub=0)
+    stackweave_c.mn_fiber(ponger, hub=1)
+    stackweave_c.mn_run()
+    lat.sort()
+    return lat[len(lat) // 2] / 1e3
+def drift(n=16):
+    # Deterministic: spawned on hub 0 (+1 there), re-pinned to hub 1 and woken,
+    # so they finish on hub 1 (-1 there) -- what random placement does to some
+    # hub after any unpinned workload.
+    ch = stackweave_c.Chan(0)
+    def mover():
+        stackweave_c.current_g().pin(1)
+        ch.recv()
+    def feeder():
+        stackweave_c.sched_sleep(0.01)   # movers park first, or they never move
+        for _ in range(n):
+            ch.send(1)
+    for _ in range(n):
+        stackweave_c.mn_fiber(mover, hub=0)
+    stackweave_c.mn_fiber(feeder, hub=2)
+    stackweave_c.mn_run()
+stackweave_c.mn_init(4)
+fresh = pingpong_p50_us(2000)
+drift()
+pending = [h["pending"] for h in stackweave_c.mn_hub_states()]
+drifted = pingpong_p50_us(2000)
+stackweave_c.mn_fini()
+print("round-trip p50: fresh %.1f us, drifted %.1f us, per-hub pending %s"
+      % (fresh, drifted, pending), flush=True)
+require_migration(pending[1] < 0)
+assert drifted < max(50.0, 3 * fresh), (
+    "pinned cross-hub round-trip p50 %.0f us on a drifted pool vs %.0f us fresh"
+    % (drifted, fresh))
+print("PASS", flush=True)
+''', timeout=90)
 
 
 def test_sched_foreign_thread_wake_reaches_a_shallow_idle_hub_promptly():
