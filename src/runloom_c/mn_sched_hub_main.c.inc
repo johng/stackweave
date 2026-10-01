@@ -128,6 +128,12 @@ static int runloom_idle_backoff_cap_ms(void)
     return cur;
 }
 
+/* Longest idle-condvar wait a hub takes while NOT registered for WAKEP (see
+ * the cap at the condvar wait in hub_main).  It bounds how long stealable
+ * surplus on a busy hub's deque goes unnoticed by an idle hub that has been
+ * idle for under ~0.7ms; past that the hub registers and is kicked instead. */
+#define RUNLOOM_IDLE_UNREG_WAIT_NS 200000LL
+
 /* Idle-backoff ceiling (ns): how deep an idle hub may back off.  Just the
  * configured cap; 0 when disabled (cap<=1ms).  Hang-safety at ANY cap does NOT
  * come from clamping the cap -- it comes from making every wake that can target
@@ -898,7 +904,9 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                 parked = runloom_netpoll_parked_count();
                 /* WAKEP (park double-check): idle_ns is now final.  Only a DEEP
                  * wait (past ~2ms, where re-poll is too slow to catch surplus on
-                 * its own) needs the registry; a short poll re-scans soon enough.
+                 * its own) needs the registry; a short poll re-scans soon enough
+                 * (the idle-condvar wait caps an unregistered wait at
+                 * RUNLOOM_IDLE_UNREG_WAIT_NS so that stays true under backoff).
                  * Register, then re-scan: if stealable work raced in between our
                  * failed steal above and the flag-set, do a non-blocking pass
                  * (idle_ns=0) and re-loop to run it.  Pairs with a producer's
@@ -1127,6 +1135,28 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                     } else {
                         int waited = 0;
                         int have_sub;
+                        /* An UNREGISTERED wait (idle_ns <= 2ms, so no
+                         * park_enter above) is reached by hub_submit and the
+                         * run-queue kick but NOT by WAKEP, so stealable surplus
+                         * on another hub's deque -- a local wake onto a hub
+                         * whose fiber keeps running, or fresh gs it drained --
+                         * waits out the whole wait.  The backoff makes those
+                         * waits 0.4/0.8/1.6ms in a row, so an idle hub spent
+                         * its first ~3ms of idleness up to 1.6ms deaf to
+                         * surplus (H=2 steal p90 ~1.8ms vs ~0.55ms with the old
+                         * 500us nap).  Cap them at RUNLOOM_IDLE_UNREG_WAIT_NS.
+                         * Each capped wait still advances idle_streak, so the
+                         * hub reaches the registered (> 2ms) waits after ~0.7ms
+                         * of idleness instead of ~3ms, and from there a WAKEP
+                         * kick reaches it at once.  Registering EVERY wait
+                         * instead fixes this case too but makes every local wake
+                         * kick a hub that then steals the wakee from its owner:
+                         * measured ~7x slower unpinned ping-pong at H=4 and 2-3x
+                         * slower fan-out.  Only with the backoff on: off, idle_ns
+                         * is already <= 100us whenever any work is pending. */
+                        if (!wakep_registered && runloom_idle_backoff_cap_ms() > 1 &&
+                            idle_ns > RUNLOOM_IDLE_UNREG_WAIT_NS)
+                            idle_ns = RUNLOOM_IDLE_UNREG_WAIT_NS;
                         if (idle_ns <= 0) idle_ns = 1;
                         /* No netpoll/iouring work: wait on this hub's idle
                          * condvar, TIMED at idle_ns and ANNOUNCED via
