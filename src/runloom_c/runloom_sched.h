@@ -76,7 +76,8 @@ typedef struct runloom_pystate_snap runloom_pystate_snap_t;
  * chunk-alloc RESERVE (RUNLOOM_STACKPROT_RESERVE_MIN = 96KB) and a usable recursion
  * window fit (eff = 256 - 96 = 160KB usable).
  *
- * Sanitizer builds (plat.h RUNLOOM_SANITIZED) floor at 1 MiB instead.  They run
+ * Sanitizer builds (plat.h RUNLOOM_SANITIZED -- ASan as well as TSan) floor at
+ * 1 MiB instead.  They run
  * under a sanitizer-built CPython (docs/dev/TSAN.md), whose frames are inflated by
  * instrumentation and whose stack margin doubles (_PyOS_STACK_MARGIN_BYTES 32KB,
  * _PyOS_MIN_STACK_SIZE 192KB under TSan): at 256KB an ordinary deep import chain

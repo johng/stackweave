@@ -43,6 +43,13 @@
  *                      resumed() [finish_switch relearn hub bounds] (post-swap)
  *   FIRST   (g entry): first_entry() [finish_switch(NULL) -> learn hub bounds]
  *   EXIT    (g done):  abandon() [tsan switch to hub; start_switch(NULL)=discard]
+ *
+ * TSan fiber lifetime: ONE fiber per goroutine lifetime, never per coro.  enter()
+ * creates it lazily; left() destroys it once the coro is done (runloom_asm_entry
+ * never returns, so its __tsan_func_entry is never paired, and a fiber kept for
+ * the pooled coro's next goroutine would gain one dead shadow-stack frame per
+ * lifetime); runloom_coro_destroy() destroys it on BOTH the pool-recycle and the
+ * true-free path, which covers a coro recycled before its body finished.
  */
 #ifndef RUNLOOM_FIBER_SAN_H
 #define RUNLOOM_FIBER_SAN_H
@@ -128,7 +135,7 @@ struct runloom_asm_coro;
  * whose backing memory is not calloc'd (placement/arena coros). */
 static inline void runloom_fibersan_zero(struct runloom_asm_coro *a);
 
-/* Free the TSan fiber (true coro free, NOT pool recycle). */
+/* Free the TSan fiber if there is one (goroutine done, coro pooled or freed). */
 static inline void runloom_fibersan_destroy(struct runloom_asm_coro *a);
 
 /* hub -> goroutine */
