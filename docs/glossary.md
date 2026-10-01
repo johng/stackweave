@@ -49,13 +49,16 @@ uses Go's **randomOrder**: each hub starts at its own id and steps by a stride
 coprime with the hub count, so every victim is visited exactly once and K idle
 hubs don't all hammer hub 0's CAS in lockstep.
 
-**global runq** — a process-wide queue that any hub drains. Every M:N run
-routes *woken* fibers here, so a fiber woken while its origin hub is blocked
-resumes on another hub instead of stranding.
+**global runq** — a process-wide queue that any hub drains. A *woken* fiber
+lands here when its waker has no deque of its own (a non-hub thread), when it
+is pinned, or when the waker's deque is full; otherwise it goes on the
+waker's own deque (**local wake**, Go-style) where any idle hub can steal
+it. Either way a fiber woken while its origin hub is blocked resumes on
+another hub instead of stranding.
 
 **submission list** (`runloom_mn_hub_submit`) — a hub's owner-drained inbox.
 Nothing else drains it, so work that lands here strands if its hub blocks;
-woken fibers bypass it for the global runq.
+woken fibers bypass it for a deque or the global runq.
 
 **park / unpark** — a fiber suspending until some event (fd readiness, a
 channel, a timer), and being made runnable again. `wake_g` is the wake path.
@@ -89,10 +92,12 @@ hub tstate's attach state:
   work-stealing already drains its fresh fibers.
 - *SUSPENDED* — parked by a stop-the-world (GC).
 
-**preemption** — the explicit time-slicer, `preempt_init(quantum_us)`, posts a
-pending call every quantum that yields the running fiber. The M:N scheduler
-has no wall-clock preemption: migration mode stands it down, so a fiber that
-never yields keeps its hub until it does.
+**preemption** — under M:N, always on: sysmon preempts an *ATTACHED* fiber
+that has run past the time slice (`STACKWEAVE_PREEMPT_MS`, default the 50 ms
+wedge budget), so a fiber that never yields cannot keep its hub. The
+single-thread scheduler has the explicit time-slicer instead,
+`preempt_init(quantum_us)`, which posts a pending call every quantum that
+yields the running fiber.
 
 **strand** — work that can never run because the only thing that would schedule
 it is itself blocked. The failure mode this codebase worries about most.
@@ -190,9 +195,10 @@ would turn a benign race into a SIGSEGV.
 
 ## Testing and verification
 
-**check_all_fast.sh / check_all_extensive.sh** — the local merge gates (there is
-no hosted CI, deliberately). Fast runs before any merge; extensive before a
-risky one.
+**check_all_fast.sh / check_all_extensive.sh** — the local merge gates. Fast
+runs before any merge; extensive before a risky one. Hosted CI
+(`.github/workflows/ci.yml`) runs only a cheap subset on push/PR, so it does
+not replace them.
 
 **run_isolated.py** — runs one test file per subprocess. In-process `pytest
 tests/` flakes on cross-file state leaks.
@@ -214,7 +220,10 @@ scheduler bugs that change *results* rather than crashing.
 **DST / mn-sim** — deterministic simulation testing: a seeded, controlled
 scheduler that replays an exact interleaving. Work-stealing and wall-clock
 ordering are disabled while armed, since either would make replay
-non-deterministic.
+non-deterministic. The M:N controller is currently disabled: woken fibers run
+from the global runq, which the seeded baton does not order, so `mn_init`
+refuses a seeded run (`STACKWEAVE_MN_SEED` / `STACKWEAVE_SIM_MN`) and the
+controller only compiles with `RUNLOOM_MN_CTRL`.
 
 **lincheck** *(inferred from the phase name)* — linearizability checking of the
 concurrent data structures.

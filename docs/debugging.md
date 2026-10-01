@@ -136,7 +136,7 @@ Each dict has:
 **`blocked_at` is best-effort.** It is read from another hub's thread-state, so
 it only fills for a hub that is *stably* DETACHED (a fiber parked in a
 blocking syscall — the owner thread won't touch its frames until the call
-returns) and only when the handoff rescue isn't mid-adoption of that hub. For an
+returns). For an
 **ATTACHED** (CPU) wedge, or when the read can't be taken safely, it is `None` —
 fall back to `stack_cmd`. `py-spy` reads the process out-of-process, so it
 always works and gives the **complete** C + Python stack of *every* thread (the
@@ -228,7 +228,7 @@ unless asked.
 
 Go reports `fatal error: all fibers are asleep - deadlock!` when the
 scheduler runs out of runnable work but fibers are still blocked on each
-other.  stackweave does the same: if the single-thread scheduler quiesces — nothing
+other.  stackweave does the same: if the scheduler quiesces — nothing
 runnable, no timers, no I/O, no offload in flight — while fibers are still
 parked on a channel or a `park`, those fibers can never be woken, so it
 reports the deadlock with a fiber dump:
@@ -252,7 +252,8 @@ gi.set_deadlock_mode("raise")   # raise RuntimeError out of run()
 gi.set_deadlock_mode("off")     # do nothing
 ```
 
-This applies to the single-thread scheduler (which `stackweave.aio` uses).  A clean `stackweave.aio` shutdown
+This applies to the single-thread scheduler (which `stackweave.aio` uses) and to
+M:N runs, where `mn_run()` takes the same census across every hub.  A clean `stackweave.aio` shutdown
 goes through `sched_stop`, which is **excluded**, so a normal loop teardown
 with pending background tasks never trips the detector — only a genuine
 "everyone is blocked, nothing can make progress" quiescence does.

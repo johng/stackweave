@@ -54,9 +54,12 @@ Each hub thread:
   bottom when their own deque is empty.
 - Has a per-hub MPSC submission queue for external producers
   (so `mn_fiber` from outside any hub doesn't race the deque owner).
-- Routes fibers back to the originating hub on yield/sleep/I/O
-  wake -- this preserves locality (the fiber's per-thread cache
-  warms one hub, not all of them).
+- Pushes a fiber it wakes (sleep/I/O/channel) onto its **own** deque
+  -- Go-style local wake: the data the waker just touched is what the
+  fiber reads next -- where any idle hub may steal it.  Wakes from
+  outside any hub go to a process-wide global run-queue.  Every fiber
+  owns its own `PyThreadState`, so it resumes on whichever hub picks
+  it up.
 
 When a hub has no work and no other hub does either, the hub
 blocks on a condition variable.  Wakes happen when:
@@ -98,11 +101,10 @@ stackweave.mn_fini()
 
 On Linux and macOS/BSD each hub polls its **own** epoll/kqueue set, and the
 parker bookkeeping is per-hub too (the per-hub parker pool), as is the io_uring
-ring each hub creates when `STACKWEAVE_TCPCONN_IOURING` is on.  Goroutines parked
-on I/O wake on the hub that submitted the
-parking call -- the parker records its origin hub and the pump routes the wake
-back there.  This means your accept loop and connection handlers stay on the same
-hub by default, which is good for cache locality:
+ring each hub creates when `STACKWEAVE_TCPCONN_IOURING` is on.  A goroutine
+woken by I/O goes onto the deque of the hub whose poller saw the event (the
+local wake above), so it usually resumes there with a warm cache -- but it
+stays stealable, so a busy hub never holds it back:
 
 ```python
 import socket, stackweave
@@ -140,7 +142,8 @@ by four different hub threads simultaneously (subject to scheduling).
   MPSC queue + work-steal-eligible push.  Comparable to single-thread
   `go`.
 - **Yield**: per-hub yield is the same ~80 ns swap.  No cross-thread
-  synchronisation on yield since fibers stay on their origin hub.
+  synchronisation on yield: a yielded fiber goes back on its current
+  hub's local FIFO.
 - **Steal**: ~1 µs to steal from another hub's deque (atomic CAS on
   the deque bottom).  Happens only when the local deque is empty.
 - **Wake**: ~3 µs to wake a hub blocked on its CV.
@@ -153,14 +156,15 @@ dominated by the actual work.
 
 ## Pairing with preemption
 
-[Time-sliced preemption](preemption.md) works with M:N -- each hub has
-its own preemption timer.  If you've got a fiber that doesn't
-yield naturally, preemption applies on whichever hub it's running on
-without affecting the others.
+[Time-sliced preemption](preemption.md) is always on under M:N and
+needs no `preempt_init` call: the sysmon watchdog thread preempts a
+fiber that has been running Python on its hub for longer than the time
+slice, on whichever hub it's running on, without affecting the others.
+The slice is `STACKWEAVE_PREEMPT_MS` (default: the 50 ms sysmon wedge
+budget, `STACKWEAVE_SYSMON_MS`):
 
-```python
-stackweave.mn_init(n=8)
-stackweave.preempt_init(quantum_us=10_000)
+```sh
+STACKWEAVE_PREEMPT_MS=10 python app.py    # 10 ms slices instead of 50 ms
 ```
 
 ## Caveats
@@ -244,12 +248,12 @@ exception up at the fiber's resume point. The reservation happens *before* the
 parker is claimed, so a target that is already holding a signal costs nothing --
 claiming first and then finding the slot busy would leave a fiber parked forever.
 
-### Goroutine routing back to origin hub
+### Goroutines do not wait for their origin hub
 
 If fiber A on hub 1 parks for I/O, and the I/O wake fires while
-hub 1 is busy, A waits for hub 1 to be free -- even if hub 2 is idle.
-This preserves locality at the cost of some load balance.  In
-practice this evens out under steady load.
+hub 1 is busy, A does not wait for hub 1: the woken fiber sits on a
+stealable deque (or the global run-queue), so an idle hub 2 takes it
+and resumes it there.  Locality is the default, not a constraint.
 
 ## Inspecting hub state
 

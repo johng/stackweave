@@ -36,13 +36,15 @@ routes through it cooperates transparently.  e.g. `urllib`/`http.client`/
 | `queue.Queue`/`SimpleQueue`/Lifo/Priority | **COOP** | built on the cooperative Condition |
 | `context.WithCancel`/`WithTimeout`/`WithDeadline` | **COOP** | deadline timer on the active scheduler |
 | regular-file buffered reads | **FAST** locally | block only on slow media (NFS/FUSE); `open()` syscall is offloaded |
-| GIL-releasing C blockers (`sqlite3`, `ctypes` I/O, `getrandom`) | **COOP*** | rescued by the sysmon handoff after ~50 ms; use `offload()` to avoid the latency |
+| GIL-releasing C blockers (`sqlite3`, `ctypes` I/O, `getrandom`) | **COOP*** | blocks only its own hub; other hubs steal its deque and run fibers woken meanwhile; use `offload()` to keep the hub free |
 | GIL-holding CPU (pure-Python loops, CPython-C aggregations) | **STALL** | fundamental — relocate via `offload()`/the `heavy` pattern |
 | `multiprocessing` fork start-method | **deadlock** | use `spawn`/`forkserver` |
 | `concurrent.futures.ProcessPoolExecutor` | **unsupported** | use the fiber-backed `ThreadPoolExecutor` |
 
-`*` Handoff makes GIL-releasing C calls cooperative without an explicit patch:
-the hub goes DETACHED, a rescue thread adopts it (~50 ms), other fibers run.
+`*` Work-stealing makes GIL-releasing C calls cooperative without an explicit
+patch: the hub goes DETACHED, idle hubs steal the fibers waiting on its deque, and a
+fiber woken meanwhile resumes on another hub.  (The ~50 ms handoff-rescue thread
+this table used to cite was removed in cbd40067 as unsound and redundant.)
 
 ## Fat C frames vs the fiber stack (select, ssl)
 

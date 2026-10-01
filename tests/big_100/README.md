@@ -57,8 +57,13 @@ end and the orchestrator exits nonzero if any project failed.
 ## Findings
 
 Building and running the campaign surfaced **10 real bugs/limitations** in the
-extension — see [FINDINGS.md](FINDINGS.md) for the full writeups with repros.
-Headlines:
+extension. The full writeups (FINDINGS.md) were not carried into this tree.
+Headlines, as recorded at the time:
+
+> **Note (2026-10-01):** the handoff rescue behind #2 was removed (cbd40067),
+> so `--handoff` / `STACKWEAVE_HANDOFF` no longer do anything. M:N has since
+> become migration-only (#23); re-check a finding against the current tree
+> before relying on it.
 
 - **#1 (fixed):** `monkey.patch()` broke every `stackweave.fiber()` (the wrapper
   dropped the stack-size positional arg). Fixed in `src/stackweave/monkey/`.

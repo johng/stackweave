@@ -1,6 +1,7 @@
 # Time-sliced preemption
 
-By default, stackweave fibers are **cooperative** -- they yield only when
+Under the single-thread scheduler (`run(1)`), stackweave fibers are
+**cooperative** by default -- they yield only when
 they explicitly call `sched_yield`, sleep, or block on I/O.  If you
 write a tight CPU loop with no yield, that fiber monopolises the
 scheduler until it returns.
@@ -100,9 +101,9 @@ but works.
 ### Per-thread, not per-process
 
 `preempt_init` configures preemption for the calling OS thread's
-scheduler.  Under the M:N hub model, each hub thread runs its own
-scheduler; preemption needs to be initialised on each.  The
-`mn_init`/`mn_fiber` path handles this automatically.
+scheduler.  Under the M:N hub model you don't call it at all: M:N runs
+are preempted by the sysmon watchdog instead (see
+[Combining with M:N](#combining-with-mn)).
 
 ## Stopping preemption
 
@@ -145,13 +146,18 @@ stackweave.preempt_init(quantum_us=1_000)
 - You're benchmarking the cooperative baseline and don't want the
   jitter from quantum-driven yields.
 
-The default for stackweave is *no preemption*, which matches Go's behaviour
-pre-1.14.  Opt into preemption when you actually need it.
+The single-thread default is *no preemption*, which matches Go's behaviour
+pre-1.14.  Opt into preemption when you actually need it.  (M:N always
+preempts -- see below.)
 
 ## Combining with M:N
 
-If you've called `mn_init(8)` to run 8 hub threads, preemption
-applies per-hub.  Each hub's currently-running fiber gets
+Under M:N (`run(8, ...)`, or `mn_init(8)`) preemption is always on,
+with no opt-out, and `preempt_init` is not involved -- its timer does
+not preempt fibers on hub threads.  The sysmon watchdog thread preempts
+any fiber that has been running Python on its hub for longer than the
+time slice, `STACKWEAVE_PREEMPT_MS` (default: the 50 ms sysmon wedge
+budget, `STACKWEAVE_SYSMON_MS`).  Each hub's currently-running fiber gets
 preempted independently.  Two CPU-bound fibers on different hubs
 will both make progress without needing to yield to each other
 (they're on different OS threads); preemption keeps any single hub

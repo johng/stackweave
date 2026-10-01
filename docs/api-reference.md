@@ -218,9 +218,8 @@ renders the table — see [debugging.md](debugging.md#what-is-each-hub-doing-hub
 #### `fiber_stack(id) → (callable_repr, [(file, line, func), ...])`
 
 Best-effort reconstructed Python stack of one fiber (deepest first).
-Full stack under the single-thread scheduler (`stackweave.aio`) and per-g-tstate
-M:N; withheld under default M:N (no safe way to freeze a hub-resumable
-fiber).
+Full stack under the single-thread scheduler (`stackweave.aio`) and under
+M:N, where every fiber owns a thread-state that is claimed for the walk.
 
 #### `dump_fibers(fd=2) → None`
 

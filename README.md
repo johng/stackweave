@@ -82,7 +82,8 @@ off stock CPython. **No runtime dependencies.**
 - **Hand-rolled asm context switch** (x86_64 SysV, aarch64) — ~80 ns/swap, no
   syscall; POSIX `ucontext` fallback.
 - **M:N work-stealing scheduler** — Chase-Lev deque per hub, per-hub MPSC
-  submission, woken goroutines routed back to their origin hub.
+  submission; a woken goroutine lands on its waker's deque (Go-style local
+  wake) or a global run-queue and resumes on whichever hub takes it.
 - **Per-goroutine `PyThreadState` snapshot** — cframe, datastack, exc_info,
   contextvars, recursion; a million yielded goroutines share their hub threads
   with no frame-chain cliff.
