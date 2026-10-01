@@ -15,6 +15,7 @@ Goals:
       STACKWEAVE_BACKEND=ucontext   force ucontext on POSIX even if asm is available
       STACKWEAVE_NO_ASM=1           same as above
       STACKWEAVE_DEBUG=1            -O0 -g
+      STACKWEAVE_TSAN=1             ThreadSanitizer build (docs/dev/TSAN.md)
       STACKWEAVE_EXTRA_CFLAGS=...   appended to compile args
       STACKWEAVE_EXTRA_LDFLAGS=...  appended to link args
       CC, CXX                 picked up by setuptools as usual
@@ -107,6 +108,12 @@ STACKWEAVE_CTXCHECK_ABORT = os.environ.get("STACKWEAVE_CTXCHECK_ABORT", "").stri
 # watchpoints (item #8): a cheap sampling data-race detector for soak scale where
 # TSan is too slow.  Debug lane only -- zero cost in a normal build.
 STACKWEAVE_KCSAN = os.environ.get("STACKWEAVE_KCSAN", "").strip() not in ("", "0", "no", "false")
+# STACKWEAVE_TSAN=1 builds the extension under ThreadSanitizer (-fsanitize=thread
+# -O1 -g, frame pointers kept).  The fiber annotations in runloom_fiber_san.h
+# switch on by themselves from __has_feature(thread_sanitizer); this knob only
+# spells the flags once.  Run the result under a --with-thread-sanitizer
+# interpreter (docs/dev/TSAN.md).  Debug lane only -- off, the build is unchanged.
+STACKWEAVE_TSAN = os.environ.get("STACKWEAVE_TSAN", "").strip() not in ("", "0", "no", "false")
 # STACKWEAVE_NETPOLL=select forces the select() fallback at build time
 # (suppresses epoll/kqueue/event_ports in plat.h so netpoll.c uses its
 # select path).
@@ -242,6 +249,10 @@ def detect_compile_args():
         args.append("-DRUNLOOM_COVER=1")
     if STACKWEAVE_FORCE_STACKGROW:
         args.append("-DRUNLOOM_FORCE_STACKGROW=1")
+    if STACKWEAVE_TSAN:
+        # After the -O level above so -O1 wins: TSan's own recommendation, and
+        # it keeps report stacks readable without changing which accesses race.
+        args += ["-fsanitize=thread", "-g", "-O1", "-fno-omit-frame-pointer"]
     args += STACKWEAVE_EXTRA_CFLAGS
     return args
 
@@ -266,6 +277,8 @@ def detect_link_args():
 def detect_link_flags():
     """Extra linker flags (not libraries)."""
     flags = []
+    if STACKWEAVE_TSAN:
+        flags.append("-fsanitize=thread")
     flags += STACKWEAVE_EXTRA_LDFLAGS
     return flags
 

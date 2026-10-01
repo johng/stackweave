@@ -74,8 +74,19 @@ typedef struct runloom_pystate_snap runloom_pystate_snap_t;
  * Fix at fiber CREATION (a fresh empty stack -- NOT a live mid-recursion copy-grow,
  * which is the p212 SEGV hazard): floor the requested size at 256KB, where both the
  * chunk-alloc RESERVE (RUNLOOM_STACKPROT_RESERVE_MIN = 96KB) and a usable recursion
- * window fit (eff = 256 - 96 = 160KB usable). */
-#  define RUNLOOM_FT314_MIN_STACK_SIZE  ((size_t)256 * 1024)
+ * window fit (eff = 256 - 96 = 160KB usable).
+ *
+ * Sanitizer builds (plat.h RUNLOOM_SANITIZED) floor at 1 MiB instead.  They run
+ * under a sanitizer-built CPython (docs/dev/TSAN.md), whose frames are inflated by
+ * instrumentation and whose stack margin doubles (_PyOS_STACK_MARGIN_BYTES 32KB,
+ * _PyOS_MIN_STACK_SIZE 192KB under TSan): at 256KB an ordinary deep import chain
+ * in a fiber raises RecursionError ("Stack overflow (used 144 kB)"), and the
+ * reserved 160KB window is below the interpreter's minimum. */
+#  if defined(RUNLOOM_SANITIZED)
+#    define RUNLOOM_FT314_MIN_STACK_SIZE  ((size_t)1024 * 1024)
+#  else
+#    define RUNLOOM_FT314_MIN_STACK_SIZE  ((size_t)256 * 1024)
+#  endif
 
 /* Clamp a requested per-fiber C-stack size up to the free-threaded-3.14 floor.
  * A no-op (returns the size unchanged) on every other build. */
