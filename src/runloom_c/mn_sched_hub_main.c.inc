@@ -1043,9 +1043,12 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                     have_sub = (h->sub_head != NULL);
                     RUNLOOM_RUNLOCK(&h->sub_lock, RUNLOOM_RANK_HUB_SUB);
                     /* Same Dekker for the multishot inbox: a fiber on another
-                     * hub pushes, fences, then kicks (runloom_loop_ms_post). */
+                     * hub pushes, fences, then kicks (runloom_loop_ms_post).
+                     * And for the sleep-heap purge mailbox: the signal wake
+                     * stores it, fences, then kicks (loop_wake_fd). */
                     if (!have_sub &&
-                        runloom_iouring_loop_inbox_pending(h->iouring_ring))
+                        (runloom_iouring_loop_inbox_pending(h->iouring_ring) ||
+                         __atomic_load_n(&h->sched.sleep_purge, __ATOMIC_ACQUIRE)))
                         have_sub = 1;
                     if (!have_sub) {
                         if (idle_ns <= 0) idle_ns = 1;
@@ -1261,6 +1264,15 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                             (__atomic_load_n(&runloom_global_runq_unpinned_len,
                                              __ATOMIC_ACQUIRE) > 0 ||
                              __atomic_load_n(&h->runq_pinned_n, __ATOMIC_ACQUIRE) > 0))
+                            have_sub = 1;
+                        /* The sleep-heap purge mailbox pairs with this fence
+                         * the same way: runloom_sched_sleep_signal_wake stores
+                         * it, fences, then kicks only an announced hub
+                         * (idle_waiting) -- so a hub that missed that kick must
+                         * see the mailbox here, or the abandoned entry it holds
+                         * waits out a whole idle_ns. */
+                        if (!have_sub &&
+                            __atomic_load_n(&h->sched.sleep_purge, __ATOMIC_ACQUIRE))
                             have_sub = 1;
                         /* The two signallers that do NOT read idle_waiting set
                          * a flag first and then signal under idle_lock, so

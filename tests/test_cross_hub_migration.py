@@ -1231,9 +1231,13 @@ def test_sched_signal_woken_io_sleeper_survives_origin_heap_churn():
     The recipients re-sleep the moment a signal lands, so most deliveries
     leave an abandoned entry due within the recipient's next sleep.  Every
     sleep that returns normally is checked against its deadline, and every
-    churner must finish (a lost heap entry hangs one; a doubled one resumes a
-    fiber twice).  test_sched_only_the_owning_hub_mutates_its_sleep_heap
-    guards the race itself.
+    churner must finish: a lost heap entry strands one, a doubled one resumes
+    a fiber twice.  main stops the itimer while the recipients are still
+    parked and only then lets them go, so no signal is left to escape run()
+    once nobody can take it, and main itself counts the finished churners --
+    a stranded one would otherwise just hang run() into the watchdog.
+    test_sched_only_the_owning_hub_mutates_its_sleep_heap guards the race
+    itself.
     """
     assert_pass(r'''
 import signal
@@ -1242,7 +1246,9 @@ NS, NR, DUR = 64, 8, 3.0
 TOL = 0.0002                    # float rounding between the two clocks' reads
 done = bytearray(NS)
 early = bytearray(NS + NR)      # one slot per fiber: race-free GIL-off
-hits, delivered, completed = [0], [0], [False]
+hits, delivered, finished = [0], [0], [False]
+stop = [False]
+recipients = stackweave.WaitGroup()
 class Tick(Exception): pass
 def handler(signum, frame):
     hits[0] += 1
@@ -1257,45 +1263,55 @@ def churner(i):
             early[i] = min(early[i] + 1, 255)
     done[i] = 1
 def recipient(r):
-    t_end = time.monotonic() + DUR
-    while time.monotonic() < t_end:
-        t0 = time.monotonic()
-        try:
-            stackweave_c.sched_sleep_io(0.01)
-        except Tick:
-            delivered[0] += 1
-            continue
-        if time.monotonic() - t0 < 0.01 - TOL:
-            early[NS + r] = min(early[NS + r] + 1, 255)
+    try:
+        while not stop[0]:
+            t0 = time.monotonic()
+            try:
+                stackweave_c.sched_sleep_io(0.01)
+            except Tick:
+                delivered[0] += 1
+                continue
+            if time.monotonic() - t0 < 0.01 - TOL:
+                early[NS + r] = min(early[NS + r] + 1, 255)
+    finally:
+        recipients.done()
 def main():
+    recipients.add(NR)
     for i in range(NS):
         stackweave.fiber(churner, i)
     for r in range(NR):
         stackweave.fiber(recipient, r)
     stackweave.sleep(0.1)                   # recipients are parked
     signal.setitimer(signal.ITIMER_REAL, 0.001, 0.001)
-    t_end = time.monotonic() + DUR + 0.5
-    while time.monotonic() < t_end:
-        try:
-            stackweave.sleep(t_end - time.monotonic())
-        except Tick:
-            pass
+    stackweave.sleep(DUR)
+    # Stop the source while the recipients still take signals: the main
+    # thread runs handlers on a ~16 ms poll, so one may still be pending.
     signal.setitimer(signal.ITIMER_REAL, 0, 0)
-    completed[0] = True
+    stackweave.sleep(0.2)
+    stop[0] = True
+    recipients.wait()
+    t_end = time.monotonic() + 5.0          # churners end DUR after they start
+    while sum(done) < NS and time.monotonic() < t_end:
+        stackweave.sleep(0.01)
+    if sum(done) < NS:                      # run() would never return: say why
+        print("LOST %d of %d churners: a sleeper was never woken"
+              % (NS - sum(done), NS), flush=True)
+        os._exit(4)
+    finished[0] = True
 try:
     stackweave.run(4, main)
 except Tick:
     signal.setitimer(signal.ITIMER_REAL, 0, 0)
-print("signals=%d delivered into io-sleepers=%d run completed=%s finished %d/%d "
-      "churners, sleeps cut short: churners %d recipients %d"
-      % (hits[0], delivered[0], completed[0], sum(done), NS,
+print("signals=%d delivered into io-sleepers=%d main finished=%s churners %d/%d, "
+      "sleeps cut short: churners %d recipients %d"
+      % (hits[0], delivered[0], finished[0], sum(done), NS,
          sum(early[:NS]), sum(early[NS:])), flush=True)
 # Handlers run on the main thread's ~16 ms poll; a loaded CI runner starves
 # that poll, so the floor is a fraction of the ~180 deliveries an idle box gets.
 assert delivered[0] >= 20, "only %d signals reached a parked io-sleeper" % delivered[0]
 assert not any(early), "%d sleeps returned before their deadline" % sum(early)
-if completed[0]:
-    assert sum(done) == NS, "%d sleepers lost" % (NS - sum(done))
+assert finished[0], "a signal escaped run() before main counted the churners"
+assert sum(done) == NS, "%d sleepers lost" % (NS - sum(done))
 print("PASS", flush=True)
 ''')
 

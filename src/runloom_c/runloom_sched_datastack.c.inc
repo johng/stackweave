@@ -413,8 +413,8 @@ static void runloom_sleep_owner_check(const runloom_sched_t *s, const char *op)
             runloom_sleep_owner_check((s), (op));                            \
     } while (0)
 
-/* ---- Sleep heap (min-heap by (wake_at, sleep_seq)) ----
- * The sleep_seq tiebreak makes equal-deadline sleepers wake in FIFO insertion
+/* ---- Sleep heap (min-heap by (wake_at, seq)) ----
+ * The entry's seq tiebreak makes equal-deadline sleepers wake in FIFO insertion
  * order, matching asyncio's (when, seq) TimerHandle ordering.  Without it,
  * two coros sleeping the same duration but started a tick apart could wake in
  * the wrong relative order (observed breaking equal-timeout races, e.g.
@@ -441,9 +441,10 @@ static int runloom_sleep_grow(runloom_sched_t *s)
     return 0;
 }
 
-/* Push g's current sleep: g->wake_at, g->sleep_real and g->sleep_ticket, which
- * the caller has just set on this thread, are copied into the entry.  A hub
- * caller takes the entry's ref on g first, and drops it if this fails. */
+/* Push g's current sleep: g->wake_at, g->sleep_real, g->sleep_io and
+ * g->sleep_ticket, which the caller has just set on this thread, are copied
+ * into the entry.  A hub caller takes the entry's ref on g first, and drops it
+ * if this fails. */
 static int runloom_sleep_push(runloom_sched_t *s, runloom_g_t *g)
 {
     Py_ssize_t i;
@@ -457,6 +458,7 @@ static int runloom_sleep_push(runloom_sched_t *s, runloom_g_t *g)
     e.g          = g;
     e.ticket     = __atomic_load_n(&g->sleep_ticket, __ATOMIC_RELAXED);
     e.sleep_real = g->sleep_real;
+    e.sleep_io   = g->sleep_io;
     /* relaxed-atomic: the deadlock census (mn_has_wakeable_work) reads sleep_size
      * cross-thread; single-writer (the owning hub).  See runloom_sched_ready_empty. */
     __atomic_store_n(&s->sleep_size, s->sleep_size + 1, __ATOMIC_RELAXED);
@@ -679,6 +681,13 @@ int runloom_sched_sleep_signal_wake(PyObject *exc)
              * drops the entry now rather than at the deadline -- an abandoned
              * entry keeps sleep_size non-zero and holds its g until then. */
             __atomic_store_n(&tgt->sleep_purge, 1, __ATOMIC_RELEASE);
+            /* Dekker with tgt's idle announce: the hub stores idle_waiting,
+             * fences, then re-checks sleep_purge before its condvar wait; we
+             * store sleep_purge, fence, then read idle_waiting in the kick
+             * below.  So either the hub sees the mailbox and skips the wait,
+             * or the kick sees the hub waiting and signals it.  Explicit here
+             * rather than borrowed from a fence inside the wake path. */
+            __atomic_thread_fence(__ATOMIC_SEQ_CST);
             if (hub != NULL) runloom_mn_wake_g(hub, g);
             else             runloom_sched_wake_safe(g);
             runloom_mn_hub_kick(hub);
@@ -755,7 +764,10 @@ runloom_g_t *runloom_sched_sleep_pop(runloom_sched_t *s)
  * top, once the purge mailbox s->sleep_purge is set).  An entry is abandoned
  * once its g's sleep_ticket no longer matches the entry's copy: a signal wake
  * claimed that sleep, so the timer must not fire it, and the fiber may since
- * have resumed on another hub and be sleeping again, here or there.
+ * have resumed on another hub and be sleeping again, here or there.  Only an
+ * io sleep has a signal waker, so every other entry is kept without touching
+ * its g: a heap of plain sleepers costs one flag test per entry, not a cache
+ * miss on each g.
  *
  * Partition the live entries to the front, re-heapify (Floyd), then release
  * the abandoned entries' refs.  The decrefs come last, with the heap already
@@ -770,7 +782,8 @@ void runloom_sched_sleep_purge(runloom_sched_t *s)
     RUNLOOM_SLEEP_OWNER_CHECK(s, "purge");
     for (i = 1; i <= size; i++) {
         runloom_sleep_entry_t e = s->sleep_heap[i];
-        if (__atomic_load_n(&e.g->sleep_ticket, __ATOMIC_ACQUIRE) != e.ticket)
+        if (e.sleep_io &&
+            __atomic_load_n(&e.g->sleep_ticket, __ATOMIC_ACQUIRE) != e.ticket)
             continue;                              /* abandoned: stays behind */
         n++;                                       /* swap into the live prefix: */
         s->sleep_heap[i] = s->sleep_heap[n];       /* slot n is abandoned, or i */

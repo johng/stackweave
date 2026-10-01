@@ -584,6 +584,7 @@ typedef struct {
     runloom_g_t *g;
     uint64_t     ticket;     /* g->sleep_ticket when pushed (hub heaps only) */
     int          sleep_real; /* wall-clock sleeper even under the logical clock */
+    int          sleep_io;   /* g->sleep_io: only these can be abandoned (purge) */
 } runloom_sleep_entry_t;
 
 /* One entry in a sched's TIMER heap: an in-memory timed park (runloom_c.park
