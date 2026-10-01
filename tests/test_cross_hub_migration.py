@@ -20,7 +20,7 @@ Each scenario runs in a fresh subprocess so a lost fiber or a wedged hub is a
 clean timeout rather than a hung pytest, and so one scenario's leak cannot
 leak into the next.
 
-Fourteen gaps are closed (their docstrings start "Was a gap").  The three
+Fifteen gaps are closed (their docstrings start "Was a gap").  The three
 that remain are strict xfails under TODO_MIGRATION_FAIL: OS-thread-identity
 checks that live in C or in importlib and need a pin or a monkey patch.  A
 strict xfail still runs, and flips to a hard XPASS failure the moment its gap
