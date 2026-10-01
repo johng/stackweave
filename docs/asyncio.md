@@ -280,7 +280,7 @@ stackweave.aio.run(main())
 | `loop.create_connection`/`create_server` (Transport+Protocol) | works |
 | `loop.create_datagram_endpoint` (UDP) | works |
 | SSL (`ssl=` keyword on `create_connection`/`create_server`) | works -- cooperative `SSLSocket` (client + server, ALPN, cert fingerprint) |
-| `loop.subprocess_*` | not implemented |
+| `loop.subprocess_*` (`create_subprocess_exec` / `_shell`) | works |
 | `signal.set_wakeup_fd` integration | implemented (`aio/loop_signals.py`, `monkey/signals.py`); the C scheduler does not use it |
 
 If a missing feature is blocking you, file an issue.  Most asyncio

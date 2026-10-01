@@ -11,18 +11,18 @@ The low-level scheduler API.  Most user code calls `stackweave.fiber` and
 
 ### Scheduler control
 
-#### `go(fn, *, stack_size=None) → G`
+#### `fiber(fn, stack_size=0) → G`
 
 Spawn a fiber running `fn`.  Returns a [`G`](#g) handle.
 
 - `fn` -- a zero-arg callable.  Bind arguments with `lambda` or
   `functools.partial`.
-- `stack_size` -- optional per-call override (bytes).  Bypasses the
+- `stack_size` -- optional per-call override (bytes; 0 = default).  Bypasses the
   scheduler's calibrated default.  See [stack sizing](stack-sizing.md).
 
 #### `fiber_noyield(fn) → G`
 
-Like `go(fn)` but with a contract: `fn` promises not to yield, sleep,
+Like `fiber(fn)` but with a contract: `fn` promises not to yield, sleep,
 park, or do monkey-patched I/O.  The scheduler skips per-g datastack
 setup, saving 150–400 ns per spawn.  **Undefined behaviour if `fn`
 yields.**  Use only for pure-compute callables.
@@ -130,19 +130,22 @@ Park the current fiber until `fd` is ready.  `events` is a
 bitmask: `1 = read`, `2 = write`.  Returns the ready bitmask.
 `timeout_ms=-1` for no timeout; 0 to poll without parking.
 
-#### `fd_read(fd, n) → bytes`, `fd_write(fd, data) → int`
+#### `fd_read(fd, buffer, n) → int`, `fd_write(fd, data) → int`
 
-Cooperative read/write on an fd.  Park on `wait_fd` when EAGAIN.
+Cooperative read (into a writable buffer, returns bytes read) / write on
+an fd.  Park on `wait_fd` when EAGAIN.
 
-#### `tcp_recv(sock, n) → bytes`, `tcp_send(sock, data) → int`
+#### `tcp_recv(fd, buffer, n, flags=0) → int`, `tcp_send(fd, data, flags=0) → int`
 
-TCP-specific fastpaths.  `sock` is a Python `socket.socket` (or its
-fileno).
+TCP-specific fastpaths on a socket's `fileno()`.  `tcp_recv` receives into
+a writable buffer and returns the byte count; `tcp_send` loops until all
+of `data` is sent.
 
-#### `file_read(fd, n, offset=-1) → bytes`, `file_write(fd, data, offset=-1) → int`
+#### `file_read(fd, buffer, n, offset=-1) → int`, `file_write(fd, data, offset=-1) → int`
 
 File I/O.  On Linux 5.1+ with `iouring_available()`, dispatched
-through io_uring.  Elsewhere dispatched through a worker thread.
+through io_uring.  Elsewhere a plain (blocking) `read`/`pread` or
+`write`/`pwrite`.
 
 #### `iouring_available() → bool`
 
@@ -153,7 +156,8 @@ True if the kernel supports io_uring (Linux 5.1+).
 See [Parallelism](parallelism.md).
 
 - `mn_init(n=0)` -- start `n` hub threads (defaults to `cpu_count`).
-- `mn_fiber(fn) → G` -- spawn on a round-robin hub.
+- `mn_fiber(fn, stack_size=0, hub=-1) → None` -- spawn on a round-robin hub
+  (`hub=N` pins it to hub N).  Returns no handle.
 - `mn_run() → int` -- wait for all hubs to drain.
 - `mn_fini()` -- tear down the pool.
 
@@ -166,7 +170,7 @@ See [Preemption](preemption.md).
 
 ### Pre-warming
 
-#### `warmup(n, stack_size=None)`
+#### `warmup(n, stack_size=131072)`
 
 Pre-allocate `n` fiber stacks so the first `n` spawns skip mmap.
 
@@ -316,7 +320,7 @@ Goroutine handle.  Attributes:
 
 - `done` -- `True` once the fiber has returned.
 - `result` -- return value (or `None` until done).
-- `error` -- exception object if the fiber raised, else `None`.
+- `exception` -- exception object if the fiber raised, else `None`.
 - `wake()` -- re-queue a parked fiber; race-safe with
   `park_self()`.
 - `stack(limit=None)` -- return a list of `(filename, lineno, name)`
@@ -364,7 +368,7 @@ registry.  `fibers(stacks=)`, `count()`, `stack(id)`, `format(stacks=)`
 [Debugging guide](debugging.md).
 
 ```python
-import stackweave
+import stackweave.inspect as gi
 print(gi.format(stacks=True))   # which fibers, and where they're stuck
 gi.install_dump_signal()        # kill -QUIT <pid> -> dump
 ```
@@ -440,7 +444,7 @@ Go-style timers and tickers.
 
 #### `Sleep(seconds)`
 
-Cooperative sleep.  Alias for `stackweave.sched_sleep`.
+Cooperative sleep.  Same as `stackweave.sleep`.
 
 #### `After(seconds) → Chan`
 
@@ -448,7 +452,7 @@ Returns a channel that will receive the current time after `seconds`.
 Equivalent of Go's `time.After`.
 
 ```python
-import stackweave
+import stackweave.time as t
 
 after = t.After(1.0)
 # ... do work ...

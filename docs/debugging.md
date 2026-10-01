@@ -8,7 +8,7 @@ from your own code or a watchdog.
 ## Quick look
 
 ```python
-import stackweave
+import stackweave.inspect as gi
 
 gi.count()                 # how many fibers are live
 print(gi.format(stacks=True))   # a formatted dump (string) -> log it
@@ -165,7 +165,7 @@ kill -QUIT <pid>
 writes a structural dump (state histogram + per-fiber line, no Python
 stacks — touching Python objects from a signal handler is not safe) to
 stderr and lets the process continue.  The underlying primitive is
-`stackweave.dump_fibers(fd)`, which is async-signal-safe-ish (it
+`stackweave_c.dump_fibers(fd)`, which is async-signal-safe-ish (it
 try-locks the registry and uses only `write(2)`).
 
 ## Crash reporting (`SIGSEGV` / `SIGBUS`)
@@ -248,7 +248,7 @@ fiber 2 [chan-wait] ...
 Three modes (default **warn**):
 
 ```python
-import stackweave
+import stackweave.inspect as gi
 gi.set_deadlock_mode("warn")    # print the dump, keep going (default)
 gi.set_deadlock_mode("raise")   # raise RuntimeError out of run()
 gi.set_deadlock_mode("off")     # do nothing
@@ -268,7 +268,7 @@ flood) can still exhaust memory.  An optional admission gate caps the number
 of live fibers:
 
 ```python
-import stackweave
+import stackweave.inspect as gi
 gi.set_max_fibers(100_000)   # 0 = unlimited (default); env STACKWEAVE_MAX_GOROUTINES
 ```
 

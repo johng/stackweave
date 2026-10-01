@@ -84,6 +84,7 @@ ch = stackweave.Chan(100)
 def producer():
     for i in range(1000):
         ch.send(i)
+    ch.close()                 # ends the consumer's `for v in ch`
 
 def consumer():
     total = 0
@@ -258,12 +259,13 @@ and resumes it there.  Locality is the default, not a constraint.
 ## Inspecting hub state
 
 ```python
-stackweave.mn_stats()
-# {'hubs': 8,
-#  'ready_per_hub': [3, 0, 2, 1, 0, 0, 4, 0], 
-#  'completed_per_hub': [12431, 9854, ...],
-#  'steals': 47,
-#  ...}
+stackweave.inspect.hubs()
+# [{'id': 0, 'state': 'attached', 'pending': 1, 'running_g': 1,
+#   'dwell_ms': 0.018, 'blocked_at': None, 'stack_cmd': 'py-spy dump --pid ...'},
+#  {'id': 1, 'state': 'detached', 'pending': 0, 'running_g': None, ...},
+#  ...]
+stackweave.inspect.print_hubs()     # the same, as a table
 ```
 
-Useful for tuning hub count or diagnosing load imbalance.
+Useful for tuning hub count or diagnosing load imbalance.  See
+[Debugging](debugging.md#what-is-each-hub-doing-hubs) for the fields.

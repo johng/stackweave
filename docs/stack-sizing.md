@@ -244,10 +244,10 @@ default's virtual footprint? Lock a smaller size up-front (an explicit size
 overrides the default and its floor, down to the 256 KB minimum):
 
 ```python
-import stackweave
+import stackweave, stackweave_c
 
 # Before any stackweave.fiber() call:
-stackweave.set_stack_size(256 * 1024)
+stackweave_c.set_stack_size(256 * 1024)
 
 # Subsequent fibers use exactly 256 KB:
 stackweave.fiber(worker)
@@ -263,9 +263,9 @@ and disables painting (no per-spawn overhead).  Use this when:
 - You're running a benchmark and want the size to not drift.
 
 ```python
-import stackweave
+import stackweave_c
 
-print(stackweave.get_stack_size())   # current default
+print(stackweave_c.get_stack_size())   # current default
 ```
 
 Bounds: `[256 KB, 8 MB]`.  Below or above is silently clamped.
@@ -351,7 +351,7 @@ guard; a non-probing extension could corrupt. If you have such a fiber,
 give it a bigger stack up front:
 
 ```python
-stackweave.set_stack_size(1024 * 1024)       # process-wide default
+stackweave_c.set_stack_size(1024 * 1024)     # process-wide default
 # or just the suspicious fiber:
 stackweave.fiber(work, stack_size=512 * 1024)
 ```
@@ -522,10 +522,10 @@ auto-sizer) or offload the deep call.
 For a production service:
 
 ```python
-import stackweave
+import stackweave, stackweave_c
 
 # Optional: pre-calibrate during a dry-run, then lock for production
-stackweave.set_stack_size(32 * 1024)        # whatever your dry-run found
+stackweave_c.set_stack_size(256 * 1024)     # whatever your dry-run found
 
 # Spawn workers
 for i in range(10000):

@@ -10,12 +10,12 @@ and hard to reproduce, so the report has to carry everything.
 
 ```python
 import stackweave
-# writes the report to ./runloom_crash.txt (append) as well as stderr:
-stackweave.inspect.install_crash_handler("goroutines,backtrace", file="runloom_crash.txt")
+# writes the report to ./stackweave_crash.txt (append) as well as stderr:
+stackweave.inspect.install_crash_handler("fibers,backtrace", file="stackweave_crash.txt")
 stackweave.inspect.start_watchdog(60)    # optional: report a 60 s hang too
 ```
 
-- `level` — what to dump: `goroutines`, `backtrace`, `gdb`, `wait` (or `all`,
+- `level` — what to dump: `fibers`, `backtrace`, `gdb`, `wait` (or `all`,
   `off`).
 - `file` — a file to append the report to (also always on stderr).
 - `start_watchdog(secs)` — arm the self-hang watchdog (see below). Call it after

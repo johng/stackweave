@@ -33,7 +33,7 @@ Rule of thumb: **`vm.max_map_count >= 2 × peak_live_fibers + slack`**.
 
 This is also the limit that **`prewarm()` and a raised `STACKWEAVE_STACK_DEPOT_CAP`
 push against** — pooled/prewarmed stacks each hold their VMAs even when idle (see
-[Tuning knobs](#runloom-tuning-knobs)). So if you prewarm 200k stacks, budget
+[Tuning knobs](#stackweave-tuning-knobs)). So if you prewarm 200k stacks, budget
 `max_map_count` for them too.
 
 ### 2. `RLIMIT_NOFILE` — open file descriptors
@@ -114,7 +114,7 @@ These environment variables interact with the limits above:
 | Env var | Default | Effect on limits |
 |---|---|---|
 | `RUNLOOM_DEFAULT_STACK_SIZE` | `524288` (512 KiB) | bigger stacks → more virtual space + RSS per fiber |
-| `STACKWEAVE_STACK_DEPOT_CAP` | `1024` | retained pooled stacks → **VMAs held when idle**; raise it (near your peak) only alongside `vm.max_map_count` |
+| `STACKWEAVE_STACK_DEPOT_CAP` | auto: ~1.5× the live-stack high-water mark (1024 until sysmon's first tick, and outside M:N) | retained pooled stacks → **VMAs held when idle**; raise it (near your peak) only alongside `vm.max_map_count` |
 | `prewarm(n, ...)` / `prewarm_keep(target, ...)` | — | pre-maps `n`/`target` stacks → consumes `~2n` VMAs; needs `vm.max_map_count` + `STACKWEAVE_STACK_DEPOT_CAP` budgeted for it (see [stack-sizing.md](stack-sizing.md#prewarming-the-stack-pool-burst-servers)) |
 
 ---

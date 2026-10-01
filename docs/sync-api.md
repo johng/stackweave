@@ -10,12 +10,12 @@ cooperative concurrency that *looks* like threaded code.
 **Performance:** Call `stackweave.run(n, main)` to drive the sync API:
   - `stackweave.run(1, main)` -- single-threaded, one OS thread (good for pure I/O)
   - `stackweave.run(8, main)` -- M:N scheduler on 8 hub threads, real multi-core
-    parallelism on free-threaded 3.14t+GIL-off (default n = CPU count)
+    parallelism on free-threaded 3.14t+GIL-off
 
 ## Hello world
 
 ```python
-import stackweave
+import stackweave.sync as ps
 
 def main():
     print("hello from a fiber")
@@ -31,7 +31,7 @@ until everything's done, and returns.
 ## Spawning fibers
 
 ```python
-import stackweave
+import stackweave.sync as ps
 
 def worker(i):
     ps.sleep(0.01)
@@ -62,7 +62,7 @@ Outside any fiber (e.g. at module top-level before `run()`),
 Channels are re-exported as `ps.Chan` and `ps.select`:
 
 ```python
-import stackweave
+import stackweave.sync as ps
 
 def producer(ch):
     for i in range(10):
@@ -106,7 +106,7 @@ def main():
     stackweave.fiber(sender)
     stackweave.fiber(receiver)
 
-stackweave.run(main)
+stackweave.run(1, main)
 ```
 
 Receivers can optionally specify a timeout; `result()` raises `TimeoutError` if
@@ -127,7 +127,7 @@ def main():
     results = js.join_all()  # wait for all, return results in spawn order
     print(results)           # [0, 10, 20, 30, 40]
 
-stackweave.run(main)
+stackweave.run(1, main)
 ```
 
 Also works as a context manager (auto-joins on exit):
@@ -139,7 +139,7 @@ def main():
             js.spawn(lambda i=i: i * 10)
         # auto-joins on __exit__
 
-stackweave.run(main)
+stackweave.run(1, main)
 ```
 
 If any spawned fiber raises an exception, `join_all()` raises the *first*
@@ -161,7 +161,7 @@ def main():
     results = stackweave.sync.gather(f1, f2)
     print(results)  # [10, 20]
 
-stackweave.run(main)
+stackweave.run(1, main)
 ```
 
 Non-future values are passed through as-is.
@@ -185,7 +185,7 @@ def main():
     wg.wait()  # blocks until all Done() calls
     print("all done")
 
-stackweave.run(main)
+stackweave.run(1, main)
 ```
 
 Call `wg.add(N)` to increment the count, `wg.done()` to decrement, and
@@ -201,12 +201,12 @@ def main():
     data = [0]
     
     def reader(i):
-        with mu.rlock():  # shared lock
+        with mu.rlocked():  # shared lock
             print("reader", i, "sees", data[0])
             stackweave.sleep(0.01)
     
     def writer(i):
-        with mu.lock():   # exclusive lock
+        with mu:            # exclusive lock
             data[0] += 1
             print("writer", i, "set to", data[0])
             stackweave.sleep(0.01)
@@ -217,12 +217,12 @@ def main():
     
     stackweave.sleep(0.2)
 
-stackweave.run(main)
+stackweave.run(1, main)
 ```
 
 - `mu.rlock()` / `runlock()` — acquire/release a read lock (shared, multiple allowed)
 - `mu.lock()` / `unlock()` — acquire/release a write lock (exclusive)
-- Context manager support: `with mu.rlock():` / `with mu.lock():`
+- Context manager support: `with mu.rlocked():` (read) / `with mu:` (write)
 
 ### Semaphore: weighted concurrency limit
 
@@ -245,7 +245,7 @@ def main():
     
     stackweave.sleep(0.4)
 
-stackweave.run(main)
+stackweave.run(1, main)
 ```
 
 Semaphores support weighted permits (default 1):
@@ -259,7 +259,7 @@ sem.release(3)
 Optional timeout on `acquire()`:
 
 ```python
-ok = sem.acquire(timeout=1.0)  # raises TimeoutError if not acquired
+ok = sem.acquire(timeout=1.0)  # False if not acquired in time
 try_ok = sem.try_acquire()     # returns True/False without blocking
 ```
 
@@ -287,7 +287,7 @@ def main():
     stackweave.sleep(0.2)
     print("init was called", init_called[0], "times")  # 1
 
-stackweave.run(main)
+stackweave.run(1, main)
 ```
 
 Use `once_value(fn)` to get a result that's computed once and cached:
@@ -335,7 +335,7 @@ def main():
     stackweave.sleep(0.2)
     print("expensive was called", call_count[0], "times")  # 1
 
-stackweave.run(main)
+stackweave.run(1, main)
 ```
 
 `group.do(key, fn, *args, **kwargs)` runs `fn(*args, **kwargs)` if it's the
@@ -353,12 +353,16 @@ def main():
     
     def setter(i):
         stackweave.sleep(0.01 * (i + 1))
-        watch.notify(i)
-        print("notified with", i)
-    
+        watch.set(i)
+        print("set to", i)
+
     def waiter(name):
-        for expected in [0, 1, 2]:
-            value = watch.wait_changed(timeout=1.0)  # blocks until value changes
+        seen = 0
+        for _ in range(3):
+            r = watch.wait_changed(seen, timeout=1.0)  # blocks until the version passes `seen`
+            if r is None:                              # timed out
+                break
+            value, seen = r
             print(name, "got", value)
     
     stackweave.fiber(setter, 0)
@@ -369,11 +373,13 @@ def main():
     
     stackweave.sleep(0.2)
 
-stackweave.run(main)
+stackweave.run(1, main)
 ```
 
-- `watch.notify(value)` — broadcast a new value to all waiters
-- `watch.wait_changed(timeout=None)` — block until the value changes
+- `watch.set(value)` — store a new value and wake all waiters
+- `watch.get()` / `watch.version()` — read the current value / version
+- `watch.wait_changed(seen_version, timeout=None)` — block until the version
+  is past `seen_version`; returns `(value, version)`, or `None` on timeout
 
 ### Thread safety
 
@@ -389,7 +395,7 @@ or a foreign thread and adapt accordingly.
 return cooperative sockets:
 
 ```python
-import stackweave
+import stackweave.sync as ps
 
 def handle(conn):
     try:
@@ -443,15 +449,15 @@ ps.run(main)
 ## Park / wake primitive
 
 For library authors building custom synchronisation, `stackweave.sync.wake`
-+ `stackweave.park_self()` form a lightweight per-task wake:
++ `stackweave.sync.park_self()` form a lightweight per-task wake:
 
 ```python
-import stackweave
+import stackweave.sync as ps
 
 def waiter():
-    g = stackweave.current_g()
+    g = ps.current()
     # ... arrange for someone else to call g.wake() ...
-    stackweave.park_self()       # blocks until wake arrives
+    ps.park_self()               # blocks until wake arrives
     print("woken")
 
 def main():
@@ -468,7 +474,7 @@ in place of a `Chan(1)` per task.  Same idea is available to user code.
 
 - You're writing new code and want it to *look* synchronous -- easier
   to read, easier to debug, no callback colour.
-- You're porting Go code (each `fiber` in Go is a `stackweave.sync.go` here).
+- You're porting Go code (each `go` in Go is a `stackweave.sync.fiber` here).
 - You want a library API that doesn't require its callers to be in an
   `async def`.
 
@@ -486,7 +492,7 @@ each adds a bit of overhead in its own layer.
 ## A complete example: parallel HTTP fetcher
 
 ```python
-import stackweave
+import stackweave.sync as ps
 
 def fetch_one(host, port, ch):
     try:

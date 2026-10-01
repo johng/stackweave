@@ -121,10 +121,10 @@ keeps the crashy combination unreachable. Opt out entirely with
 ## Verifying the install
 
 ```python
-import stackweave
+import stackweave, stackweave_c
 print("backend:", stackweave.backend())            # e.g. fcontext-asm
 print("netpoll:", stackweave.netpoll_backend())    # e.g. epoll
-print("stack default:", stackweave.get_stack_size(), "bytes")
+print("stack default:", stackweave_c.get_stack_size(), "bytes")
 
 def hello():
     print("hello from a fiber!")

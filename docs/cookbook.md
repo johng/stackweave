@@ -158,7 +158,7 @@ def main():
     stackweave.fiber(lambda: worker(done))
 
     # ... do stuff with out ...
-    stackweave.sched_sleep(0.05)
+    stackweave.sleep(0.05)
     done.close()                    # wakes every recv on done
 
 stackweave.fiber(main)
@@ -177,7 +177,7 @@ import threading
 def with_timeout(ch, seconds):
     timer = stackweave.Chan(1)
     def fire():
-        stackweave.sched_sleep(seconds)
+        stackweave.sleep(seconds)
         timer.send(None)
     stackweave.fiber(fire)
 
@@ -282,7 +282,7 @@ def slow_op():
     sem.recv()                      # acquire (blocks if no token)
     try:
         # ... slow thing ...
-        stackweave.sched_sleep(0.5)
+        stackweave.sleep(0.5)
     finally:
         sem.send(None)              # release
 
@@ -396,7 +396,7 @@ import asyncio, stackweave
 def background_worker():
     while True:
         # ... cooperative work ...
-        stackweave.sched_sleep(1.0)
+        stackweave.sleep(1.0)
 
 async def main():
     stackweave.fiber(background_worker)

@@ -12,7 +12,7 @@ when you mix in libraries that don't expect to be cooperative -- a
 long `numpy` matmul or a 10-million-iteration arithmetic loop will
 starve every other fiber.
 
-`stackweave.preempt_init(quantum_us=10_000)` solves this on
+`stackweave.preempt_init(10_000)` (the quantum, in µs) solves this on
 **free-threaded Python** (the GIL-disabled build).  A timer
 thread posts a `Py_AddPendingCall` every quantum; CPython's
 `eval_breaker` check -- already done between bytecodes -- invokes our
@@ -23,7 +23,7 @@ callback, which calls `runloom_sched_yield()` on the running fiber.
 ```python
 import stackweave
 
-stackweave.preempt_init(quantum_us=10_000)    # 10 ms slices
+stackweave.preempt_init(10_000)    # quantum_us: 10 ms slices
 
 def hog():
     total = 0
@@ -34,7 +34,7 @@ def hog():
 def chatty():
     for i in range(50):
         print("chatty tick", i)
-        stackweave.sched_sleep(0.01)
+        stackweave.sleep(0.01)
 
 stackweave.fiber(hog)
 stackweave.fiber(chatty)
@@ -95,7 +95,7 @@ stackweave only builds on free-threaded CPython 3.14+.  The preemption
 path relies on the M:N hub model and `Py_AddPendingCall` having a
 fast path that's safe across hubs.  If the GIL has been re-enabled at
 runtime (`PYTHON_GIL=1`) and you want time-slicing anyway, sprinkle
-`stackweave.sched_yield_classic()` calls into your hot loops.  Crude
+`stackweave.yield_now()` calls into your hot loops.  Crude
 but works.
 
 ### Per-thread, not per-process
@@ -127,7 +127,7 @@ leave it on after `preempt_init`.
   fibers.
 
 ```python
-stackweave.preempt_init(quantum_us=1_000)
+stackweave.preempt_init(1_000)     # quantum_us (positional only)
 ```
 
 ## When to use preemption

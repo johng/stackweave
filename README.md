@@ -50,8 +50,7 @@ with Go and beats it on raw spawn** — a stackful coroutine runtime on CPython
 matching a compiled language even with a Python handler (596 k vs 603 k req/s at
 saturation; a C handler beats Go). The one honest gap left is **memory**: a
 suspended fiber carries a CPython eval frame, ~3.3× Go's per-fiber RSS.
-Full cross-runtime numbers + cold spawn-vs-N curves: **[benchmark report](https://github.com/johng/stackweave/blob/main/benchmark/report.html)**
-· [perf summary](https://github.com/johng/stackweave/blob/main/docs/dev/PERF_SUMMARY.md).
+Full cross-runtime numbers + cold spawn-vs-N curves: **[benchmark report](https://github.com/johng/stackweave/blob/main/benchmark/report.html)**.
 
 ```python
 stackweave.optimize("throughput")   # stackweave.fiber -> max spawn rate (fiber_fast)
