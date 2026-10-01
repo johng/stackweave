@@ -601,6 +601,12 @@ struct runloom_sched {
     Py_ssize_t sleep_size;
     Py_ssize_t sleep_cap;
     uint64_t   sleep_seq_ctr;  /* monotonic counter for sleep_seq FIFO tiebreak */
+    /* The hub whose thread owns this sleep heap, while that thread runs; NULL
+     * for a single-thread sched and for a hub that has not started or has
+     * exited.  The heap is a plain array, so only the owner may push, pop or
+     * remove.  hub_main sets and clears it on its own thread; only the
+     * STACKWEAVE_DEBUG=sleepheap oracle reads it (runloom_sleep_owner_check). */
+    void      *heap_owner;
     /* Timer heap -- min-heap by deadline for in-memory TIMED parks
      * (runloom_park_generic_timed).  Separate from the sleep heap so a g can hold
      * multiple stale entries safely (by-value entries, no g->wake_at reuse).

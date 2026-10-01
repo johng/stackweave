@@ -134,8 +134,8 @@ def require_migration(moved):
 ''' % os.path.join(REPO, "src")
 
 
-def run_scenario(code, timeout=60):
-    env = dict(os.environ)
+def run_scenario(code, timeout=60, env=None):
+    env = dict(os.environ, **(env or {}))
     env["PYTHON_GIL"] = "0"
     env["STACKWEAVE_GIL"] = "0"
     try:
@@ -154,14 +154,14 @@ def _key_line(out, err):
     """The one line that says why the scenario failed: the last error or
     watchdog line on stderr, else the last thing the scenario printed."""
     for line in reversed(err.splitlines()):
-        if re.match(r"\s*(\w+(Error|Exception|Interrupt)\b|WATCHDOG)", line):
+        if re.match(r"\s*(\w+(Error|Exception|Interrupt)\b|WATCHDOG|\[STACKWEAVE_DEBUG=)", line):
             return line.strip()
     lines = [l for l in out.splitlines() if l.strip()]
     return lines[-1].strip() if lines else "(no output)"
 
 
-def assert_pass(code, timeout=60):
-    rc, out, err = run_scenario(code, timeout=timeout)
+def assert_pass(code, timeout=60, env=None):
+    rc, out, err = run_scenario(code, timeout=timeout, env=env)
     if "NOMIG" in out:
         pytest.skip("no cross-hub migration observed on this machine; "
                     "the scenario needs >=2 hubs that actually trade fibers")
@@ -1267,6 +1267,76 @@ if completed[0]:
     assert sum(done) == NS, "%d sleepers lost" % (NS - sum(done))
 print("PASS", flush=True)
 ''')
+
+
+@TODO_MIGRATION_FAIL("A1: a signal-woken io sleeper that resumes on another hub "
+                     "removes itself from its ORIGIN hub's sleep heap")
+def test_sched_only_the_owning_hub_mutates_its_sleep_heap():
+    """No thread but a hub's own may push, pop or remove on its sleep heap.
+
+    The heap is a plain array with no lock.  A select.poll / no-fd select
+    reprobe sleeps in it with sched_sleep_io, and a raised signal handler on
+    the main thread wakes that sleeper through the global run-queue, so it can
+    resume on any hub.  If the woken fiber then edits its origin hub's heap,
+    it races that hub's timer pop and its other fibers' sleeps: plain stores
+    that can lose a sleeper or schedule one twice.  TSan reports it (A1 in
+    docs/dev/TSAN.md), but a release build almost never shows a symptom, so
+    the churn test above passes either way.
+
+    STACKWEAVE_DEBUG=sleepheap turns the race into a deterministic abort on a
+    release build: every heap mutation checks that it runs on the owning hub's
+    thread.  The scenario needs at least one delivery that resumed on a
+    different OS thread from the one it parked on, and skips loudly without.
+    """
+    assert_pass(r'''
+import signal
+_watchdog(40)
+NS, NR, DUR = 32, 8, 2.0
+hits = [0]
+delivered = bytearray(NR)       # one slot per recipient: race-free GIL-off
+moved = bytearray(NR)
+class Tick(Exception): pass
+def handler(signum, frame):
+    hits[0] += 1
+    raise Tick()
+signal.signal(signal.SIGALRM, handler)      # main thread, before run()
+def churner():
+    t_end = time.monotonic() + DUR
+    while time.monotonic() < t_end:
+        stackweave.sleep(0.001)
+def recipient(r):
+    t_end = time.monotonic() + DUR
+    while time.monotonic() < t_end:
+        before = threading.get_ident()
+        try:
+            stackweave_c.sched_sleep_io(0.01)
+        except Tick:
+            delivered[r] = min(delivered[r] + 1, 255)
+            if threading.get_ident() != before:
+                moved[r] = min(moved[r] + 1, 255)
+def main():
+    for _ in range(NS):
+        stackweave.fiber(churner)
+    for r in range(NR):
+        stackweave.fiber(recipient, r)
+    stackweave.sleep(0.1)                   # recipients are parked
+    signal.setitimer(signal.ITIMER_REAL, 0.001, 0.001)
+    t_end = time.monotonic() + DUR + 0.5
+    while time.monotonic() < t_end:
+        try:
+            stackweave.sleep(t_end - time.monotonic())
+        except Tick:
+            pass
+    signal.setitimer(signal.ITIMER_REAL, 0, 0)
+try:
+    stackweave.run(4, main)
+except Tick:
+    signal.setitimer(signal.ITIMER_REAL, 0, 0)
+print("signals=%d delivered=%d of them resumed on another hub=%d"
+      % (hits[0], sum(delivered), sum(moved)), flush=True)
+require_migration(sum(moved) > 0)
+print("PASS", flush=True)
+''', env={"STACKWEAVE_DEBUG": "sleepheap"})
 
 
 if __name__ == "__main__":

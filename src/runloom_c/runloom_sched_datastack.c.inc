@@ -388,6 +388,31 @@ runloom_g_t *runloom_sched_ready_pop(runloom_sched_t *s)
 #define runloom_ready_push runloom_sched_ready_push
 #define runloom_ready_pop  runloom_sched_ready_pop
 
+/* STACKWEAVE_DEBUG=sleepheap: abort if a thread other than the owning hub's
+ * mutates a hub's sleep heap.  The heap is a plain array with no lock, so a
+ * second mutator corrupts it silently (a sleeper lost or scheduled twice) and
+ * only TSan sees the race; this makes it a deterministic abort on a release
+ * build.  Unowned heaps (single-thread scheds, a hub torn down by mn_fini after
+ * its thread exited) are not checked.  Off by default: one predictable branch
+ * per heap operation. */
+static void runloom_sleep_owner_check(const runloom_sched_t *s, const char *op)
+{
+    void *owner = __atomic_load_n(&s->heap_owner, __ATOMIC_ACQUIRE);
+    void *self = runloom_mn_current_hub_opaque();
+    if (owner == NULL || owner == self) return;
+    fprintf(stderr,
+            "[STACKWEAVE_DEBUG=sleepheap] %s on hub %d's sleep heap from hub %d "
+            "(-1: not a hub thread); only the owning hub's thread may mutate it\n",
+            op, runloom_mn_hub_id_of(owner), runloom_mn_hub_id_of(self));
+    fflush(stderr);
+    abort();
+}
+#define RUNLOOM_SLEEP_OWNER_CHECK(s, op)                                     \
+    do {                                                                     \
+        if (RUNLOOM_DBG_ON(RUNLOOM_DBG_SLEEPHEAP))                           \
+            runloom_sleep_owner_check((s), (op));                            \
+    } while (0)
+
 /* ---- Sleep heap (min-heap by (wake_at, sleep_seq)) ----
  * The sleep_seq tiebreak makes equal-deadline sleepers wake in FIFO insertion
  * order, matching asyncio's (when, seq) TimerHandle ordering.  Without it,
@@ -418,6 +443,7 @@ static int runloom_sleep_grow(runloom_sched_t *s)
 static int runloom_sleep_push(runloom_sched_t *s, runloom_g_t *g)
 {
     Py_ssize_t i;
+    RUNLOOM_SLEEP_OWNER_CHECK(s, "push");
     if (s->sleep_size + 1 > s->sleep_cap) {
         if (runloom_sleep_grow(s) < 0) return -1;
     }
@@ -449,6 +475,7 @@ static int runloom_sleep_push(runloom_sched_t *s, runloom_g_t *g)
 static int runloom_sleep_remove(runloom_sched_t *s, runloom_g_t *g)
 {
     Py_ssize_t i, last_i, child;
+    RUNLOOM_SLEEP_OWNER_CHECK(s, "remove");
     for (i = 1; i <= s->sleep_size; i++)
         if (s->sleep_heap[i] == g) break;
     if (i > s->sleep_size) return 0;
@@ -682,6 +709,7 @@ runloom_g_t *runloom_sched_sleep_pop(runloom_sched_t *s)
     runloom_g_t *top;
     runloom_g_t *last;
     Py_ssize_t i, child;
+    RUNLOOM_SLEEP_OWNER_CHECK(s, "pop");
     if (s->sleep_size == 0) return NULL;
     top = s->sleep_heap[1];
     last = s->sleep_heap[s->sleep_size];

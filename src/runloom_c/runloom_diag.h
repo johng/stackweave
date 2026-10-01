@@ -15,7 +15,7 @@
  *      Cheap enough to run between bench iterations.
  *
  *   3. RUNLOOM_DEBUG env-var parsing.  Comma-separated token list:
- *        parker, gstate, invariants, ring, all, none.
+ *        parker, gstate, invariants, ring, sleepheap, all, none.
  *      Tokens turn on the corresponding bit in runloom_debug_flags; checks
  *      throughout the codebase use bitwise & against that global.
  *
@@ -33,7 +33,8 @@ extern "C" {
 /* ---- runtime debug flags ----
  *
  * Read once at module init from the RUNLOOM_DEBUG env var.  Tokens
- * (comma-separated): parker | gstate | invariants | ring | all | none.
+ * (comma-separated): parker | gstate | invariants | ring | sleepheap | all |
+ * none.
  * Default is 0 (all off).  Hot-path checks use RUNLOOM_DBG_ON(BIT). */
 extern unsigned int runloom_debug_flags;
 
@@ -41,8 +42,10 @@ extern unsigned int runloom_debug_flags;
 #define RUNLOOM_DBG_GSTATE     (1u << 1)   /* g-state transition asserts */
 #define RUNLOOM_DBG_INVARIANTS (1u << 2)   /* run self_check after each park/unpark */
 #define RUNLOOM_DBG_RING       (1u << 3)   /* record lifecycle events */
+#define RUNLOOM_DBG_SLEEPHEAP  (1u << 4)   /* a hub's sleep heap is touched only by that hub */
 #define RUNLOOM_DBG_ALL        (RUNLOOM_DBG_PARKER | RUNLOOM_DBG_GSTATE \
-                             | RUNLOOM_DBG_INVARIANTS | RUNLOOM_DBG_RING)
+                             | RUNLOOM_DBG_INVARIANTS | RUNLOOM_DBG_RING \
+                             | RUNLOOM_DBG_SLEEPHEAP)
 
 #define RUNLOOM_DBG_ON(bit) \
     (__builtin_expect((runloom_debug_flags & (bit)) != 0, 0))

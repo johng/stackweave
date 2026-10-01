@@ -327,6 +327,9 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
      * sigaltstack).  Must run BEFORE the first runloom_coro_resume. */
     runloom_coro_thread_init();
     runloom_tls_hub = h;
+    /* From here until this thread exits, only it may mutate h->sched's sleep
+     * heap (checked under STACKWEAVE_DEBUG=sleepheap). */
+    __atomic_store_n(&h->sched.heap_owner, (void *)h, __ATOMIC_RELEASE);
 
     /* Create the hub's per-thread io_uring ring.  Try
      * SINGLE_ISSUER (Linux 5.18+) + DEFER_TASKRUN (6.1+); the create
@@ -1508,6 +1511,9 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
             }
         }
     }
+    /* mn_fini drains what is left in the heap from the main thread once this
+     * thread has been joined. */
+    __atomic_store_n(&h->sched.heap_owner, (void *)NULL, __ATOMIC_RELEASE);
     runloom_tls_hub = NULL;
     /* Tear down the hub's iouring ring.  Unregister from netpoll FIRST
      * so the pump can't dispatch a CQE to a freed ring; THEN destroy.
