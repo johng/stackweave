@@ -73,10 +73,11 @@ Source = "https://github.com/johng/stackweave"
 
 # --------------------------------------------------------------------
 # cibuildwheel: build prebuilt wheels for the matrix of Python versions
-# x supported OSes.  This project uses NO hosted CI -- run it by hand on
-# each target host: `pipx run cibuildwheel --output-dir wheels` (or
-# `python -m cibuildwheel`).  Until prebuilt wheels are uploaded, `pip
-# install stackweave` builds from the sdist (needs a C compiler).
+# x supported OSes.  Hosted CI (.github/workflows/ci.yml) tests but does
+# not build wheels -- run this by hand on each target host:
+# `pipx run cibuildwheel --output-dir wheels` (or `python -m cibuildwheel`).
+# Until prebuilt wheels are uploaded, `pip install stackweave` builds from
+# the sdist (needs a C compiler).
 # --------------------------------------------------------------------
 [tool.cibuildwheel]
 # CPython only (PyPy lacks the C-API surface we rely on).
