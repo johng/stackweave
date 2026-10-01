@@ -7,7 +7,7 @@ one OS thread in two separate ways — and either alone still corrupts:
 | half | flag | what it decouples |
 |---|---|---|
 | **allocation** | `Py_TSTATE_ALLOC_HOME` | which heap a migrated fiber allocates on |
-| **execution** | `Py_TSTATE_EXEC_HOME` | whether the compiler may cache *which OS thread we are* (plus memoryview's export counts, which a migrated fiber's deallocs race, see below) |
+| **execution** | `Py_TSTATE_EXEC_HOME` | whether the compiler may cache *which OS thread we are* (plus memoryview's and array.array's buffer-export counts, which a migrated fiber's deallocs race, see below) |
 
 Each half ships as a **version-specific** patch (stackweave supports only
 free-threaded CPython 3.14+), and they are **not** interchangeable across
@@ -274,12 +274,8 @@ then be thread-safe even in a single-fiber program.
 
 CPython has an **open class** of buffer-export counters that are not: a plain
 `++`/`--` in a `getbuffer`/`releasebuffer` pair, or in a view's
-register/release. The hunk fixes one instance, memoryview's. **Known still
-open: `array.array`** — `ob_exports` in `Modules/arraymodule.c`
-(`array_buffer_getbuf`/`array_buffer_relbuf`, no critical section). A fiber
-holding `memoryview(arr)` across a park leaves arrays pinned for good
-(BufferError on resize): 2–22 of 192 arrays per run at H=8. It is
-left for a follow-up.
+register/release. The hunks fix two instances: memoryview's and
+`array.array`'s.
 
 The memoryview instance: `_PyManagedBufferObject.exports` — every view of a
 buffer bumps it on creation and drops it on release/dealloc — is a plain
@@ -306,8 +302,25 @@ defines `_Py_MV_EXPORTS_ATOMIC` as an installed witness; on an interpreter
 patched with an older copy the guard xfails with a "rebuild from src/patches/"
 message instead of failing.
 
+The array.array instance: `ob_exports` in `Modules/arraymodule.c` is bumped by
+`array_buffer_getbuf` and dropped by `array_buffer_relbuf`, a plain `++`/`--`
+with no critical section (still on main; python/cpython#157759, for
+gh-154524, proposes the same atomics). A fiber holding `memoryview(arr)` across
+a park and dropping it on another hub has the old hub run the release while it
+takes the next view. A lost decrement pins the array for good (`BufferError:
+cannot resize an array that is exporting buffers`); a lost increment lets it
+resize, and free its items, under a live view. The hunk makes the count atomic
+under the flag; the three "is it exporting?" checks before a resize read it
+relaxed. Measured, 64 ping-pong pairs each holding a view of its own array
+across a park, batches to ~3000 OS-thread moves per run at H=8: without it
+186–261 of 2112–2688 arrays lost an update per run (149–215 pinned, 37–49
+resizable under a live view); with it, none over 10 runs. Guard:
+`tests/test_cross_hub_migration.py::test_memory_array_view_survives_a_migration`,
+which xfails the same way on an interpreter without the installed
+`_Py_ARRAY_EXPORTS_ATOMIC` witness.
+
 Not audited beyond that: the rest of the class. bytearray is safe (its
-`ob_exports` is under the object's critical section); array.array is not (above).
+`ob_exports` is under the object's critical section).
 
 ## Using it
 
@@ -341,6 +354,8 @@ needs is an interpreter built with **both** patches:
    grep -q _Py_TID_ASM Include/object.h                            # exec-home
    grep -q _Py_MV_EXPORTS_ATOMIC Include/object.h                  # exec-home
    grep -q MBUF_EXPORTS_INC Objects/memoryobject.c                 # exec-home
+   grep -q _Py_ARRAY_EXPORTS_ATOMIC Include/object.h               # exec-home
+   grep -q ARRAY_EXPORTS_INC Modules/arraymodule.c                 # exec-home
    grep -q _PyThreadStateImpl_AllocHome Include/internal/pycore_tstate.h  # alloc-home
    ```
 

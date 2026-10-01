@@ -20,7 +20,7 @@ Each scenario runs in a fresh subprocess so a lost fiber or a wedged hub is a
 clean timeout rather than a hung pytest, and so one scenario's leak cannot
 leak into the next.
 
-Thirteen gaps are closed (their docstrings start "Was a gap").  The three
+Fourteen gaps are closed (their docstrings start "Was a gap").  The three
 that remain are strict xfails under TODO_MIGRATION_FAIL: OS-thread-identity
 checks that live in C or in importlib and need a pin or a monkey patch.  A
 strict xfail still runs, and flips to a hard XPASS failure the moment its gap
@@ -730,6 +730,122 @@ def main():
         % (len(state["errors"]), state["errors"][0]))
     print("PASS", flush=True)
 stackweave.run(8, main)
+''', timeout=90)
+
+
+def _interpreter_has_array_exports_fix():
+    """Whether this interpreter carries the exec-home patch's arraymodule.c
+    hunk, by its installed witness _Py_ARRAY_EXPORTS_ATOMIC (see
+    _interpreter_has_mv_exports_fix)."""
+    import sysconfig
+    include = sysconfig.get_path("include")
+    for header in ("object.h", os.path.join("cpython", "object.h")):
+        try:
+            with open(os.path.join(include, header), errors="replace") as f:
+                if "_Py_ARRAY_EXPORTS_ATOMIC" in f.read():
+                    return True
+        except OSError:
+            pass
+    return False
+
+
+def test_memory_array_view_survives_a_migration():
+    """64 ping-pong pairs at H=8; each pinger holds `memoryview(arr)` of its
+    own array.array across the channel park, then drops it.
+
+    Was a gap (fixed in the exec-home CPython patch: array.array's export
+    count is updated atomically): a view created on one hub and dropped on
+    another is brc-queued back to the hub that allocated it, so its release
+    (`array_buffer_relbuf`, `ob_exports--`) ran there while the fiber, now
+    on another hub, was already taking the next view (`array_buffer_getbuf`,
+    `ob_exports++`).  Neither has a critical section, so the plain ++/--
+    lost updates: a lost decrement pins the array for good ("cannot resize
+    an array that is exporting buffers"), a lost increment lets it resize
+    under a live view.  Same class as the memoryview count above; upstream
+    too (gh-154524, plain threads on a stock 3.14.4t).
+
+    After run() returns and a gc.collect() has merged every queued decref,
+    each array must resize with no view live, and must refuse to while a
+    fresh one is.  Runs batches until MOVES_WANTED OS-thread moves were
+    seen so a pass means the gap is really closed, not unexercised.  On an
+    interpreter without the hunk (no _Py_ARRAY_EXPORTS_ATOMIC witness) a
+    failure is an xfail asking for a rebuild.
+    """
+    try:
+        _run_array_view_scenario()
+    except pytest.fail.Exception:
+        if _interpreter_has_array_exports_fix():
+            raise
+        pytest.xfail("this interpreter lacks the exec-home arraymodule.c hunk "
+                     "(no _Py_ARRAY_EXPORTS_ATOMIC in its installed object.h): "
+                     "rebuild the interpreter from src/patches/")
+
+
+def _run_array_view_scenario():
+    assert_pass(r'''
+import array, gc
+_watchdog(50)
+PAIRS, ROUNDS, MOVES_WANTED, BUDGET_S = 64, 4000, 3000, 30
+state = {"moves": 0, "arrays": []}
+def batch():
+    wg = stackweave.WaitGroup()
+    wg.add(PAIRS)
+    for _ in range(PAIRS):
+        a, b = stackweave_c.Chan(0), stackweave_c.Chan(0)
+        def ponger(a=a, b=b):
+            while True:
+                v, ok = a.recv()
+                if not ok:
+                    return
+                b.send(v)
+        def pinger(a=a, b=b):
+            arr = array.array("i", range(16))
+            tid = threading.get_ident()
+            try:
+                for r in range(ROUNDS):
+                    mv = memoryview(arr)
+                    a.send(r)
+                    b.recv()
+                    del mv
+                    t = threading.get_ident()
+                    if t != tid:
+                        state["moves"] += 1
+                        tid = t
+            finally:
+                state["arrays"].append(arr)
+                a.close()
+                wg.done()
+        stackweave.fiber(ponger)
+        stackweave.fiber(pinger)
+    wg.wait()
+def main():
+    t0 = time.monotonic()
+    while state["moves"] < MOVES_WANTED and time.monotonic() - t0 < BUDGET_S:
+        batch()
+stackweave.run(8, main)
+gc.collect()                       # merge every brc-queued view release
+pinned = unguarded = 0
+for arr in state["arrays"]:
+    try:
+        arr.append(0)              # no view is live: must resize
+    except BufferError:
+        pinned += 1                # lost decrement
+        continue
+    mv = memoryview(arr)
+    try:
+        arr.append(0)              # a view is live: must refuse
+        unguarded += 1             # lost increment (count went negative)
+    except BufferError:
+        pass
+    mv.release()
+print("moves=%d arrays=%d pinned=%d unguarded=%d"
+      % (state["moves"], len(state["arrays"]), pinned, unguarded), flush=True)
+require_migration(pinned or unguarded or state["moves"] >= 100)
+assert not pinned and not unguarded, (
+    "%d of %d arrays lost export-count updates after a migration "
+    "(%d pinned, %d resizable under a live view)"
+    % (pinned + unguarded, len(state["arrays"]), pinned, unguarded))
+print("PASS", flush=True)
 ''', timeout=90)
 
 
