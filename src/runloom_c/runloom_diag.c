@@ -32,6 +32,7 @@ static unsigned int parse_one_token(const char *t, size_t n)
     if (n == 6 && memcmp(t, "gstate", 6) == 0)  return RUNLOOM_DBG_GSTATE;
     if (n == 10 && memcmp(t, "invariants", 10) == 0) return RUNLOOM_DBG_INVARIANTS;
     if (n == 4 && memcmp(t, "ring", 4) == 0)    return RUNLOOM_DBG_RING;
+    if (n == 9 && memcmp(t, "sleepheap", 9) == 0) return RUNLOOM_DBG_SLEEPHEAP;
     /* "1" -- legacy: tag for "build-style debug" only, no diag flags. */
     /* Unknown token: keep silent.  setup.py also uses RUNLOOM_DEBUG=1
      * which we ignore here. */

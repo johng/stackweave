@@ -327,6 +327,9 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
      * sigaltstack).  Must run BEFORE the first runloom_coro_resume. */
     runloom_coro_thread_init();
     runloom_tls_hub = h;
+    /* From here until this thread exits, only it may mutate h->sched's sleep
+     * heap (checked under STACKWEAVE_DEBUG=sleepheap). */
+    __atomic_store_n(&h->sched.heap_owner, (void *)h, __ATOMIC_RELEASE);
 
     /* Create the hub's per-thread io_uring ring.  Try
      * SINGLE_ISSUER (Linux 5.18+) + DEFER_TASKRUN (6.1+); the create
@@ -620,6 +623,15 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
             runloom_cldeque_size(&h->deque) > 1)
             runloom_mn_wakep_one();
 
+        /* PURGE MAILBOX: a signal wake claimed a sleeper of ours from the main
+         * thread and abandoned its entry on our heap (the fiber may resume on
+         * any hub, and only we may edit this heap).  Drop every abandoned
+         * entry now, so none lingers to its deadline holding its g and keeping
+         * sleep_size -- which the deadlock census reads -- non-zero.  Cheap
+         * relaxed peek first: set only by a delivered signal. */
+        if (__atomic_load_n(&h->sched.sleep_purge, __ATOMIC_RELAXED) &&
+            __atomic_exchange_n(&h->sched.sleep_purge, 0, __ATOMIC_ACQ_REL))
+            runloom_sched_sleep_purge(&h->sched);
         /* Wake any sleepers whose timers have expired and move them
          * onto the local FIFO so the pop below picks them up.  In controlled-
          * replay mode the clock is logical (advanced only at a quiescent census,
@@ -629,25 +641,39 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
             double now = runloom_mn_logical_now_or(runloom_sched_monotonic_seconds());
             while (h->sched.sleep_size > 0 &&
                    runloom_sched_sleep_peek(&h->sched)->wake_at <= now) {
-                runloom_g_t *woke = runloom_sched_sleep_pop(&h->sched);
-                /* ENQUEUE CLAIM (g->sleep_claimed).  A sleep_io sleeper has a
+                runloom_sleep_entry_t e;
+                runloom_g_t *woke;
+                (void)runloom_sched_sleep_pop_entry(&h->sched, &e);
+                woke = e.g;
+                /* ENQUEUE CLAIM (g->sleep_ticket).  A sleep_io sleeper has a
                  * second possible scheduler: the main thread, which picks it as
                  * the recipient of a raised signal handler and wakes it via
                  * mn_wake_g.  ready_push below is a bare ring push with no
                  * dedup, so without this claim both could enqueue the same g
                  * and it would be resumed twice -- onto a coro the first
                  * run-to-completion may already have freed.  Losing the CAS
-                 * means the signal side got there first and is waking it; drop
-                 * this pop rather than scheduling it again.  Delivery is not
-                 * affected: the exception rides the waiter node, not the
+                 * means this entry was ABANDONED: the signal side claimed the
+                 * sleep and is waking the fiber, which may since have moved on
+                 * and be sleeping again, here or on another hub, under a newer
+                 * ticket.  Drop the entry rather than schedule it.  Delivery is
+                 * not affected: the exception rides the waiter node, not the
                  * enqueue.  (Plain sleeps never register a waiter, so nothing
-                 * contends this and the CAS always wins for them.) */
-                {   int cexp = 0;
-                    if (!__atomic_compare_exchange_n(&woke->sleep_claimed, &cexp, 1,
-                                                     0, __ATOMIC_ACQ_REL,
-                                                     __ATOMIC_ACQUIRE))
+                 * contends this and the CAS always wins for them.)  Either way
+                 * the entry's ref on the g is ours to drop -- after the push,
+                 * when we win; the fiber's own ref keeps it alive meanwhile. */
+                {   uint64_t cexp = e.ticket;
+                    if (!__atomic_compare_exchange_n(&woke->sleep_ticket, &cexp,
+                                                     e.ticket | 1, 0,
+                                                     __ATOMIC_ACQ_REL,
+                                                     __ATOMIC_ACQUIRE)) {
+                        runloom_g_decref(woke);
                         continue;
+                    }
                 }
+                /* Won: this is the g's live sleep, so it must be a live g (the
+                 * entry ref makes a DONE one possible only for an abandoned
+                 * entry, which lost above).  Zero-cost unless gstate debug. */
+                RUNLOOM_G_ASSERT_NOT(woke, RUNLOOM_GST_MASK_DEAD);
                 /* The timer is a wake, and the sleep release left this g in
                  * wake_state PARKED.  Claim it back to RUNNING through the
                  * state machine (it has no other waker, so the CAS normally
@@ -683,6 +709,7 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                         }
                     }
                 }
+                runloom_g_decref(woke);   /* the entry's ref (taken by the sleeper) */
             }
         }
         /* Fire any due in-memory TIMED parks on this hub (runloom_c.park(timeout)).
@@ -1016,9 +1043,12 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                     have_sub = (h->sub_head != NULL);
                     RUNLOOM_RUNLOCK(&h->sub_lock, RUNLOOM_RANK_HUB_SUB);
                     /* Same Dekker for the multishot inbox: a fiber on another
-                     * hub pushes, fences, then kicks (runloom_loop_ms_post). */
+                     * hub pushes, fences, then kicks (runloom_loop_ms_post).
+                     * And for the sleep-heap purge mailbox: the signal wake
+                     * stores it, fences, then kicks (loop_wake_fd). */
                     if (!have_sub &&
-                        runloom_iouring_loop_inbox_pending(h->iouring_ring))
+                        (runloom_iouring_loop_inbox_pending(h->iouring_ring) ||
+                         __atomic_load_n(&h->sched.sleep_purge, __ATOMIC_ACQUIRE)))
                         have_sub = 1;
                     if (!have_sub) {
                         if (idle_ns <= 0) idle_ns = 1;
@@ -1234,6 +1264,15 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                             (__atomic_load_n(&runloom_global_runq_unpinned_len,
                                              __ATOMIC_ACQUIRE) > 0 ||
                              __atomic_load_n(&h->runq_pinned_n, __ATOMIC_ACQUIRE) > 0))
+                            have_sub = 1;
+                        /* The sleep-heap purge mailbox pairs with this fence
+                         * the same way: runloom_sched_sleep_signal_wake stores
+                         * it, fences, then kicks only an announced hub
+                         * (idle_waiting) -- so a hub that missed that kick must
+                         * see the mailbox here, or the abandoned entry it holds
+                         * waits out a whole idle_ns. */
+                        if (!have_sub &&
+                            __atomic_load_n(&h->sched.sleep_purge, __ATOMIC_ACQUIRE))
                             have_sub = 1;
                         /* The two signallers that do NOT read idle_waiting set
                          * a flag first and then signal under idle_lock, so
@@ -1508,6 +1547,9 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
             }
         }
     }
+    /* mn_fini drains what is left in the heap from the main thread once this
+     * thread has been joined. */
+    __atomic_store_n(&h->sched.heap_owner, (void *)NULL, __ATOMIC_RELEASE);
     runloom_tls_hub = NULL;
     /* Tear down the hub's iouring ring.  Unregister from netpoll FIRST
      * so the pump can't dispatch a CQE to a freed ring; THEN destroy.

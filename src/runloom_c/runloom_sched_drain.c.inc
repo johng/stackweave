@@ -110,7 +110,7 @@ long long runloom_sched_sim_advance_clock(runloom_sched_t *s, long long netpoll_
     long long sleeper_ns = -1, target_ns;
     double sleeper_sec = -1.0;
     if (s != NULL && s->sleep_size > 0) {
-        runloom_g_t *pk = runloom_sched_sleep_peek(s);
+        const runloom_sleep_entry_t *pk = runloom_sched_sleep_peek(s);
         if (pk != NULL && !pk->sleep_real) {
             sleeper_sec = pk->wake_at;
             sleeper_ns  = (long long)(sleeper_sec * 1e9);
@@ -197,7 +197,7 @@ Py_ssize_t runloom_sched_drain(runloom_sched_t *s)
          * the wall clock does.  Off the logical clock both reduce to `now`
          * (== wall), the original behaviour. */
         while (s->sleep_size > 0) {
-            runloom_g_t *pk = runloom_sleep_peek(s);
+            const runloom_sleep_entry_t *pk = runloom_sleep_peek(s);
             double clk = pk->sleep_real ? runloom_sched_monotonic_seconds() : now;
             if (pk->wake_at > clk) break;
             runloom_ready_push(s, runloom_sleep_pop(s));
@@ -388,7 +388,7 @@ Py_ssize_t runloom_sched_drain(runloom_sched_t *s)
              * loop runs the pending signal handler -- so let it. */
             now = runloom_sched_logical_now_or(runloom_sched_monotonic_seconds());
             while (s->sleep_size > 0) {
-                runloom_g_t *pk = runloom_sleep_peek(s);
+                const runloom_sleep_entry_t *pk = runloom_sleep_peek(s);
                 double clk = pk->sleep_real ? runloom_sched_monotonic_seconds() : now;
                 if (pk->wake_at > clk) break;
                 runloom_ready_push(s, runloom_sleep_pop(s));

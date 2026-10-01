@@ -14,4 +14,4 @@ tests/test_swarm_mn_sched.py::test_hub_guard_page_overflow_is_classified_not_sil
 tests/test_swarm_mn_sched.py::test_all_modes_at_once_under_hostile_workload_no_crash_no_hang | 120 s subprocess budget
 tests/test_swarm_mn_sched.py::test_cpu_hog_plus_sibling_on_one_hub_both_complete | 60 s subprocess budget
 tests/test_swarm_mn_sched.py::test_large_fiber_n_set_equality_at_scale | subprocess budget at scale
-tests/test_cross_hub_migration.py::test_sched_signal_woken_io_sleeper_survives_origin_heap_churn | 20-delivery floor / 40 s watchdog under TSan (and A1)
+tests/test_cross_hub_migration.py::test_sched_signal_woken_io_sleeper_survives_origin_heap_churn | 20-delivery floor / 40 s watchdog under TSan

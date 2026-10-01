@@ -223,8 +223,9 @@ struct runloom_g {
     PyThreadState *tstate;        /* per-g tstate, non-NULL under M:N;
                                    * the g's own Python execution state,
                                    * migratable across hubs */
+    /* Deadline of the current sleep, for introspection.  The sleep heap orders
+     * on its own copy in the entry (runloom_sleep_entry_t), never on this. */
     double wake_at;
-    uint64_t sleep_seq;  /* FIFO tiebreak for equal wake_at (asyncio (when,seq) order) */
     runloom_g_t *next;
     /* Owning per-thread scheduler (Phase C: one sched per OS thread).  Set at
      * spawn to the spawning thread's sched.  A cross-thread wake_safe (e.g. a
@@ -276,25 +277,34 @@ struct runloom_g {
      * scheduler otherwise cannot draw between it and an application
      * time.sleep(), which are byte-identical at this layer. */
     int sleep_io;
-    /* SLEEP CLAIM -- makes a sleep_io sleeper's resume EXACTLY-ONCE across its
-     * two possible schedulers.  A hub sleeper can be made runnable either by
-     * its deadline (the hub's own timer pop in mn_sched_hub_main) or, when a
-     * signal handler raises, by the MAIN thread choosing it as the recipient.
-     * Both would otherwise enqueue it -- the timer via ready_push (a bare ring
-     * push, no dedup) and the signal via mn_wake_g -- and a g scheduled twice
-     * is resumed twice, which lands on a coro that the first run-to-completion
-     * may already have destroyed.
+    /* SLEEP TICKET -- one per sleep, and the claim that makes the sleep's
+     * resume EXACTLY-ONCE.  A hub sleeper can be made runnable by its deadline
+     * (its hub's timer pop in mn_sched_hub_main) or, for a sleep_io sleeper
+     * when a signal handler raises, by the MAIN thread choosing it as the
+     * recipient.  Both would otherwise enqueue it -- the timer via ready_push
+     * (a bare ring push, no dedup) and the signal via mn_wake_g -- and a g
+     * scheduled twice is resumed twice, onto a coro the first run-to-
+     * completion may already have destroyed.
      *
-     * So both sides CAS 0->1 here and only the winner enqueues; the loser
-     * leaves the scheduling to whoever won.  Delivery is unaffected either way:
-     * the exception is claimed from the waiter node, not from the enqueue, so a
-     * signal that LOSES the claim is still picked up when the timer's resume
-     * reaches the sleeper's post-yield check.
+     * The sleeper sets a fresh EVEN ticket, greater than every earlier one,
+     * before it pushes its heap entry, and the entry carries a copy.  Each
+     * waker CASes the ticket from that copy to copy|1 and only the winner
+     * enqueues; delivery is unaffected either way, because the exception rides
+     * the waiter node, not the enqueue.
      *
-     * Reset to 0 by the sleeper itself, on its own thread, before it re-links
-     * and re-parks (runloom_sched_sleep_until_ex).  Single-thread-plane sleeps
-     * never touch it -- there the drain owns both paths already. */
-    int sleep_claimed;
+     * The ticket is also how an abandoned entry is recognised.  A signal-woken
+     * sleeper can resume on ANOTHER hub, and only the owning hub may touch its
+     * heap, so the entry stays behind on the origin heap while the fiber goes
+     * on, and maybe sleeps again, there or elsewhere.  The entry's copy then no
+     * longer matches (the ticket is odd, or a later sleep's), so its CAS fails
+     * and the origin hub drops it (runloom_sched_sleep_purge, or the pop when
+     * it comes due).  A per-sleep 0/1 flag could not tell the two sleeps apart:
+     * the stale entry would cut the next sleep short.
+     *
+     * Written by the sleeper on its own thread; CASed by the timer pop and the
+     * signal wake; all accesses atomic.  Single-thread-plane sleeps never use
+     * it -- there the drain owns both paths already. */
+    uint64_t sleep_ticket;
     /* Race-safe park/wake counter.  runloom_sched_park_safe decrements;
      * if >0, the wake already arrived and we skip the yield.
      * runloom_sched_wake_safe increments and (if g is currently parked)
@@ -559,13 +569,31 @@ void runloom_g_slab_thread_flush(void);
 void runloom_g_slab_reclaim(void);
 
 /* Per-OS-thread scheduler. */
+/* One entry in a sched's SLEEP heap.  By value: the heap orders on its own
+ * (wake_at, seq) and never reads the g, so an entry can outlive the sleep it
+ * was pushed for -- a signal-woken hub sleeper that resumed on another hub
+ * leaves it behind, and its g may already be sleeping again with a different
+ * deadline.  `ticket` is the g's sleep_ticket at push; the entry is live while
+ * the two still match.  On a HUB heap every entry holds a ref to g (taken by
+ * the sleeper before the push, dropped by the owning hub when the entry
+ * leaves the heap), so an abandoned entry never points at a freed or recycled
+ * g.  A single-thread heap never abandons an entry and holds no refs. */
+typedef struct {
+    double       wake_at;    /* deadline: monotonic, or logical if !sleep_real */
+    uint64_t     seq;        /* FIFO tiebreak for equal wake_at (asyncio (when,seq)) */
+    runloom_g_t *g;
+    uint64_t     ticket;     /* g->sleep_ticket when pushed (hub heaps only) */
+    int          sleep_real; /* wall-clock sleeper even under the logical clock */
+    int          sleep_io;   /* g->sleep_io: only these can be abandoned (purge) */
+} runloom_sleep_entry_t;
+
 /* One entry in a sched's TIMER heap: an in-memory timed park (runloom_c.park
  * with a timeout) that must be woken at `deadline` (monotonic seconds) if a real
  * wake_safe has not already done so.  Self-contained by VALUE (no g->wake_at
- * reuse, unlike the sleep heap), so a g may have several STALE entries in flight
- * across re-parks -- a stale entry that pops just causes at most ONE spurious
- * wake (the parker re-checks the clock and re-parks), never a premature timeout:
- * the parker decides timed-out from the clock on resume, NOT from the timer. */
+ * reuse), so a g may have several STALE entries in flight across re-parks -- a
+ * stale entry that pops just causes at most ONE spurious wake (the parker
+ * re-checks the clock and re-parks), never a premature timeout: the parker
+ * decides timed-out from the clock on resume, NOT from the timer. */
 typedef struct {
     double       deadline;   /* wake deadline (monotonic seconds -- or census-
                               * LOGICAL seconds when `logical` is set, I4) */
@@ -595,12 +623,24 @@ struct runloom_sched {
     size_t    ready_tail;             /* enqueue index */
     /* Currently-running g (for yield). */
     runloom_g_t *current;
-    /* Sleep heap -- min-heap by wake_at.  Stored as a growable array
-     * indexed 1..size; index 0 unused. */
-    runloom_g_t **sleep_heap;
+    /* Sleep heap -- min-heap by (wake_at, seq) of by-value entries.  Stored
+     * as a growable array indexed 1..size; index 0 unused. */
+    runloom_sleep_entry_t *sleep_heap;
     Py_ssize_t sleep_size;
     Py_ssize_t sleep_cap;
-    uint64_t   sleep_seq_ctr;  /* monotonic counter for sleep_seq FIFO tiebreak */
+    uint64_t   sleep_seq_ctr;  /* monotonic counter for the entries' seq tiebreak */
+    /* Purge mailbox: set by a thread that abandoned an entry on this heap (the
+     * signal wake that claimed a hub sleeper), taken by the owning hub at its
+     * loop top, which then drops every abandoned entry.  Until then an
+     * abandoned entry is only a dead timer: it keeps sleep_size non-zero and
+     * holds its g, nothing more. */
+    int        sleep_purge;
+    /* The hub whose thread owns this sleep heap, while that thread runs; NULL
+     * for a single-thread sched and for a hub that has not started or has
+     * exited.  The heap is a plain array, so only the owner may push, pop or
+     * remove.  hub_main sets and clears it on its own thread; only the
+     * STACKWEAVE_DEBUG=sleepheap oracle reads it (runloom_sleep_owner_check). */
+    void      *heap_owner;
     /* Timer heap -- min-heap by deadline for in-memory TIMED parks
      * (runloom_park_generic_timed).  Separate from the sleep heap so a g can hold
      * multiple stale entries safely (by-value entries, no g->wake_at reuse).
@@ -940,9 +980,12 @@ void runloom_sched_datastack_sweep_stats(unsigned long long *tail_bytes,
                                       unsigned long long *chunks);
 
 /* Sleep-heap helpers exposed for mn_sched.c's per-hub timer processing.
- * Single-thread drain still uses them via #define aliases. */
-runloom_g_t *runloom_sched_sleep_peek(runloom_sched_t *s);
+ * Single-thread drain still uses them via #define aliases.  Only the heap's
+ * owning thread may call the mutators (pop, pop_entry, purge). */
+const runloom_sleep_entry_t *runloom_sched_sleep_peek(runloom_sched_t *s);
 runloom_g_t *runloom_sched_sleep_pop(runloom_sched_t *s);
+int runloom_sched_sleep_pop_entry(runloom_sched_t *s, runloom_sleep_entry_t *out);
+void runloom_sched_sleep_purge(runloom_sched_t *s);
 
 /* Monotonic clock used by the sleep heap.  Public so hub_main can
  * decide when sleepers are due. */

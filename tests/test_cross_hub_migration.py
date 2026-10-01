@@ -20,7 +20,7 @@ Each scenario runs in a fresh subprocess so a lost fiber or a wedged hub is a
 clean timeout rather than a hung pytest, and so one scenario's leak cannot
 leak into the next.
 
-Fourteen gaps are closed (their docstrings start "Was a gap").  The three
+Fifteen gaps are closed (their docstrings start "Was a gap").  The three
 that remain are strict xfails under TODO_MIGRATION_FAIL: OS-thread-identity
 checks that live in C or in importlib and need a pin or a monkey patch.  A
 strict xfail still runs, and flips to a hard XPASS failure the moment its gap
@@ -51,8 +51,8 @@ Four tests pass today and are here to pin down what was verified to work:
 that migration is actually observable through this harness, that
 ``PyGILState_Ensure`` callbacks (ctypes, sqlite UDFs, OpenSSL) run on the
 fiber's own thread state after it has moved, that ``G.pin`` keeps a fiber
-on one OS thread, and that signal delivery into a migrating io-sleeper does
-not crash (the heap race it exercises is confirmed by reading only).
+on one OS thread, and that signal delivery into a migrating io-sleeper
+neither crashes nor cuts the fiber's next sleep short.
 """
 import os
 import re
@@ -134,8 +134,8 @@ def require_migration(moved):
 ''' % os.path.join(REPO, "src")
 
 
-def run_scenario(code, timeout=60):
-    env = dict(os.environ)
+def run_scenario(code, timeout=60, env=None):
+    env = dict(os.environ, **(env or {}))
     env["PYTHON_GIL"] = "0"
     env["STACKWEAVE_GIL"] = "0"
     try:
@@ -154,14 +154,14 @@ def _key_line(out, err):
     """The one line that says why the scenario failed: the last error or
     watchdog line on stderr, else the last thing the scenario printed."""
     for line in reversed(err.splitlines()):
-        if re.match(r"\s*(\w+(Error|Exception|Interrupt)\b|WATCHDOG)", line):
+        if re.match(r"\s*(\w+(Error|Exception|Interrupt)\b|WATCHDOG|\[STACKWEAVE_DEBUG=)", line):
             return line.strip()
     lines = [l for l in out.splitlines() if l.strip()]
     return lines[-1].strip() if lines else "(no output)"
 
 
-def assert_pass(code, timeout=60):
-    rc, out, err = run_scenario(code, timeout=timeout)
+def assert_pass(code, timeout=60, env=None):
+    rc, out, err = run_scenario(code, timeout=timeout, env=env)
     if "NOMIG" in out:
         pytest.skip("no cross-hub migration observed on this machine; "
                     "the scenario needs >=2 hubs that actually trade fibers")
@@ -1204,24 +1204,51 @@ stackweave.run(4, main)
 
 
 # ---------------------------------------------------------------------------
-# Not reproduced: the signal-wake heap race (PR #23 review, 7.5 #6) is confirmed by
-# reading only -- the window is ~100 ns per delivery.  This stress drives the
-# path (a raising SIGALRM handler is delivered INTO a parked io-sleeper, which
-# is woken from the main thread through the global run-queue, resumes on some
-# other hub and edits its ORIGIN hub's sleep heap while that hub pops timers)
-# and passes today; it is here so a crash or a lost sleeper has a name.  Each
+# The signal-wake heap race (PR #23 review, 7.5 #6; TSan finding A1).  A
+# raising SIGALRM handler is delivered INTO a parked io-sleeper, which is woken
+# from the main thread through the global run-queue and resumes on some other
+# hub.  It used to edit its ORIGIN hub's sleep heap from there while that hub
+# popped timers; the window is ~100 ns per delivery, so a release build never
+# showed a symptom, and only TSan and the sleepheap oracle below catch it.  Each
 # hub holds one undelivered exception at a time, so a burst can find every
 # slot full and carry the exception out of run(): that ends the stress early
-# and is tolerated, a crash or a lost churner is not.
+# and is tolerated; a crash, a lost churner or an early wake is not.
 # ---------------------------------------------------------------------------
 
 def test_sched_signal_woken_io_sleeper_survives_origin_heap_churn():
+    """A sleep the signal wake abandoned never wakes the fiber's next sleep.
+
+    A signal-woken io sleeper that resumed on another hub used to remove
+    itself from its ORIGIN hub's sleep heap, racing that hub's timer pop and
+    its churners' sleeps (A1 in docs/dev/TSAN.md).  Now the entry stays where
+    it is, and the origin hub drops it on its own thread.  So the risk moves
+    to the abandoned entry: the fiber may already be sleeping again, on the
+    same heap or another, when the old entry comes due.  If the entry could
+    claim that next sleep, the sleep would return before its deadline.  Each
+    entry therefore carries the sleep's ticket and loses its claim once the
+    ticket has moved on.
+
+    The recipients re-sleep the moment a signal lands, so most deliveries
+    leave an abandoned entry due within the recipient's next sleep.  Every
+    sleep that returns normally is checked against its deadline, and every
+    churner must finish: a lost heap entry strands one, a doubled one resumes
+    a fiber twice.  main stops the itimer while the recipients are still
+    parked and only then lets them go, so no signal is left to escape run()
+    once nobody can take it, and main itself counts the finished churners --
+    a stranded one would otherwise just hang run() into the watchdog.
+    test_sched_only_the_owning_hub_mutates_its_sleep_heap guards the race
+    itself.
+    """
     assert_pass(r'''
 import signal
 _watchdog(40)
-NS, DUR = 64, 3.0
+NS, NR, DUR = 64, 8, 3.0
+TOL = 0.0002                    # float rounding between the two clocks' reads
 done = bytearray(NS)
-hits, delivered, completed = [0], [0], [False]
+early = bytearray(NS + NR)      # one slot per fiber: race-free GIL-off
+hits, delivered, finished = [0], [0], [False]
+stop = [False]
+recipients = stackweave.WaitGroup()
 class Tick(Exception): pass
 def handler(signum, frame):
     hits[0] += 1
@@ -1230,20 +1257,113 @@ signal.signal(signal.SIGALRM, handler)      # main thread, before run()
 def churner(i):
     t_end = time.monotonic() + DUR
     while time.monotonic() < t_end:
+        t0 = time.monotonic()
         stackweave.sleep(0.001)
+        if time.monotonic() - t0 < 0.001 - TOL:
+            early[i] = min(early[i] + 1, 255)
     done[i] = 1
-def recipient():
+def recipient(r):
+    try:
+        while not stop[0]:
+            t0 = time.monotonic()
+            try:
+                stackweave_c.sched_sleep_io(0.01)
+            except Tick:
+                delivered[0] += 1
+                continue
+            if time.monotonic() - t0 < 0.01 - TOL:
+                early[NS + r] = min(early[NS + r] + 1, 255)
+    finally:
+        recipients.done()
+def main():
+    recipients.add(NR)
+    for i in range(NS):
+        stackweave.fiber(churner, i)
+    for r in range(NR):
+        stackweave.fiber(recipient, r)
+    stackweave.sleep(0.1)                   # recipients are parked
+    signal.setitimer(signal.ITIMER_REAL, 0.001, 0.001)
+    stackweave.sleep(DUR)
+    # Stop the source while the recipients still take signals: the main
+    # thread runs handlers on a ~16 ms poll, so one may still be pending.
+    signal.setitimer(signal.ITIMER_REAL, 0, 0)
+    stackweave.sleep(0.2)
+    stop[0] = True
+    recipients.wait()
+    t_end = time.monotonic() + 5.0          # churners end DUR after they start
+    while sum(done) < NS and time.monotonic() < t_end:
+        stackweave.sleep(0.01)
+    if sum(done) < NS:                      # run() would never return: say why
+        print("LOST %d of %d churners: a sleeper was never woken"
+              % (NS - sum(done), NS), flush=True)
+        os._exit(4)
+    finished[0] = True
+try:
+    stackweave.run(4, main)
+except Tick:
+    signal.setitimer(signal.ITIMER_REAL, 0, 0)
+print("signals=%d delivered into io-sleepers=%d main finished=%s churners %d/%d, "
+      "sleeps cut short: churners %d recipients %d"
+      % (hits[0], delivered[0], finished[0], sum(done), NS,
+         sum(early[:NS]), sum(early[NS:])), flush=True)
+# Handlers run on the main thread's ~16 ms poll; a loaded CI runner starves
+# that poll, so the floor is a fraction of the ~180 deliveries an idle box gets.
+assert delivered[0] >= 20, "only %d signals reached a parked io-sleeper" % delivered[0]
+assert not any(early), "%d sleeps returned before their deadline" % sum(early)
+assert finished[0], "a signal escaped run() before main counted the churners"
+assert sum(done) == NS, "%d sleepers lost" % (NS - sum(done))
+print("PASS", flush=True)
+''')
+
+
+def test_sched_only_the_owning_hub_mutates_its_sleep_heap():
+    """Was a gap (fixed: the woken sleeper leaves its entry behind and the origin hub purges it): only a hub's own thread may push, pop or remove on its sleep heap.
+
+    The heap is a plain array with no lock.  A select.poll / no-fd select
+    reprobe sleeps in it with sched_sleep_io, and a raised signal handler on
+    the main thread wakes that sleeper through the global run-queue, so it can
+    resume on any hub.  If the woken fiber then edits its origin hub's heap,
+    it races that hub's timer pop and its other fibers' sleeps: plain stores
+    that can lose a sleeper or schedule one twice.  TSan reports it (A1 in
+    docs/dev/TSAN.md), but a release build almost never shows a symptom, so
+    the churn test above passes either way.
+
+    STACKWEAVE_DEBUG=sleepheap turns the race into a deterministic abort on a
+    release build: every heap mutation checks that it runs on the owning hub's
+    thread.  The scenario needs at least one delivery that resumed on a
+    different OS thread from the one it parked on, and skips loudly without.
+    """
+    assert_pass(r'''
+import signal
+_watchdog(40)
+NS, NR, DUR = 32, 8, 2.0
+hits = [0]
+delivered = bytearray(NR)       # one slot per recipient: race-free GIL-off
+moved = bytearray(NR)
+class Tick(Exception): pass
+def handler(signum, frame):
+    hits[0] += 1
+    raise Tick()
+signal.signal(signal.SIGALRM, handler)      # main thread, before run()
+def churner():
     t_end = time.monotonic() + DUR
     while time.monotonic() < t_end:
+        stackweave.sleep(0.001)
+def recipient(r):
+    t_end = time.monotonic() + DUR
+    while time.monotonic() < t_end:
+        before = threading.get_ident()
         try:
             stackweave_c.sched_sleep_io(0.01)
         except Tick:
-            delivered[0] += 1
+            delivered[r] = min(delivered[r] + 1, 255)
+            if threading.get_ident() != before:
+                moved[r] = min(moved[r] + 1, 255)
 def main():
-    for i in range(NS):
-        stackweave.fiber(churner, i)
-    for _ in range(8):
-        stackweave.fiber(recipient)
+    for _ in range(NS):
+        stackweave.fiber(churner)
+    for r in range(NR):
+        stackweave.fiber(recipient, r)
     stackweave.sleep(0.1)                   # recipients are parked
     signal.setitimer(signal.ITIMER_REAL, 0.001, 0.001)
     t_end = time.monotonic() + DUR + 0.5
@@ -1253,19 +1373,65 @@ def main():
         except Tick:
             pass
     signal.setitimer(signal.ITIMER_REAL, 0, 0)
-    completed[0] = True
 try:
     stackweave.run(4, main)
 except Tick:
     signal.setitimer(signal.ITIMER_REAL, 0, 0)
-print("signals=%d delivered into io-sleepers=%d run completed=%s finished %d/%d churners"
-      % (hits[0], delivered[0], completed[0], sum(done), NS), flush=True)
-# Handlers run on the main thread's ~16 ms poll; a loaded CI runner starves
-# that poll, so the floor is a fraction of the ~180 deliveries an idle box gets.
-assert delivered[0] >= 20, "only %d signals reached a parked io-sleeper" % delivered[0]
-if completed[0]:
-    assert sum(done) == NS, "%d sleepers lost" % (NS - sum(done))
+print("signals=%d delivered=%d of them resumed on another hub=%d"
+      % (hits[0], sum(delivered), sum(moved)), flush=True)
+require_migration(sum(moved) > 0)
 print("PASS", flush=True)
+''', env={"STACKWEAVE_DEBUG": "sleepheap"})
+
+
+def test_sched_an_abandoned_sleep_entry_does_not_mask_a_deadlock():
+    """The origin hub drops an abandoned sleep entry promptly, not at its deadline.
+
+    A signal-woken io sleeper's entry stays on the heap of the hub it parked
+    on (only that hub may edit it).  Until it is gone it is a dead timer that
+    still counts: it keeps that hub's sleep_size non-zero, and the deadlock
+    census reads a sleeper as work that will wake a fiber.  A no-fd
+    select.select(timeout) sleeps the whole timeout in one go, so an abandoned
+    entry could mask a real deadlock for that long -- an hour for
+    select.select([], [], [], None).  The signal wake therefore posts the
+    origin hub's purge mailbox, and that hub drops the entry at its next loop
+    top.
+
+    Here a fiber is interrupted out of a one-hour io sleep, and then every
+    fiber blocks on a channel nobody sends to.  With deadlock mode "raise",
+    run() must raise within a few census periods, not after the hour.
+    """
+    assert_pass(r'''
+import signal
+_watchdog(30)
+class Tick(Exception): pass
+def handler(signum, frame):
+    raise Tick()
+signal.signal(signal.SIGALRM, handler)      # main thread, before run()
+stackweave_c.set_deadlock_mode(2)           # raise
+got = []
+never = stackweave.Chan(0)
+def sleeper():
+    try:
+        stackweave_c.sched_sleep_io(3600.0)
+    except Tick:
+        got.append(time.monotonic())
+    never.recv()
+def main():
+    stackweave.fiber(sleeper)
+    signal.setitimer(signal.ITIMER_REAL, 0.2)
+    never.recv()
+t0 = time.monotonic()
+try:
+    stackweave.run(2, main)
+    print("run() returned", flush=True)
+except RuntimeError as e:
+    print("raised after %.2fs: %s" % (time.monotonic() - t0, e), flush=True)
+    assert "deadlock" in str(e), e
+    assert got, "the signal never reached the io sleeper"
+    lag = time.monotonic() - got[0]
+    assert lag < 5.0, "deadlock reported %.1fs after the last wake source went" % lag
+    print("PASS", flush=True)
 ''')
 
 
