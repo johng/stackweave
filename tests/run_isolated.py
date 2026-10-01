@@ -176,39 +176,89 @@ def run_file(name, pytest_args):
     cmd = [sys.executable, "-m", "pytest", path, "-v", "-s",
            "-p", "no:cacheprovider"] + list(pytest_args)
     t0 = time.monotonic()
+    # The file runs as the leader of its OWN process group (start_new_session)
+    # so a timeout can kill everything it spawned, not just pytest.  Tests
+    # spawn children (test_process_compat, the subprocess-based reproducers),
+    # and a child inherits the stdout pipe below: with pytest alone killed,
+    # communicate() waits for EOF that a surviving grandchild never delivers.
+    # That is how the CI macOS lane sat silent for 28 minutes past a 600 s
+    # per-file deadline until the job cap cancelled it (run 36835001629): the
+    # deadline fired, SIGABRT + kill hit pytest, and the final no-timeout
+    # communicate() blocked on the pipe.  Every read below is bounded now, and
+    # the signals go to the group.
     p = subprocess.Popen(cmd, cwd=REPO, env=env,
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                         text=True)
-    try:
-        out, _ = p.communicate(timeout=timeout)
-        rc = p.returncode
-    except subprocess.TimeoutExpired:
-        # Hung.  Extract which test was running (last one mentioned in -v output),
-        # SIGABRT to dump stacks, then kill if needed.
+                         text=True, start_new_session=True)
+
+    def killpg(sig):
         try:
-            p.send_signal(signal.SIGABRT)
-        except Exception:
+            os.killpg(p.pid, sig)
+        except (ProcessLookupError, PermissionError):
             pass
+
+    note = None
+    try:
         try:
-            out, _ = p.communicate(timeout=15 * TIMEOUT_MULT)
+            out, _ = p.communicate(timeout=timeout)
+            rc = p.returncode
         except subprocess.TimeoutExpired:
-            p.kill()
-            out, _ = p.communicate()
-        rc = 124
-        # Find the last test name in the verbose output (the one that hung).
-        last_test = "(unknown test)"
-        for line in reversed((out or "").splitlines()):
-            if "::" in line and not line.startswith("="):
-                # Extract test name from lines like:
-                # "tests/test_X.py::Class::test_name PASSED"
-                # or just "tests/test_X.py::Class::test_name" (still running when hung)
-                parts = line.split()
-                if parts:
-                    last_test = parts[0]
-                    break
-        out = (out or "") + (
-            "\n[run_isolated: TIMED OUT after {0}s on {1}; SIGABRT faulthandler "
-            "dump (if any) is above]".format(timeout, last_test))
+            pytest_rc = p.poll()        # None: pytest itself is still running
+            # Hung (or a leftover child holds the pipe).  SIGABRT the group so
+            # faulthandler dumps every thread, give it a bounded grace, then
+            # SIGKILL the group; communicate() keeps already-read output across
+            # retries, and the last read is bounded too: if something outside
+            # the group still holds the pipe, drop it rather than hang here.
+            killpg(signal.SIGABRT)
+            try:
+                out, _ = p.communicate(timeout=15 * TIMEOUT_MULT)
+            except subprocess.TimeoutExpired:
+                killpg(signal.SIGKILL)
+                try:
+                    out, _ = p.communicate(timeout=10 * TIMEOUT_MULT)
+                except subprocess.TimeoutExpired:
+                    try:
+                        p.stdout.close()
+                    except Exception:
+                        pass
+                    try:
+                        p.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        pass
+                    out = ""
+                    note = ("[run_isolated: the output pipe stayed open after "
+                            "SIGKILL of the process group; output abandoned]")
+            if pytest_rc is not None:
+                # pytest had already exited: the file did not hang, a child it
+                # left behind kept our pipe open.  Keep pytest's verdict (the
+                # tests themselves were not wedged) but say so -- a leaked
+                # child is a test-hygiene bug worth seeing.
+                rc = pytest_rc
+                note = ((note + "\n") if note else "") + (
+                    "[run_isolated: pytest exited rc={0} but a leftover child "
+                    "process held the output pipe open until the {1}s deadline; "
+                    "the process group was killed]".format(pytest_rc, timeout))
+            else:
+                rc = 124
+                # Find the last test name in the verbose output (the one that hung).
+                last_test = "(unknown test)"
+                for line in reversed((out or "").splitlines()):
+                    if "::" in line and not line.startswith("="):
+                        # Extract test name from lines like:
+                        # "tests/test_X.py::Class::test_name PASSED"
+                        # or just "tests/test_X.py::Class::test_name" (still running when hung)
+                        parts = line.split()
+                        if parts:
+                            last_test = parts[0]
+                            break
+                note = ((note + "\n") if note else "") + (
+                    "[run_isolated: TIMED OUT after {0}s on {1}; SIGABRT faulthandler "
+                    "dump (if any) is above]".format(timeout, last_test))
+    except KeyboardInterrupt:
+        # Ctrl-C reaches the runner, not the child's own session: forward it.
+        killpg(signal.SIGINT)
+        raise
+    if note is not None:
+        out = (out or "") + "\n" + note
     return rc, out, time.monotonic() - t0
 
 
@@ -333,7 +383,8 @@ def main(argv):
             # Surface conftest leak reports even when the file passed (report
             # mode does not fail, so the tail-on-failure path misses them).
             for line in out.splitlines():
-                if "[runloom-leak]" in line:
+                if "[runloom-leak]" in line or (
+                        "[run_isolated:" in line and "leftover child" in line):
                     print("      {0}".format(line.strip()))
             sys.stdout.flush()
 

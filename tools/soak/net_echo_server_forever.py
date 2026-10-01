@@ -54,9 +54,32 @@ def handle(conn):
         pass
 
 
+# Stop plumbing.  The SIGTERM/SIGINT handler runs on the MAIN thread and only
+# sets STOP; it cannot wake a fiber parked in a plain sched_sleep (a handler that
+# does not raise never cuts a sleep short -- CPython's time.sleep has worked the
+# same way since PEP 475), so root's old `sleep(3600)` kept the server up for up
+# to an hour after `kill`, on every backend.  The handler writes a byte to a
+# pipe instead and root parks on it with wait_fd, which readiness wakes at once
+# (asyncio's set_wakeup_fd pattern); root then wakes the reporter the same way.
+_READ = 1                                   # stackweave_c.wait_fd READ mask
+_STOP_PIPE = [None, None]                   # (r, w) root's wake pipe
+_REPORT_PIPE = [None, None]                 # (r, w) reporter's wake pipe
+
+
+def _close_pipe(pair):
+    r, w = pair
+    stackweave_c.netpoll_unregister(r)
+    os.close(r)
+    os.close(w)
+
+
 def reporter(t_start):
+    rep_r = _REPORT_PIPE[0]
     while not STOP[0]:
-        stackweave_c.sched_sleep(REPORT)
+        # Heartbeat interval as a TIMED park on the report pipe: 0 == interval
+        # elapsed (print a heartbeat), anything else == root woke us to stop.
+        if stackweave_c.wait_fd(rep_r, _READ, int(REPORT * 1000)) != 0:
+            break
         try:
             fc = stackweave_c.fiber_count()
         except Exception:                       # noqa: BLE001 - best-effort liveness
@@ -65,6 +88,7 @@ def reporter(t_start):
             "[net_echo_srv] up={0:.0f}s alive fibers={1} bind={2}:{3}\n".format(
                 time.monotonic() - t_start, fc, BIND, PORT))
         sys.stderr.flush()
+    _close_pipe(_REPORT_PIPE)
 
 
 def root():
@@ -76,21 +100,31 @@ def root():
             BIND, port, HUBS, BACKLOG))
     sys.stderr.flush()
     stackweave.fiber(lambda: reporter(t_start))
-    # serve()'s C accept loops run under the hubs; park root until a signal flips
-    # STOP, then close the listeners so the accept loops (and run()) drain.
+    # serve()'s C accept loops run under the hubs; park root on the stop pipe
+    # until the signal handler writes to it (see _STOP_PIPE), then close the
+    # listeners so the accept loops (and run()) drain, and wake the reporter.
+    stop_r = _STOP_PIPE[0]
     while not STOP[0]:
-        stackweave_c.sched_sleep(3600)
+        stackweave_c.wait_fd(stop_r, _READ)
     for l in listeners:
         l.close()
+    os.write(_REPORT_PIPE[1], b"x")
+    _close_pipe(_STOP_PIPE)
 
 
 def request_stop(signum, frame):
     STOP[0] = True
+    try:
+        os.write(_STOP_PIPE[1], b"x")       # async-signal-safe; wakes root
+    except OSError:
+        pass
 
 
 def main():
     faulthandler.enable()
     faulthandler.register(signal.SIGUSR1, all_threads=True)   # kill -USR1 == live stacks
+    _STOP_PIPE[:] = os.pipe()
+    _REPORT_PIPE[:] = os.pipe()
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
     sys.stderr.write(
