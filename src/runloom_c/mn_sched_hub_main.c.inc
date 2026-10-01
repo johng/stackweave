@@ -164,33 +164,21 @@ static volatile int runloom_mn_nidle = 0;   /* # hubs with idle_parked=1 (hint) 
 static int runloom_mn_any_stealable_work(const runloom_hub_t *self)
 {
     int i;
-    /* An offload hub only ever runs work pinned to it (exclusion 2 from the
-     * puller's side, mirrored in runloom_mn_global_runq_pull): unpinned
-     * run-queue entries and other hubs' deques are not its work, so they
-     * must not keep it awake either. */
-    int self_offload = (self != NULL && runloom_hub_is_offload(self->id));
-    if (!self_offload &&
-        __atomic_load_n(&runloom_global_runq_unpinned_len, __ATOMIC_ACQUIRE) > 0)
+    long over;
+    if (__atomic_load_n(&runloom_global_runq_unpinned_len, __ATOMIC_ACQUIRE) > 0)
         return 1;
     if (self != NULL &&
         __atomic_load_n(&self->runq_pinned_n, __ATOMIC_ACQUIRE) > 0) return 1;
-    if (self_offload) return 0;
-    /* General hubs only: work sitting on an offload hub is NOT stealable by
-     * anyone (exclusion 2), so counting it here would wake general hubs to
-     * hunt for work they are forbidden to take. */
-    {
-        /* Surplus threshold.  Default mode: >1 -- one for the owner, who is at
-         * its own drain and about to run it, at least one to steal.  Under
-         * migration a deque may also hold a LOCALLY-WOKEN g
-         * (runloom_mn_woken_enqueue) pushed mid-fiber by a BUSY owner that
-         * will not reach its pick step until that fiber parks, so a deque of
-         * ONE is surplus a parking hub must not sleep through.  The producer
-         * side kicks after every local push, so the Dekker pair stays exact;
-         * >0 can only cost an extra scan, never lose a wake. */
-        long over = runloom_use_global_runq() ? 0 : 1;
-        for (i = 0; i < runloom_general_hub_count(); i++)
-            if (runloom_cldeque_size(&runloom_hubs[i].deque) > over) return 1;
-    }
+    /* Surplus threshold.  Default mode: >1 -- one for the owner, who is at its
+     * own drain and about to run it, at least one to steal.  Under migration a
+     * deque may also hold a LOCALLY-WOKEN g (runloom_mn_woken_enqueue) pushed
+     * mid-fiber by a BUSY owner that will not reach its pick step until that
+     * fiber parks, so a deque of ONE is surplus a parking hub must not sleep
+     * through.  The producer side kicks after every local push, so the Dekker
+     * pair stays exact; >0 can only cost an extra scan, never lose a wake. */
+    over = runloom_use_global_runq() ? 0 : 1;
+    for (i = 0; i < runloom_hub_count; i++)
+        if (runloom_cldeque_size(&runloom_hubs[i].deque) > over) return 1;
     return 0;
 }
 
@@ -232,11 +220,7 @@ static void runloom_mn_wakep_one(void)
      * is only paid on a surplus tick, never in the busy steady state. */
     __atomic_thread_fence(__ATOMIC_SEQ_CST);
     if (__atomic_load_n(&runloom_mn_nidle, __ATOMIC_RELAXED) <= 0) return;
-    /* Wake a GENERAL hub only.  This is the "someone has stealable work" kick;
-     * an offload hub cannot steal, so waking one burns a scan and re-park.
-     * Offload hubs are woken by their own submit path instead
-     * (runloom_mn_hub_submit), which is how pinned work reaches them. */
-    for (i = 0; i < runloom_general_hub_count(); i++) {
+    for (i = 0; i < runloom_hub_count; i++) {
         if (runloom_mn_wakep_kick(&runloom_hubs[i]))
             return;                              /* one wakep per surplus, like Go */
     }
@@ -244,8 +228,8 @@ static void runloom_mn_wakep_one(void)
 
 /* Wake the ONE hub a pinned global-runq entry belongs to: every other hub walks
  * past the entry, so wakep_one could rouse a hub that cannot take it while the
- * owner stays deep-parked.  Bounded by runloom_hub_count, not the general-hub
- * count, because G.pin(N) accepts any live hub.  Same backoff gate as wakep_one. */
+ * owner stays deep-parked.  G.pin(N) accepts any live hub, so the bound is
+ * runloom_hub_count.  Same backoff gate as wakep_one. */
 static void runloom_mn_wakep_pinned(int hub_id)
 {
     if (runloom_idle_backoff_cap_ms() <= 1) return;
@@ -791,23 +775,11 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
             }
         }
         if (g == NULL) {
-          /* EXCLUSION 2 of 3 (see the offload-hubs block in mn_sched.c).
-           * Both directions matter and they fail differently:
-           *   - an OFFLOAD hub must never steal: a stolen general g would sit
-           *     on a hub that is about to block in a syscall, i.e. exactly the
-           *     strand this design exists to prevent;
-           *   - a GENERAL hub must never steal FROM an offload hub: it would
-           *     run a blocking call on a general hub, ditto.
-           * Bounding the victim scan at the general count gets the second for
-           * free (offload hubs are the array TAIL), and the guard below gets
-           * the first.  With the feature off, general count == hub count and
-           * this is the previous condition unchanged. */
-          if (!runloom_mn_ctrl_no_steal() && !runloom_hub_is_offload(h->id) &&
-              runloom_general_hub_count() >= 2) {
+          if (!runloom_mn_ctrl_no_steal() && runloom_hub_count >= 2) {
             /* Randomized coprime-stride victim order (see runloom_steal_stride):
              * each hub starts at its own id and steps by a coprime stride, so K
              * idle hubs don't all hammer hub 0's steal CAS in lockstep. */
-            int n = runloom_general_hub_count();
+            int n = runloom_hub_count;
             int stride, pos, k;
             if (runloom_sched_random_on()) {
                 /* Random start + random coprime stride: still visits every
@@ -1162,9 +1134,8 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                              * we see the entry here or the pusher sees our announce. */
                             __atomic_thread_fence(__ATOMIC_SEQ_CST);
                             if (!have_sub &&
-                                ((!runloom_hub_is_offload(h->id) &&
-                                  __atomic_load_n(&runloom_global_runq_unpinned_len,
-                                                  __ATOMIC_ACQUIRE) > 0) ||
+                                (__atomic_load_n(&runloom_global_runq_unpinned_len,
+                                                 __ATOMIC_ACQUIRE) > 0 ||
                                  __atomic_load_n(&h->runq_pinned_n, __ATOMIC_ACQUIRE) > 0))
                                 have_sub = 1;
                             if (!have_sub) {

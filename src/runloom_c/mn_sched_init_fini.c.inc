@@ -31,7 +31,7 @@ void runloom_mn_worker_tstate_delete(PyThreadState *ts)
     PyThreadState_DeleteCurrent();
 }
 
-int runloom_mn_init(int n_threads, int offload_hubs)
+int runloom_mn_init(int n_threads)
 {
     int i;
     PyInterpreterState *interp;
@@ -130,35 +130,8 @@ int runloom_mn_init(int n_threads, int offload_hubs)
         if (n_threads <= 0) n_threads = 4;
         if (n_threads > 16) n_threads = 16;
     }
-    /* Reserve the offload hubs ON TOP of the general count, so enabling the
-     * feature never shrinks general parallelism -- n_threads keeps whatever
-     * the caller (or the auto-sizing above) chose, and K extra hubs are
-     * appended.  They occupy the TAIL of the array, which is what lets every
-     * exclusion below be a bound rather than a per-hub test.  Resolved here,
-     * once, before any hub thread exists.  The count comes only from the
-     * caller: it is a property of what the CALLER's code does (does it make
-     * blocking calls?), not of how the process was launched.  Negative = 0. */
-    runloom_offload_hub_count = offload_hubs;
-    if (runloom_offload_hub_count > RUNLOOM_OFFLOAD_HUBS_MAX)
-        runloom_offload_hub_count = RUNLOOM_OFFLOAD_HUBS_MAX;
-    if (runloom_offload_hub_count < 0)
-        runloom_offload_hub_count = 0;
-    if (runloom_offload_hub_count > 0 &&
-        n_threads > INT_MAX - runloom_offload_hub_count) {
-        runloom_offload_hub_count = 0;          /* absurd n_threads; stay off */
-    }
-    /* No cap check against RUNLOOM_PARKER_POOL_HUBS here.  An earlier version
-     * refused n+K past it, which broke a SUPPORTED configuration: hubs beyond
-     * the per-hub pools share the default pool -- correct, just without the
-     * locality -- and tests/test_cov100_wake_iouring.py deliberately runs 100
-     * hubs to exercise exactly that fallback.  It was also the wrong worry for
-     * offload hubs specifically: they never park on an fd, so which parker pool
-     * they map to does not matter to them at all. */
-    n_threads += runloom_offload_hub_count;
-
     runloom_hubs = (runloom_hub_t *)PyMem_Calloc((size_t)n_threads, sizeof(runloom_hub_t));
     if (runloom_hubs == NULL) {
-        runloom_offload_hub_count = 0;
         PyErr_NoMemory();
         return -1;
     }
@@ -190,7 +163,6 @@ int runloom_mn_init(int n_threads, int offload_hubs)
             PyMem_Free(runloom_hubs);
             runloom_hubs = NULL;
             runloom_hub_count = 0;
-            runloom_offload_hub_count = 0;   /* keep the boundary consistent across mn_init cycles */
             PyErr_SetString(PyExc_RuntimeError,
                 "mn_init: the controlled scheduler failed to initialise "
                 "(OOM?) -- native mn-sim cannot run without the census "
@@ -311,7 +283,6 @@ int runloom_mn_init(int n_threads, int offload_hubs)
             PyMem_Free(runloom_hubs);
             runloom_hubs = NULL;
             runloom_hub_count = 0;
-            runloom_offload_hub_count = 0;   /* keep the boundary consistent across mn_init cycles */
             PyErr_SetString(PyExc_OSError, "thread spawn failed");
             return -1;
         }
@@ -568,7 +539,6 @@ void runloom_mn_fini(void)
     PyMem_Free(runloom_hubs);
     runloom_hubs = NULL;
     runloom_hub_count = 0;
-    runloom_offload_hub_count = 0;   /* keep the boundary consistent across mn_init cycles */
     /* (No global pending counter to reset -- runloom_mn_run sums the per-hub
      * fields, which are freed along with the hub array just above.) */
     /* Stand the snap back up for any later single-thread scheduler use. */
@@ -595,7 +565,6 @@ void runloom_mn_reset_after_fork(void)
 {
     runloom_hubs = NULL;            /* abandon (leak) the inherited hub array */
     runloom_hub_count = 0;
-    runloom_offload_hub_count = 0;   /* keep the boundary consistent across mn_init cycles */
     runloom_mn_spawn_counter = 0;
     runloom_mn_nidle = 0;           /* WAKEP parked-hub count: no hubs in the child */
     runloom_mn_interp = NULL;
@@ -641,10 +610,9 @@ static long runloom_spawn_pace(void)
     return cur;
 }
 
-/* force_hub: -1 = normal placement (general hubs only).  >=0 pins the spawn to
- * that hub index, which is how offload work reaches a reserved offload hub --
- * see the offload-hubs block in mn_sched.c.  Routed through THIS
- * function rather than a second spawn path on purpose: a path that bypassed
+/* force_hub: -1 = normal placement.  >=0 pins the spawn to that hub index
+ * (mn_fiber(hub=N), runloom_mn_fiber_pinned).  Routed through THIS function
+ * rather than a second spawn path on purpose: a path that bypassed
  * runloom_greg_link would reopen the parked-frame GC blind spot (CLAUDE.md,
  * "Parked-fiber frames are made GC-visible by the frames anchor"). */
 static int runloom_mn_fiber_core(PyObject *callable, runloom_c_entry_fn c_fn,
@@ -678,24 +646,16 @@ static int runloom_mn_fiber_core(PyObject *callable, runloom_c_entry_fn c_fn,
      * spawn_counter%H map, so a pinned spawn must still consume its index. */
     n = __atomic_fetch_add(&runloom_mn_spawn_counter, 1, __ATOMIC_RELAXED);
     if (force_hub >= 0 && force_hub < runloom_hub_count) {
-        /* Pinned: overrides every placement policy, general-hub modulus
-         * included, so this is the only way a g lands on an offload hub.
-         * Both API boundaries validate; the range check is belt and braces. */
+        /* Pinned: overrides every placement policy.  The API boundary
+         * validates; the range check is belt and braces. */
         hub_idx = force_hub;
+    } else if (runloom_hub_count > 1 && runloom_sched_random_on()) {
+        /* Sanitizer/debug: randomize placement too (Go's raceenabled), so a
+         * goroutine can land on any hub rather than the round-robin one --
+         * diversifies cross-hub interleavings the sanitizer lane explores. */
+        hub_idx = (int)(runloom_steal_rand(-1) % (unsigned)runloom_hub_count);
     } else {
-        /* EXCLUSION 1 of 3: general spawns are placed over general hubs only.
-         * runloom_general_hub_count() == runloom_hub_count when the feature is
-         * off, so all three branches below are bit-for-bit their previous
-         * behaviour in the default build. */
-        int gen = runloom_general_hub_count();
-        if (gen > 1 && runloom_sched_random_on()) {
-            /* Sanitizer/debug: randomize placement too (Go's raceenabled), so a
-             * goroutine can land on any hub rather than the round-robin one --
-             * diversifies cross-hub interleavings the sanitizer lane explores. */
-            hub_idx = (int)(runloom_steal_rand(-1) % (unsigned)gen);
-        } else {
-            hub_idx = (int)(n % gen);
-        }
+        hub_idx = (int)(n % runloom_hub_count);
     }
     h = &runloom_hubs[hub_idx];
     {   /* Backpressure: admit under the max-fibers limit. */
@@ -736,10 +696,7 @@ static int runloom_mn_fiber_core(PyObject *callable, runloom_c_entry_fn c_fn,
     __atomic_store_n(&g->id, runloom_next_goid(), __ATOMIC_RELAXED);
     g->park_fd = -1;
     /* Record the pin (+1 encoded, see runloom_sched.h) so the drain routes this
-     * g to hub_idx's LOCAL FIFO, not its stealable deque.  Offload spawns are
-     * pinned too: under a migration mode a woken offload fiber goes to the
-     * GLOBAL RUNQ, and the pin is what stops a general hub pulling a blocking
-     * call onto itself (exclusion 2 from the other side). */
+     * g to hub_idx's LOCAL FIFO, not its stealable deque. */
     if (force_hub >= 0)
         __atomic_store_n(&g->pin_hub1, hub_idx + 1, __ATOMIC_RELEASE);
     /* Clamp an explicit per-spawn size to [MIN, MAX], exactly like the
@@ -845,42 +802,6 @@ PyObject *runloom_mn_fiber(PyObject *callable, size_t stack_size)
     Py_RETURN_NONE;
 }
 
-/* Spawn `callable` on a RESERVED OFFLOAD HUB -- the entry point for running a
- * blocking call as an ordinary fiber (offload hubs; see the block in
- * mn_sched.c for why a dedicated hub rather than a general one).
- *
- * Round-robins across the K offload hubs, so K of them carry K concurrent
- * blocking calls.  Everything after placement is the normal spawn path, which
- * is the entire point: submit, completion, wake and GC-visibility
- * (runloom_greg_link) are the same tested code every other fiber uses.
- *
- * Raises RuntimeError when no offload hubs are reserved, rather than quietly
- * falling back to a general hub: running a blocking call there would strand
- * every g woken on that hub for the duration, which is the failure this whole
- * mechanism exists to avoid.  The caller decides what to do instead. */
-PyObject *runloom_mn_offload_fiber(PyObject *callable, size_t stack_size)
-{
-    int k = __atomic_load_n(&runloom_offload_hub_count, __ATOMIC_RELAXED);
-    unsigned long slot;
-    int hub;
-    if (runloom_hubs == NULL) {
-        PyErr_SetString(PyExc_RuntimeError, "runloom_mn_init() must be called first");
-        return NULL;
-    }
-    if (k <= 0) {
-        PyErr_SetString(PyExc_RuntimeError,
-                        "stackweave: no offload hubs reserved "
-                        "(pass offload_hubs=K to mn_init / stackweave.run)");
-        return NULL;
-    }
-    slot = (unsigned long)__atomic_fetch_add(&runloom_mn_offload_rr, 1, __ATOMIC_RELAXED);
-    hub  = runloom_general_hub_count() + (int)(slot % (unsigned long)k);
-    if (runloom_mn_fiber_core(callable, NULL, NULL, stack_size, -1, hub) < 0) {
-        return NULL;
-    }
-    Py_RETURN_NONE;
-}
-
 /* Spawn `callable` on hub `hub_id` and keep it there (see mn_sched.h).
  * hub_id < 0 raises ValueError. */
 PyObject *runloom_mn_fiber_pinned(PyObject *callable, size_t stack_size,
@@ -894,11 +815,7 @@ PyObject *runloom_mn_fiber_pinned(PyObject *callable, size_t stack_size,
         return NULL;
     }
 
-    /* Validate against the LIVE hub count.  The bound is runloom_hub_count,
-     * DELIBERATELY including the reserved offload hubs: the one sanctioned
-     * exception to "no general work ever lands on an offload hub" (CLAUDE.md).
-     * Liveness only -- on a busy offload hub the fiber strands; nothing
-     * migrates, so never corruption. */
+    /* Validate against the LIVE hub count. */
     if (runloom_hubs == NULL || runloom_hub_count <= 0) {
         PyErr_SetString(PyExc_RuntimeError,
                         "mn_fiber(hub=): the M:N runtime is not running");

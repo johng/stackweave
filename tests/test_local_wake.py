@@ -1,10 +1,10 @@
 """Go-style local wake (runloom_mn_woken_enqueue).
 
-A wake performed ON a general hub thread pushes the woken fiber onto the
-waker's own Chase-Lev deque instead of the mutex-protected global run-queue.
-The waker's hub picks it up at its next pick step, or an idle hub steals it.
-The global queue is left for foreign-thread wakers, offload-hub wakers, pinned
-fibers, controlled replay, and a full deque.
+A wake performed ON a hub thread pushes the woken fiber onto the waker's own
+Chase-Lev deque instead of the mutex-protected global run-queue.  The waker's
+hub picks it up at its next pick step, or an idle hub steals it.  The global
+queue is left for foreign-thread wakers, pinned fibers, controlled replay, and
+a full deque.
 
 These tests pin down the soundness properties the redirect must keep --
 at-most-one resume per wake, no lost wake, no hang, clean quiescence -- and,
@@ -148,7 +148,7 @@ def test_foreign_thread_wake_still_falls_back_to_the_global_queue():
 @needs_migration
 def test_pinned_fiber_is_not_placed_on_the_waker_deque():
     """A pinned fiber may only run on its pinned hub; a deque is stealable by
-    any general hub, so the wake must go global and honour the pin.  Mirrors
+    any hub, so the wake must go global and honour the pin.  Mirrors
     test_hub_pinning's contract from the local-wake side."""
     handoff, res = rc.Chan(1), rc.Chan(1)
 

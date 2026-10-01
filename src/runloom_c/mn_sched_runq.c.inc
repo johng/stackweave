@@ -58,14 +58,14 @@ RUNLOOM_INLINE void runloom_mn_pending_steal(runloom_hub_t *victim,
  * empty-deque path (alongside neighbour-steal).  An idle hub thus recovers a
  * stalled hub's woken work.  This is Go's per-P-local + global-runq model.
  *
- * LOCAL WAKE (the other half of Go's model).  A wake performed ON a general hub
- * thread does not come here at all: runloom_mn_woken_enqueue pushes the g onto
- * the waker's own deque (a lock-free owner push) and kicks one parked hub, so
- * the common cross-hub wake never takes this mutex.  This queue is the path for
- * a foreign (non-hub) waker, an offload-hub waker, a pinned g, controlled
- * replay, or a full deque.  A deque-resident woken g is QUEUED and carries its
- * queue ref exactly as an entry here does; hub_main detects it at the pick step
- * and runs the same claim + release.
+ * LOCAL WAKE (the other half of Go's model).  A wake performed ON a hub thread
+ * does not come here at all: runloom_mn_woken_enqueue pushes the g onto the
+ * waker's own deque (a lock-free owner push) and kicks one parked hub, so the
+ * common cross-hub wake never takes this mutex.  This queue is the path for a
+ * foreign (non-hub) waker, a pinned g, controlled replay, or a full deque.  A
+ * deque-resident woken g is QUEUED and carries its queue ref exactly as an
+ * entry here does; hub_main detects it at the pick step and runs the same
+ * claim + release.
  *
  * Accounting: the g stays counted in its origin hub's `pending` and the
  * global counter while it sits here (we do NOT rebalance per-hub pending on
@@ -140,9 +140,9 @@ static void runloom_mn_kick_hub_waits(runloom_hub_t *h)
  * (the default) nothing woke anyone and the g waited for the next 1 ms idle
  * pump of whichever hub pulled it: p99 380-600 us for a foreign-thread wake at
  * a sub-2 ms cadence, against ~30 us for the per-hub scheduler.  Kick ONE hub:
- * the pinned target, else the first general hub announcing an idle-condvar
- * wait, else the g's owner hub (it has this g pending, so it is in a timed pump
- * wait rather than a bare nap).  Not the hot path: local wakes never come here. */
+ * the pinned target, else the first hub announcing an idle-condvar wait, else
+ * the g's owner hub (it has this g pending, so it is in a timed pump wait
+ * rather than a bare nap).  Not the hot path: local wakes never come here. */
 static void runloom_mn_kick_for_runq_entry(runloom_g_t *g, int pin1)
 {
     runloom_hub_t *h = NULL;
@@ -151,7 +151,7 @@ static void runloom_mn_kick_for_runq_entry(runloom_g_t *g, int pin1)
     if (pin1 != 0) {
         if (pin1 - 1 < runloom_hub_count) h = &runloom_hubs[pin1 - 1];
     } else {
-        for (i = 0; i < runloom_general_hub_count(); i++) {
+        for (i = 0; i < runloom_hub_count; i++) {
             if (__atomic_load_n(&runloom_hubs[i].idle_waiting, __ATOMIC_ACQUIRE)) {
                 h = &runloom_hubs[i];
                 break;
@@ -216,11 +216,6 @@ static runloom_g_t *runloom_mn_global_runq_pull(int hub_id)
 {
     runloom_g_t *g, *prev;
     const int want = hub_id + 1;   /* +1 encoding; hub_id<0 -> match unpinned only */
-    /* Exclusion 2 from the puller's side: an OFFLOAD hub takes only what is
-     * pinned to it.  Taking an unpinned general fiber would strand it behind
-     * the hub's next blocking call (it was the one general-work path left
-     * onto an offload hub). */
-    const int take_unpinned = !(hub_id >= 0 && runloom_hub_is_offload(hub_id));
     /* Lock-free fast-out: the queue is empty in the common case (default
      * mode never touches it; per-g-tstate only when a wake is in flight),
      * so skip the mutex when there is clearly nothing to take.  A racing
@@ -237,7 +232,7 @@ static runloom_g_t *runloom_mn_global_runq_pull(int hub_id)
          * pin_hub1 per entry; its stores are under this lock (repin) or
          * pre-publication (spawn). */
         int p1 = __atomic_load_n(&g->pin_hub1, __ATOMIC_ACQUIRE);
-        if ((p1 == 0 && take_unpinned) || p1 == want) break;
+        if (p1 == 0 || p1 == want) break;
         prev = g;
         g = g->next;
     }
