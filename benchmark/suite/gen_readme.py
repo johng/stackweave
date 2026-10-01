@@ -13,6 +13,8 @@ import config
 RES = config.RESULTS_DIR
 BENCH = config.BENCH_DIR
 REPORT = "benchmark/report.html"
+# README_SECTIONS.md is written next to report.html, so link relative to it.
+REPORT_LINK = "report.html"
 
 
 def load(name):
@@ -226,7 +228,7 @@ def main():
     L.append("[^bench]: Full data, methodology, per-connection ladder curves, the assumed "
              "constraints, every benchmark program's source, and the zero-PyObject Cython "
              "disassembly proof: [`%s`](%s). Cross-platform backend syscall profiles "
-             "(Linux/macOS) are linked from there." % (REPORT, REPORT))
+             "(Linux/macOS) are linked from there." % (REPORT, REPORT_LINK))
     L.append("")
 
     out = os.path.join(BENCH, "README_SECTIONS.md")

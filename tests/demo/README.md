@@ -1,6 +1,6 @@
 # mnweb — a micro web stack on stackweave's M:N sync API
 
-A self-contained demo that exercises [stackweave](../README.md)'s **M:N
+A self-contained demo that exercises [stackweave](../../README.md)'s **M:N
 synchronous** API (Go-style stackful goroutines across N hub threads, GIL
 off, free-threaded CPython 3.13t) under a realistic, long-running web
 workload — plus a supervisor that detects crashes/hangs, gathers cores and
@@ -71,9 +71,9 @@ Core dumps: `kernel.core_pattern` → `run/cores/` and `kernel.yama.ptrace_scope
 Building this surfaced two real defects in stackweave's **fatal-signal crash
 handler under the M:N runtime** — both made a genuine fault *wedge* the
 process (a stranded hub, service dead, **no core**) instead of coring and
-dying cleanly. See [BUGS_FOUND.md](BUGS_FOUND.md). Both are fixed in this
-branch and validated (6/6 faults now core+die; `test_crash_handler`,
-`test_mn`, `test_sysmon_oracle`, `test_sched_fairness` all green):
+dying cleanly. Both are fixed in this branch and validated (6/6 faults now
+core+die; `test_crash_handler`, `test_mn`, `test_sysmon_oracle`,
+`test_sched_fairness` all green):
 
 1. **`runloom_crash_install` was not idempotent** (`runloom_crash.c`). When
    the handler was installed twice — stackweave's package `__init__` then

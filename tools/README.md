@@ -24,8 +24,8 @@ map, and the few deepest-used ones are written up at the bottom.
 |------|------|-----|
 | [`run_sanitizers.sh`](run_sanitizers.sh) | the standalone deque C harness (`test_cldeque`) under ASan / TSan / UBSan | `tools/run_sanitizers.sh [pushes thieves rounds]` |
 | [`run_sanitizers_ext.sh`](run_sanitizers_ext.sh) | the **whole `stackweave_c` ext** under TSan (preloaded libtsan) on free-threaded CPython -- real scheduler/chan/select/netpoll | `tools/run_sanitizers_ext.sh [intensity]` |
-| [`run_pydebug.sh`](run_pydebug.sh) | stackweave under a `--with-pydebug` CPython so the host's OWN internal asserts (tstate/STW/gilstate/mimalloc) are the oracle | `tools/run_pydebug.sh [iters]` -- see [`../docs/dev/cpython_boundary.md`](../docs/dev/cpython_boundary.md) |
-| [`run_msan.sh`](run_msan.sh) | `stackweave_c` under MemorySanitizer vs an MSan-instrumented CPython -- uninitialised reads | `tools/run_msan.sh` -- see [`../docs/dev/msan.md`](../docs/dev/msan.md) |
+| [`run_pydebug.sh`](run_pydebug.sh) | stackweave under a `--with-pydebug` CPython so the host's OWN internal asserts (tstate/STW/gilstate/mimalloc) are the oracle | `tools/run_pydebug.sh [iters]` |
+| [`run_msan.sh`](run_msan.sh) | `stackweave_c` under MemorySanitizer vs an MSan-instrumented CPython -- uninitialised reads | `tools/run_msan.sh` |
 | [`build_msan_cpython.sh`](build_msan_cpython.sh) | build a free-threaded CPython under MSan (clang, `-fsanitize=memory`) -- prereq for `run_msan.sh` | `tools/build_msan_cpython.sh` |
 | [`build_tsan_cpython.sh`](build_tsan_cpython.sh) | build a fully TSan-instrumented CPython (gold standard -- interpreter + ext both instrumented) | `tools/build_tsan_cpython.sh` |
 | [`build_patched_rr.sh`](build_patched_rr.sh) | build + install `rr` with the vPMU min-period clamp so record/replay works on VMware vPMU | `tools/build_patched_rr.sh` -- see [`../docs/dev/rr_vpmu_status.md`](../docs/dev/rr_vpmu_status.md) |
@@ -43,7 +43,7 @@ map, and the few deepest-used ones are written up at the bottom.
 | [`cov_measure.sh`](cov_measure.sh) | coverage via the **isolated** runner (`-j1`) -- avoids cross-file state leaks + the `.gcda` race | `tools/cov_measure.sh [args]` |
 | [`cov_subsystem.py`](cov_subsystem.py) | aggregate gcov for a subsystem split across `.c` + `.c.inc` fragments (honors LCOV markers) | `cov_subsystem.py <covdir>` |
 | [`cov_summary.py`](cov_summary.py) | per-file line coverage + heuristic uncovered-error-path report (ENOMEM/errno/`return -1`) | `cov_summary.py <covdir>` |
-| [`kqueue_cov.sh`](kqueue_cov.sh) · [`kqueue_cov_run.sh`](kqueue_cov_run.sh) · [`kqueue_cov_parse.py`](kqueue_cov_parse.py) | scoped **branch** coverage of the macOS kqueue netpoll backend (one module/process) | `tools/kqueue_cov.sh` -- see [`../docs/dev/KQUEUE_AUDIT_2026-06.md`](../docs/dev/KQUEUE_AUDIT_2026-06.md) |
+| [`kqueue_cov.sh`](kqueue_cov.sh) · [`kqueue_cov_run.sh`](kqueue_cov_run.sh) · [`kqueue_cov_parse.py`](kqueue_cov_parse.py) | scoped **branch** coverage of the macOS kqueue netpoll backend (one module/process) | `tools/kqueue_cov.sh` |
 
 ### Deterministic & controlled scheduling (a failure reduces to one seed)
 | tool | what | run |
@@ -78,7 +78,7 @@ map, and the few deepest-used ones are written up at the bottom.
 ### Benchmarking & misc
 | tool | what | run |
 |------|------|-----|
-| [`benchmark/bench/`](benchmark/bench/) | rigorous microbench harness defending against autocorrelation + layout bias (Kalibera & Jones) -- driven by `../scripts/bench.sh` | see [`benchmark/bench/README.md`](benchmark/bench/README.md) |
+| [`bench/`](bench/) | rigorous microbench harness defending against autocorrelation + layout bias (Kalibera & Jones) -- driven by `bench/bench.sh` | see [`bench/README.md`](bench/README.md) |
 | [`heavy_frames/`](heavy_frames/) | the stdlib fat-frame profile + generator for `runloom_heavy_frames.h` (goroutine stack cold-start sizing) | see [`heavy_frames/README.md`](heavy_frames/README.md) |
 
 **Related, outside `tools/`:** `../scripts/check_all*.sh` (the CI lanes that drive
