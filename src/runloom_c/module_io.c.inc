@@ -252,8 +252,11 @@ static void runloom_io_c_close(int fd)
  * split any larger message into 8-byte recv/send pairs: a 64-byte round trip
  * cost 8 recv + 8 send (and 8 TCP_NODELAY segments) instead of 1 + 1, half the
  * throughput of a Python handler's conn.recv(4096) on the same serve()
- * scaffold.  4 KiB matches that handler's read size. */
-#define RUNLOOM_IO_C_ECHO_BUF 4096
+ * scaffold.  2 KiB, not 4: a parked echo fiber keeps the buffer's stack page
+ * resident, and with 4 KiB pages a 4 KiB buffer measured +3.9 KB RSS per idle
+ * connection (24.7 vs 20.8 KB/conn, ~+19%) while 1-3 KiB measured the same as
+ * the old 64-byte buffer.  Messages up to 2 KiB still take 1 recv + 1 send. */
+#define RUNLOOM_IO_C_ECHO_BUF 2048
 /* The io_uring loop paths (Linux, STACKWEAVE_IOURING_LOOP=1, with or without
  * multishot) still move 8 bytes per op.  The same change very likely helps
  * them, but it has not been measured on that backend, so they are left as

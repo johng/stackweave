@@ -1,5 +1,6 @@
 """All-C echo tier: stackweave_c.serve(handler=None) -> the built-in tstate-free C
-echo (runloom_io_c_echo), an 8-byte ping-pong. NOT a general handler.
+echo (runloom_io_c_echo), driven here with an 8-byte ping-pong payload. NOT a
+general handler.
 
 Exists only to test the io_uring-loop "+20% over epoll" claim under its ORIGINAL
 conditions: 8-byte payload, all-C fiber, the Stage-2 single-shot proactor
@@ -26,7 +27,7 @@ def main():
 
     def root():
         port, listeners = stackweave_c.serve(
-            args.host, args.port, None,        # handler=None -> all-C 8-byte echo
+            args.host, args.port, None,        # handler=None -> all-C echo (8-byte payload here)
             acceptors=args.hubs, backlog=4096)
         print("LISTENING %d" % port, flush=True)
         stackweave.sleep(float("inf"))
