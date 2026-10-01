@@ -31,17 +31,16 @@
  *
  *   Goroutine placement: MIGRATION, always on.  Each fiber carries its OWN
  *   PyThreadState, so a suspended fiber is not bound to one hub.  A wake
- *   performed on a general hub thread pushes the g onto the waker's own deque
+ *   performed on a hub thread pushes the g onto the waker's own deque
  *   (Go-style local wake, runloom_mn_woken_enqueue), where the waker's hub or
  *   any idle thief picks it up; the process-global run-queue (see the
  *   global-runq block in mn_sched_runq.c.inc) serves the wakes with nowhere
- *   local to go -- foreign-thread wakers, offload-hub wakers, pinned fibers,
- *   replay, and a full deque -- and is drained by whichever hub gets there
- *   first.  Either way an idle hub can rescue the woken work of a hub wedged
- *   in a blocking C call.  Fresh fibers are placed on a hub's stealable deque
- *   and work-stealing runs alongside.  (The per-hub-tstate mode, where a g ran
- *   only on its origin hub and only fresh fibers were stolen, has been
- *   removed.)
+ *   local to go -- foreign-thread wakers, pinned fibers, replay, and a full
+ *   deque -- and is drained by whichever hub gets there first.  Either way an
+ *   idle hub can rescue the woken work of a hub wedged in a blocking C call.
+ *   Fresh fibers are placed on a hub's stealable deque and work-stealing runs
+ *   alongside.  (The per-hub-tstate mode, where a g ran only on its origin hub
+ *   and only fresh fibers were stolen, has been removed.)
  *
  *   Why migration needs a patched interpreter.  In STOCK free-threaded
  *   CPython it is unsound, for two independent reasons, and either alone
@@ -88,25 +87,13 @@
  * that includes mn_sched.h. */
 struct runloom_iouring_ring;
 
-/* offload_hubs: how many EXTRA hubs to reserve for blocking offload (<= 0 =
- * none).  See runloom_mn_offload_fiber. */
-int runloom_mn_init(int n_threads, int offload_hubs);
+int runloom_mn_init(int n_threads);
 /* stack_size: per-fiber C-stack override in bytes; 0 = the hub default.
  * Use a larger value for a g that runs a deep, non-yielding C burst (cold
  * imports, terminfo/OpenSSL init) that the copy-grow can't rescue mid-burst. */
 PyObject *runloom_mn_fiber(PyObject *callable, size_t stack_size);
-/* Spawn on a RESERVED OFFLOAD hub (mn_init offload_hubs), where a blocking call
- * may run without stranding the g's woken on a general hub.  Raises
- * RuntimeError when none are reserved -- it never silently falls back to a
- * general hub.  runloom_mn_offload_hub_count() reports how many exist (0 =
- * feature off). */
-PyObject *runloom_mn_offload_fiber(PyObject *callable, size_t stack_size);
-int runloom_mn_offload_hub_count(void);
 /* Place the fiber on hub `hub_id`, drained to that hub's local FIFO rather than
  * its stealable deque.  hub_id < 0 or >= the live hub count raises ValueError.
- * Alone among spawn paths it may name a reserved offload hub, so a test can
- * force general work onto one; on a busy one the fiber strands behind the
- * blocking call.
  *
  * PIN CONTRACT: a pinned fiber is NOT stealable.  It runs only when its hub
  * does, so it starves if that hub blocks -- a determinism knob for tests, not

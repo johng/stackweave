@@ -124,7 +124,6 @@ static RUNLOOM_THREAD_RET runloom_sysmon_main(void *arg)
                  * tstate-holding syscall -> needs preemption.  SUSPENDED =>
                  * stop-the-world. */
                 const char *cls =
-                    runloom_hub_is_offload(i)   ? "OFFLOAD HUB (blocking on purpose -- not a wedge)" :
                     tss == RUNLOOM_TS_DETACHED  ? "DETACHED (blocking-IO)" :
                     tss == RUNLOOM_TS_ATTACHED  ? "ATTACHED (CPU/raw-syscall: needs preemption)" :
                     tss == RUNLOOM_TS_SUSPENDED ? "SUSPENDED (stop-the-world)" :
@@ -145,16 +144,9 @@ static RUNLOOM_THREAD_RET runloom_sysmon_main(void *arg)
              * it on each yield), giving periodic time-slicing.  (A DETACHED wedge
              * needs no dispatch: work-stealing already drains its fresh fibers to
              * idle hubs.) */
-            /* EXCLUSION 3 of 3 (RUNLOOM_OFFLOAD_HUBS, mn_sched.c): an offload
-             * hub blocks ON PURPOSE and must never be preempted for it.
-             * A blocking-IO offload is DETACHED and the tss test below already
-             * skips it -- but `offload` also sanctions CPU-bound work (hashing,
-             * compression), which runs ATTACHED and would otherwise be yielded
-             * every preempt tick, forever, to a scheduler with nothing else
-             * runnable on that hub. */
             if (runloom_preempt_enabled && start != 0 &&
                 (now - start) > runloom_sysmon_preempt_ns &&
-                tss == RUNLOOM_TS_ATTACHED && !runloom_hub_is_offload(i)) {
+                tss == RUNLOOM_TS_ATTACHED) {
                 __atomic_store_n(&h->preempt_requested, 1, __ATOMIC_RELAXED);
                 /* Single-frame liveness backstop: the eval-frame flag above only
                  * fires at a Python FRAME boundary, so it cannot break a
