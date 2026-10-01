@@ -62,11 +62,15 @@ def make_round(conns, rounds):
 
         def client(conn):
             def f():
-                # No memoryview slice is held across the park in recv_into: a
-                # migrating fiber can find such a view's managed buffer already
-                # released (the migration refcount bug guarded by
-                # test_cross_hub_migration's memoryview xfail).  A partial read
-                # is finished with recv() into a fresh bytes object instead.
+                # No memoryview slice is held across the park in recv_into.
+                # On an interpreter built from an older copy of src/patches/,
+                # a migrating fiber could find such a view's buffer released:
+                # memoryview's export counts were a plain ++/-- that a
+                # cross-hub dealloc raced (fixed in the exec-home patch,
+                # guarded by test_cross_hub_migration's
+                # test_memory_memoryview_slice_survives_a_migration).  Kept
+                # so the bench also runs there.  A partial read is finished
+                # with recv() into a fresh bytes object instead.
                 buf = bytearray(MSG)
                 try:
                     for _ in range(rounds):

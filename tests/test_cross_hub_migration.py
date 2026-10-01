@@ -20,13 +20,11 @@ Each scenario runs in a fresh subprocess so a lost fiber or a wedged hub is a
 clean timeout rather than a hung pytest, and so one scenario's leak cannot
 leak into the next.
 
-Eleven gaps are closed (their docstrings start "Was a gap").  The four that
-remain are strict xfails under TODO_MIGRATION_FAIL: three OS-thread-identity
-checks that live in C or in importlib and need a pin or a monkey patch, and
-one refcount loss (a memoryview's managed buffer released while still
-referenced after the fiber holding it migrates).  A strict xfail still runs,
-and flips to a hard XPASS failure the moment its gap is closed.  The cost of
-one PyThreadState per fiber (gc.collect() per parked
+Twelve gaps are closed (their docstrings start "Was a gap").  The three that
+remain are strict xfails under TODO_MIGRATION_FAIL: OS-thread-identity checks
+that live in C or in importlib and need a pin or a monkey patch.  A strict
+xfail still runs, and flips to a hard XPASS failure the moment its gap is
+closed.  The cost of one PyThreadState per fiber (gc.collect() per parked
 fiber, RSS per parked fiber, spawn) was bounded against the per-hub
 scheduler while that scheduler existed; with migration the only mode there
 is no in-tree baseline, so those three comparisons are not carried here.
@@ -36,7 +34,8 @@ lands in, so ``-k memory`` (or identity, sched, preempt, cost, harness)
 selects one gap family:
 
     harness   the file's own premise (migration is observable)
-    memory    the brc merge queue: cross-hub last decrefs that never run
+    memory    the brc merge queue: cross-hub last decrefs that never run,
+              or that run on the old hub racing the fiber
     preempt   what the deleted sysmon wall-clock preemption guaranteed
     sched     races and leaks that came in with the global run-queue
     identity  code keyed on the OS thread after a fiber has moved
@@ -633,21 +632,54 @@ stackweave.run(4, main)
 ''')
 
 
-@TODO_MIGRATION_FAIL(
-    'a memoryview slice held across a park in a migrating fiber finds the view\'s '
-    'managed buffer already released: a lost incref / extra decref on migration '
-    '(~1 per 30-50 cross-hub moves at H=8 on arm64 macOS); root cause open')
+def _interpreter_has_mv_exports_fix():
+    """Whether this interpreter carries the exec-home patch's memoryobject.c
+    hunk.  That file is not installed, so the patch also defines
+    _Py_MV_EXPORTS_ATOMIC in the installed object.h (3.14) or
+    cpython/object.h (3.15); tools/ci/lib.sh checks the same witness."""
+    import sysconfig
+    include = sysconfig.get_path("include")
+    for header in ("object.h", os.path.join("cpython", "object.h")):
+        try:
+            with open(os.path.join(include, header), errors="replace") as f:
+                if "_Py_MV_EXPORTS_ATOMIC" in f.read():
+                    return True
+        except OSError:
+            pass
+    return False
+
+
 def test_memory_memoryview_slice_survives_a_migration():
-    """Known gap: 64 ping-pong pairs at H=8; each pinger holds `view[0:]` of
-    its own memoryview across the channel park, then drops it.  After enough
-    cross-hub moves one of them finds `view` unusable ("operation forbidden on
-    released memoryview object"): the _PyManagedBuffer both views share hit
-    refcount zero while `view` still referenced it -- a use-after-free, which
-    the RELEASED flag merely makes visible.  No I/O, no GC needed (it
-    reproduces with gc disabled and with PYTHON_TLBC=0), and none at H=2
-    where no fiber moves.  Runs batches until MOVES_WANTED OS-thread moves
-    were seen so a pass means the gap is really closed, not unexercised.
+    """64 ping-pong pairs at H=8; each pinger holds `view[0:]` of its own
+    memoryview across the channel park, then drops it.
+
+    Was a gap (fixed in the exec-home CPython patch: the managed buffer's
+    export count is updated atomically): a slice created on one hub and
+    dropped on another is brc-queued back to the hub that allocated it, so
+    its dealloc (`--mbuf->exports`) ran there while the fiber, now on
+    another hub, was already taking the next slice (`mbuf->exports++`).
+    The plain ++/-- lost updates: a lost increment released the buffer
+    under `view` ("operation forbidden on released memoryview object"), a
+    lost decrement pinned the bytearray for good.  Refcounts were never
+    wrong.  The failure rate tracked OS-thread moves, not the hub count.
+    Runs batches until MOVES_WANTED OS-thread moves were seen so a pass
+    means the gap is really closed, not unexercised.
+
+    The fix lives in the interpreter, so on one built from an older copy of
+    src/patches/ (no _Py_MV_EXPORTS_ATOMIC witness in its headers) the
+    scenario still runs, but a failure is an xfail asking for a rebuild.
     """
+    try:
+        _run_memoryview_slice_scenario()
+    except pytest.fail.Exception:
+        if _interpreter_has_mv_exports_fix():
+            raise
+        pytest.xfail("this interpreter lacks the exec-home memoryobject.c hunk "
+                     "(no _Py_MV_EXPORTS_ATOMIC in its installed object.h): "
+                     "rebuild the interpreter from src/patches/")
+
+
+def _run_memoryview_slice_scenario():
     assert_pass(r'''
 _watchdog(50)
 PAIRS, ROUNDS, MOVES_WANTED, BUDGET_S = 64, 4000, 3000, 30

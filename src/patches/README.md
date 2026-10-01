@@ -7,7 +7,7 @@ one OS thread in two separate ways — and either alone still corrupts:
 | half | flag | what it decouples |
 |---|---|---|
 | **allocation** | `Py_TSTATE_ALLOC_HOME` | which heap a migrated fiber allocates on |
-| **execution** | `Py_TSTATE_EXEC_HOME` | whether the compiler may cache *which OS thread we are* |
+| **execution** | `Py_TSTATE_EXEC_HOME` | whether the compiler may cache *which OS thread we are* (plus memoryview's export counts, which a migrated fiber's deallocs race, see below) |
 
 Each half ships as a **version-specific** patch (stackweave supports only
 free-threaded CPython 3.14+), and they are **not** interchangeable across
@@ -219,6 +219,53 @@ no fiber path reads them across a park: `pkgcontext` (`Python/import.c`) and
 mimalloc's `_mi_heap_default` (object allocation reaches the heap through the
 tstate — see alloc-home — not through it).
 
+### A dealloc that runs on the far side of a migration (`memoryobject.c`)
+
+exec-home also carries one hunk outside thread identity. Biased refcounting
+sends a non-owner's last decref to the OS thread that owns the object (`ob_tid`,
+set where it was allocated), and that thread's merge runs `tp_dealloc`. For a
+fiber that has moved, the owner is the hub it *allocated* on — so the dealloc of
+an object the fiber never shared runs **concurrently** with the fiber's own next
+statements on its new hub. Anything a dealloc and its creator both touch must
+then be thread-safe even in a single-fiber program.
+
+CPython has an **open class** of buffer-export counters that are not: a plain
+`++`/`--` in a `getbuffer`/`releasebuffer` pair, or in a view's
+register/release. The hunk fixes one instance, memoryview's. **Known still
+open: `array.array`** — `ob_exports` in `Modules/arraymodule.c`
+(`array_buffer_getbuf`/`array_buffer_relbuf`, no critical section). A fiber
+holding `memoryview(arr)` across a park leaves arrays pinned for good
+(BufferError on resize): 2–22 of 192 arrays per run at H=8. It is
+left for a follow-up.
+
+The memoryview instance: `_PyManagedBufferObject.exports` — every view of a
+buffer bumps it on creation and drops it on release/dealloc — is a plain
+`++`/`--` upstream (still on main). The per-view `PyMemoryViewObject.exports`
+is updated atomically by `memory_getbuf`/`memory_releasebuf`, but 3.14.4's
+`memoryview.hex()` and `memory_hash()` still bump it with a plain `++`/`--`, so
+the 3.14 hunk also backports the 3.14 branch's `FT_ATOMIC_ADD_SSIZE` there
+(3.15.0rc2 already has it). A fiber that holds
+`sl = view[0:]` across a park and drops it on another hub has the old hub run
+`--exports` while it runs `exports++` for its next slice. A lost increment
+releases the buffer under the live `view` (`ValueError: operation forbidden on
+released memoryview object`, and the exporter is unpinned, free to resize or
+free memory the view still points at); a lost decrement pins the exporter for
+good. Refcounts stay exact throughout. It is an upstream bug too — plain threads
+slicing one shared view on a **stock** 3.14.4t lose updates the same way —
+migration just turns a shared-object race into a private-object one. The hunk
+makes both counts atomic under the flag. Measured with two interpreters built
+identically apart from it (64 ping-pong pairs, each slicing its own view across
+a park, ~3000 OS-thread moves per run): without it 43–179 released views and
+93–283 leaked counts per run at H=2/4/8/12; with it zero over 10 runs. Guard:
+`tests/test_cross_hub_migration.py::test_memory_memoryview_slice_survives_a_migration`.
+`memoryobject.c` is not installed, so the exec-home `object.h` hunk also
+defines `_Py_MV_EXPORTS_ATOMIC` as an installed witness; on an interpreter
+patched with an older copy the guard xfails with a "rebuild from src/patches/"
+message instead of failing.
+
+Not audited beyond that: the rest of the class. bytearray is safe (its
+`ob_exports` is under the object's critical section); array.array is not (above).
+
 ## Using it
 
 Migration is **always on** under M:N (`run(n > 1)`); there is no switch. What it
@@ -249,6 +296,8 @@ needs is an interpreter built with **both** patches:
    witnesses before building — this is what the CI's `rl_verify_witnesses` checks:
    ```sh
    grep -q _Py_TID_ASM Include/object.h                            # exec-home
+   grep -q _Py_MV_EXPORTS_ATOMIC Include/object.h                  # exec-home
+   grep -q MBUF_EXPORTS_INC Objects/memoryobject.c                 # exec-home
    grep -q _PyThreadStateImpl_AllocHome Include/internal/pycore_tstate.h  # alloc-home
    ```
 

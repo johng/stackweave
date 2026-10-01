@@ -222,7 +222,13 @@ rl_verify_witnesses() {
         || rl_die "alloc-home witness missing: _PyThreadStateImpl_AllocHome not in pycore_tstate.h"
     grep -q 'Py_NO_INLINE' "$_src/Python/pystate.c" \
         || rl_die "exec-home witness missing: Py_NO_INLINE not applied to _PyThreadState_GetCurrent()"
-    rl_log "witnesses present: _Py_TID_ASM, _PyThreadStateImpl_AllocHome, Py_NO_INLINE"
+    grep -q 'MBUF_EXPORTS_INC' "$_src/Objects/memoryobject.c" \
+        || rl_die "exec-home witness missing: MBUF_EXPORTS_INC not in Objects/memoryobject.c (atomic memoryview export counts)"
+    # memoryobject.c is not installed; this header witness is what an installed
+    # interpreter (and test_memory_memoryview_slice_survives_a_migration) can see.
+    grep -qs '_Py_MV_EXPORTS_ATOMIC' "$_src/Include/object.h" "$_src/Include/cpython/object.h" \
+        || rl_die "exec-home witness missing: _Py_MV_EXPORTS_ATOMIC not in Include/object.h or Include/cpython/object.h"
+    rl_log "witnesses present: _Py_TID_ASM, _PyThreadStateImpl_AllocHome, Py_NO_INLINE, MBUF_EXPORTS_INC, _Py_MV_EXPORTS_ATOMIC"
 }
 
 # ---- guards -----------------------------------------------------------------
