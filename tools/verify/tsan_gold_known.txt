@@ -12,7 +12,6 @@
 # <function>" pins one site of a function that has other, untriaged accesses.
 
 runloom_sched_parkwake.c.inc:858 in runloom_sched_sleep_until_ex | C5 | g->wake_at write vs the C5 introspection read
-in runloom_chan_select                               | A2 | runloom_select_rng TLS address cached across the park (Darwin)
 in runloom_sched_logical_now_or                      | C1 | lazy getenv cache runloom_sched_logical_on, plain int
 in runloom_preempt_init                              | C2 | time-slicer stop flag / quantum, plain ints across threads
 in runloom_preempt_fini                              | C2 | time-slicer stop flag, plain int across threads
