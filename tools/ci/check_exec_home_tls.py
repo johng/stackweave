@@ -15,9 +15,9 @@ if any reader is outside pystate.o (an unknown object counts as outside).
 Without a debug map (stripped binary) it falls back to a count: more than a few
 dozen readers means unsafe.
 
-Measured (arm64 Darwin, Apple clang 21 / clang-2100.1.1.101, 3.14.4 + both patches): plain build and
---enable-optimizations keep every reader in pystate.o; --enable-optimizations
---with-lto=thin has ~400 readers outside it.
+Measured (arm64 Darwin, Apple clang 21 / clang-2100.1.1.101, 3.14.4 + both
+patches): the plain build and --enable-optimizations keep every reader in
+pystate.o; --enable-optimizations --with-lto=thin has ~400 readers outside it.
 
 arm64 Mach-O only (macOS TLV access pattern, `nm` + `objdump`; a universal
 binary's arm64 slice is extracted with `lipo` first).  Exits 2 when it cannot
@@ -47,7 +47,10 @@ class ScanError(Exception):
 
 
 def run(cmd):
-    p = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True)
+    except OSError as e:                 # e.g. lipo/objdump not installed
+        raise ScanError("cannot run %s: %s" % (cmd[0], e))
     if p.returncode != 0:
         raise ScanError("%s failed (rc=%d): %s"
                         % (" ".join(cmd[:2]), p.returncode, p.stderr.strip()[:200]))

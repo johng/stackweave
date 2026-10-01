@@ -241,7 +241,8 @@ rl_verify_witnesses() {
 # interpreter just corrupts memory under migration.  Refuse loudly.  PGO alone
 # (--enable-optimizations) was measured safe, but CI gains nothing from it and
 # keeps building the exact (non-PGO) interpreter the tests were measured on,
-# so it is refused here too.  tools/ci/check_exec_home_tls.py checks a built interpreter.
+# so it is refused here too.  tools/ci/check_exec_home_tls.py checks a built
+# interpreter.
 rl_reject_lto() {
     case " $* " in
         *" --with-lto"*|*"-flto"*)
