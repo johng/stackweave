@@ -171,7 +171,7 @@ STACKWEAVE_PREEMPT_MS=10 python app.py    # 10 ms slices instead of 50 ms
 
 ### GIL off only
 
-`mn_init` raises if the GIL has been re-enabled at runtime.  The M:N scheduler relies on
+`run(n, ...)` with `n > 1` raises if the GIL has been re-enabled at runtime.  The M:N scheduler relies on
 `Py_MOD_GIL_NOT_USED` and CPython's free-threading guarantees about
 atomic refcount + GC; with the GIL on you'd get serialisation through
 the lock with no concurrency benefit and a small overhead loss.

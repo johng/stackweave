@@ -21,7 +21,7 @@ The original spec and every scoping decision are archived verbatim in
 
 ## Prerequisites
 
-- Free-threaded CPython 3.13t with the stackweave C extension built
+- Free-threaded CPython 3.14t with the stackweave C extension built
   (`python setup.py build_ext --inplace` from the repo root) and Cython 3.x.
 - The GIL build of 3.13 with `uvloop` + `gevent` (the single-threaded baselines
   run there — their best case).

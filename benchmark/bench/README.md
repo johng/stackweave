@@ -5,9 +5,9 @@ profiling drivers used to explain the numbers.  This is **measurement
 infrastructure**, not optimization work: the goal is that any number is
 diffable, has its full environment recorded, and a regression is visible.
 
-Primary target runtime is free-threaded CPython **3.13t** (stackweave's M:N hub
-pool only gets real core-level parallelism with the GIL off).  GIL'd 3.13,
-asyncio, and the Go loadgen are comparison baselines.
+Primary target runtime is free-threaded CPython **3.14t** (stackweave's M:N hub
+pool only gets real core-level parallelism with the GIL off, and stackweave
+builds on nothing else).  asyncio and the Go loadgen are comparison baselines.
 
 ## Why not just the existing `bench/bench_*.py`?
 
@@ -21,7 +21,7 @@ measurement you can compare across days or use as a regression gate.
 | --- | --- |
 | `harness.py` | env capture + CPU pinning + warmup/samples + median/MAD/min + bootstrap-CI median + JSON writer |
 | `micro.py` | single-hub scheduler microbenchmarks (spawn, yield, chan ping-pong, buffered chan) |
-| `mn.py` | M:N CPU-bound core-scaling (1..N hubs on 3.13t) |
+| `mn.py` | M:N CPU-bound core-scaling (1..N hubs on 3.14t) |
 | `mnsched.py` | M:N scheduler under migration: park/wake routing (local wake, pinned, cross-hub, busy and drifted pools), spawn / yield / pairs / fan-out / Mutex / WaitGroup / select / `blocking()`, 64-pair hub scaling, and latency percentiles (foreign-thread and cross-hub wakes, spawn-to-first-run, timer lateness) |
 | `echo.py` | in-process TCP echo round-trips (all-C and Python handlers, `TCPConn` clients) at 2/4/8 hubs -- measures whichever I/O path the environment selects |
 | `features.py` | feature matrix: runs suites once per opt-in switch (`STACK_ARENA`, `optimize("throughput")`, and on Linux `TCPCONN_IOURING` / the io_uring loop +/- multishot) and per build (`--build NAME=SRC`), in interleaved passes, with a delta-vs-default summary |

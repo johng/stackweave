@@ -2,27 +2,29 @@
 
 Small, self-contained programs — each one demonstrates a single aspect of
 stackweave. They run fibers across all your cores via the M:N scheduler
-(`run(HUBS, ...)`), so they need **free-threaded CPython 3.13t with the GIL
+(`run(HUBS, ...)`), so they need **free-threaded CPython 3.14t with the GIL
 off** — stackweave is a free-threaded runtime, and `run(n>1)` deliberately raises
-on a GIL build rather than pretend.
+when the GIL is on rather than pretend.
 
-Install stackweave first — `pip install stackweave`, or `pip install -e .` from a
-clone — then run any example with the GIL off:
+Install stackweave first with a patched interpreter's pip (see
+[Install](../README.md#install)) — `pip install stackweave`, or `pip install -e .`
+from a clone — then run any example with the GIL off:
 
 ```bash
-PYTHON_GIL=0 ~/.pyenv/versions/3.14.4t/bin/python3 examples/hello_fibers.py
+PYTHON_GIL=0 /path/to/patched/bin/python3.14 examples/hello_fibers.py
 ```
 
-(On a stock GIL build the M:N examples raise a clear error telling you to use
-`run(1, ...)`; only `asyncio_bridge.py` is single-loop by nature.)
+(With the GIL re-enabled at runtime (`PYTHON_GIL=1`) the M:N examples raise a
+clear error telling you to use `run(1, ...)`; only `asyncio_bridge.py` is
+single-loop by nature.)
 
-For raw performance numbers and the measurement harness, see [`../bench/`](../bench/).
+For raw performance numbers and the measurement harness, see [`../benchmark/`](../benchmark/).
 
 ## Goroutines & channels
 
 | Example | Shows |
 | --- | --- |
-| [hello_fibers.py](hello_fibers.py) | `go` / `run` / `yield_now` / `sleep` — the basics |
+| [hello_fibers.py](hello_fibers.py) | `fiber` / `run` / `yield_now` / `sleep` — the basics |
 | [channels.py](channels.py) | buffered vs unbuffered channels, `close`, `for v in ch` |
 | [select_demo.py](select_demo.py) | `select` over recv/send cases, plus non-blocking `default` |
 | [ping_pong.py](ping_pong.py) | two fibers synchronised purely by channels |
@@ -62,12 +64,12 @@ For raw performance numbers and the measurement harness, see [`../bench/`](../be
 | Example | Shows |
 | --- | --- |
 | [offload_blocking.py](offload_blocking.py) | `stackweave.blocking` keeps a hub alive across a non-cooperative call |
-| [mn_parallel.py](mn_parallel.py) | the M:N scheduler scaling across cores (free-threaded 3.13t) |
+| [mn_parallel.py](mn_parallel.py) | the M:N scheduler scaling across cores (free-threaded 3.14t) |
 | [segfault_dump.py](segfault_dump.py) | `install_crash_handler()` turns a fiber stack overflow into a classified dump |
 | [asyncio_bridge.py](asyncio_bridge.py) | run existing `async`/`await` code on stackweave via `stackweave.aio.run` |
 
 ### Free-threaded run (for `mn_parallel.py`)
 
 ```bash
-PYTHON_GIL=0 ~/.pyenv/versions/3.14.4t/bin/python3 examples/mn_parallel.py
+PYTHON_GIL=0 /path/to/patched/bin/python3.14 examples/mn_parallel.py
 ```

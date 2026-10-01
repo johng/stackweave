@@ -129,7 +129,7 @@ inherits the fiber model's hard edges:
 
 - **Tiny JITs.** Compile a hot predicate / filter / arithmetic expression to a
   blob once, call it per row from each fiber — a per-connection JIT with no
-  GIL contention under 3.13t.
+  GIL contention under 3.14t.
 - **Hand-rolled SIMD kernels** (AVX2/AVX-512/NEON) called from fibers for
   number-crunching that the interpreter is too slow for and that's awkward to
   ship as a separate `.so`.

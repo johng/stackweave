@@ -2,7 +2,7 @@
 
 100 self-contained workloads that hammer the `stackweave` Go-style-coroutine
 extension in **M:N parallel mode** (`run(n>1)`, GIL off, free-threaded CPython
-3.13t), blocking-style code over `monkey.patch()` — **no `async`/`await`, no
+3.14t), blocking-style code over `monkey.patch()` — **no `async`/`await`, no
 aio bridge**. Each one fields tens of thousands of lightweight goroutines and
 exercises one corner of the runtime (sockets, files, subprocess, scheduler,
 sync primitives, cancellation, exception/finalizer machinery, …).
@@ -25,7 +25,7 @@ requirements:
 
 ## Requirements
 
-- Free-threaded CPython 3.13t built with the extension:
+- Free-threaded CPython 3.14t built with the extension:
   `~/.pyenv/versions/3.14.4t/bin/python3`, `PYTHON_GIL=0`.
 - Build the extension once: `python setup.py build_ext --inplace` (repo root).
 - The harness auto-raises `RLIMIT_NOFILE` (via `sudo -n prlimit`) so socket
