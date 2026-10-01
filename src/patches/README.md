@@ -76,8 +76,8 @@ the optimizer from caching the two reads identifying the OS thread a frame runs
 on: `_PyThreadState_GET()` (via `pycore_pystate.h`, now routed through the
 out-of-line `_PyThreadState_GetCurrent()`, which gains `Py_NO_INLINE` so no
 caller can inline it) and `_Py_ThreadId()` (via `object.h`, whose per-arch reads
-become volatile asm).  The out-of-line call does not survive LTO as a whole --
-see "Build flags" below.
+become volatile asm).  The scheme as a whole does not survive LTO -- see
+"Build flags" below.
 
 **Why it's needed.** Both reads are pure expressions, so the compiler hoists them
 out of loops, CSEs repeats into one, and sinks them to function entry. That is
@@ -208,7 +208,8 @@ the `_Py_tss_tstate` thread-local behind a call into `Python/pystate.c`, so no
 caller outside that file holds a read the compiler may cache across a fiber
 park.  The rule that matters is "no direct `_Py_tss_tstate` read outside
 `pystate.c`", and only cross-TU inlining can break it.  Measured on arm64 Darwin
-(clang 21, 3.14.4 + both patches, `tools/ci/check_exec_home_tls.py <python>`):
+(Apple clang 21 / clang-2100.1.1.101, 3.14.4 + both patches,
+`tools/ci/check_exec_home_tls.py <python>`):
 
 | configure | functions reading `_Py_tss_tstate` (directly or via an outlined helper) | `_PyThreadState_GetCurrent()` call sites | `PyThreadState_Get()` call sites |
 |---|---:|---:|---:|
@@ -217,11 +218,17 @@ park.  The rule that matters is "no direct `_Py_tss_tstate` read outside
 | `--enable-optimizations --with-lto=thin` | **413** | 5508 | **7** |
 
 `Py_NO_INLINE` holds under LTO: `_PyThreadState_GetCurrent()` itself is never
-inlined.  What LTO does is inline `pystate.c`'s *other* entry points that read
-the thread-local directly -- `PyThreadState_Get()` and its siblings, which use
-`current_fast_get()` -- into ~400 functions across the interpreter (the parser,
-`type_new`, ...), each of which then holds a cacheable read: the use-after-free
-this patch exists to prevent, with no build error and no test failure.  So
+inlined.  What LTO does is inline `pystate.c`'s *other* entry points that touch
+the thread-local directly -- readers such as `PyThreadState_Get()`
+(`current_fast_get()`) and writers such as `_PyThreadState_Attach()` /
+`_PyThreadState_Detach()` / `PyEval_SaveThread()` (`current_fast_set()` /
+`current_fast_clear()`) -- into ~400 functions across the interpreter,
+`_PyEval_EvalFrameDefault` among them.  Each then holds a cacheable address of
+the slot.  For example, the LTO build's `time_sleep` computes the slot's address
+once and, inside its EINTR retry loop -- after `_PyErr_CheckSignals()`, which can
+run Python and so park and migrate the fiber -- writes NULL through it (an
+inlined detach): the use-after-free this patch exists to prevent, with no build
+error and no test failure.  So
 **never use `--with-lto`** (or `-flto` in CFLAGS) with these patches.
 `--enable-optimizations` (PGO) does no cross-TU inlining and keeps the reads
 confined to `pystate.c`; the cross-hub migration, parked-frame GC and swarm

@@ -116,8 +116,9 @@
 #
 # CAVEATS
 #   * Do NOT build with --with-lto (or -flto): LTO inlines pystate.c's direct
-#     _Py_tss_tstate readers (PyThreadState_Get() and friends) into ~400
-#     callers across the interpreter, each then holding a cacheable read.
+#     _Py_tss_tstate readers and writers (PyThreadState_Get(),
+#     _PyThreadState_Attach/Detach, PyEval_SaveThread, ...) into ~400 callers
+#     across the interpreter, each then holding a cacheable slot address.
 #     Py_NO_INLINE keeps _PyThreadState_GetCurrent() itself out of line even
 #     under LTO; it is the other accessors that leak.  PGO alone
 #     (--enable-optimizations) does no cross-TU inlining and is safe.  Check a
