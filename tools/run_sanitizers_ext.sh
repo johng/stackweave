@@ -21,12 +21,13 @@
 # STACKWEAVE_TSAN_CPYTHON_SUPP to that tree's suppressions_free_threading.txt to mute
 # the known CPython free-threading races.
 #
-# STATUS (2026-08-21, gold on a --with-thread-sanitizer CPython 3.14.4t): the
-# only non-suppressed report in stackweave's own C is
-# runloom_sched_pystate.c.inc:602 runloom_chunk_grace_depth -- the lazy getenv
-# cache, self-documented in the source as a benign idempotent first-init race.
-# Everything else is clean.  Re-verify with tools/verify/tsan_gold_drift.py,
-# which warns when src/runloom_c has drifted past this run.
+# STATUS: superseded for gold runs by tools/run_tsan_gold.sh (docs/dev/TSAN.md),
+# which runs against an interpreter WITH both migration patches -- migration is
+# always on now, and the 2026-08-21 gold run below predates it.  That run (stock
+# --with-thread-sanitizer 3.14.4t) reported only runloom_chunk_grace_depth, the
+# benign lazy getenv cache; the 2026-10-01 migration-on run found more (A1/A2 and
+# C1-C6 in docs/dev/TSAN.md).  tools/verify/tsan_gold_drift.py still warns when
+# src/runloom_c drifts past the last recorded clean run.
 #
 # The previous status line here claimed "stackweave's C is TSan-clean" from a run
 # against **3.13t**, and it had gone quietly stale by a whole minor version:

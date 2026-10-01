@@ -55,8 +55,18 @@ static inline void runloom_fibersan_left(struct runloom_asm_coro *a)
 {
 #if defined(RUNLOOM_FIBERSAN_ASAN)
     __sanitizer_finish_switch_fiber(a->fibersan.asan_caller_fake, NULL, NULL);
-#else
-    (void)a;
+#endif
+#if defined(RUNLOOM_FIBERSAN_TSAN)
+    /* The goroutine finished: abandon() handed us back for the last time.
+     * Retire its TSan fiber here instead of keeping it for the pooled coro's
+     * next goroutine.  runloom_asm_entry never returns, so its
+     * __tsan_func_entry is never paired and its frame stays on the fiber's
+     * shadow stack: a fiber reused across goroutine lifetimes gains one dead
+     * frame per lifetime (report stacks fill with runloom_asm_trampoline), and
+     * after ~64K reuses of one coro TSan writes past the end of the shadow
+     * stack.  enter() creates a fresh fiber on the coro's next resume. */
+    if (a->done)
+        runloom_fibersan_destroy(a);
 #endif
 }
 

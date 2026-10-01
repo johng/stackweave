@@ -1800,6 +1800,12 @@ void runloom_coro_destroy(runloom_coro_t *c)
          * coro struct (the producer-drains fix; same shape as the g-slab). */
         if (runloom_coro_pool_size >= RUNLOOM_CORO_POOL_CAP)
             runloom_coro_global_flush();
+        /* The next occupant gets a fresh TSan fiber (enter() creates one).  A
+         * coro that finished already dropped its fiber in fibersan_left(); one
+         * pooled mid-body (a Python-level Coro deallocated or re-initialised
+         * before it returned) still holds one, with that body's frames on its
+         * shadow stack.  No-op unless built with -fsanitize=thread. */
+        runloom_fibersan_destroy(&c->asm_coro);
         c->pool_next = runloom_coro_pool;
         runloom_coro_pool = c;
         runloom_coro_pool_size++;
@@ -1813,7 +1819,7 @@ void runloom_coro_destroy(runloom_coro_t *c)
     if (c->stack != NULL) {
         runloom_stack_release(c->stack, c->stack_size);
     }
-    runloom_fibersan_destroy(&c->asm_coro);   /* free the TSan fiber (true free) */
+    runloom_fibersan_destroy(&c->asm_coro);   /* free the TSan fiber, if any */
     free(c);
 }
 
