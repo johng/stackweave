@@ -9,8 +9,10 @@
 # Two reads carry that identity and both are covered:
 #   _PyThreadState_GET()  -> out-of-line call  (pycore_pystate.h, pystate.c)
 #   _Py_ThreadId()        -> volatile asm      (object.h)
-# Plus one deallocation that a migration makes race the fiber (see ALSO below):
+# Plus memoryview's export counts, which a migration makes a fiber's own
+# deallocs race (see ALSO below):
 #   _PyManagedBufferObject.exports -> atomic ++/--  (memoryobject.c)
+#   PyMemoryViewObject.exports     -> atomic in hex()/hash() too (3.14 backport)
 #
 # WHY: compilers treat thread identity as loop-invariant and hoist/CSE it.  That
 # is sound for OS threads, whose stacks never move.  A stackful fiber parks on
@@ -71,10 +73,20 @@
 # tp_dealloc.  For a fiber that has moved, the owner is the hub it ALLOCATED on,
 # so the dealloc of an object it never shared runs concurrently with its own next
 # statements on the new hub.  Code that a dealloc and its creator both touch
-# must therefore be thread-safe even for single-fiber programs.  One that is not:
-# _PyManagedBufferObject.exports, bumped by every view of a buffer on creation
-# (mbuf_add_*view) and dropped on release/dealloc (_memory_release), is a plain
-# ++/-- (the per-view PyMemoryViewObject.exports beside it is already atomic).
+# must therefore be thread-safe even for single-fiber programs.  CPython has an
+# OPEN CLASS of export counters that are not -- a plain ++/-- in a getbuffer /
+# releasebuffer pair or a view's register/release -- and this hunk fixes only
+# memoryview's.  Known still open: array.array's ob_exports (arraymodule.c,
+# array_buffer_getbuf/relbuf, no critical section) -- a fiber holding
+# `memoryview(arr)` across a park leaves 2-22 of 192 arrays pinned at H=8.
+#
+# The memoryview instance: _PyManagedBufferObject.exports, bumped by every view
+# of a buffer on creation (mbuf_add_*view) and dropped on release/dealloc
+# (_memory_release), is a plain ++/-- upstream (still on main).  The per-view
+# PyMemoryViewObject.exports is updated atomically by memory_getbuf /
+# memory_releasebuf, but 3.14.4's memoryview.hex() and memory_hash() still
+# bump it with a plain ++/--; the hunk backports the 3.14 branch's
+# FT_ATOMIC_ADD_SSIZE there (3.15.0rc2 already has it).
 # A fiber holding `sl = view[0:]` across a park and dropping it on another hub
 # has the old hub run `--exports` while it runs `exports++` for the next slice;
 # a lost increment releases the buffer under the live `view` ("operation
@@ -94,6 +106,10 @@
 #
 # Guard: tests/test_cross_hub_migration.py::
 #        test_memory_memoryview_slice_survives_a_migration.
+# memoryobject.c is not installed, so the object.h hunk also defines
+# _Py_MV_EXPORTS_ATOMIC (under the flag) as an installed witness: on an
+# interpreter patched with an older copy the guard still runs, but a failure
+# there is an xfail asking for a rebuild.
 #
 # ZERO IMPACT BY DEFAULT: with the flag undefined every site macro-expands back
 # to stock.  No ABI change (unlike alloc-home, no struct field is added).
@@ -109,6 +125,7 @@
 #     while lacking it.  The object.h hunk defines _Py_TID_ASM in both arms as a
 #     compile-time witness; test for both (stackweave does).  Check by hand with:
 #         grep _Py_TID_ASM Include/object.h
+#         grep _Py_MV_EXPORTS_ATOMIC Include/object.h
 #         grep MBUF_EXPORTS_INC Objects/memoryobject.c
 #   * MSVC thread-id reads are intrinsics, not asm, and are left untouched.
 #   * Same class, not covered (not read by a fiber across a park in any path
@@ -122,7 +139,7 @@
 #
 --- a/Include/object.h
 +++ b/Include/object.h
-@@ -182,6 +182,21 @@
+@@ -182,6 +182,29 @@
  #if defined(Py_GIL_DISABLED) && !defined(Py_LIMITED_API)
  PyAPI_FUNC(uintptr_t) _Py_GetThreadLocal_Addr(void);
  
@@ -141,10 +158,18 @@
 +#  define _Py_TID_ASM __asm__
 +#endif
 +
++/* Py_TSTATE_EXEC_HOME witness for this patch's Objects/memoryobject.c hunk
++   (atomic memoryview export counts).  That file is not installed, so this is
++   how code built against these headers can tell an interpreter that has the
++   hunk from one patched with an older copy of exec-home. */
++#ifdef Py_TSTATE_EXEC_HOME
++#  define _Py_MV_EXPORTS_ATOMIC 1
++#endif
++
  static inline uintptr_t
  _Py_ThreadId(void)
  {
-@@ -199,24 +214,24 @@
+@@ -199,24 +222,24 @@
  #elif defined(__MINGW32__) && defined(_M_ARM64)
      tid = __getReg(18);
  #elif defined(__i386__)
@@ -177,7 +202,7 @@
      tid = tp;
      #endif
  #elif defined(__powerpc__)
-@@ -225,7 +240,7 @@
+@@ -225,7 +248,7 @@
      #else
      // r2 is reserved for use as system thread ID by the Power 32-bit ABI.
      register uintptr_t tp __asm__ ("r2");
@@ -186,7 +211,7 @@
      tid = tp;
      #endif
  #elif defined(__s390__) && defined(__GNUC__)
-@@ -237,7 +252,7 @@
+@@ -237,7 +260,7 @@
      tid = (uintptr_t)__builtin_thread_pointer();
      #else
      // tp is Thread Pointer provided by the RISC-V ABI.
@@ -243,7 +268,7 @@
  {
 --- a/Objects/memoryobject.c
 +++ b/Objects/memoryobject.c
-@@ -84,6 +84,28 @@
+@@ -84,6 +84,38 @@
  
      return mbuf;
  }
@@ -259,20 +284,30 @@
 +   the exporter is unpinned and may resize or free the memory they point at);
 +   a lost decrement pins the exporter forever.  A fiber that migrates between
 +   OS threads hits it on its own unshared views: each slice it drops on
-+   another thread is deallocated back on the one it was created on.  The
-+   per-view count (PyMemoryViewObject.exports) is already atomic; this makes
-+   the per-buffer count match.  _Py_atomic_add_ssize returns the old value. */
++   another thread is deallocated back on the one it was created on.  Upstream
++   (still on main) this count is a plain ++/--.  _Py_atomic_add_ssize returns
++   the old value.
++
++   The per-view count (PyMemoryViewObject.exports) has the same exposure:
++   memory_getbuf/memory_releasebuf update it atomically, but 3.14.4's
++   memoryview.hex() and memory_hash() still use a plain ++/-- around their
++   callouts.  MV_EXPORTS_ADD backports the 3.14 branch's FT_ATOMIC_ADD_SSIZE
++   there (3.15 already has it). */
 +#if defined(Py_GIL_DISABLED) && defined(Py_TSTATE_EXEC_HOME)
 +#  define MBUF_EXPORTS_INC(mbuf) ((void)_Py_atomic_add_ssize(&(mbuf)->exports, 1))
 +#  define MBUF_EXPORTS_DEC(mbuf) (_Py_atomic_add_ssize(&(mbuf)->exports, -1) - 1)
++#  define MBUF_EXPORTS_GET(mbuf) _Py_atomic_load_ssize_relaxed(&(mbuf)->exports)
++#  define MV_EXPORTS_ADD(mv, n)  FT_ATOMIC_ADD_SSIZE((mv)->exports, (n))
 +#else
 +#  define MBUF_EXPORTS_INC(mbuf) ((void)(mbuf)->exports++)
 +#  define MBUF_EXPORTS_DEC(mbuf) (--(mbuf)->exports)
++#  define MBUF_EXPORTS_GET(mbuf) ((mbuf)->exports)
++#  define MV_EXPORTS_ADD(mv, n)  ((void)((mv)->exports += (n)))
 +#endif
  
  static PyObject *
  _PyManagedBuffer_FromObject(PyObject *base, int flags)
-@@ -699,7 +721,7 @@
+@@ -699,7 +731,7 @@
      init_flags(mv);
  
      mv->mbuf = (_PyManagedBufferObject*)Py_NewRef(mbuf);
@@ -281,7 +316,7 @@
  
      return (PyObject *)mv;
  }
-@@ -729,7 +751,7 @@
+@@ -729,7 +761,7 @@
      init_shared_values(dest, src);
  
      mv->mbuf = (_PyManagedBufferObject*)Py_NewRef(mbuf);
@@ -290,12 +325,38 @@
  
      return (PyObject *)mv;
  }
-@@ -1114,7 +1136,7 @@
+@@ -1113,8 +1145,8 @@
+         return;
  
      self->flags |= _Py_MEMORYVIEW_RELEASED;
-     assert(self->mbuf->exports > 0);
+-    assert(self->mbuf->exports > 0);
 -    if (--self->mbuf->exports == 0) {
++    assert(MBUF_EXPORTS_GET(self->mbuf) > 0);
 +    if (MBUF_EXPORTS_DEC(self->mbuf) == 0) {
          mbuf_release(self->mbuf);
      }
  }
+@@ -2352,9 +2384,9 @@
+         // Prevent 'self' from being freed if computing len(sep) mutates 'self'
+         // in _Py_strhex_with_sep().
+         // See: https://github.com/python/cpython/issues/143195.
+-        self->exports++;
++        MV_EXPORTS_ADD(self, 1);
+         PyObject *ret = _Py_strhex_with_sep(src->buf, src->len, sep, bytes_per_sep);
+-        self->exports--;
++        MV_EXPORTS_ADD(self, -1);
+         return ret;
+     }
+ 
+@@ -3231,9 +3263,9 @@
+         if (view->obj != NULL) {
+             // Prevent 'self' from being freed when computing the item's hash.
+             // See https://github.com/python/cpython/issues/142664.
+-            self->exports++;
++            MV_EXPORTS_ADD(self, 1);
+             Py_hash_t h = PyObject_Hash(view->obj);
+-            self->exports--;
++            MV_EXPORTS_ADD(self, -1);
+             if (h == -1) {
+                 /* Keep the original error message */
+                 return -1;

@@ -632,6 +632,23 @@ stackweave.run(4, main)
 ''')
 
 
+def _interpreter_has_mv_exports_fix():
+    """Whether this interpreter carries the exec-home patch's memoryobject.c
+    hunk.  That file is not installed, so the patch also defines
+    _Py_MV_EXPORTS_ATOMIC in the installed object.h (3.14) or
+    cpython/object.h (3.15); tools/ci/lib.sh checks the same witness."""
+    import sysconfig
+    include = sysconfig.get_path("include")
+    for header in ("object.h", os.path.join("cpython", "object.h")):
+        try:
+            with open(os.path.join(include, header), errors="replace") as f:
+                if "_Py_MV_EXPORTS_ATOMIC" in f.read():
+                    return True
+        except OSError:
+            pass
+    return False
+
+
 def test_memory_memoryview_slice_survives_a_migration():
     """64 ping-pong pairs at H=8; each pinger holds `view[0:]` of its own
     memoryview across the channel park, then drops it.
@@ -645,10 +662,24 @@ def test_memory_memoryview_slice_survives_a_migration():
     under `view` ("operation forbidden on released memoryview object"), a
     lost decrement pinned the bytearray for good.  Refcounts were never
     wrong.  The failure rate tracked OS-thread moves, not the hub count.
-    Needs an interpreter rebuilt from src/patches/.  Runs batches until
-    MOVES_WANTED OS-thread moves were seen so a pass means the gap is
-    really closed, not unexercised.
+    Runs batches until MOVES_WANTED OS-thread moves were seen so a pass
+    means the gap is really closed, not unexercised.
+
+    The fix lives in the interpreter, so on one built from an older copy of
+    src/patches/ (no _Py_MV_EXPORTS_ATOMIC witness in its headers) the
+    scenario still runs, but a failure is an xfail asking for a rebuild.
     """
+    try:
+        _run_memoryview_slice_scenario()
+    except pytest.fail.Exception:
+        if _interpreter_has_mv_exports_fix():
+            raise
+        pytest.xfail("this interpreter lacks the exec-home memoryobject.c hunk "
+                     "(no _Py_MV_EXPORTS_ATOMIC in its installed object.h): "
+                     "rebuild the interpreter from src/patches/")
+
+
+def _run_memoryview_slice_scenario():
     assert_pass(r'''
 _watchdog(50)
 PAIRS, ROUNDS, MOVES_WANTED, BUDGET_S = 64, 4000, 3000, 30

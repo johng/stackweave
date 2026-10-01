@@ -31,15 +31,20 @@
 #    is unchanged from the 3.14 patch and applies to 3.15 as-is.
 #
 # 4. Objects/memoryobject.c -- the atomic managed-buffer export count (the 3.14
-#    patch's "ALSO" section) is byte-identical: 3.15.0rc2 has the same plain
-#    ++/-- on _PyManagedBufferObject.exports at the same lines.
+#    patch's "ALSO" section): 3.15.0rc2 has the same plain ++/-- on
+#    _PyManagedBufferObject.exports at the same lines.  The 3.14 patch's other
+#    memoryobject.c change, backporting FT_ATOMIC_ADD_SSIZE to the per-view
+#    count in memoryview.hex()/memory_hash(), is not needed: 3.15 has it.  The
+#    same _Py_MV_EXPORTS_ATOMIC witness is defined next to _Py_TID_ASM.  As in
+#    3.14, array.array's ob_exports is a known-open member of the same class.
 #
 # ZERO IMPACT BY DEFAULT: with the flag undefined _Py_TID_ASM expands to plain
 # __asm__, _PyThreadState_GET() keeps its inline thread-local read, and the
 # export count keeps its plain ++/--.  No ABI change.  APPLY EVERY FILE'S HUNKS
 # -- the flag is armed in pyconfig.h regardless, so a partial build advertises
 # the feature while lacking it; check with
-# `grep _Py_TID_ASM Include/cpython/object.h` and
+# `grep _Py_TID_ASM Include/cpython/object.h`,
+# `grep _Py_MV_EXPORTS_ATOMIC Include/cpython/object.h` and
 # `grep MBUF_EXPORTS_INC Objects/memoryobject.c`.
 #
 # APPLY:  from the CPython source root:  patch -p1 -F0 < this-file
@@ -48,7 +53,7 @@
 #
 --- a/Include/cpython/object.h
 +++ b/Include/cpython/object.h
-@@ -506,6 +506,21 @@
+@@ -506,6 +506,29 @@
  #if defined(Py_GIL_DISABLED)
  PyAPI_FUNC(uintptr_t) _Py_GetThreadLocal_Addr(void);
  
@@ -67,10 +72,18 @@
 +#  define _Py_TID_ASM __asm__
 +#endif
 +
++/* Py_TSTATE_EXEC_HOME witness for this patch's Objects/memoryobject.c hunk
++   (atomic memoryview export counts).  That file is not installed, so this is
++   how code built against these headers can tell an interpreter that has the
++   hunk from one patched with an older copy of exec-home. */
++#ifdef Py_TSTATE_EXEC_HOME
++#  define _Py_MV_EXPORTS_ATOMIC 1
++#endif
++
  static inline uintptr_t
  _Py_ThreadId(void)
  {
-@@ -523,24 +538,24 @@
+@@ -523,24 +546,24 @@
  #elif defined(__MINGW32__) && defined(_M_ARM64)
      tid = __getReg(18);
  #elif defined(__i386__)
@@ -103,7 +116,7 @@
      tid = tp;
      #endif
  #elif defined(__powerpc__)
-@@ -549,7 +564,7 @@
+@@ -549,7 +572,7 @@
      #else
      // r2 is reserved for use as system thread ID by the Power 32-bit ABI.
      register uintptr_t tp __asm__ ("r2");
@@ -112,7 +125,7 @@
      tid = tp;
      #endif
  #elif defined(__s390__) && defined(__GNUC__)
-@@ -561,7 +576,7 @@
+@@ -561,7 +584,7 @@
      tid = (uintptr_t)__builtin_thread_pointer();
      #else
      // tp is Thread Pointer provided by the RISC-V ABI.
@@ -168,11 +181,10 @@
  {
 --- a/Objects/memoryobject.c
 +++ b/Objects/memoryobject.c
-@@ -84,6 +84,28 @@
- 
+@@ -85,6 +85,31 @@
      return mbuf;
  }
-+
+ 
 +/* Py_TSTATE_EXEC_HOME: mbuf->exports is shared by every memoryview of one
 +   managed buffer, and each view's registration (mbuf_add_*view) and release
 +   (_memory_release, reached from memory_dealloc too) read-modify-writes it.
@@ -184,20 +196,24 @@
 +   the exporter is unpinned and may resize or free the memory they point at);
 +   a lost decrement pins the exporter forever.  A fiber that migrates between
 +   OS threads hits it on its own unshared views: each slice it drops on
-+   another thread is deallocated back on the one it was created on.  The
-+   per-view count (PyMemoryViewObject.exports) is already atomic; this makes
-+   the per-buffer count match.  _Py_atomic_add_ssize returns the old value. */
++   another thread is deallocated back on the one it was created on.  In 3.15
++   every update of the per-view count (PyMemoryViewObject.exports) is already
++   FT_ATOMIC_ADD_SSIZE; this makes the per-buffer count match.
++   _Py_atomic_add_ssize returns the old value. */
 +#if defined(Py_GIL_DISABLED) && defined(Py_TSTATE_EXEC_HOME)
 +#  define MBUF_EXPORTS_INC(mbuf) ((void)_Py_atomic_add_ssize(&(mbuf)->exports, 1))
 +#  define MBUF_EXPORTS_DEC(mbuf) (_Py_atomic_add_ssize(&(mbuf)->exports, -1) - 1)
++#  define MBUF_EXPORTS_GET(mbuf) _Py_atomic_load_ssize_relaxed(&(mbuf)->exports)
 +#else
 +#  define MBUF_EXPORTS_INC(mbuf) ((void)(mbuf)->exports++)
 +#  define MBUF_EXPORTS_DEC(mbuf) (--(mbuf)->exports)
++#  define MBUF_EXPORTS_GET(mbuf) ((mbuf)->exports)
 +#endif
- 
++
  static PyObject *
  _PyManagedBuffer_FromObject(PyObject *base, int flags)
-@@ -699,7 +721,7 @@
+ {
+@@ -699,7 +724,7 @@
      init_flags(mv);
  
      mv->mbuf = (_PyManagedBufferObject*)Py_NewRef(mbuf);
@@ -206,7 +222,7 @@
  
      return (PyObject *)mv;
  }
-@@ -729,7 +751,7 @@
+@@ -729,7 +754,7 @@
      init_shared_values(dest, src);
  
      mv->mbuf = (_PyManagedBufferObject*)Py_NewRef(mbuf);
@@ -215,11 +231,13 @@
  
      return (PyObject *)mv;
  }
-@@ -1114,7 +1136,7 @@
+@@ -1113,8 +1138,8 @@
+         return;
  
      self->flags |= _Py_MEMORYVIEW_RELEASED;
-     assert(self->mbuf->exports > 0);
+-    assert(self->mbuf->exports > 0);
 -    if (--self->mbuf->exports == 0) {
++    assert(MBUF_EXPORTS_GET(self->mbuf) > 0);
 +    if (MBUF_EXPORTS_DEC(self->mbuf) == 0) {
          mbuf_release(self->mbuf);
      }
