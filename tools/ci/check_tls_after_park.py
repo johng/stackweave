@@ -143,6 +143,8 @@ NATIVE_ONLY = {
     "_py_blocking_worker_thread_fini":
         "the blocking-pool worker's exit hook "
         "(runloom_blockpool_worker_thread_fini), run on that worker thread",
+    "_runloom_blockpool_worker":
+        "a blocking-pool worker thread's start routine (runloom_thread_create)",
 }
 
 # Reviewed findings left as they are: function -> (variables, why).  Each is
