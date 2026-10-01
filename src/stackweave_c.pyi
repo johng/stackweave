@@ -5,7 +5,7 @@ from typing import Any, Literal, overload
 # ---- Coroutine handle (raw, no scheduler) -----------------------------
 
 class Coro:
-    """A raw stackful coroutine.  Most users want go()/run() instead."""
+    """A raw stackful coroutine.  Most users want fiber()/run() instead."""
     done: bool
     def __init__(self, fn: Callable[..., Any], stack_size: int = ...) -> None: ...
     def resume(self) -> Any: ...
@@ -13,7 +13,7 @@ class Coro:
 # ---- Goroutine handle (scheduler-aware) -------------------------------
 
 class G:
-    """Opaque goroutine handle returned by go() / mn_go()."""
+    """Opaque goroutine handle returned by fiber()."""
     ...
 
 # ---- Channel ---------------------------------------------------------
@@ -33,11 +33,12 @@ class Chan:
 
 # ---- Single-thread scheduler -----------------------------------------
 
-def go(callable_: Callable[[], Any]) -> G:
-    """Spawn a goroutine on the single-thread C scheduler.  Returns handle."""
+def fiber(callable_: Callable[[], Any], stack_size: int = ...) -> G:
+    """Spawn a goroutine on the single-thread C scheduler.  Returns handle.
+    stack_size > 0 overrides the default C stack for this one fiber."""
     ...
 
-def go_noyield(callable_: Callable[[], Any]) -> G:
+def fiber_noyield(callable_: Callable[[], Any]) -> G:
     """Spawn a goroutine the caller PROMISES runs to completion without
     yielding.  Skips per-g snap/load dance.  150-400 ns/g faster.
     Undefined behaviour if the callable yields."""
@@ -112,18 +113,22 @@ def warmup(n: int, stack_size: int = ...) -> int:
     latency on server workloads."""
     ...
 
-# ---- M:N scheduler (3.13t) -------------------------------------------
+# ---- M:N scheduler -----------------------------------------------------
 
 def mn_init(n: int = ...) -> int:
     """Start N hub threads (default: nproc).  Returns count."""
     ...
 
-def mn_go(callable_: Callable[[], Any], stack_size: int = 0) -> G:
-    """Spawn on a round-robin hub.  v1: run-to-completion only.
+def mn_fiber(callable_: Callable[[], Any], stack_size: int = 0,
+             hub: int = -1) -> None:
+    """Spawn on a round-robin hub.  Returns no handle.
 
-    stack_size>0 overrides the hub's small default C-stack (bytes) for a
+    stack_size>0 overrides the default C-stack (bytes) for a
     goroutine that runs a deep, non-yielding C burst (cold imports,
     terminfo/OpenSSL init) that the resume-boundary copy-grow can't rescue.
+
+    hub=N spawns on hub N and keeps it there (not stealable) -- a
+    determinism knob for tests, not affinity.
     """
     ...
 
@@ -135,10 +140,10 @@ def mn_fini() -> None:
     """Tear down the hub pool."""
     ...
 
-# ---- Preemption (3.13t) ----------------------------------------------
+# ---- Preemption ------------------------------------------------------
 
 def preempt_init(quantum_us: int = ...) -> None:
-    """Start the time-sliced preemption timer.  3.13t only."""
+    """Start the time-sliced preemption timer."""
     ...
 
 def preempt_fini() -> None:
