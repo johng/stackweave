@@ -109,8 +109,8 @@ architecture-specific:
 Because the blob runs on the fiber's stack and is opaque native code, it
 inherits the fiber model's hard edges:
 
-- **Small stack.** It runs on the fiber's C stack (default 32 KB with a
-  PROT_NONE guard page). The same fat-frame rule as the rest of stackweave applies:
+- **Small stack.** It runs on the fiber's C stack (default 512 KB, never
+  below 256 KB, with a PROT_NONE guard page). The same fat-frame rule as the rest of stackweave applies:
   a blob that pushes a large frame or recurses deeply overflows into the guard
   page → a clean SIGSEGV. For a big compute kernel, give that fiber a roomy
   stack: `stackweave_c.fiber(fn, stack_size=...)`.

@@ -381,7 +381,8 @@ import stackweave
 g = stackweave.fiber(worker)             # plus stackweave.run(1) at top level
 ```
 
-You go from 8 MB per thread (Linux default) to ~16 KB per fiber.
+You go from an 8 MB stack per thread (Linux default) to a 512 KB one per
+fiber (both demand-paged, so only touched pages cost RAM).
 Spawn rate goes from ~10k/sec to ~1.7M/sec.
 
 ## Bridging stackweave with `asyncio` libraries

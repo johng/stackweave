@@ -189,11 +189,13 @@ On a fault it maps the faulting address onto the guard pages and prints, e.g.:
 ======================== stackweave crash ========================
 [stackweave] fatal SIGSEGV at address 0x7622eca18f30  (pid 48681, thread 0x7622ebbff6c0)
 [stackweave] >>> GOROUTINE STACK OVERFLOW <<<
-[stackweave]     fiber g1 ran off the low end of its 128 KiB C stack
-[stackweave]     (the fault hit the guard page just below it).
-[stackweave]     Fix: give it a bigger stack -- stackweave_c.fiber(fn, stack_size=N), ...
+[stackweave]     fiber g1 ran off the low end of its 512 KiB C stack
+[stackweave]     -- the fault hit the guard page just below it: a CLEAN trap,
+[stackweave]     not memory corruption.
+[stackweave]     Fix: pin a bigger stack with stackweave.fiber(fn, stack_size=N)
+[stackweave]     ...
 [stackweave] this thread was executing fiber g1.
-=== stackweave fiber dump: 1 live (default stack 128 KiB) ===
+=== stackweave fiber dump: 1 live (default stack 512 KiB) ===
   ...
 ```
 

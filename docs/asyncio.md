@@ -116,8 +116,8 @@ stackweave.aio.run(main())
 
 The server runs at full speed using stackweave's netpoll (epoll on Linux,
 kqueue on BSD/macOS).  Per-connection
-overhead is one fiber -- by default 16 KB of stack after
-[calibration](stack-sizing.md).
+overhead is one fiber -- a 512 KB stack by default, demand-paged so only
+the pages it touches are resident (see [stack sizing](stack-sizing.md)).
 
 ### Client
 
@@ -304,7 +304,7 @@ total = sum(results)
 
 ### Avoid making a new task for trivial work
 
-A `StackweaveTask` allocates a 16 KB fiber stack.  For something that's
+A `StackweaveTask` reserves a 512 KB fiber stack (`STACKWEAVE_AIO_TASK_STACK`).  For something that's
 basically "return a value", just call the function:
 
 ```python
@@ -339,7 +339,7 @@ This lets you use libraries that don't support `async` -- `requests`,
 | Task storage | callback chains in `_callbacks` lists | per-task fiber + 1-call-deep stack |
 | Context switch | `loop._run_once` + `selector.select` | C `swap` instruction |
 | `await fut` | adds callback, returns control to loop | parks fiber on per-task wake |
-| Per-task memory | ~5 KB (interpreter frame + Task object) | ~16 KB (stack) + ~250 B (G + Task) |
+| Per-task memory | ~5 KB (interpreter frame + Task object) | the touched pages of a 512 KB demand-paged stack + ~250 B (G + Task) |
 | Switch cost | ~1800 ns | ~80 ns |
 
 The trade is: stackweave costs more memory per task but switches between
