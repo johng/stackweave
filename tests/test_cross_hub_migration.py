@@ -941,7 +941,11 @@ ref, _ = steal_p50_us(4)
 p50, stolen = steal_p50_us(2)
 print("steal p50: H=2 %.0f us (stolen %.0f%%), H=4 %.0f us"
       % (p50, 100 * stolen, ref), flush=True)
-require_migration(stolen >= 0.9)
+# A FAILED steal is the regression this guards (a skip would hide it): with
+# stealing broken the sender parks on its next send and hub 0 runs the
+# receiver, so almost nothing is stolen.  0.5, not 0.9, so a briefly starved
+# hub thread on a loaded 3-core runner does not flake it.
+assert stolen >= 0.5, "only %.0f%% of wakes were stolen by the idle hub" % (100 * stolen)
 assert p50 < max(150.0, 10 * ref), (
     "a local wake left on a busy hub was stolen after %.0f us p50 at H=2 vs "
     "%.0f us at H=4" % (p50, ref))
