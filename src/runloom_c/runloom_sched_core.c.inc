@@ -139,6 +139,7 @@ void runloom_sched_init(runloom_sched_t *s)
     s->sleep_size = 0;
     s->sleep_cap = 0;
     s->heap_owner = NULL;
+    s->sleep_purge = 0;
     s->timer_heap = NULL;
     s->timer_size = 0;
     s->timer_cap = 0;

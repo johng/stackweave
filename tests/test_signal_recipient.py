@@ -295,11 +295,11 @@ def test_selector_outranks_a_dense_unrelated_sleeper():
         "interrupt the select" % p.stdout.strip())
 
 
-# Delivering to a sleeper means pulling it out of the MIDDLE of the sleep heap,
-# which is the one new data-structure operation in this area
-# (runloom_sleep_remove: linear find, fill from the tail, restore the invariant
-# in both directions).  Every other heap op only ever touches the root, so
-# nothing else would exercise a hole fill.
+# Delivering to a single-thread sleeper means pulling it out of the MIDDLE of the
+# sleep heap, which is the one new data-structure operation in this area
+# (runloom_sleep_remove_at: fill from the tail, restore the invariant in both
+# directions).  Every other heap op only ever touches the root, so nothing else
+# would exercise a hole fill.
 _HEAP = r"""
 import faulthandler, signal, socket, sys
 sys.path.insert(0, "src")
@@ -351,8 +351,8 @@ sys.stdout.write("HEAP sel=%s woke=%d/%d ordered=%s\n"
 def test_sleep_heap_survives_removing_a_signalled_sleeper():
     """Yanking one sleeper out of the middle must not disturb the others.
 
-    What this pins is runloom_sleep_remove: a linear find, a fill from the
-    tail, and a restore of the heap invariant in both directions.  Every other
+    What this pins is runloom_sleep_remove_at: a fill from the tail and a
+    restore of the heap invariant in both directions.  Every other
     heap operation only ever touches the root, so nothing else exercises a hole
     fill, and a broken one would silently drop or misorder timers.
 
@@ -380,7 +380,7 @@ def test_sleep_heap_survives_removing_a_signalled_sleeper():
     who, woke, total, ordered = m.group(1), int(m.group(2)), int(m.group(3)), m.group(4)
     assert ordered == "True", (
         "sleep heap came back OUT OF ORDER after a mid-heap removal -- "
-        "runloom_sleep_remove did not restore the invariant: %s" % p.stdout.strip())
+        "runloom_sleep_remove_at did not restore the invariant: %s" % p.stdout.strip())
     assert woke >= total - 1, (
         "%d of %d sleepers never woke: a removal lost entries from the heap"
         % (woke, total))
@@ -651,14 +651,16 @@ def test_mn_signal_reaches_a_hub_fiber_sleeping_in_select_poll():
 
     The fix does not reach into the heap at all.  A sleep_io sleeper registers a
     stack node in a process-wide list (the same idiom the io_uring parkers use),
-    the main thread marks a node and issues the wake, and the sleeper removes
-    itself from its own heap on its own thread when it resumes.
+    and the main thread marks a node and issues the wake.  The woken fiber may
+    resume on another hub, so it does not touch the heap either: its entry is
+    left behind and the hub it parked on drops it (TSan finding A1 was the
+    sleeper removing itself from there).
 
     The subtle part is that a hub sleeper has TWO possible schedulers -- its
     deadline (the hub's timer pop) and the signal wake -- and ready_push has no
     dedup, so both enqueuing it would resume the fiber twice onto a coro the
-    first run-to-completion may already have freed.  Both sides now CAS
-    g->sleep_claimed and only the winner enqueues; delivery is unaffected either
+    first run-to-completion may already have freed.  Both sides CAS the sleep's
+    g->sleep_ticket and only the winner enqueues; delivery is unaffected either
     way because the exception rides the waiter node, not the enqueue.
 
     Measured `who=out-of-mn_run finally_ran=False` before, 50/50

@@ -360,10 +360,18 @@ static void runloom_mn_hub_drain_leftovers(runloom_hub_t *h)
         runloom_g_decref(g);
     while ((g = (runloom_g_t *)runloom_cldeque_pop(&h->deque)) != NULL)
         runloom_g_decref(g);
-    while (h->sched.sleep_size > 0) {
-        g = runloom_sched_sleep_pop(&h->sched);
-        if (g != NULL) runloom_g_decref(g);
+    /* Each sleep entry holds its own ref on its g.  A LIVE one (ticket still
+     * the g's) is also a fiber that never woke, so drop its scheduler ref too;
+     * an ABANDONED one's fiber was claimed by a signal wake and is accounted
+     * for wherever it went (a queue drained above, another hub's heap, done). */
+    {   runloom_sleep_entry_t e;
+        while (runloom_sched_sleep_pop_entry(&h->sched, &e)) {
+            if (__atomic_load_n(&e.g->sleep_ticket, __ATOMIC_ACQUIRE) == e.ticket)
+                runloom_g_decref(e.g);   /* scheduler ref */
+            runloom_g_decref(e.g);       /* the entry's ref */
+        }
     }
+    __atomic_store_n(&h->sched.sleep_purge, 0, __ATOMIC_RELAXED);
     /* A signal committed to a fiber on this hub that never resumed to take it
      * (the run was torn down first, or the g completed).  Drop it rather than
      * leak the exception AND -- the part that actually bites -- rather than
@@ -1597,10 +1605,10 @@ Py_ssize_t runloom_mn_run(void)
              *     waiter parked: a hub parker used park_current, which
              *     wake_safe cannot observe, so it takes mn_wake_g.
              *   - sched_sleep_io sleepers, select.poll's reprobe
-             *     (runloom_sleep_sigwaiters).  Nothing here touches a hub's
-             *     sleep heap; the sleeper removes ITSELF on its own thread.
-             *     Its one hazard is that the hub's timer pop is a second
-             *     scheduler for the same g -- see g->sleep_claimed.
+             *     (runloom_sleep_sigwaiters).  Nothing touches a hub's sleep
+             *     heap but that hub: the claimed sleeper's entry is abandoned
+             *     and the hub purges it.  The hub's timer pop is a second
+             *     scheduler for the same g -- see g->sleep_ticket.
              * The fallback below stays exactly as it was and is what keeps
              * NEVER FETCH A SIGNAL YOU CANNOT DELIVER true here: each arm
              * returns 0 when it has no recipient, and carry-out is always a

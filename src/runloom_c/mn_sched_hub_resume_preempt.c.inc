@@ -903,7 +903,7 @@ static int runloom_mn_ctrl_census_idle(runloom_hub_t *h)
      * front only counts when it is a LOGICAL sleeper.  The peek is race-free:
      * the hub owns its sleep heap. */
     if (!has_work && h->sched.sleep_size > 0) {
-        runloom_g_t *pk = runloom_sched_sleep_peek(&h->sched);
+        const runloom_sleep_entry_t *pk = runloom_sched_sleep_peek(&h->sched);
         if (pk != NULL && !pk->sleep_real &&
             pk->wake_at <= runloom_mn_ctrl.logical_now)
             has_work = 1;
