@@ -159,6 +159,10 @@ static PyMethodDef module_methods[] = {
      "if called outside one.  Used together with park_self/G.wake to "
      "implement lightweight per-task wake primitives without the "
      "overhead of a Chan."},
+    {"in_fiber",    m_in_fiber,    METH_NOARGS,
+     "in_fiber() -> bool: whether the caller is a running fiber (M:N hub "
+     "or single-thread scheduler) -- current_g() is not None, without "
+     "allocating a handle.  Safe from any OS thread."},
     {"current_g_hwm", m_current_g_hwm, METH_NOARGS,
      "Return the current fiber's stack high-water-mark in bytes "
      "(page-granular, paint-free via mincore), or 0 outside a fiber "

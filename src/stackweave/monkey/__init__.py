@@ -180,46 +180,6 @@ def __getattr__(name):
 # ============================================================
 # top-level patch() / unpatch()
 # ============================================================
-_orig_runloom_c_fiber = None
-_orig_runloom_c_mn_fiber = None
-
-
-def _patched_runloom_c_fiber(fn, stack_size=0, **kwargs):
-    # stackweave.runtime.fiber() calls stackweave_c.fiber(target, stack_size) with the
-    # stack size as a 2nd POSITIONAL arg, so this wrapper must accept and
-    # forward it.  A bare (fn, **kwargs) signature raised TypeError and broke
-    # every stackweave.fiber() once monkey.patch() was applied (worst under M:N,
-    # where runtime.go always passes the grow-down stack size).
-    return _orig_runloom_c_fiber(_wrap_fiber_callable(fn), stack_size, **kwargs)
-
-
-def _patched_runloom_c_mn_fiber(fn, stack_size=0, **kwargs):
-    return _orig_runloom_c_mn_fiber(_wrap_fiber_callable(fn), stack_size,
-                                 **kwargs)
-
-
-def _install_fiber_wrapper():
-    """Wrap stackweave_c.fiber / mn_fiber so user callables run with the
-    fiber-context flag set.  Idempotent."""
-    global _orig_runloom_c_fiber, _orig_runloom_c_mn_fiber
-    if _orig_runloom_c_fiber is None:
-        _orig_runloom_c_fiber = stackweave_c.fiber
-        stackweave_c.fiber = _patched_runloom_c_fiber
-    if _orig_runloom_c_mn_fiber is None:
-        _orig_runloom_c_mn_fiber = stackweave_c.mn_fiber
-        stackweave_c.mn_fiber = _patched_runloom_c_mn_fiber
-
-
-def _uninstall_fiber_wrapper():
-    global _orig_runloom_c_fiber, _orig_runloom_c_mn_fiber
-    if _orig_runloom_c_fiber is not None:
-        stackweave_c.fiber = _orig_runloom_c_fiber
-        _orig_runloom_c_fiber = None
-    if _orig_runloom_c_mn_fiber is not None:
-        stackweave_c.mn_fiber = _orig_runloom_c_mn_fiber
-        _orig_runloom_c_mn_fiber = None
-
-
 _DEFAULTS = ("socket", "time", "os", "select", "selectors", "stdio", "getpass",
              "ssl", "subprocess", "process", "threading", "queue", "futures",
              "multiprocessing", "file", "syscalls", "fcntl", "signal",
@@ -309,7 +269,6 @@ def patch(**flags):
     if unknown:
         raise TypeError("patch() got unknown category: " +
                         ", ".join(sorted(unknown)))
-    _install_fiber_wrapper()
     # Safe sys._current_frames: hand callers self-contained frame snapshots so a
     # cross-thread / descheduled reader never use-after-frees a recycled datastack
     # chunk (layer C of the p200 frame-UAF fix; see monkey/frames.py).
@@ -344,7 +303,6 @@ def unpatch(**flags):
         _PATCHERS[name][1]()
         _applied.discard(name)
     if not _applied:
-        _uninstall_fiber_wrapper()
         from . import frames as _frames
         _frames.uninstall()
         _restore_preimported_stdlib_locks()

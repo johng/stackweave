@@ -319,6 +319,26 @@ static PyObject *m_current_g(PyObject *self, PyObject *unused)
     return (PyObject *)handle;
 }
 
+/* in_fiber(): whether the caller is a running fiber -- current_g() is not
+ * None, without minting the handle.  The monkey shims ask this on every
+ * patched lock/sleep/wait, from any OS thread, so it is the same
+ * foreign-thread-safe peek and allocates nothing.  It replaces a per-OS-thread
+ * counter bumped around each fiber's callable, which any fiber left
+ * mid-callable kept up: aio.run() ends while its keepalive fiber is asleep,
+ * so the main thread went on answering "in a fiber" after run() and parked
+ * where nothing could wake it (tests/test_monkey_fiber_detection.py). */
+static PyObject *m_in_fiber(PyObject *self, PyObject *unused)
+{
+    runloom_g_t *g;
+    (void)self; (void)unused;
+    if (runloom_mn_current_hub_opaque() != NULL)
+        g = runloom_mn_tls_current_g();
+    else
+        g = runloom_sched_peek_current();
+    if (g == NULL) Py_RETURN_FALSE;
+    Py_RETURN_TRUE;
+}
+
 /* unpark_many(handles) -> list[int] : directly wake a batch of fibers parked
  * in wait_fd (the wake side of a fan-in primitive -- Event.set / notify_all /
  * Semaphore.release).  `handles` is a sequence of G objects (each a waiter's

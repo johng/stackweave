@@ -586,12 +586,12 @@ _MN_POLL = r'''
 import faulthandler, os, signal, socket, sys
 sys.path.insert(0, "src")
 import stackweave_c as rc
-# PATCH BEFORE SPAWNING.  monkey.patch() wraps stackweave_c.mn_fiber, and that
-# wrapper is what bumps the thread-local counter _co_sleep_io tests; a fiber
-# spawned through the UNPATCHED mn_fiber never gets wrapped, so its reprobe
-# silently degrades to a plain sched_sleep and never registers as a signal
-# recipient.  An earlier version of this test patched inside the worker and so
-# never exercised CoPoll's sleep_io path at all.
+# PATCH BEFORE SPAWNING (and before importing selectors), so the worker's
+# PollSelector is the cooperative CoPoll.  _co_sleep_io asks the runtime
+# (stackweave_c.in_fiber()) whether it is on a fiber; it used to read a
+# thread-local counter that only a monkey-wrapped mn_fiber bumped, and an
+# earlier version of this test patched inside the worker and so never
+# exercised CoPoll's sleep_io path at all.
 import stackweave.monkey; stackweave.monkey.patch()
 import selectors
 

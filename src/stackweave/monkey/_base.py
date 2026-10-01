@@ -74,34 +74,26 @@ _raw_os_sendfile = getattr(os, "sendfile", None)
 
 
 # ---------- fiber-context detection ----------
-# stackweave_c (C scheduler) does not expose a "current fiber"
-# accessor, so we wrap stackweave_c.fiber / mn_fiber and bump a thread-local
-# counter for the duration of every user callable.  The Python
-# scheduler still uses stackweave.current() (which works there).
-_g_state = _th.local()
-
-
-def _bump_in(value):
-    _g_state.count = getattr(_g_state, "count", 0) + value
-
-
-def _wrap_fiber_callable(fn):
-    def wrapper():
-        _bump_in(1)
-        try:
-            return fn()
-        finally:
-            _bump_in(-1)
-    return wrapper
+# stackweave_c.in_fiber() asks the runtime whether the caller is a running
+# fiber (M:N hub or single-thread scheduler), from any OS thread, without
+# allocating.  This used to be a thread-local counter bumped around every
+# fiber's callable by a wrapper on stackweave_c.fiber / mn_fiber, which any
+# fiber left mid-callable kept up -- and aio.run() leaves its keepalive fiber
+# asleep when the run ends.  The main thread then kept answering "in a
+# fiber", and its waits parked in memory where nothing could wake them
+# (logging.shutdown() at exit spun forever on a StreamHandler's lock).  The
+# counter could not follow a fiber that finished on another OS thread
+# either.  An extension built before in_fiber() existed falls back to
+# current_g(), which allocates a handle.
+_c_in_fiber = getattr(stackweave_c, "in_fiber", None) or \
+    (lambda: stackweave_c.current_g() is not None)
 
 
 def _in_fiber():
-    """True when called from inside a running fiber.
-
-    Handles both the C scheduler (via the thread-local counter set by
-    our stackweave_c.fiber wrapper) and the Python scheduler (via
-    stackweave.current())."""
-    if getattr(_g_state, "count", 0) > 0:
+    """True when called from inside a running fiber: a C-scheduler fiber
+    (stackweave_c.in_fiber()) or a Python-scheduler one
+    (stackweave.current())."""
+    if _c_in_fiber():
         return True
     try:
         return stackweave.current() is not None
@@ -930,12 +922,12 @@ def offload(fn, *args, **kwargs):
 def _co_sleep(seconds):
     """Cooperative sleep that dispatches to whichever scheduler is live.
 
-    Inside the C scheduler (thread-local count > 0) call
+    Inside the C scheduler (stackweave_c.in_fiber()) call
     stackweave_c.sched_sleep directly -- stackweave.sleep there would route to
     the Python scheduler, see no current fiber, and call time.sleep
     again (us), recursing.  Inside the Python scheduler use stackweave.sleep.
     """
-    if getattr(_g_state, "count", 0) > 0:
+    if _c_in_fiber():
         stackweave_c.sched_sleep(seconds)
     else:
         stackweave.sleep(seconds)
@@ -956,7 +948,7 @@ def _co_sleep_io(seconds):
     builtin, so a stale in-place build degrades to the old behaviour rather
     than failing to import.
     """
-    if getattr(_g_state, "count", 0) > 0:
+    if _c_in_fiber():
         sleep_io = getattr(stackweave_c, "sched_sleep_io", None)
         if sleep_io is not None:
             sleep_io(seconds)
