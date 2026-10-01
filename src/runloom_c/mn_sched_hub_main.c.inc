@@ -129,10 +129,26 @@ static int runloom_idle_backoff_cap_ms(void)
 }
 
 /* Longest idle-condvar wait a hub takes while NOT registered for WAKEP (see
- * the cap at the condvar wait in hub_main).  It bounds how long stealable
- * surplus on a busy hub's deque goes unnoticed by an idle hub that has been
- * idle for under ~0.7ms; past that the hub registers and is kicked instead. */
-#define RUNLOOM_IDLE_UNREG_WAIT_NS 200000LL
+ * the cap at the condvar wait in hub_main), in ns; 0 = no cap.  It bounds how
+ * long stealable surplus on a busy hub's deque goes unnoticed by an idle hub
+ * that has been idle for under ~0.7ms; past that the hub registers and is
+ * kicked instead.  Default 200us; STACKWEAVE_IDLE_UNREG_WAIT_US=N overrides it
+ * (0 turns the cap off, which is how the regression test measures what the cap
+ * buys on the machine it runs on).  Read once, like the backoff cap. */
+static long long runloom_idle_unreg_wait_ns(void)
+{
+    static long long v = -1;
+    long long cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
+    if (cur < 0) {
+        const char *e = getenv("STACKWEAVE_IDLE_UNREG_WAIT_US");
+        long long us = (e != NULL && e[0]) ? atoll(e) : 200;
+        if (us < 0) us = 0;
+        if (us > 60LL * 1000000LL) us = 60LL * 1000000LL;   /* no overflow */
+        cur = us * 1000LL;
+        __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
+    }
+    return cur;
+}
 
 /* Idle-backoff ceiling (ns): how deep an idle hub may back off.  Just the
  * configured cap; 0 when disabled (cap<=1ms).  Hang-safety at ANY cap does NOT
@@ -907,7 +923,7 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                  * its own) needs the registry; a short poll is meant to re-scan
                  * soon enough.  Under the backoff that holds only for the
                  * idle-condvar wait, which caps an unregistered wait at
-                 * RUNLOOM_IDLE_UNREG_WAIT_NS.  The other two idle waits are NOT
+                 * runloom_idle_unreg_wait_ns().  The other two idle waits are NOT
                  * capped and stay deaf to stealable surplus while unregistered:
                  * the netpoll pump waits pump_ns = 1ms << idle_streak (4/8/16ms
                  * while idle_ns is still <= 2ms; unchanged from before the
@@ -1150,7 +1166,8 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                          * waits 0.4/0.8/1.6ms in a row, so an idle hub spent
                          * its first ~3ms of idleness up to 1.6ms deaf to
                          * surplus (H=2 steal p90 ~1.8ms vs ~0.55ms with the old
-                         * 500us nap).  Cap them at RUNLOOM_IDLE_UNREG_WAIT_NS.
+                         * 500us nap).  Cap them at runloom_idle_unreg_wait_ns()
+                         * (200us unless STACKWEAVE_IDLE_UNREG_WAIT_US says).
                          * Each capped wait still advances idle_streak, so the
                          * hub reaches the registered (> 2ms) waits after ~0.7ms
                          * of idleness instead of ~3ms, and from there a WAKEP
@@ -1160,9 +1177,11 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                          * measured ~7x slower unpinned ping-pong at H=4 and 2-3x
                          * slower fan-out.  Only with the backoff on: off, idle_ns
                          * is already <= 100us whenever any work is pending. */
-                        if (!wakep_registered && runloom_idle_backoff_cap_ms() > 1 &&
-                            idle_ns > RUNLOOM_IDLE_UNREG_WAIT_NS)
-                            idle_ns = RUNLOOM_IDLE_UNREG_WAIT_NS;
+                        if (!wakep_registered && runloom_idle_backoff_cap_ms() > 1) {
+                            long long unreg_cap = runloom_idle_unreg_wait_ns();
+                            if (unreg_cap > 0 && idle_ns > unreg_cap)
+                                idle_ns = unreg_cap;
+                        }
                         if (idle_ns <= 0) idle_ns = 1;
                         /* No netpoll/iouring work: wait on this hub's idle
                          * condvar, TIMED at idle_ns and ANNOUNCED via
