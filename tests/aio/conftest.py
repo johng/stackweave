@@ -33,11 +33,7 @@ def install_policy():
         asyncio.set_event_loop_policy(paio.StackweaveEventLoopPolicy())
 
 
-# Skip on an interpreter below the floor: the suite is not going to run, and
-# set_event_loop_policy is process-global, so installing it would leak the
-# bridge policy into anything else sharing the session.
-if not _TOO_OLD:
-    install_policy()
+install_policy()
 
 
 def make_runloom_loop(self, *args, **kwargs):

@@ -17,8 +17,8 @@ GH96704 = ("gh-96704: the bridge runs the exception handler in the outer context
            "not the failing task/handle's contextvars Context (accepted default-"
            "bridge behavior; the loop_core fix was reverted as low-applicability)")
 
-# Reasons shared by several test_events entries (stated once, here).  The three
-# selector-variant classes (EPoll/Poll/Select) are identical runs once conftest
+# Reasons shared by several test_events entries (stated once, here).  The four
+# selector-variant classes (EPoll/Poll/Kqueue/Select) are identical runs once conftest
 # makes create_event_loop() return StackweaveEventLoop(): the loop drives its own
 # netpoll and ignores the selector.  SelectEventLoopTests is the canonical one.
 EV_SELECTOR_REDUNDANT = ("redundant selector variant -- identical to "
@@ -49,12 +49,13 @@ SKIPS = {
     },
     "test_events": {
         # --- Redundant selector-variant classes ------------------------------
-        # EPoll/Poll/Select all inherit EventLoopTestsMixin and differ only in
+        # EPoll/Poll/Kqueue/Select all inherit EventLoopTestsMixin and differ only in
         # the selector passed to create_event_loop(); conftest replaces that
         # with StackweaveEventLoop() regardless, so they run identically.  Keep
         # SelectEventLoopTests (always present) as canonical; skip the others.
         "EPollEventLoopTests.*": EV_SELECTOR_REDUNDANT,
         "PollEventLoopTests.*": EV_SELECTOR_REDUNDANT,
+        "KqueueEventLoopTests.*": EV_SELECTOR_REDUNDANT,    # macOS / BSD only
 
         # --- Canonical class (SelectEventLoopTests) remaining divergences -----
         # These few tests reach into asyncio-internal structure the stackweave loop
