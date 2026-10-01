@@ -141,13 +141,14 @@ else
     [ "${TSAN_GOLD_EXTENDED:-0}" = 1 ] && FILES="$FILES tests/test_swarm_mn_sched.py"
 fi
 
-# Is a failing pytest node id on the expected-failure list?  Entries are node-id
-# prefixes ("file::test", which also covers parametrised "[...]" ids).
+# Is a failing pytest node id on the expected-failure list?  An entry
+# "file::test" matches that id exactly and its parametrised "file::test[...]"
+# ids -- not a longer name it happens to prefix.
 expected_fail() {
     awk -F' *[|] *' -v id="$1" '
         /^[[:space:]]*(#|$)/ { next }
         { k = $1; sub(/[[:space:]]+$/, "", k)
-          if (substr(id, 1, length(k)) == k) { found = 1; exit } }
+          if (id == k || index(id, k "[") == 1) { found = 1; exit } }
         END { exit !found }' "$EXPECTED_FAIL" 2>/dev/null
 }
 
@@ -155,11 +156,14 @@ echo "-- test files under TSan (one process each, ${TIMEOUT}s budget) --"
 for f in $FILES; do
     # The label names a log directory that goes into TSAN_OPTIONS' log_path, where
     # ':' is the option separator -- so no "::" from a pytest node id.
-    label="$(basename "$f" | sed -E 's/\.py(::|$)/\1/; s/[^A-Za-z0-9_.-]+/_/g')"
+    # "t_" keeps a label off the teeth_* and tree directories; the whole path
+    # (not its basename, which would cut at a "/" inside a param id) keeps two
+    # files with one basename apart.
+    label="t_$(printf '%s' "$f" | sed -E 's#^(\./)?tests/##; s/\.py(::|$)/\1/; s/[^A-Za-z0-9_.-]+/_/g')"
     run "$label" "$PY" -m pytest "$f" -q -p no:cacheprovider --no-header
     out="$LOGDIR/$label/out.txt"
     case "$LAST_RC" in
-        0)  grep -qE '[0-9]+ passed' "$out" \
+        0)  grep -qE '[0-9]+ (passed|skipped|xfailed|xpassed|deselected)' "$out" \
                 || note_broken "$label: rc=0 but no pytest result line (see $out)" ;;
         1)  # Test failures: fine only if every one is an expected TSan-environment failure.
             ids="$(sed -nE 's/^(FAILED|ERROR) ([^ ]+).*/\2/p' "$out")"

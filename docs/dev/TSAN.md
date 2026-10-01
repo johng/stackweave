@@ -133,8 +133,9 @@ that run and present in earlier ones. The oracle runs were at 879fc099.
 sites, whose functions have other, untriaged accesses. When that code moves, the
 report comes back as NEW, which errs in the safe direction: update the line.
 The pinned `file:line in function` keys were taken from macOS (`atos`)
-symbolisation. On Linux, llvm-symbolizer prints full paths, which suffix
-matching tolerates, but it may attribute inlined code to a different line. The
+symbolisation. On Linux, llvm-symbolizer's SUMMARY reads `path:line:col in
+function`, so the line-pinned keys (and T1) will not match there and those
+reports show as NEW -- the safe direction, but expect to add Linux keys. The
 bare `in <function>` keys are portable.
 
 Categories: **(a)** real data race in stackweave's C; **(b)** CPython race

@@ -43,7 +43,7 @@ def race():
     # they run one after the other, which is no race).  Retry until they run on
     # two OS threads at once; the harness requires "cross-hub".
     for _attempt in range(8):
-        tids = []
+        tids, wrote = [], []
         done = stackweave.Chan(2)
 
         def writer(value):
@@ -53,6 +53,7 @@ def race():
             while len(tids) < 2 and time.monotonic() < deadline:
                 pass                 # both writers live before either writes
             if len(set(tids)) == 2:
+                wrote.append(value)  # a writer whose spin expired never gets here
                 for _ in range(100000):
                     mv[0] = value
             mv.release()
@@ -62,9 +63,9 @@ def race():
         stackweave.fiber(writer, 66)
         done.recv()
         done.recv()
-        if len(set(tids)) == 2:
+        if len(wrote) == 2:          # both wrote, on two hubs: a real race
             break
-    print("TEETH race ran%s" % (" cross-hub" if len(set(tids)) == 2 else ""),
+    print("TEETH race ran%s" % (" cross-hub" if len(wrote) == 2 else ""),
           flush=True)
 
 
