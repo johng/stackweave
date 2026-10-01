@@ -23,12 +23,12 @@ never timed out. The ring branch of `hub_main` now clamps its wait to
 `runloom_netpoll_drain_expired_all()` after it, the pump's two halves.
 Regression: `test_cov100b_iouring.py::test_iouring_loop_timed_park_expires`.
 
-Open in the same family: the soak server (`tools/soak/net_echo_server_forever.py`,
-4 hubs, `LOOP=1 MS=1`) was seen ignoring SIGTERM twice over after a 10 s
-external-client run, with root parked in `sched_sleep(3600)` and every hub in
-`io_cqring_wait` (the handler only sets a flag; whatever wakes the parked root
-on a signal did not). Intermittent: the same server exited promptly on the
-earlier rep. Not yet diagnosed.
+Not in this family, though first mistaken for it: the soak server
+(`tools/soak/net_echo_server_forever.py`) ignoring SIGTERM. Its handler only
+set a flag that root checked between `sched_sleep(3600)` calls, and a handler
+that does not raise never cuts a fiber sleep short (the runtime matches
+CPython's `time.sleep` here, PEP 475), so `kill` took up to an hour on every
+backend. Fixed on the server side with a wake pipe (fork PR #31).
 
 ## 2. Route Python-level sockets through the ring
 
