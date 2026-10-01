@@ -233,13 +233,19 @@ rl_verify_witnesses() {
 
 # ---- guards -----------------------------------------------------------------
 
-# The exec-home patch works by keeping _PyThreadState_GetCurrent() a real
-# cross-TU call.  LTO folds it back in and silently reintroduces the UAF the
-# patch exists to prevent, with no build error and no test failure -- the
-# resulting interpreter just corrupts memory under migration.  Refuse loudly.
+# The exec-home patch keeps every _Py_tss_tstate read behind a call into
+# Python/pystate.c.  LTO inlines pystate.c's direct readers (PyThreadState_Get()
+# and friends) into ~400 callers and silently reintroduces the UAF the patch
+# exists to prevent, with no build error and no test failure -- the resulting
+# interpreter just corrupts memory under migration.  Refuse loudly.  PGO alone
+# (--enable-optimizations) was measured safe, but CI gains nothing from it and
+# keeps building the exact interpreter the tests were measured on, so it is
+# refused here too.  tools/ci/check_exec_home_tls.py checks a built interpreter.
 rl_reject_lto() {
     case " $* " in
-        *" --with-lto"*|*"--enable-optimizations"*|*"-flto"*)
-            rl_die "refusing to build with LTO/PGO: it re-inlines _PyThreadState_GetCurrent() and silently undoes the exec-home patch (see src/patches/cpython314t-tstate-exec-home.patch, CAVEATS)" ;;
+        *" --with-lto"*|*"-flto"*)
+            rl_die "refusing to build with LTO: it inlines pystate.c's direct thread-state reads into ~400 callers and silently undoes the exec-home patch (see src/patches/README.md, 'Build flags')" ;;
+        *"--enable-optimizations"*)
+            rl_die "refusing to build with PGO in CI: safe for exec-home (no cross-TU inlining) but CI builds the unoptimized interpreter its tests were measured on (see src/patches/README.md, 'Build flags')" ;;
     esac
 }

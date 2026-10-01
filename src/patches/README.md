@@ -74,9 +74,10 @@ required alongside it.
 Optional CPython feature (`-DPy_TSTATE_EXEC_HOME`, **off by default**) that stops
 the optimizer from caching the two reads identifying the OS thread a frame runs
 on: `_PyThreadState_GET()` (via `pycore_pystate.h`, now routed through the
-out-of-line `_PyThreadState_GetCurrent()`, which gains `Py_NO_INLINE` so LTO can't
-undo it) and `_Py_ThreadId()` (via `object.h`, whose per-arch reads become
-volatile asm).
+out-of-line `_PyThreadState_GetCurrent()`, which gains `Py_NO_INLINE` so no
+caller can inline it) and `_Py_ThreadId()` (via `object.h`, whose per-arch reads
+become volatile asm).  The out-of-line call does not survive LTO as a whole --
+see "Build flags" below.
 
 **Why it's needed.** Both reads are pure expressions, so the compiler hoists them
 out of loops, CSEs repeats into one, and sinks them to function entry. That is
@@ -202,10 +203,41 @@ lookup, not the thread id.
 > differences were being counted as patch cost. The table above compares three
 > interpreters built from the same source with the same configure line.
 
-**⚠ Do not build with `--with-lto` / `--enable-optimizations`.** exec-home works by
-making `_PyThreadState_GetCurrent()` a genuine cross-TU call that cannot be CSE'd;
-LTO can inline it back into its callers and silently reintroduce the bug.
-`Py_NO_INLINE` covers only the same-TU case.
+**⚠ Build flags: no LTO.  PGO alone is fine.**  exec-home keeps every read of
+the `_Py_tss_tstate` thread-local behind a call into `Python/pystate.c`, so no
+caller outside that file holds a read the compiler may cache across a fiber
+park.  The rule that matters is "no direct `_Py_tss_tstate` read outside
+`pystate.c`", and only cross-TU inlining can break it.  Measured on arm64 Darwin
+(clang 21, 3.14.4 + both patches, `tools/ci/check_exec_home_tls.py <python>`):
+
+| configure | functions reading `_Py_tss_tstate` directly | `_PyThreadState_GetCurrent()` call sites | `PyThreadState_Get()` call sites |
+|---|---:|---:|---:|
+| (none) | 28, all in `pystate.c` | 2059 | 473 |
+| `--enable-optimizations` | 17, all in `pystate.c` | 1802 | 485 |
+| `--enable-optimizations --with-lto=thin` | **413** | 5508 | **7** |
+
+`Py_NO_INLINE` holds under LTO: `_PyThreadState_GetCurrent()` itself is never
+inlined.  What LTO does is inline `pystate.c`'s *other* entry points that read
+the thread-local directly -- `PyThreadState_Get()` and its siblings, which use
+`current_fast_get()` -- into ~400 functions across the interpreter (the parser,
+`type_new`, ...), each of which then holds a cacheable read: the use-after-free
+this patch exists to prevent, with no build error and no test failure.  So
+**never use `--with-lto`** (or `-flto` in CFLAGS) with these patches.
+`--enable-optimizations` (PGO) does no cross-TU inlining and keeps the reads
+confined to `pystate.c`; the cross-hub migration, parked-frame GC and swarm
+scheduler tests pass on such a build.  CI builds without either
+(`tools/ci/lib.sh` `rl_reject_lto` refuses both there: CI gains nothing from
+PGO, and refusing it keeps the CI interpreter identical to the one the tests
+were measured on).  Check any build with the script above: more than a few
+dozen direct readers, or any outside `pystate.c`, means the build is unsafe.
+
+An earlier revision of this section said LTO "inlines
+`_PyThreadState_GetCurrent()` back into its callers"; the measurement above shows
+that it does not, and that the real path is the other `pystate.c` accessors.
+(An alternative "inline form" of exec-home -- a volatile asm TLS read in
+`_PyThreadState_GET()` and `current_fast_get()` instead of an out-of-line call --
+is safe under LTO by construction and measured cheaper; it lives on the upstream
+draft runloom PR #10 and is not what this directory ships.)
 
 **⚠ Rebuild everything.** `_Py_ThreadId()` is inlined into `Py_INCREF`/`Py_DECREF`
 through the *public* `refcount.h`, so the fix only reaches code compiled against

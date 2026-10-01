@@ -28,6 +28,9 @@ Full derivations for the invariants below: [docs/dev/RUNTIME_GOTCHAS.md](docs/de
   there, with an overflow raising `RecursionError`, not crashing. Target the
   patched **3.14t**: `~/.pyenv/versions/3.14.4t-mig/bin/python3.14`, `PYTHON_GIL=0`
   (`3.14.4t` is stock: fine for building, crashes as above under migration).
+  Build that interpreter from `src/patches/` with **no `--with-lto`** (LTO
+  inlines pystate.c's thread-state reads and silently undoes exec-home); PGO
+  alone is fine. `tools/ci/check_exec_home_tls.py <python>` checks a build.
 - Build `STACKWEAVE_EXTRA_CFLAGS="-DPy_TSTATE_ALLOC_HOME -DPy_TSTATE_EXEC_HOME"
   python setup.py build_ext --inplace` (add `--force` when switching
   interpreters; the flags are not picked up from the interpreter, and without
