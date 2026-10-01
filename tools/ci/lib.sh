@@ -228,7 +228,11 @@ rl_verify_witnesses() {
     # interpreter (and test_memory_memoryview_slice_survives_a_migration) can see.
     grep -qs '_Py_MV_EXPORTS_ATOMIC' "$_src/Include/object.h" "$_src/Include/cpython/object.h" \
         || rl_die "exec-home witness missing: _Py_MV_EXPORTS_ATOMIC not in Include/object.h or Include/cpython/object.h"
-    rl_log "witnesses present: _Py_TID_ASM, _PyThreadStateImpl_AllocHome, Py_NO_INLINE, MBUF_EXPORTS_INC, _Py_MV_EXPORTS_ATOMIC"
+    grep -q 'ARRAY_EXPORTS_INC' "$_src/Modules/arraymodule.c" \
+        || rl_die "exec-home witness missing: ARRAY_EXPORTS_INC not in Modules/arraymodule.c (atomic array.array export count)"
+    grep -qs '_Py_ARRAY_EXPORTS_ATOMIC' "$_src/Include/object.h" "$_src/Include/cpython/object.h" \
+        || rl_die "exec-home witness missing: _Py_ARRAY_EXPORTS_ATOMIC not in Include/object.h or Include/cpython/object.h"
+    rl_log "witnesses present: _Py_TID_ASM, _PyThreadStateImpl_AllocHome, Py_NO_INLINE, MBUF_EXPORTS_INC, _Py_MV_EXPORTS_ATOMIC, ARRAY_EXPORTS_INC, _Py_ARRAY_EXPORTS_ATOMIC"
 }
 
 # ---- guards -----------------------------------------------------------------

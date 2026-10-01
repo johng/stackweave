@@ -36,25 +36,32 @@
 #    _PyManagedBufferObject.exports at the same lines.  The 3.14 patch's other
 #    memoryobject.c change, backporting FT_ATOMIC_ADD_SSIZE to the per-view
 #    count in memoryview.hex()/memory_hash(), is not needed: 3.15 has it.  The
-#    same _Py_MV_EXPORTS_ATOMIC witness is defined next to _Py_TID_ASM.  As in
-#    3.14, array.array's ob_exports is a known-open member of the same class.
+#    same _Py_MV_EXPORTS_ATOMIC witness is defined next to _Py_TID_ASM.
+#
+# 5. Modules/arraymodule.c -- the atomic array.array export count (also the
+#    3.14 patch's "ALSO" section): 3.15.0rc2 has the same plain ++/-- in
+#    array_buffer_getbuf/relbuf and the same three "is it exporting?" reads,
+#    so the hunk is the 3.14 one at shifted lines.  Its witness,
+#    _Py_ARRAY_EXPORTS_ATOMIC, sits next to _Py_MV_EXPORTS_ATOMIC.
 #
 # ZERO IMPACT BY DEFAULT: with the flag undefined _Py_TID_ASM expands to plain
 # __asm__, _PyThreadState_GET() keeps its inline thread-local read, and the
-# export count keeps its plain ++/--.  No ABI change.  APPLY EVERY FILE'S HUNKS
+# export counts keep their plain ++/--.  No ABI change.  APPLY EVERY FILE'S HUNKS
 # -- the flag is armed in pyconfig.h regardless, so a partial build advertises
 # the feature while lacking it; check with
 # `grep _Py_TID_ASM Include/cpython/object.h`,
-# `grep _Py_MV_EXPORTS_ATOMIC Include/cpython/object.h` and
-# `grep MBUF_EXPORTS_INC Objects/memoryobject.c`.
+# `grep _Py_MV_EXPORTS_ATOMIC Include/cpython/object.h`,
+# `grep MBUF_EXPORTS_INC Objects/memoryobject.c`,
+# `grep _Py_ARRAY_EXPORTS_ATOMIC Include/cpython/object.h` and
+# `grep ARRAY_EXPORTS_INC Modules/arraymodule.c`.
 #
 # APPLY:  from the CPython source root:  patch -p1 -F0 < this-file
 # SCOPE:  Include/cpython/object.h, Include/internal/pycore_pystate.h, Python/pystate.c,
-#         Objects/memoryobject.c
+#         Objects/memoryobject.c, Modules/arraymodule.c
 #
 --- a/Include/cpython/object.h
 +++ b/Include/cpython/object.h
-@@ -506,6 +506,29 @@
+@@ -506,6 +506,35 @@
  #if defined(Py_GIL_DISABLED)
  PyAPI_FUNC(uintptr_t) _Py_GetThreadLocal_Addr(void);
  
@@ -81,10 +88,16 @@
 +#  define _Py_MV_EXPORTS_ATOMIC 1
 +#endif
 +
++/* Likewise for the Modules/arraymodule.c hunk (atomic array.array export
++   count). */
++#ifdef Py_TSTATE_EXEC_HOME
++#  define _Py_ARRAY_EXPORTS_ATOMIC 1
++#endif
++
  static inline uintptr_t
  _Py_ThreadId(void)
  {
-@@ -523,24 +546,24 @@
+@@ -523,24 +552,24 @@
  #elif defined(__MINGW32__) && defined(_M_ARM64)
      tid = __getReg(18);
  #elif defined(__i386__)
@@ -117,7 +130,7 @@
      tid = tp;
      #endif
  #elif defined(__powerpc__)
-@@ -549,7 +572,7 @@
+@@ -549,7 +578,7 @@
      #else
      // r2 is reserved for use as system thread ID by the Power 32-bit ABI.
      register uintptr_t tp __asm__ ("r2");
@@ -126,7 +139,7 @@
      tid = tp;
      #endif
  #elif defined(__s390__) && defined(__GNUC__)
-@@ -561,7 +584,7 @@
+@@ -561,7 +590,7 @@
      tid = (uintptr_t)__builtin_thread_pointer();
      #else
      // tp is Thread Pointer provided by the RISC-V ABI.
@@ -243,3 +256,77 @@
          mbuf_release(self->mbuf);
      }
  }
+--- a/Modules/arraymodule.c
++++ b/Modules/arraymodule.c
+@@ -136,13 +136,34 @@
+ 
+ #define array_Check(op, state) PyObject_TypeCheck(op, state->ArrayType)
+ 
++/* Py_TSTATE_EXEC_HOME: ob_exports counts the buffers array_buffer_getbuf has
++   exported and array_buffer_relbuf drops it, with no critical section around
++   either.  Free-threaded, those run on different OS threads at once: a
++   memoryview dropped by a thread that does not own it is deallocated -- and
++   releases its buffer -- by the biased-refcount merge on the thread that
++   ALLOCATED it, while other code takes the next view.  A plain ++/-- then
++   loses updates: a lost decrement pins the array for good ("cannot resize an
++   array that is exporting buffers"), a lost increment lets it resize or free
++   its items under a live view.  A fiber that migrates between OS threads hits
++   it on its own unshared arrays.  Upstream (still on main) this count is a
++   plain ++/--; python/cpython#157759 proposes the same fix. */
++#if defined(Py_GIL_DISABLED) && defined(Py_TSTATE_EXEC_HOME)
++#  define ARRAY_EXPORTS_GET(a) _Py_atomic_load_ssize_acquire(&(a)->ob_exports)
++#  define ARRAY_EXPORTS_INC(a) ((void)_Py_atomic_add_ssize(&(a)->ob_exports, 1))
++#  define ARRAY_EXPORTS_DEC(a) ((void)_Py_atomic_add_ssize(&(a)->ob_exports, -1))
++#else
++#  define ARRAY_EXPORTS_GET(a) ((a)->ob_exports)
++#  define ARRAY_EXPORTS_INC(a) ((void)(a)->ob_exports++)
++#  define ARRAY_EXPORTS_DEC(a) ((void)(a)->ob_exports--)
++#endif
++
+ static int
+ array_resize(arrayobject *self, Py_ssize_t newsize)
+ {
+     char *items;
+     size_t _new_size;
+ 
+-    if (self->ob_exports > 0 && newsize != Py_SIZE(self)) {
++    if (ARRAY_EXPORTS_GET(self) > 0 && newsize != Py_SIZE(self)) {
+         PyErr_SetString(PyExc_BufferError,
+             "cannot resize an array that is exporting buffers");
+         return -1;
+@@ -1189,7 +1210,7 @@
+     /* Issue #4509: If the array has exported buffers and the slice
+        assignment would change the size of the array, fail early to make
+        sure we don't modify it. */
+-    if (d != 0 && a->ob_exports > 0) {
++    if (d != 0 && ARRAY_EXPORTS_GET(a) > 0) {
+         PyErr_SetString(PyExc_BufferError,
+             "cannot resize an array that is exporting buffers");
+         return -1;
+@@ -2871,7 +2892,7 @@
+     /* Issue #4509: If the array has exported buffers and the slice
+        assignment would change the size of the array, fail early to make
+        sure we don't modify it. */
+-    if ((needed == 0 || slicelength != needed) && self->ob_exports > 0) {
++    if ((needed == 0 || slicelength != needed) && ARRAY_EXPORTS_GET(self) > 0) {
+         PyErr_SetString(PyExc_BufferError,
+             "cannot resize an array that is exporting buffers");
+         return -1;
+@@ -2988,7 +3009,7 @@
+         }
+     }
+ 
+-    self->ob_exports++;
++    ARRAY_EXPORTS_INC(self);
+     return 0;
+ }
+ 
+@@ -2996,7 +3017,7 @@
+ array_buffer_relbuf(PyObject *op, Py_buffer *Py_UNUSED(view))
+ {
+     arrayobject *self = arrayobject_CAST(op);
+-    self->ob_exports--;
++    ARRAY_EXPORTS_DEC(self);
+ }
+ 
+ static PyObject *
