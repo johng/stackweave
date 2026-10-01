@@ -22,7 +22,11 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 LOGDIR = os.path.join(HERE, "logs")
 
-DEFAULT_PY = os.path.expanduser("~/.pyenv/versions/3.14.4t/bin/python3")
+# Children run under the interpreter that runs this script, as in
+# tests/run_isolated.py; STACKWEAVE_PYTHON or --python overrides it.  M:N is
+# migration-only, so it must be a free-threaded 3.14t built with both
+# src/patches/ halves -- a stock 3.14t crashes under churn at hubs >= 2.
+DEFAULT_PY = os.environ.get("STACKWEAVE_PYTHON", sys.executable)
 
 VERDICT_RE = re.compile(r"VERDICT\s*:\s*(\w+)\s*\(exit\s*(\d+)\)")
 
@@ -60,8 +64,6 @@ def main():
     ap.add_argument("--seed", type=int, default=1234)
     ap.add_argument("--funcs", type=int, default=None,
                     help="override per-project goroutine count")
-    ap.add_argument("--handoff", action="store_true", default=False,
-                    help="enable the buggy handoff rescue (reproduce BUG #2)")
     ap.add_argument("--only", default=None, help="comma list, e.g. 1,3,7")
     ap.add_argument("--from", dest="from_", type=int, default=None)
     ap.add_argument("--to", type=int, default=None)
@@ -117,8 +119,6 @@ def main():
         cmd += ["--ip-start", str(ip_start), "--ip-end", str(ip_end)]
         if args.funcs is not None:
             cmd += ["--funcs", str(args.funcs)]
-        if args.handoff:
-            cmd += ["--handoff"]
         return cmd
 
     sys.stderr.write(
