@@ -7,7 +7,7 @@ one OS thread in two separate ways — and either alone still corrupts:
 | half | flag | what it decouples |
 |---|---|---|
 | **allocation** | `Py_TSTATE_ALLOC_HOME` | which heap a migrated fiber allocates on |
-| **execution** | `Py_TSTATE_EXEC_HOME` | whether the compiler may cache *which OS thread we are* |
+| **execution** | `Py_TSTATE_EXEC_HOME` | whether the compiler may cache *which OS thread we are* (plus one dealloc that races a migrated fiber, see below) |
 
 Each half ships as a **version-specific** patch (stackweave supports only
 free-threaded CPython 3.14+), and they are **not** interchangeable across
@@ -219,6 +219,37 @@ no fiber path reads them across a park: `pkgcontext` (`Python/import.c`) and
 mimalloc's `_mi_heap_default` (object allocation reaches the heap through the
 tstate — see alloc-home — not through it).
 
+### A dealloc that runs on the far side of a migration (`memoryobject.c`)
+
+exec-home also carries one hunk outside thread identity. Biased refcounting
+sends a non-owner's last decref to the OS thread that owns the object (`ob_tid`,
+set where it was allocated), and that thread's merge runs `tp_dealloc`. For a
+fiber that has moved, the owner is the hub it *allocated* on — so the dealloc of
+an object the fiber never shared runs **concurrently** with the fiber's own next
+statements on its new hub. Anything a dealloc and its creator both touch must
+then be thread-safe even in a single-fiber program.
+
+`_PyManagedBufferObject.exports` is not: every view of a buffer bumps it on
+creation and drops it on release/dealloc with a plain `++`/`--` (the per-view
+`PyMemoryViewObject.exports` beside it is already atomic). A fiber that holds
+`sl = view[0:]` across a park and drops it on another hub has the old hub run
+`--exports` while it runs `exports++` for its next slice. A lost increment
+releases the buffer under the live `view` (`ValueError: operation forbidden on
+released memoryview object`, and the exporter is unpinned, free to resize or
+free memory the view still points at); a lost decrement pins the exporter for
+good. Refcounts stay exact throughout. It is an upstream bug too — plain threads
+slicing one shared view on a **stock** 3.14.4t lose updates the same way —
+migration just turns a shared-object race into a private-object one. The hunk
+makes that count atomic under the flag. Measured with two interpreters built
+identically apart from it (64 ping-pong pairs, each slicing its own view across
+a park, ~3000 OS-thread moves per run): without it 43–179 released views and
+93–283 leaked counts per run at H=2/4/8/12; with it zero over 10 runs. Guard:
+`tests/test_cross_hub_migration.py::test_memory_memoryview_slice_survives_a_migration`.
+
+Not audited: other types whose deallocator writes non-atomically to state a
+live object shares. The ones checked are already safe in 3.14 (bytearray's
+export count is under its critical section; the per-view count is atomic).
+
 ## Using it
 
 Migration is **always on** under M:N (`run(n > 1)`); there is no switch. What it
@@ -249,6 +280,7 @@ needs is an interpreter built with **both** patches:
    witnesses before building — this is what the CI's `rl_verify_witnesses` checks:
    ```sh
    grep -q _Py_TID_ASM Include/object.h                            # exec-home
+   grep -q MBUF_EXPORTS_INC Objects/memoryobject.c                 # exec-home
    grep -q _PyThreadStateImpl_AllocHome Include/internal/pycore_tstate.h  # alloc-home
    ```
 

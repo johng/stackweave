@@ -9,6 +9,8 @@
 # Two reads carry that identity and both are covered:
 #   _PyThreadState_GET()  -> out-of-line call  (pycore_pystate.h, pystate.c)
 #   _Py_ThreadId()        -> volatile asm      (object.h)
+# Plus one deallocation that a migration makes race the fiber (see ALSO below):
+#   _PyManagedBufferObject.exports -> atomic ++/--  (memoryobject.c)
 #
 # WHY: compilers treat thread identity as loop-invariant and hoist/CSE it.  That
 # is sound for OS threads, whose stacks never move.  A stackful fiber parks on
@@ -63,6 +65,36 @@
 # NOT RUN ON LINUX: the Linux codegen above is cross-compiled evidence only;
 # every runtime result here is arm64 Darwin.
 #
+# ALSO -- a dealloc that runs on the far side of a migration (memoryobject.c).
+# Biased refcounting sends a non-owner's last decref to the OS thread that owns
+# the object (ob_tid, set where it was allocated), and that thread's merge runs
+# tp_dealloc.  For a fiber that has moved, the owner is the hub it ALLOCATED on,
+# so the dealloc of an object it never shared runs concurrently with its own next
+# statements on the new hub.  Code that a dealloc and its creator both touch
+# must therefore be thread-safe even for single-fiber programs.  One that is not:
+# _PyManagedBufferObject.exports, bumped by every view of a buffer on creation
+# (mbuf_add_*view) and dropped on release/dealloc (_memory_release), is a plain
+# ++/-- (the per-view PyMemoryViewObject.exports beside it is already atomic).
+# A fiber holding `sl = view[0:]` across a park and dropping it on another hub
+# has the old hub run `--exports` while it runs `exports++` for the next slice;
+# a lost increment releases the buffer under the live `view` ("operation
+# forbidden on released memoryview object"; the exporter is unpinned and may
+# resize/free the memory the view points at), a lost decrement pins the
+# exporter forever.  The objects' refcounts stay exact throughout -- only the
+# export count is lost.  Upstream bug as well: plain threads slicing one shared
+# view release it the same way on a stock 3.14.4t; migration just turns a
+# shared-object race into a private-object one.  Measured, 64 ping-pong pairs
+# each slicing its own view across a park, batches to ~3000 OS-thread moves
+# per run, two interpreters built identically apart from this hunk (arm64
+# Darwin, no LTO/PGO; "with" held at 0 over 10 such runs):
+#
+#                 H=2        H=4        H=8        H=12
+#   without     179 / 283   60 / 114   43 / 93    44 / 117   (released views /
+#   with          0 / 0      0 / 0      0 / 0      0 / 0      leaked counts)
+#
+# Guard: tests/test_cross_hub_migration.py::
+#        test_memory_memoryview_slice_survives_a_migration.
+#
 # ZERO IMPACT BY DEFAULT: with the flag undefined every site macro-expands back
 # to stock.  No ABI change (unlike alloc-home, no struct field is added).
 #
@@ -72,11 +104,12 @@
 #     it back.  Py_NO_INLINE covers only the same-TU case.
 #   * Do NOT annotate _PyThreadState_GetCurrent() pure/const -- it looks eligible
 #     and would silently re-license the folding this prevents.
-#   * APPLY BOTH HUNKS.  Py_TSTATE_EXEC_HOME is armed in pyconfig.h independently
+#   * APPLY EVERY HUNK.  Py_TSTATE_EXEC_HOME is armed in pyconfig.h independently
 #     of whether the patch landed, so a partial build would advertise the feature
 #     while lacking it.  The object.h hunk defines _Py_TID_ASM in both arms as a
 #     compile-time witness; test for both (stackweave does).  Check by hand with:
 #         grep _Py_TID_ASM Include/object.h
+#         grep MBUF_EXPORTS_INC Objects/memoryobject.c
 #   * MSVC thread-id reads are intrinsics, not asm, and are left untouched.
 #   * Same class, not covered (not read by a fiber across a park in any path
 #     exercised so far): import.c's `pkgcontext`, mimalloc's _mi_heap_default.
@@ -84,7 +117,8 @@
 # ENABLE: ./configure --disable-gil CPPFLAGS=-DPy_TSTATE_EXEC_HOME
 #         (also add the #define to pyconfig.h so extension modules agree)
 # APPLY:  from the CPython source root:  patch -p1 -F0 < this-file
-# SCOPE:  Include/object.h, Include/internal/pycore_pystate.h, Python/pystate.c
+# SCOPE:  Include/object.h, Include/internal/pycore_pystate.h, Python/pystate.c,
+#         Objects/memoryobject.c
 #
 --- a/Include/object.h
 +++ b/Include/object.h
@@ -207,3 +241,61 @@
  PyThreadState *
  _PyThreadState_GetCurrent(void)
  {
+--- a/Objects/memoryobject.c
++++ b/Objects/memoryobject.c
+@@ -84,6 +84,28 @@
+ 
+     return mbuf;
+ }
++
++/* Py_TSTATE_EXEC_HOME: mbuf->exports is shared by every memoryview of one
++   managed buffer, and each view's registration (mbuf_add_*view) and release
++   (_memory_release, reached from memory_dealloc too) read-modify-writes it.
++   Free-threaded, those run on different OS threads at once: a view dropped by
++   a thread that does not own it is deallocated by the biased-refcount merge
++   on the thread that ALLOCATED it, while other code keeps slicing the parent.
++   A plain ++/-- then loses updates -- a lost increment releases the buffer
++   under live views ("operation forbidden on released memoryview object", and
++   the exporter is unpinned and may resize or free the memory they point at);
++   a lost decrement pins the exporter forever.  A fiber that migrates between
++   OS threads hits it on its own unshared views: each slice it drops on
++   another thread is deallocated back on the one it was created on.  The
++   per-view count (PyMemoryViewObject.exports) is already atomic; this makes
++   the per-buffer count match.  _Py_atomic_add_ssize returns the old value. */
++#if defined(Py_GIL_DISABLED) && defined(Py_TSTATE_EXEC_HOME)
++#  define MBUF_EXPORTS_INC(mbuf) ((void)_Py_atomic_add_ssize(&(mbuf)->exports, 1))
++#  define MBUF_EXPORTS_DEC(mbuf) (_Py_atomic_add_ssize(&(mbuf)->exports, -1) - 1)
++#else
++#  define MBUF_EXPORTS_INC(mbuf) ((void)(mbuf)->exports++)
++#  define MBUF_EXPORTS_DEC(mbuf) (--(mbuf)->exports)
++#endif
+ 
+ static PyObject *
+ _PyManagedBuffer_FromObject(PyObject *base, int flags)
+@@ -699,7 +721,7 @@
+     init_flags(mv);
+ 
+     mv->mbuf = (_PyManagedBufferObject*)Py_NewRef(mbuf);
+-    mbuf->exports++;
++    MBUF_EXPORTS_INC(mbuf);
+ 
+     return (PyObject *)mv;
+ }
+@@ -729,7 +751,7 @@
+     init_shared_values(dest, src);
+ 
+     mv->mbuf = (_PyManagedBufferObject*)Py_NewRef(mbuf);
+-    mbuf->exports++;
++    MBUF_EXPORTS_INC(mbuf);
+ 
+     return (PyObject *)mv;
+ }
+@@ -1114,7 +1136,7 @@
+ 
+     self->flags |= _Py_MEMORYVIEW_RELEASED;
+     assert(self->mbuf->exports > 0);
+-    if (--self->mbuf->exports == 0) {
++    if (MBUF_EXPORTS_DEC(self->mbuf) == 0) {
+         mbuf_release(self->mbuf);
+     }
+ }
