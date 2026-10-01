@@ -258,7 +258,19 @@ jobs:
           github-token: ${{ github.token }}
 
       # Build the stackweave extension + run its suite against that interpreter.
+      #
+      # STEP timeout, under the job's 35.  A step that times out FAILS, which
+      # continue-on-error above turns into a non-blocking macOS result and the
+      # Linux lane reports as a real failure.  A JOB timeout instead CANCELS the
+      # job, and the aggregate below rightly treats cancelled as red -- so a
+      # stall in the non-blocking macOS lane took ci-success down with it (run
+      # 36835001629: the suite sat silent for 28 min, the job cap hit, red).
+      # run_isolated's per-file deadline (300 s x the action's timeout-mult 2,
+      # plus a 25 s kill grace) fits inside this with room for the rest of the
+      # suite, so a wedged file is reported as TIMEOUT with its faulthandler
+      # dump instead of as a cancelled job with nothing.
       - name: Run stackweave validation ${{ matrix.version }}
+        timeout-minutes: 30
         uses: ./.github/actions/runloom-tests
         with:
           version: ${{ matrix.version }}
