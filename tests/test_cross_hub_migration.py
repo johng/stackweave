@@ -918,7 +918,11 @@ def test_sched_local_wake_is_stolen_promptly_by_a_shallow_idle_hub(monkeypatch):
     loaded 3-vCPU CI runner) ~0.9 ms vs 1.6-1.8 ms.  An absolute bound
     (capped H=2 against an H=4 reference) failed on the 3-vCPU macOS CI
     runner for that reason.  Where a 200 us sleep takes several ms (background
-    QoS: 8-10 ms) the cap cannot show and the test skips.
+    QoS: 8-10 ms) the cap cannot show and the test skips.  It also skips,
+    instead of failing, when the process was starved of CPU (two spinning
+    threads got under half a core each, e.g. utility QoS under default-QoS
+    CPU hogs: 34-40% stolen, capped ~ uncapped); an unstarved run still
+    asserts, so a real regression fails wherever the CPU is there to show it.
     """
     monkeypatch.setenv("STACKWEAVE_IDLE_BACKOFF_MS", "32")   # the cap needs the backoff
     runs = {"capped": [], "uncapped": []}
@@ -929,7 +933,8 @@ def test_sched_local_wake_is_stolen_promptly_by_a_shallow_idle_hub(monkeypatch):
             else:
                 monkeypatch.setenv("STACKWEAVE_IDLE_UNREG_WAIT_US", "0")
             rc, out, err = run_scenario(STEAL_DELAY, timeout=60)
-            m = re.search(r"DELAY=([0-9.]+) STOLEN=([0-9.]+) SLEEP200=([0-9.]+)", out)
+            m = re.search(r"DELAY=([0-9.]+) STOLEN=([0-9.]+) SLEEP200=([0-9.]+) "
+                          r"CPU=([0-9.]+)", out)
             if rc != 0 or m is None:
                 print("--- %s scenario stdout ---\n%s\n--- stderr ---\n%s" % (kind, out, err))
                 pytest.fail("%s run rc=%s: %s" % (kind, rc, _key_line(out, err)),
@@ -939,11 +944,16 @@ def test_sched_local_wake_is_stolen_promptly_by_a_shallow_idle_hub(monkeypatch):
     uncapped = sum(r[0] for r in runs["uncapped"]) / 2
     stolen = min(r[1] for r in runs["capped"])
     sleep200 = max(r[2] for kinds in runs.values() for r in kinds)
+    cpu = min(r[3] for kinds in runs.values() for r in kinds)
     print("mean steal delay: capped %.0f us (stolen >= %.0f%%), uncapped %.0f us; "
-          "a 200 us sleep takes %.0f us here" % (capped, 100 * stolen, uncapped, sleep200))
+          "a 200 us sleep takes %.0f us, a spinning thread gets %.0f%% of a core here"
+          % (capped, 100 * stolen, uncapped, sleep200, 100 * cpu))
     if sleep200 > 4000:
         pytest.skip("timers here are too coarse for the cap to show (a 200 us sleep "
                     "takes %.1f ms)" % (sleep200 / 1e3))
+    if (stolen < 0.5 or capped >= 0.7 * uncapped) and cpu < 0.5:
+        pytest.skip("the process was starved of CPU (a spinning thread got %.0f%% of a "
+                    "core), so the idle hub could not steal in time" % (100 * cpu))
     # A FAILED steal is a regression too (a skip would hide it): with stealing
     # broken the sender parks on its next send and hub 0 runs the receiver.
     # 0.5, not 0.9, so a briefly starved hub thread on a loaded runner does not
@@ -972,6 +982,21 @@ def sleep200_us():
     t.join()
     out.sort()
     return out[len(out) // 2] / 1e3
+def cpu_share():
+    """The smaller share of a core two threads (one per hub) get while each
+    spins 20 ms: well under 1 when higher-priority load starves this process."""
+    out = []
+    def probe():
+        w0, c0 = time.perf_counter_ns(), time.thread_time_ns()
+        while time.perf_counter_ns() - w0 < 20_000_000:
+            pass
+        out.append((time.thread_time_ns() - c0) / (time.perf_counter_ns() - w0))
+    ts = [threading.Thread(target=probe) for _ in range(2)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    return min(out)
 def steal_delay_us():
     ch, lat, where = stackweave_c.Chan(0), [], []
     def sender():
@@ -998,9 +1023,10 @@ def steal_delay_us():
     # next send: the idle hub missed the whole spin, so charge it the spin.
     delay = [l / 1e3 if h != 0 else SPIN_US for l, h in zip(lat, where)]
     return sum(delay) / len(delay), sum(h != 0 for h in where) / len(where)
-slept = sleep200_us()
+slept, cpu = sleep200_us(), cpu_share()
 delay, stolen = steal_delay_us()
-print("DELAY=%.1f STOLEN=%.3f SLEEP200=%.0f" % (delay, stolen, slept), flush=True)
+print("DELAY=%.1f STOLEN=%.3f SLEEP200=%.0f CPU=%.2f" % (delay, stolen, slept, cpu),
+      flush=True)
 '''
 
 
