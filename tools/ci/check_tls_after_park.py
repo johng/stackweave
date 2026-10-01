@@ -367,9 +367,14 @@ def reg(tok):
 
 
 def regs_in(tok):
+    """Every register an operand reads or names: a register list's members,
+    and a memory operand's base and index (an address is a read too)."""
     if tok.startswith("{"):
         inner = tok.split("}")[0].strip("{ ")
         return [r for r in (reg(t) for t in inner.split(",")) if r]
+    if tok.startswith("["):
+        parts = [p.strip() for p in tok.rstrip("!").strip("[]").split(",")]
+        return [r for r in (reg(p) for p in parts[:2]) if r]
     r = reg(tok)
     return [r] if r else []
 

@@ -69,6 +69,42 @@ int owned_after_park(unsigned long *owner)
 """
 
 
+# The address handed to an out-of-line helper instead of used inline: the
+# helper's load/store base is an argument register, so the caller passing a
+# stale address in it is a stale use.  Each CASE compiles on its own, after the
+# same prelude.
+PRELUDE = r"""
+#include <stdint.h>
+__thread void *current;
+__attribute__((noinline)) void runloom_coro_yield(void)
+{
+    __asm__ volatile("" ::: "memory");
+}
+void *runloom_mn_tls_current_g(void) { return current; }
+static __thread uint64_t rng = 1;
+"""
+CASES = {
+    # A2 again, behind a noinline PRNG step that takes the state by pointer:
+    # the caller resolves &rng once and passes it to both draws.
+    "helper_by_pointer": (r"""
+static __attribute__((noinline)) uint64_t step(uint64_t *s)
+{ uint64_t x = *s; x ^= x << 13; x ^= x >> 7; x ^= x << 17; *s = x; return x; }
+uint64_t sel(void) { uint64_t a = step(&rng); runloom_coro_yield(); return a + step(&rng); }
+""", True),
+    # The same, the second use a tail call.
+    "tail_call": (r"""
+__attribute__((noinline)) uint64_t use(uint64_t *p) { return ++*p; }
+uint64_t f(void) { rng++; runloom_coro_yield(); return use(&rng); }
+""", True),
+    # The fix: the helper resolves the thread-local itself, on every call.
+    "helper_resolves_itself": (r"""
+static __attribute__((noinline)) uint64_t step(void)
+{ uint64_t x = rng; x ^= x << 13; x ^= x >> 7; x ^= x << 17; rng = x; return x; }
+uint64_t sel(void) { uint64_t a = step(); runloom_coro_yield(); return a + step(); }
+""", False),
+}
+
+
 def lint(path):
     return subprocess.run([sys.executable, str(LINT), str(path)],
                           capture_output=True, text=True, timeout=300)
@@ -104,4 +140,25 @@ def test_fixture_verdicts(tmp_path, reuse, volatile_tid, flagged):
     for var in flagged:
         assert "STALE" in out and var in out, out
     if not flagged:
+        assert "UNSAFE" not in out, out
+
+
+@pytest.mark.parametrize("case", sorted(CASES))
+def test_fixture_helper_cases(tmp_path, case):
+    cc = shutil.which("cc")
+    if cc is None:
+        pytest.skip("no C compiler")
+    body, flagged = CASES[case]
+    src = tmp_path / "fixture.c"
+    src.write_text(PRELUDE + body)
+    so = tmp_path / "fixture.so"
+    subprocess.run([cc, "-O2", "-arch", "arm64", "-bundle", "-undefined",
+                    "dynamic_lookup", "-o", str(so), str(src)],
+                   check=True, capture_output=True, timeout=120)
+    r = lint(so)
+    out = r.stdout + r.stderr
+    assert r.returncode == (1 if flagged else 0), out
+    if flagged:
+        assert "STALE" in out and "[rng]" in out, out
+    else:
         assert "UNSAFE" not in out, out
