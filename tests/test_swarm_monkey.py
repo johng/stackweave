@@ -143,8 +143,8 @@ def test_getattr_resolves_section_internals_live():
         monkey.this_name_does_not_exist_anywhere
 
 
-def test_fiber_wrapper_installed_marks_fiber_context():
-    # After patch(), stackweave_c.fiber is wrapped so _in_fiber() is true inside.
+def test_in_fiber_is_true_on_a_fiber_after_patch():
+    # After patch(), _in_fiber() asks the runtime: true inside a fiber.
     box = {}
     def main():
         box["in_fiber"] = monkey._in_fiber()

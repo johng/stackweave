@@ -80,25 +80,19 @@ _raw_os_sendfile = getattr(os, "sendfile", None)
 # fiber's callable by a wrapper on stackweave_c.fiber / mn_fiber, which any
 # fiber left mid-callable kept up -- and aio.run() leaves its keepalive fiber
 # asleep when the run ends.  The main thread then kept answering "in a
-# fiber", and its waits parked in memory where nothing could wake them
-# (logging.shutdown() at exit spun forever on a StreamHandler's lock).  The
-# counter could not follow a fiber that finished on another OS thread
-# either.  An extension built before in_fiber() existed falls back to
+# fiber": a cooperative RLock recorded its owner there as current() (None),
+# so a re-entrant acquire -- logging.shutdown() flushing a StreamHandler at
+# exit -- waited on itself, in an in-memory park that returns at once off a
+# fiber, and spun forever.  Hub threads between fibers answered wrongly the
+# same way.  An extension built before in_fiber() existed falls back to
 # current_g(), which allocates a handle.
 _c_in_fiber = getattr(stackweave_c, "in_fiber", None) or \
     (lambda: stackweave_c.current_g() is not None)
 
 
 def _in_fiber():
-    """True when called from inside a running fiber: a C-scheduler fiber
-    (stackweave_c.in_fiber()) or a Python-scheduler one
-    (stackweave.current())."""
-    if _c_in_fiber():
-        return True
-    try:
-        return stackweave.current() is not None
-    except Exception:
-        return False
+    """True when called from inside a running fiber (stackweave_c.in_fiber())."""
+    return _c_in_fiber()
 
 
 def _runtime_live():
@@ -920,12 +914,9 @@ def offload(fn, *args, **kwargs):
 
 
 def _co_sleep(seconds):
-    """Cooperative sleep that dispatches to whichever scheduler is live.
-
-    Inside the C scheduler (stackweave_c.in_fiber()) call
-    stackweave_c.sched_sleep directly -- stackweave.sleep there would route to
-    the Python scheduler, see no current fiber, and call time.sleep
-    again (us), recursing.  Inside the Python scheduler use stackweave.sleep.
+    """Cooperative sleep: on a fiber, sleep on the scheduler
+    (stackweave_c.sched_sleep); off one, defer to stackweave.sleep, which
+    falls back to time.sleep.
     """
     if _c_in_fiber():
         stackweave_c.sched_sleep(seconds)

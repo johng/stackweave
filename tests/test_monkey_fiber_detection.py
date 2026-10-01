@@ -7,9 +7,11 @@ around each fiber's callable, so any fiber left mid-callable kept its thread
 marked.  aio.run() leaves one every time a run ends while its keepalive
 fiber is asleep: the loop's sched_stop() ends run() there, by design (a later
 run lets it exit).  The main thread then answered "in a fiber" for the rest
-of the process, and its waits took the fiber-only in-memory park, which
-returns at once outside a fiber -- so their re-park loops spun forever.
-logging.shutdown() at exit acquiring a StreamHandler's lock was enough:
+of the process.  A cooperative RLock then recorded its owner there as
+current() -- None -- so a re-entrant acquire failed its own owner check and
+waited on itself, in the fiber-only in-memory park, which returns at once
+outside a fiber: the re-park loop spun forever.  logging.shutdown() at exit
+(acquire, then flush's `with self.lock`) on a StreamHandler was enough:
 `requests.get` under aio.run hung on exit, because charset_normalizer adds a
 StreamHandler when imported.  _in_fiber() now asks the runtime
 (stackweave_c.in_fiber()).
