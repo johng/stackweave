@@ -1,5 +1,11 @@
 """big_100 / 226 -- per-fiber C-stack grow-on-demand + autosize calibration.
 
+On free-threaded CPython 3.14 this no longer reaches copy-grow: every fiber
+stack is at least 256 KB, its deep json C recursion runs BETWEEN yields (the
+trigger needs it across one), and copy-grow itself is off there (it crashes
+the fiber; tests/test_copy_grow.py).  It still checks deep C recursion on a
+fiber stack and the autosize/advice profiler.  The text below predates that.
+
 Every other big_100 program PINS a fixed C stack (the harness sets --stack-kb,
 default 512KB, via stackweave_c.set_stack_size before the run).  That leaves the
 grow-on-demand machinery -- a fiber whose live frames creep toward its guard

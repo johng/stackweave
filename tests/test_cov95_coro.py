@@ -43,14 +43,13 @@ Regions driven (uncovered coro.c line -> how):
             rc.prewarm_keep() clears the running flag and returns -1.
 
 Lines with NO safe Python trigger are classified in the structured report:
-  * runloom_coro_grow / maybe_grow target (L1401-1449, L1481-1483): the copy-
-    grow only fires for a fiber whose C stack deepens ACROSS yields (low sp at
-    a resume boundary).  Python 3.13 keeps interpreter frames on a heap data
-    stack, so Python recursion does NOT lower the coro's C sp; the only C-stack
-    deepening expressible (operator-dispatch / json C recursion) is a single
-    NON-yielding burst that overflows the guard page BEFORE any resume boundary
-    (exactly what coro.c's own comment at L1457 says it cannot rescue).  Even
-    the full corpus never grows (gcov Runs:499, all #####).
+  * runloom_coro_grow / maybe_grow target: copy-grow is OFF on CPython 3.14
+    (STACKWEAVE_STACK_GROW unset), because it leaves pointers into the old
+    stack and crashes the fiber.  The trigger IS reachable -- a fiber with a
+    stack of 512 KB (the default) or more that yields deep in C recursion --
+    and
+    tests/test_copy_grow.py covers both the declined trigger and, as a strict
+    xfail, the grow itself.  The grow body stays unreached by design.
   * runloom_coro_stack_base / guard_size (L126-144) and the invariant_fail
     abort (L182): only reachable via runloom_fiber_for_addr, whose sole caller
     is the fatal-signal crash handler (runloom_crash.c) -- it re-raises and

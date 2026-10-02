@@ -323,9 +323,13 @@ protection the main thread gets, scaled to the fiber's smaller stack:
   (`runloom_arm_fiber_stackprot`).  So unbounded Python *or* C recursion (`json`,
   `re`, deeply nested calls) hits a catchable `RecursionError` (the parser raises
   `MemoryError`) well before the stack overflows.
-- **Stacks grow on demand.** At each resume boundary a fiber whose headroom
-  has dropped below a quarter of its stack is copied onto a stack twice as big.
-  A fiber that gradually deepens grows with it.
+- **Stacks do not grow.** A fiber keeps the stack it was spawned with. The
+  runtime used to copy a fiber whose headroom had dropped below a quarter of its
+  stack onto one twice as big, at a resume; on CPython 3.14 that leaves pointers
+  into the old stack and crashes the fiber, so it is off (`STACKWEAVE_STACK_GROW`
+  turns it back on, unsafely; `stats()["copy_grows_declined"]` counts the
+  fibers it would have grown).  Give a fiber that recurses deep in C, and
+  yields there, a bigger `stack_size`.
 - **Every stack has a guard page.** A `PROT_NONE` page sits just below each
   fiber stack. An overflow faults *immediately and cleanly* at the guard
   rather than silently scribbling over a neighbouring stack. With the crash reporter installed
@@ -357,8 +361,7 @@ stackweave.fiber(work, stack_size=512 * 1024)
 ```
 
 So the 256 KB minimum is not a blanket "safe for anything" size: it works
-because recursion is bounded and stacks grow -- not because 256 KB fits every
-possible C call.
+because recursion is bounded -- not because 256 KB fits every possible C call.
 
 ## Right-sizing with the advisory profiler
 
@@ -426,8 +429,8 @@ It is **in-memory only and never persisted to disk.** A remembered-small size
 is only a lower bound on what a *future* input might need (recursion depth is
 data-dependent), so writing it out would be a foot-gun across restarts and
 deploys -- the run that finally gets the deep input would load a too-small size.
-The guard page, on-demand growth, and the crash reporter remain the safety net
-for any underestimate. An explicit `stackweave.fiber(fn, stack_size=...)` always wins
+The overflow check, the guard page and the crash reporter remain the safety
+net for any underestimate. An explicit `stackweave.fiber(fn, stack_size=...)` always wins
 over the auto-sizer. Off by default (it changes per-kind stack sizes); enable it
 before the runtime starts so kinds are sized from their first spawn.
 

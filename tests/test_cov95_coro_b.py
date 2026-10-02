@@ -58,11 +58,10 @@ regenerating gcov against the instrumented build before writing this file:
             many iterations.
 
 Lines this file deliberately does NOT chase (see the structured exclusions):
-  * L1401-1449, L1481-1483 (runloom_coro_grow / maybe_grow copy-on-grow): EMPIRICALLY
-    proven unreachable -- a probe with 60 nested Python frames YIELDING at each
-    level ran maybe_grow 587k times and the `headroom < quarter` body NEVER
-    fired, because CPython 3.13 keeps interpreter frames on its own heap data
-    stack, so Python recursion does not lower the coro's C sp across a resume.
+  * runloom_coro_grow / maybe_grow copy-on-grow: off on CPython 3.14 (it
+    crashes the fiber; see runloom_coro_maybe_grow).  Python recursion alone
+    never reaches the trigger (frames live on the heap data stack), but C
+    recursion does from 512 KB, the default: tests/test_copy_grow.py.
   * L126-144, L182 (stack_base / guard_size / invariant_fail): crash-handler-only.
   * L773 (hwm-scan batch continuation): needs >2 MiB live C stack, > CPython's
     own recursion guard.
