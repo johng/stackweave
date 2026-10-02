@@ -61,7 +61,7 @@ Lines this file deliberately does NOT chase (see the structured exclusions):
   * runloom_coro_grow / maybe_grow copy-on-grow: off on CPython 3.14 (it
     crashes the fiber; see runloom_coro_maybe_grow).  Python recursion alone
     never reaches the trigger (frames live on the heap data stack), but C
-    recursion does on a stack over ~512 KB: tests/test_copy_grow.py.
+    recursion does from 512 KB, the default: tests/test_copy_grow.py.
   * L126-144, L182 (stack_base / guard_size / invariant_fail): crash-handler-only.
   * L773 (hwm-scan batch continuation): needs >2 MiB live C stack, > CPython's
     own recursion guard.

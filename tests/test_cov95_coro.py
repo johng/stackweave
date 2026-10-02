@@ -46,7 +46,8 @@ Lines with NO safe Python trigger are classified in the structured report:
   * runloom_coro_grow / maybe_grow target: copy-grow is OFF on CPython 3.14
     (STACKWEAVE_STACK_GROW unset), because it leaves pointers into the old
     stack and crashes the fiber.  The trigger IS reachable -- a fiber with a
-    stack over ~512 KB that yields deep in C recursion -- and
+    stack of 512 KB (the default) or more that yields deep in C recursion --
+    and
     tests/test_copy_grow.py covers both the declined trigger and, as a strict
     xfail, the grow itself.  The grow body stays unreached by design.
   * runloom_coro_stack_base / guard_size (L126-144) and the invariant_fail

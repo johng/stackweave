@@ -111,7 +111,7 @@ RUNLOOM_INLINE void runloom_tstate_restore(const RunloomTstateSnapshot *s)
  * fibers on a hub, the limit set at a fiber's entry is overwritten by the next
  * fiber to enter -- so a parked-then-resumed deep recurser would run off its own
  * stack into the guard page (SIGSEGV).  Re-reading base+size each resume also
- * tracks runloom_coro_maybe_grow's copy-grow.
+ * tracks runloom_coro_maybe_grow's copy-grow, when it is turned on.
  *
  * Delegates to runloom_arm_fiber_stackprot (runloom_iframe.c), which reserves
  * extra headroom above the guard so the RecursionError trips before CPython's

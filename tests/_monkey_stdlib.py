@@ -14,9 +14,9 @@ Mechanics: each CPython test method is run inside its own stackweave fiber (the
 ``monkey`` patches only cooperate under the C scheduler) with a LARGE stack.
 The large stack is required, not cosmetic: CPython test bodies do deep,
 non-yielding imports (e.g. ``mock.patch`` -> ``importlib._find_and_load``) and
-C-stack-heavy work; a non-yielding burst can't be rescued by the copy-grow
-path (which only grows at yield points), so on a default small fiber stack
-it overflows into the guard page and SIGSEGVs.  ``stack_size=`` is the
+C-stack-heavy work, and fiber stacks don't grow (copy-grow is off on
+CPython 3.14), so on a default fiber stack it overflows into the guard page
+and SIGSEGVs.  ``stack_size=`` is the
 documented knob for exactly this ("entry function known to recurse deeply or
 call into a C extension that consumes large C stack").
 """

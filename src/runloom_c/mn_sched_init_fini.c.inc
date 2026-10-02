@@ -762,8 +762,7 @@ static RUNLOOM_NOINLINE int runloom_mn_fiber_core(PyObject *callable,
      *  1. an explicit per-spawn override (mn_fiber(fn, stack_size) > 0) -- a caller
      *     that knows it runs a deep, NON-yielding C burst (cold stdlib import,
      *     readline/terminfo init, a doctest, OpenSSL) asks for a roomy stack up
-     *     front; the resume-boundary copy-grow only rescues stacks that deepen
-     *     ACROSS yields, not a single-frame burst;
+     *     front, since stacks don't grow (copy-grow is off on 3.14);
      *  2. otherwise the adaptive autosizer -- this fiber-kind's learned
      *     size (start-large default for an unseen kind), which itself falls
      *     back to the hub default when autosize is off. */

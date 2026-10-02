@@ -109,8 +109,8 @@ struct runloom_iouring_ring;
 
 int runloom_mn_init(int n_threads);
 /* stack_size: per-fiber C-stack override in bytes; 0 = the hub default.
- * Use a larger value for a g that runs a deep, non-yielding C burst (cold
- * imports, terminfo/OpenSSL init) that the copy-grow can't rescue mid-burst. */
+ * Use a larger value for a g that runs deep C recursion (cold imports,
+ * terminfo/OpenSSL init): stacks don't grow (copy-grow is off on 3.14). */
 PyObject *runloom_mn_fiber(PyObject *callable, size_t stack_size);
 /* Place the fiber on hub `hub_id`, drained to that hub's local FIFO rather than
  * its stealable deque.  hub_id < 0 or >= the live hub count raises ValueError.
