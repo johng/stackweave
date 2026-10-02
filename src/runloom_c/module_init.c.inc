@@ -187,6 +187,10 @@ static PyMethodDef module_methods[] = {
      "until fd is ready.  events is a bitmask: 1=read, 2=write."},
     {"netpoll_backend", m_netpoll_backend, METH_NOARGS,
      "Return active netpoll backend name (\"epoll\", \"kqueue\", \"select\")."},
+    {"_c_stack_limits", m_c_stack_limits, METH_NOARGS,
+     "_c_stack_limits() -> (top, soft_limit, hard_limit): the calling thread "
+     "state's C-stack window, which RecursionError and the trashcan measure "
+     "the stack pointer against.  Test-only."},
     {"_logical_ns", m_logical_ns, METH_NOARGS,
      "Read the single-thread LOGICAL clock in ns (STACKWEAVE_LOGICAL_CLOCK/STACKWEAVE_SIM); "
      "0 off the logical clock.  Diagnostic (sim determinism witness)."},

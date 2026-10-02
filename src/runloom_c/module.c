@@ -58,10 +58,16 @@
  *    invisible while still resident in the shared datastack for a later
  *    resume).  We restore only the topmost pointer, never datastack_top --
  *    reclaiming the coro's frame slots would let the caller overwrite a
- *    still-parked coro. */
+ *    still-parked coro.
+ *  - the C-stack limits (3.14).  Every resume arms them at the coro's stack
+ *    (runloom_coro_rearm_stackprot); unrestored, the caller ran on under
+ *    them, and deep recursion or a deep free there crashed off the end of
+ *    its own stack instead of raising RecursionError.  Only caller_snap's
+ *    copy matters: the re-arm overwrites the coro's own before it runs. */
 typedef struct {
     int py_recursion_remaining;
     struct _PyInterpreterFrame *current_frame;
+    runloom_cstack_limits_t c_stack;
     int initialised;
 } RunloomTstateSnapshot;
 
@@ -81,6 +87,7 @@ RUNLOOM_INLINE void runloom_tstate_save(RunloomTstateSnapshot *s)
     PyThreadState *ts = PyThreadState_GET();
     s->py_recursion_remaining = ts->py_recursion_remaining;
     s->current_frame = ts->current_frame;
+    runloom_cstack_limits_save(ts, &s->c_stack);
     s->initialised = 1;
 }
 
@@ -93,6 +100,7 @@ RUNLOOM_INLINE void runloom_tstate_restore(const RunloomTstateSnapshot *s)
     ts = PyThreadState_GET();
     ts->py_recursion_remaining = s->py_recursion_remaining;
     ts->current_frame = s->current_frame;
+    runloom_cstack_limits_restore(ts, &s->c_stack);
 }
 
 

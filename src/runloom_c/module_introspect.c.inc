@@ -87,6 +87,17 @@ static PyObject *m_fiber_count(PyObject *self, PyObject *unused)
     return PyLong_FromLong(runloom_fiber_count());
 }
 
+/* _c_stack_limits(): the calling thread state's C-stack window, for the tests
+ * that check run(1) and Coro.resume hand their caller its own back. */
+static PyObject *m_c_stack_limits(PyObject *self, PyObject *unused)
+{
+    runloom_cstack_limits_t l;
+    (void)self; (void)unused;
+    runloom_cstack_limits_save(PyThreadState_GET(), &l);
+    return Py_BuildValue("(KKK)", (unsigned long long)l.top,
+                         (unsigned long long)l.soft, (unsigned long long)l.hard);
+}
+
 /* Build one {...} dict for a hub snapshot entry (runloom.inspect.hubs()).
  * Returns a new ref or NULL (exception set). */
 static PyObject *runloom_hub_info_to_dict(const runloom_hub_info_t *o)
