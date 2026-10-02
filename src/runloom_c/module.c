@@ -136,8 +136,12 @@ RUNLOOM_INLINE void runloom_tstate_snap_drop(RunloomTstateSnapshot *s)
 }
 
 /* A coro finished: every frame is popped (a frame object that outlives its
- * frame has taken a copy), so free its datastack chunks to the arena, as
- * CPython frees a popped chunk. */
+ * frame has taken a copy), so its chunks are free.  The root goes into the
+ * thread state's one-chunk cache when that is empty -- CPython's own
+ * push_chunk takes it for the next coro's first frame, and clearing the
+ * thread state frees it -- so a coro doesn't cost an mmap + munmap (8x on
+ * create-and-run); the rest go to the arena, as CPython frees a popped
+ * chunk. */
 RUNLOOM_INLINE void runloom_coro_free_datastack(void)
 {
     PyThreadState *ts = PyThreadState_GET();
@@ -150,7 +154,12 @@ RUNLOOM_INLINE void runloom_coro_free_datastack(void)
     PyObject_GetArenaAllocator(&alloc);
     while (chunk != NULL) {
         _PyStackChunk *prev = chunk->previous;
-        alloc.free(alloc.ctx, chunk, chunk->size);
+        if (prev == NULL && ts->datastack_cached_chunk == NULL) {
+            chunk->top = 0;
+            ts->datastack_cached_chunk = chunk;
+        } else {
+            alloc.free(alloc.ctx, chunk, chunk->size);
+        }
         chunk = prev;
     }
 }
