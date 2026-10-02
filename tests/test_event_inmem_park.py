@@ -29,12 +29,15 @@ def _count_fds():
 
 
 def _wait_all_hubs_started():
-    # Each hub opens its own wake fds (an epoll fd and an eventfd) as its
-    # thread starts, and run() does not wait for that before main runs.  So
-    # a baseline taken first in main can miss the hubs still starting, whose
-    # fds then land in the delta: under load that was 10 with 8 hubs (CI, and
-    # reproduced on one busy CPU).  A hub opens them before it runs any fiber,
-    # so once every hub has run one, the baseline holds them all.
+    # The first time each hub starts in this process it opens its own wake
+    # fds (an epoll fd and an eventfd; the per-hub pools outlive run()), and
+    # run() does not wait for that before main runs.  So a baseline taken
+    # first in main can miss the hubs still starting, whose fds then land in
+    # the delta: under load that was 10 with 8 hubs (CI, and reproduced on
+    # one busy CPU).  On epoll a hub opens them before it runs any fiber, so
+    # once every hub has run one, the baseline holds them all.  (Linux only:
+    # _count_fds() is -1 elsewhere, and kqueue opens its per-hub fds at a
+    # hub's first park instead.)
     n = stackweave_c.mn_hub_count()
     ran = bytearray(n)
 
