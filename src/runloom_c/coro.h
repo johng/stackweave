@@ -79,6 +79,11 @@ int runloom_coro_done(const runloom_coro_t *c);
 /* This coro's stack size in bytes.  Used by the fiber dump. */
 size_t runloom_coro_stack_size(const runloom_coro_t *c);
 
+/* Copy-grows done, and grow triggers declined because copy-grow is off
+ * (STACKWEAVE_STACK_GROW unset; see runloom_coro_maybe_grow). */
+unsigned long long runloom_coro_copy_grows(void);
+unsigned long long runloom_coro_copy_grows_declined(void);
+
 /* Lowest usable byte of this coro's stack (the PROT_NONE guard page is the page
  * immediately below it).  Used by the crash handler to map a faulting address
  * back to a fiber. */

@@ -134,6 +134,9 @@ STACKWEAVE_COVER = os.environ.get("STACKWEAVE_COVER", "").strip() not in ("", "0
 # a dangerous transition on EVERY opportunity so scale/timing Heisenbugs become
 # deterministic first-run failures.  STACKWEAVE_FORCE_STACKGROW copy-grows the coro
 # stack a page every resume (exercises the pointer-rewrite path every time).
+# Copy-grow is broken on CPython 3.14 (it leaves pointers into the old stack;
+# see runloom_coro_maybe_grow), so such a build crashes a fiber's first
+# resumed yield until it is fixed -- tests/test_copy_grow.py holds the xfail.
 STACKWEAVE_FORCE_STACKGROW = os.environ.get("STACKWEAVE_FORCE_STACKGROW", "").strip() not in ("", "0", "no", "false")
 STACKWEAVE_EXTRA_CFLAGS  = os.environ.get("STACKWEAVE_EXTRA_CFLAGS", "").split()
 STACKWEAVE_EXTRA_LDFLAGS = os.environ.get("STACKWEAVE_EXTRA_LDFLAGS", "").split()

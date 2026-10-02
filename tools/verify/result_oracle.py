@@ -10,7 +10,9 @@ into its own slot, and the harness verifies EVERY returned value against the sam
 function recomputed as an in-memory model. Any mismatch is silent corruption the
 counters cannot see.
 
-Strongest composed with the chaos + rare-path tools:
+Strongest composed with the chaos + rare-path tools (except that copy-grow is
+broken on CPython 3.14, so a FORCE_STACKGROW build crashes there for now; see
+runloom_coro_maybe_grow and tests/test_copy_grow.py):
     STACKWEAVE_FORCE_STACKGROW=1 python setup.py build_ext --inplace --force  # then
     PYTHONPATH=src python tools/verify/result_oracle.py --buggify --seed N
 

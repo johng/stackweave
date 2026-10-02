@@ -1913,6 +1913,54 @@ static int runloom_coro_grow(runloom_coro_t *c, size_t new_usable)
  * silent corruption); such code must set a larger stack explicitly or
  * (for known deep stdlib paths) be pre-warmed. */
 #define RUNLOOM_STACK_GROW_MAX (8u << 20)   /* 8 MB ceiling (matches MAX_STACK) */
+/* Copy-grow is OFF unless STACKWEAVE_STACK_GROW=1.  runloom_coro_grow rebases
+ * only pointers INSIDE the copied stack, and on CPython 3.14 a parked fiber's
+ * stack is pointed into from outside it: the thread state's current_frame,
+ * critical_section and c_stack_refs, and heap (datastack) frames whose
+ * `previous` is an entry frame on the C stack.  After a grow they all name the
+ * freed old stack, so the fiber crashes on its next frame return or detach:
+ * a 1 MB fiber yielding 330 C-recursion levels deep SIGSEGVs, and a
+ * STACKWEAVE_FORCE_STACKGROW build crashes a fiber's first resumed yield.  Off,
+ * a fiber keeps the stack it was given, and the overflow check (RecursionError)
+ * bounds it as on any other fiber.  Stacks up to 512 KB (the default, and aio's
+ * protocol fibers) don't reach the grow trigger anyway: their overflow check
+ * trips at or above the trigger's depth, and a yield needs a checked Python
+ * call.  Kept, not removed, for
+ * a grow that rebases those pointers: tests/test_copy_grow.py holds the strict
+ * xfail.  stats()["copy_grows"] counts grows, ["copy_grows_declined"] the
+ * triggers that found it off. */
+static unsigned long long runloom_copy_grows_total = 0;
+static unsigned long long runloom_copy_grows_declined_total = 0;
+
+unsigned long long runloom_coro_copy_grows(void)
+{
+    return __atomic_load_n(&runloom_copy_grows_total, __ATOMIC_RELAXED);
+}
+
+unsigned long long runloom_coro_copy_grows_declined(void)
+{
+    return __atomic_load_n(&runloom_copy_grows_declined_total, __ATOMIC_RELAXED);
+}
+
+static int runloom_coro_grow_enabled(void)
+{
+    static int v = -1;
+    int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
+    if (cur < 0) {
+        const char *e = getenv("STACKWEAVE_STACK_GROW");
+        cur = (e != NULL && strcmp(e, "1") == 0) ? 1 : 0;
+        __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
+    }
+    return cur;
+}
+
+static int runloom_coro_grow_counted(runloom_coro_t *c, size_t target)
+{
+    int rc = runloom_coro_grow(c, target);
+    if (rc == 0) __atomic_add_fetch(&runloom_copy_grows_total, 1, __ATOMIC_RELAXED);
+    return rc;
+}
+
 static int runloom_coro_maybe_grow(runloom_coro_t *c)
 {
     uintptr_t sp, lo, headroom, quarter;
@@ -1929,7 +1977,7 @@ static int runloom_coro_maybe_grow(runloom_coro_t *c)
         size_t pg = runloom_round_to_page(1);
         size_t ftarget = c->stack_size + pg;
         if (ftarget > RUNLOOM_STACK_GROW_MAX) ftarget = RUNLOOM_STACK_GROW_MAX;
-        return runloom_coro_grow(c, ftarget);
+        return runloom_coro_grow_counted(c, ftarget);   /* forced: knob or not */
     }
 #endif
     sp = (uintptr_t)c->asm_coro.self.sp;
@@ -1940,7 +1988,19 @@ static int runloom_coro_maybe_grow(runloom_coro_t *c)
     if (headroom < quarter) {
         size_t target = c->stack_size << 1;
         if (target > RUNLOOM_STACK_GROW_MAX) target = RUNLOOM_STACK_GROW_MAX;
-        return runloom_coro_grow(c, target);
+        if (!runloom_coro_grow_enabled()) {
+            static int noted = 0;
+            __atomic_add_fetch(&runloom_copy_grows_declined_total, 1, __ATOMIC_RELAXED);
+            if (__atomic_exchange_n(&noted, 1, __ATOMIC_RELAXED) == 0)
+                fprintf(stderr, "[stackweave] a fiber's C stack is over 3/4 full at a "
+                        "yield, but copy-grow is off: on CPython 3.14 it leaves "
+                        "pointers into the old stack and crashes.  The fiber "
+                        "keeps its %zu KB stack; give deep C recursion a bigger "
+                        "stack_size.  (STACKWEAVE_STACK_GROW=1 grows anyway, "
+                        "unsafely.)\n", c->stack_size / 1024);
+            return 0;
+        }
+        return runloom_coro_grow_counted(c, target);
     }
     return 0;
 }
@@ -2019,6 +2079,10 @@ void runloom_coro_arena_release(size_t start_slot, long n, size_t stack_size, in
 {
     (void)start_slot; (void)n; (void)stack_size; (void)node;
 }
+
+/* No copy-grow on the ucontext backend: nothing to count. */
+unsigned long long runloom_coro_copy_grows(void) { return 0; }
+unsigned long long runloom_coro_copy_grows_declined(void) { return 0; }
 #endif  /* !RUNLOOM_HAVE_FCONTEXT */
 
 /* ================================================================== */
