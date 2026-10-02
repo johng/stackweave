@@ -130,6 +130,22 @@ int runloom_mn_init(int n_threads)
         if (n_threads <= 0) n_threads = 4;
         if (n_threads > 16) n_threads = 16;
     }
+#if !RUNLOOM_MIGRATION_PATCHED
+    /* Fibers migrate between hubs whenever there are two, and without both
+     * patches that can crash under load -- a SIGSEGV that looks like a runtime
+     * bug.  Say why up front, once. */
+    if (n_threads >= 2) {
+        static int warned = 0;
+        if (__atomic_exchange_n(&warned, 1, __ATOMIC_RELAXED) == 0)
+            fprintf(stderr, "[stackweave] this extension was built against a "
+                    "CPython without the migration patches ("
+                    RUNLOOM_MIGRATION_PATCHES_MISSING "; see "
+                    "src/patches/README.md), and fibers migrate between the %d "
+                    "hubs regardless, which can crash under load -- rebuild "
+                    "against a patched interpreter, or run with 1 hub\n",
+                    n_threads);
+    }
+#endif
     runloom_hubs = (runloom_hub_t *)PyMem_Calloc((size_t)n_threads, sizeof(runloom_hub_t));
     if (runloom_hubs == NULL) {
         PyErr_NoMemory();

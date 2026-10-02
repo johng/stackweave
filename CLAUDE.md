@@ -19,9 +19,11 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   `assert_iouring_loop_ran` in `tests/adv_util.py` reads the hub ring-wait
   count).
 - Migration is only sound on a free-threaded
-  CPython built with BOTH `src/patches/` halves (alloc-home + exec-home), and
-  nothing checks for them at runtime — on a stock interpreter it crashes under
-  churn at H≥2 (mimalloc `_mi_page_retire`).
+  CPython built with BOTH `src/patches/` halves (alloc-home + exec-home) — on a
+  stock interpreter it crashes under churn at H≥2 (mimalloc `_mi_page_retire`,
+  or a dict free under `_Py_MergeZeroLocalRefcount`). The interpreter can't be
+  checked at runtime, but an extension built without both says so:
+  `stackweave_c.migration_patched` is 0 and `mn_init` warns once at H≥2.
 - **Free-threaded CPython 3.14+ only** (M:N is only real with the GIL off):
   `setup.py` refuses GIL builds and anything older, and the C sources have no
   other code paths (`#error` in `runloom_sched.h`). Every fiber stack is >= 256 KB
@@ -32,9 +34,11 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   inlines pystate.c's thread-state reads and silently undoes exec-home); PGO
   alone is fine. `tools/ci/check_exec_home_tls.py <python>` checks a build.
 - Build `STACKWEAVE_EXTRA_CFLAGS="-DPy_TSTATE_ALLOC_HOME -DPy_TSTATE_EXEC_HOME"
-  python setup.py build_ext --inplace` (add `--force` when switching
-  interpreters; the flags are not picked up from the interpreter, and without
-  them the alloc-home borrow compiles out); run with `PYTHONPATH=src`.
+  python setup.py build_ext --inplace` (an interpreter whose pyconfig.h lacks
+  the flags doesn't pass them on, and without them the alloc-home borrow
+  compiles out); run with `PYTHONPATH=src`. Switching interpreters or flags in
+  one tree recompiles everything (a stamp in `build/temp.*`); before that,
+  build_ext reused the other interpreter's extension and it segfaulted.
 - `pip install` / `pip install -e` refuse any interpreter without both migration
   patches (setup.py install gate), so they refuse a stock 3.14t.
   `build_ext --inplace` is ungated; set

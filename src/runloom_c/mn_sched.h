@@ -57,10 +57,12 @@
  *       Py_TSTATE_EXEC_HOME.  An arm64 SIGSEGV that looks benign on x86-TSO,
  *       so it survives local x86 review and only dies on weak memory.
  *   Both patches, the build recipe, and the measured validation live in
- *   src/patches/README.md.  Nothing checks for them at runtime: build the
- *   extension against a patched interpreter with both features defined (the
- *   setup.py install gate refuses a pip install without them).  Missing
- *   either, migration still runs and can crash under churn at H>=2.
+ *   src/patches/README.md.  The interpreter can't be checked at runtime, so
+ *   build the extension against a patched interpreter with both features
+ *   defined (the setup.py install gate refuses a pip install without them).
+ *   Missing either, migration still runs and can crash under churn at H>=2;
+ *   an extension built that way says so (RUNLOOM_MIGRATION_PATCHED below):
+ *   mn_init warns once when it starts 2+ hubs.
  *
  *   Historical note: the old "handoff-rescue" pool (run a wedged hub's fibers
  *   on a standby thread) was REMOVED (2026-06) because it migrated suspended
@@ -82,6 +84,22 @@
 #include <stdint.h>
 
 #include "runloom_sched.h"   /* for runloom_g_t forward */
+
+/* 1 iff this extension was compiled against an interpreter with BOTH
+ * migration patches (see "Why migration needs a patched interpreter" above).
+ * Exposed as stackweave_c.migration_patched. */
+#if defined(Py_TSTATE_ALLOC_HOME) && defined(Py_TSTATE_EXEC_HOME)
+#  define RUNLOOM_MIGRATION_PATCHED 1
+#else
+#  define RUNLOOM_MIGRATION_PATCHED 0
+#  if !defined(Py_TSTATE_ALLOC_HOME) && !defined(Py_TSTATE_EXEC_HOME)
+#    define RUNLOOM_MIGRATION_PATCHES_MISSING "Py_TSTATE_ALLOC_HOME, Py_TSTATE_EXEC_HOME"
+#  elif !defined(Py_TSTATE_ALLOC_HOME)
+#    define RUNLOOM_MIGRATION_PATCHES_MISSING "Py_TSTATE_ALLOC_HOME"
+#  else
+#    define RUNLOOM_MIGRATION_PATCHES_MISSING "Py_TSTATE_EXEC_HOME"
+#  endif
+#endif
 
 /* Forward-decl avoids pulling io_uring.h into every translation unit
  * that includes mn_sched.h. */

@@ -23,6 +23,7 @@ Goals:
 Toolchains regularly built against:
   - GCC 4.7+ / Clang 3.5+ / ICC 17+
 """
+import json
 import os
 import platform
 import subprocess
@@ -284,6 +285,47 @@ def detect_link_flags():
 
 
 # --------------------------------------------------------------------
+# Rebuild everything when the interpreter or the build flags change
+# --------------------------------------------------------------------
+# build_ext reuses an object, and a built extension, whenever it is newer than
+# its sources.  A stock and a patched interpreter of one version share every
+# build path (both are cp3NNt), so building with one after the other compiled
+# nothing and copied the first one's extension back into src/ -- which
+# disagrees with the second about the _PyThreadStateImpl layout and segfaulted
+# at the first M:N test.  A change of compile flags (STACKWEAVE_TSAN,
+# STACKWEAVE_DEBUG, STACKWEAVE_EXTRA_CFLAGS, ...) is just as invisible to it.
+# So each build leaves a stamp of what it was built for in build_temp, and a
+# build whose stamp differs, or that has none, recompiles everything.
+_BUILD_STAMP = "stackweave-build.json"
+
+
+def build_identity(extensions):
+    """What a build's objects depend on besides their sources."""
+    return {
+        "include": os.path.realpath(sysconfig.get_path("include")),
+        "version": sys.version,
+        "patch_problems": patched_cpython_problems(),
+        "env": {k: os.environ.get(k, "")
+                for k in ("CC", "CFLAGS", "CPPFLAGS", "LDFLAGS")},
+        "extensions": [
+            {"name": e.name, "sources": list(e.sources),
+             "macros": [list(m) for m in e.define_macros],
+             "compile": list(e.extra_compile_args or ()),
+             "link": list(e.extra_link_args or ()),
+             "libraries": list(e.libraries or ())}
+            for e in extensions],
+    }
+
+
+def _read_build_stamp(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+# --------------------------------------------------------------------
 # Custom build_ext with graceful fallback to ucontext if asm fails
 # --------------------------------------------------------------------
 class runloom_build_ext(_build_ext):
@@ -293,10 +335,21 @@ class runloom_build_ext(_build_ext):
     Solaris/illumos assemblers) reject the .S files even on x86_64 /
     aarch64.  Instead of crashing the install, we drop the .S source
     and the asm define, then retry the build with ucontext semantics.
+
+    It also recompiles everything when the build stamp says the interpreter
+    or the flags changed (see build_identity).
     """
 
     def run(self):
         global USE_UCONTEXT
+        stamp = os.path.join(self.build_temp, _BUILD_STAMP)
+        previous = _read_build_stamp(stamp)
+        if previous != build_identity(self.extensions):
+            if previous is not None:
+                print("stackweave build: the interpreter or the build flags "
+                      "changed since the last build in %s; recompiling "
+                      "everything" % self.build_temp)
+            self.force = True
         try:
             super().run()
         except Exception as e:
@@ -310,7 +363,11 @@ class runloom_build_ext(_build_ext):
                 e_obj.sources = [s for s in e_obj.sources
                                  if not s.endswith((".S", ".s"))]
                 e_obj.extra_compile_args = detect_compile_args()
+            self.force = True   # objects built with the asm flags don't fit
             super().run()
+        os.makedirs(self.build_temp, exist_ok=True)
+        with open(stamp, "w") as f:
+            json.dump(build_identity(self.extensions), f, indent=1)
 
 
 # --------------------------------------------------------------------
@@ -324,7 +381,9 @@ class runloom_build_ext(_build_ext):
 # about the _PyThreadStateImpl layout.  So the gate lives here, on the two
 # commands pip drives: bdist_wheel (`pip install`) and editable_wheel
 # (`pip install -e`).  `setup.py build_ext --inplace` -- the dev/test path --
-# stays ungated so the suite keeps running on stock CPython.
+# stays ungated, so stock CPython can build and import the extension; but
+# fibers migrate between hubs whenever there are two, and that can crash
+# there, so mn_init warns (src/runloom_c/mn_sched.h).
 STACKWEAVE_ALLOW_STOCK_CPYTHON = os.environ.get("STACKWEAVE_ALLOW_STOCK_CPYTHON", "").strip() not in ("", "0", "no", "false")
 
 # (feature define, header under the include dir, text only the patched header
