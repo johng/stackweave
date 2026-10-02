@@ -392,3 +392,53 @@ def kernel_pbuf_ring_errno():
         os.close(fd)                                   # drops the kernel's pin
         del cring
         ring.close()
+
+
+_NPROC_PROBE = r"""
+import resource, threading
+soft, hard = resource.getrlimit(resource.RLIMIT_NPROC)
+resource.setrlimit(resource.RLIMIT_NPROC, (1, hard))
+try:
+    t = threading.Thread(target=lambda: None)
+    t.start()
+    t.join()
+    print("NOT_CAPPED")
+except RuntimeError:
+    print("CAPPED")
+"""
+
+
+def rlimit_nproc_caps_threads():
+    """True iff lowering RLIMIT_NPROC actually stops this process creating a
+    thread, which the thread-spawn-failure tests rely on.
+
+    It does not for root, nor for any process with CAP_SYS_RESOURCE or
+    CAP_SYS_ADMIN: the kernel exempts them from the limit at clone(), so under
+    those the tests' "no new threads" limit is ignored and every spawn
+    succeeds.  Probed for real in a child (limit 1, start one thread) rather
+    than inferred from the euid, since a capability set can exempt a non-root
+    user, and root in a container that maps it to an unprivileged host uid is
+    capped.  False off Linux, where the limit caps fork()ed processes, not
+    threads."""
+    import subprocess
+    if not sys.platform.startswith("linux"):
+        return False
+    try:
+        p = subprocess.run([sys.executable, "-c", _NPROC_PROBE],
+                           capture_output=True, text=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        return False
+    return p.stdout.strip() == "CAPPED"
+
+
+def needs_rlimit_nproc_thread_cap():
+    """A skipif mark for tests that force a thread-spawn failure by lowering
+    RLIMIT_NPROC: skip, saying why, where the limit can't take effect."""
+    import pytest
+    capped = rlimit_nproc_caps_threads()
+    return pytest.mark.skipif(
+        not capped,
+        reason="RLIMIT_NPROC does not stop thread creation here (euid %d: the "
+               "kernel exempts root and CAP_SYS_RESOURCE/CAP_SYS_ADMIN, and "
+               "off Linux it caps processes, not threads), so a thread-spawn "
+               "failure can't be forced" % os.geteuid())
