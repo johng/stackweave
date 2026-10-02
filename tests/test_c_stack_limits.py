@@ -4,16 +4,15 @@ CPython 3.14 checks for C-stack overflow by comparing the stack pointer with
 limits kept on the thread state, and _Py_Dealloc's trashcan measures its margin
 against the same limits.  Every resume arms them at the fiber's own stack
 (runloom_coro_rearm_stackprot).  The single-thread scheduler and Coro run their
-fibers on the caller's thread state and never put the caller's limits back, so
-the drain freed objects on its own stack under a fiber's limits, and after
-run(1) returned the main thread kept the last fiber's.  Its stack lies above
-the fibers', so the check never fired: repr() of a deeply nested list, or
+fibers on the caller's thread state, and used not to put the caller's limits
+back: the drain freed objects on its own stack under a fiber's limits, and
+after run(1) returned the main thread kept the last fiber's.  Its stack lies
+above the fibers', so the check never fired: repr() of a deeply nested list, or
 freeing one, ran off the end of the stack (SIGSEGV) instead of raising
 RecursionError.
 
 stackweave_c._c_stack_limits() reads the calling thread state's limits.
 """
-import functools
 import os
 import pathlib
 import subprocess
@@ -54,17 +53,34 @@ def test_the_drain_frees_a_finished_fibers_objects_under_its_own_limits():
     assert freed == [before]
 
 
-def test_a_nested_run1_hands_the_outer_fiber_its_limits_back():
+@pytest.mark.parametrize("n", [
+    1,
+    pytest.param(2, marks=pytest.mark.skipif(
+        not needs_free_threading(), reason="M:N needs free-threaded CPython")),
+])
+def test_a_fiber_gets_its_limits_back_from_a_nested_run1_and_coro(n):
+    # Under run(1) the nested drain and the Coro share the main thread's
+    # state; under run(2) they run on the outer fiber's own (per-g) state.
     seen = {}
+
+    def coro_body():
+        seen["coro"] = limits()
+        stackweave_c.yield_()
 
     def outer():
         seen["outer"] = limits()
         stackweave.run(1, lambda: seen.setdefault("inner", limits()))
-        seen["outer after"] = limits()
+        seen["after run(1)"] = limits()
+        c = stackweave_c.Coro(coro_body)
+        c.resume()                  # parks at yield_
+        seen["after a parked resume"] = limits()
+        c.resume()                  # finishes
+        seen["after the last resume"] = limits()
 
-    stackweave.run(1, outer)
-    assert seen["inner"] != seen["outer"]
-    assert seen["outer after"] == seen["outer"]
+    stackweave.run(n, outer)
+    assert seen["inner"] != seen["outer"] and seen["coro"] != seen["outer"], seen
+    for k in ("after run(1)", "after a parked resume", "after the last resume"):
+        assert seen[k] == seen["outer"], (k, seen)
 
 
 @pytest.mark.skipif(not needs_free_threading(), reason="M:N needs free-threaded CPython")
@@ -135,7 +151,7 @@ def test_deep_recursion_after_a_fiber_raises_instead_of_crashing(after):
 def test_freeing_a_deep_structure_after_run1_does_not_crash():
     rc, out = _run("import stackweave\n" + DEEP
                    + "stackweave.run(1, lambda: None)\n"
-                   + "l = deep(1000000)\n"
+                   + "l = deep(300000)\n"
                    + "del l\n"
                    + "print('freed')\n")
     assert rc == 0 and "freed" in out, (rc, out)

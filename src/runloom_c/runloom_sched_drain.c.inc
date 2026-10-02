@@ -142,10 +142,10 @@ long long runloom_sched_sim_advance_clock(runloom_sched_t *s, long long netpoll_
 
 /* Resume g on this thread's own state, then put back the C-stack limits the
  * resume replaced.  runloom_coro_rearm_stackprot arms them at g's stack on the
- * way in, and nothing else restores them: the drain then freed finished
- * fibers' objects on its own stack under g's limits, and run()'s caller -- or
- * the fiber a nested run(1) was called from -- carried on under the last
- * fiber's, so deep recursion there crashed instead of raising RecursionError.
+ * way in.  Left there, the drain freed finished fibers' objects on its own
+ * stack under g's limits, and run()'s caller -- or the fiber a nested run(1)
+ * was called from -- carried on under the last fiber's, so deep recursion
+ * there crashed instead of raising RecursionError.
  * Saved per resume rather than once per drain, so what goes back is exactly
  * what this resume replaced. */
 static inline void runloom_drain_resume(runloom_g_t *g)

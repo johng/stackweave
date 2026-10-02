@@ -115,11 +115,13 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   on.** `runloom_coro_rearm_stackprot` arms the attached state's limits at a
   fiber's own coroutine stack on every resume. 3.14's overflow check
   (RecursionError) and `_Py_Dealloc`'s trashcan margin both measure the stack
-  pointer against them, so on any other stack both are garbage: deep recursion
-  or a deep free runs off the real stack (SIGSEGV), and a margin below 2 parks
-  each GC-tracked object on the state's trashcan list (`delete_later`), which
-  only a later GC-type dealloc with margin >= 4 on that state frees and
-  `PyThreadState_Clear` never does -- a leak. Two places leave a state's stack
+  pointer against them. On any other stack the check never raises, so deep
+  recursion runs off the real stack (SIGSEGV), and the margin is wrong: on a
+  stack above the limits it never defers, so a deep free crashes too; on one
+  below them it is under 2, and each GC-tracked object is parked on the
+  state's trashcan list (`delete_later`), which only a later GC-type dealloc
+  with margin >= 4 on that state frees and `PyThreadState_Clear` never does --
+  a leak. Two places leave a state's stack
   without detaching it, and each puts the right limits back:
   (1) M:N: `runloom_iframe_brc_release` drains a parked fiber's
   biased-refcount queue on the HUB's stack with the fiber's state attached, so

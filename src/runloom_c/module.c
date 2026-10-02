@@ -62,7 +62,8 @@
  *  - the C-stack limits (3.14).  Every resume arms them at the coro's stack
  *    (runloom_coro_rearm_stackprot); unrestored, the caller ran on under
  *    them, and deep recursion or a deep free there crashed off the end of
- *    its own stack instead of raising RecursionError. */
+ *    its own stack instead of raising RecursionError.  Only caller_snap's
+ *    copy matters: the re-arm overwrites the coro's own before it runs. */
 typedef struct {
     int py_recursion_remaining;
     struct _PyInterpreterFrame *current_frame;
