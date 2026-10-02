@@ -940,6 +940,10 @@ void runloom_g_entry(void *user);
  * paying for an arena alloc. */
 void runloom_drain_g_datastack(void);
 
+/* The same for a chunk chain that is NOT the thread state's current one (an
+ * abandoned Coro's, see module.c): give each chunk back without touching ts. */
+void runloom_datastack_release(_PyStackChunk *chunk);
+
 /* Datastack-chunk graveyard reclamation (defined in runloom_sched_pystate.c.inc).
  * thread_flush: an exiting hub splices its TLS chunk reuse-pool + grace-ring into
  * a shared graveyard; reclaim: the main thread frees the graveyard at mn_fini

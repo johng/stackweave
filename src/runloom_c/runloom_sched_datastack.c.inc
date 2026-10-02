@@ -143,14 +143,19 @@ void runloom_drain_g_datastack(void)
 {
     PyThreadState *ts = PyThreadState_GET();
     _PyStackChunk *chunk = ts->datastack_chunk;
-    PyObjectArenaAllocator alloc;
 
     if (chunk == NULL) return;
 
     ts->datastack_chunk = NULL;
     ts->datastack_top = NULL;
     ts->datastack_limit = NULL;
+    runloom_datastack_release(chunk);
+}
 
+void runloom_datastack_release(_PyStackChunk *chunk)
+{
+    PyObjectArenaAllocator alloc;
+    if (chunk == NULL) return;
     PyObject_GetArenaAllocator(&alloc);
     while (chunk != NULL) {
         _PyStackChunk *prev = chunk->previous;
