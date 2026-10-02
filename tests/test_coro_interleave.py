@@ -2,10 +2,11 @@
 
 Coro.resume swapped only the recursion counter and current_frame, so Coros
 taking turns shared the rest of the thread state:
-  * the critical-section chain: a Coro parked inside list(map())'s critical
-    section left its node at the head of the chain, holding the list's mutex,
-    and the next Coro to push or pop linked through the other's stack --
-    two Coros one level deep SIGSEGVed;
+  * the critical-section chain: a Coro parked inside a critical section (a
+    list(map()) callback holds the new list's, list.extend() the extended
+    list's) left its node at the head of the chain, still holding the mutex,
+    and the next Coro to push or pop linked through the other's stack -- two
+    Coros one level deep SIGSEGVed;
   * the datastack: the first Coro to return popped the frame top back below
     frames another still owned, and the next push overwrote them -- eight
     Coros recursing 50 Python levels deep SIGSEGVed.
@@ -41,7 +42,7 @@ def take_turns(coros):
 
 @pytest.mark.parametrize("n, depth", [(2, 1), (3, 50), (8, 40)])
 def test_coros_parked_inside_critical_sections_take_turns(n, depth):
-    # list(map()) holds a critical section on its list across each callback,
+    # list(map()) holds a critical section on the list it builds across each callback,
     # and each level parks inside one.
     rc, out, err = _run(TAKE_TURNS + """
 N, DEPTH = %d, %d
@@ -77,23 +78,31 @@ print("RESULTS", sorted(got))
 
 
 def test_a_parked_coro_does_not_hold_its_critical_section():
-    # A Coro parks inside list(map()) over `shared`, which holds `shared`'s
-    # critical section.  Parked, it must release it, so another Coro can
-    # append to `shared`; resumed, the map finishes.
+    # shared.extend(map(...)) holds `shared`'s critical section while it pulls
+    # each item, and the Coro parks inside that.  Parked, it must have released
+    # it: another OS thread appends to `shared` while this one busy-spins (a
+    # blocking wait would detach this thread, which releases the section anyway
+    # and hides the bug).  Resumed, the extend finishes.
     rc, out, err = _run(TAKE_TURNS + """
+import threading, time
 shared = [0, 1, 2]
-seen = []
-def walker():
-    return list(map(lambda x: (stackweave_c.yield_(), seen.append(x), x)[2], shared))
-def appender():
-    for k in range(3):
-        shared.append(10 + k)
-        stackweave_c.yield_()
-take_turns([stackweave_c.Coro(walker), stackweave_c.Coro(appender)])
-print("SHARED", shared)
+c = stackweave_c.Coro(lambda: shared.extend(map(lambda x: (stackweave_c.yield_(), x)[1], [7, 8])))
+c.resume()                       # parked inside shared.extend
+done = []
+t = threading.Thread(target=lambda: (shared.append(99), done.append(1)))
+t.start()
+end = time.monotonic() + 3
+while not done and time.monotonic() < end:
+    pass
+print("APPENDED_WHILE_PARKED", bool(done))
+while not c.done:
+    c.resume()
+t.join()
+print("SHARED", sorted(shared))
 """)
     assert rc == 0, (rc, err[-2000:])
-    assert "SHARED [0, 1, 2, 10, 11, 12]" in out, out
+    assert "APPENDED_WHILE_PARKED True" in out, out
+    assert "SHARED [0, 1, 2, 7, 8, 99]" in out, out
 
 
 def test_coros_dropped_while_parked_leave_the_thread_usable():
