@@ -435,7 +435,6 @@ void runloom_netpoll_reset_after_fork(void)
     for (i = 0; i < (size_t)RUNLOOM_PARKER_POOL_MAX; i++) {
         runloom_parker_pool_t *p = &runloom_pools[i];
         runloom_mutex_init(&p->lock);
-        p->lock_inited = 2;     /* ready (re-inited above) */
         p->head = NULL;
         __atomic_store_n(&p->total, 0, __ATOMIC_RELAXED);
         if (p->by_fd != NULL)
@@ -446,12 +445,23 @@ void runloom_netpoll_reset_after_fork(void)
         p->link_count = 0;
         p->churn_last_links = 0;
         p->churn_last_ns = 0;
-        /* Fresh per-hub kqueue + self-pipe for the child: fork shares the
-         * parent's kernel kqueue, so the inherited handles (closed by fini above,
-         * set -1) must not be reused.  lock_inited is set to 2 directly here, so
-         * the lazy backend path is skipped -- create it explicitly.  No-op on
-         * epoll/select. */
-        runloom_pool_backend_create(p);
+        /* The child needs pollers of its own -- fork shares the parent's
+         * kernel epoll/kqueue, and fini above closed the inherited handles --
+         * but only for the pools it uses.  So a hub pool goes back to
+         * never-used, and lock_ensure_inited creates its backend on first
+         * touch, as in a fresh process.  Creating every slot's here put a
+         * poller in every forked child for all RUNLOOM_PARKER_POOL_MAX pools
+         * (130 fds on epoll, 195 on kqueue), hub or no hub.  The default pool
+         * stays ready: the fd arm-mask accessors take its lock directly
+         * (netpoll_register.c.inc), not through lock_ensure_inited. */
+        if (p == &runloom_pool) {
+            runloom_pool_backend_create(p);
+            p->lock_inited = 2;
+        } else {
+            p->epoll_fd = p->wake_efd = -1;
+            p->kqueue_fd = p->selfpipe_r = p->selfpipe_w = -1;
+            p->lock_inited = 0;
+        }
     }
     /* The per-fd registration bitmap says "fd X is already armed in the
      * poller"; against the child's BRAND-NEW poller every such bit is a lie
