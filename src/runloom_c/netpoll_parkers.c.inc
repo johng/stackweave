@@ -86,7 +86,11 @@ static runloom_parked_t *runloom_parker_pool_acquire(void)
     return p;
 }
 
-static void runloom_parker_pool_release(runloom_parked_t *p)
+/* Out of line (RUNLOOM_NOINLINE): runloom_netpoll_wait_fd releases its parker
+ * after runloom_coro_yield.  Inlined there, the push would go onto the freelist
+ * of the hub the fiber parked on, which may no longer be this thread's --
+ * corrupting that hub's freelist. */
+static RUNLOOM_NOINLINE void runloom_parker_pool_release(runloom_parked_t *p)
 {
     if (p == NULL) return;
     /* Defence-in-depth: scrub list-link fields so a stray ref into

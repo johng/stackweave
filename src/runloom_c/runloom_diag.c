@@ -803,6 +803,35 @@ void runloom_lockrank_violation(int held, int acquired)
     abort();
 #endif
 }
+
+RUNLOOM_NOINLINE void runloom_lockrank_push(int rank)
+{
+    int i;
+    for (i = 0; i < runloom_lockrank_depth; i++) {
+        if (runloom_lockrank_held[i] >= rank) {
+            runloom_lockrank_violation(runloom_lockrank_held[i], rank);
+            break;   /* report the first conflict; still push so unlock balances */
+        }
+    }
+    if (runloom_lockrank_depth < RUNLOOM_LOCKRANK_DEPTH)
+        runloom_lockrank_held[runloom_lockrank_depth++] = rank;
+}
+
+RUNLOOM_NOINLINE void runloom_lockrank_pop(int rank)
+{
+    int i;
+    /* Pop the topmost matching rank (locks are released LIFO in practice, but
+     * tolerate non-LIFO by searching from the top). */
+    for (i = runloom_lockrank_depth - 1; i >= 0; i--) {
+        if (runloom_lockrank_held[i] == rank) {
+            int j;
+            for (j = i; j < runloom_lockrank_depth - 1; j++)
+                runloom_lockrank_held[j] = runloom_lockrank_held[j + 1];
+            runloom_lockrank_depth--;
+            return;
+        }
+    }
+}
 #endif
 
 /* ---- park/yield-safety checker storage (item 10, debug-only) ---- */
@@ -832,6 +861,19 @@ void runloom_ctx_parkable_violation(const char *where, int held_rank, int noyiel
     abort();
 #endif
 }
+
+RUNLOOM_NOINLINE void runloom_ctx_assert_parkable(const char *where)
+{
+    if (runloom_lockrank_depth > 0)
+        runloom_ctx_parkable_violation(
+            where, runloom_lockrank_held[runloom_lockrank_depth - 1],
+            runloom_ctx_noyield_depth);
+    else if (runloom_ctx_noyield_depth > 0)
+        runloom_ctx_parkable_violation(where, 0, runloom_ctx_noyield_depth);
+}
+
+RUNLOOM_NOINLINE void runloom_ctx_noyield_enter(void) { runloom_ctx_noyield_depth++; }
+RUNLOOM_NOINLINE void runloom_ctx_noyield_leave(void) { runloom_ctx_noyield_depth--; }
 #endif
 
 /* ---- named reachability ("Sometimes()") counters (runloom_cover.h) -------- */

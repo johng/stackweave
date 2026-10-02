@@ -273,6 +273,11 @@ typedef struct {
     int      lo_ctr;                     /* assigns distinct low (demoted) prios */
 } runloom_pct_t;
 static runloom_pct_t runloom_pct;
+/* Init runs once (two threads may spawn first at the same time), and every
+ * M:N hub's ready_pop reads `enabled` while it does: init publishes `enabled`
+ * with release after the rest, and runloom_pct_pick acquires it before reading
+ * them (TSan C6, docs/dev/TSAN.md). */
+static pthread_once_t runloom_pct_once = PTHREAD_ONCE_INIT;
 
 static uint64_t runloom_pct_rand(void)      /* xorshift64 */
 {
@@ -282,14 +287,15 @@ static uint64_t runloom_pct_rand(void)      /* xorshift64 */
     return x;
 }
 
-static void runloom_pct_init(void)
+static void runloom_pct_init_once(void)
 {
     const char *seed = getenv("STACKWEAVE_PCT_SEED");
     int i;
     long k;
-    runloom_pct.inited = 1;
-    if (seed == NULL || seed[0] == '\0') { runloom_pct.enabled = 0; return; }
-    runloom_pct.enabled = 1;
+    if (seed == NULL || seed[0] == '\0') {
+        __atomic_store_n(&runloom_pct.inited, 1, __ATOMIC_RELAXED);
+        return;
+    }
     runloom_pct.rng = strtoull(seed, NULL, 10);
     if (runloom_pct.rng == 0) runloom_pct.rng = 0x9E3779B97F4A7C15ULL;  /* xorshift fixpoint */
     runloom_pct.depth = getenv("STACKWEAVE_PCT_DEPTH") ? atoi(getenv("STACKWEAVE_PCT_DEPTH")) : 3;
@@ -317,6 +323,13 @@ static void runloom_pct_init(void)
                     i + 1 < runloom_pct.depth - 1 ? "," : "\n");
         if (runloom_pct.depth <= 1) fprintf(stderr, "(none)\n");
     }
+    __atomic_store_n(&runloom_pct.enabled, 1, __ATOMIC_RELEASE);
+    __atomic_store_n(&runloom_pct.inited, 1, __ATOMIC_RELAXED);
+}
+
+static void runloom_pct_init(void)
+{
+    (void)pthread_once(&runloom_pct_once, runloom_pct_init_once);
 }
 
 /* Find the logical ring index of the highest-priority ready g, assigning a
@@ -350,6 +363,7 @@ static runloom_g_t *runloom_pct_pick(runloom_sched_t *s)
 {
     size_t best, p;
     runloom_g_t *g;
+    (void)__atomic_load_n(&runloom_pct.enabled, __ATOMIC_ACQUIRE);  /* pairs with init */
     runloom_pct.steps++;
     best = runloom_pct_argmax(s);
     /* change point: demote the would-be winner below everyone, then re-pick,
@@ -372,7 +386,7 @@ runloom_g_t *runloom_sched_ready_pop(runloom_sched_t *s)
 {
     runloom_g_t *g;
     if (s->ready_head == s->ready_tail) return NULL;
-    if (__builtin_expect(runloom_pct.enabled, 0))
+    if (__builtin_expect(__atomic_load_n(&runloom_pct.enabled, __ATOMIC_RELAXED), 0))
         return runloom_pct_pick(s);
     g = s->ready_ring[s->ready_head & s->ready_mask];
     /* relaxed-atomic store: races the cross-thread deadlock census's read of

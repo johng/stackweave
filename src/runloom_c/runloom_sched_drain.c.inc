@@ -27,25 +27,31 @@ static double runloom_sched_logical_val = 0.0;
 static int runloom_sim_on = -1;                  /* -1 = lazy-init from env */
 int runloom_sim_enabled(void)
 {
-    if (__builtin_expect(runloom_sim_on < 0, 0)) {
+    /* Relaxed atomics: read from any thread, and two first callers may both
+     * fill the cache -- with the same value (TSan C1, docs/dev/TSAN.md). */
+    int on = __atomic_load_n(&runloom_sim_on, __ATOMIC_RELAXED);
+    if (__builtin_expect(on < 0, 0)) {
         const char *e = getenv("STACKWEAVE_SIM");
-        runloom_sim_on = (e != NULL && e[0] != '\0') ? 1 : 0;
+        on = (e != NULL && e[0] != '\0') ? 1 : 0;
+        __atomic_store_n(&runloom_sim_on, on, __ATOMIC_RELAXED);
     }
-    return runloom_sim_on;
+    return on;
 }
 
 static int runloom_sched_logical_enabled(void)
 {
-    if (__builtin_expect(runloom_sched_logical_on < 0, 0)) {
+    /* Relaxed atomics, as in runloom_sim_enabled (TSan C1). */
+    int on = __atomic_load_n(&runloom_sched_logical_on, __ATOMIC_RELAXED);
+    if (__builtin_expect(on < 0, 0)) {
         const char *e = getenv("STACKWEAVE_LOGICAL_CLOCK");
         /* RUNLOOM_SIM REQUIRES logical time: wait_fd deadlines ride the logical
          * clock under sim and sched_sleep must share it, so sim implies the
          * logical clock even when RUNLOOM_LOGICAL_CLOCK is unset -- otherwise a
          * mixed sched_sleep + wait_fd sim workload would run on two clocks. */
-        runloom_sched_logical_on = ((e != NULL && e[0] == '1') ||
-                                    runloom_sim_enabled()) ? 1 : 0;
+        on = ((e != NULL && e[0] == '1') || runloom_sim_enabled()) ? 1 : 0;
+        __atomic_store_n(&runloom_sched_logical_on, on, __ATOMIC_RELAXED);
     }
-    return runloom_sched_logical_on;
+    return on;
 }
 
 /* The clock sched_sleep deadlines and loop.time() read: the logical clock when
@@ -739,5 +745,7 @@ Py_ssize_t runloom_sched_drain(runloom_sched_t *s)
  * a call runs the yield on its currently-running g. */
 
 static runloom_thread_t runloom_preempt_thread;
-static volatile int runloom_preempt_running = 0;
-static volatile long runloom_preempt_quantum_us = 10000;
+/* Set by init/fini, polled by the time-slicer thread: relaxed atomics (TSan
+ * C2).  The join in fini orders everything after the loop's last read. */
+static int runloom_preempt_running = 0;
+static long runloom_preempt_quantum_us = 10000;

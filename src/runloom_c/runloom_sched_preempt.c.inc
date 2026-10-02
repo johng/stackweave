@@ -43,13 +43,13 @@ static int runloom_preempt_yield_cb(void *user)
 static RUNLOOM_THREAD_RET runloom_preempt_main(void *arg)
 {
     (void)arg;
-    while (runloom_preempt_running) {
-        long us = runloom_preempt_quantum_us;
+    while (__atomic_load_n(&runloom_preempt_running, __ATOMIC_RELAXED)) {
+        long us = __atomic_load_n(&runloom_preempt_quantum_us, __ATOMIC_RELAXED);
         int posts, i;
 
         if (us < 100) us = 100;        /* clamp lower bound */
         runloom_sleep_ns((long long)us * 1000LL);
-        if (!runloom_preempt_running) break;
+        if (!__atomic_load_n(&runloom_preempt_running, __ATOMIC_RELAXED)) break;
 
         /* Post one pending call per hub (or just one for single-thread)
          * so each hub's eval loop has something to pick up.  The
@@ -99,16 +99,16 @@ int runloom_preempt_init(long quantum_us)
             return 0;
         }
     }
-    runloom_preempt_quantum_us = quantum_us;
-    if (runloom_preempt_running) {
+    __atomic_store_n(&runloom_preempt_quantum_us, quantum_us, __ATOMIC_RELAXED);
+    if (__atomic_load_n(&runloom_preempt_running, __ATOMIC_RELAXED)) {
         /* Already running -- the timer loop reloads quantum on its
          * next iteration. */
         return 0;
     }
-    runloom_preempt_running = 1;
+    __atomic_store_n(&runloom_preempt_running, 1, __ATOMIC_RELAXED);
     if (runloom_thread_create(&runloom_preempt_thread,
                            runloom_preempt_main, NULL) != 0) {
-        runloom_preempt_running = 0;
+        __atomic_store_n(&runloom_preempt_running, 0, __ATOMIC_RELAXED);
         PyErr_SetString(PyExc_OSError, "stackweave preempt thread create failed");
         return -1;
     }
@@ -120,13 +120,13 @@ int runloom_preempt_init(long quantum_us)
  * nondeterministic yields into a seeded run (I2 review). */
 int runloom_preempt_active(void)
 {
-    return runloom_preempt_running;
+    return __atomic_load_n(&runloom_preempt_running, __ATOMIC_RELAXED);
 }
 
 void runloom_preempt_fini(void)
 {
-    if (!runloom_preempt_running) return;
-    runloom_preempt_running = 0;
+    if (!__atomic_load_n(&runloom_preempt_running, __ATOMIC_RELAXED)) return;
+    __atomic_store_n(&runloom_preempt_running, 0, __ATOMIC_RELAXED);
     /* Release the GIL so the timer thread's final pending-call post
      * (if any) doesn't deadlock with our join.  The timer's sleep
      * doesn't need the GIL but Py_AddPendingCall briefly touches

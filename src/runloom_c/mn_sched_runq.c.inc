@@ -358,7 +358,8 @@ static long long runloom_sysmon_wedge_ns = 50LL * 1000000LL;   /* 50 ms default 
 static long long runloom_sysmon_preempt_ns = 50LL * 1000000LL;
 /* Preemption has no opt-out.  The one writer besides init is the fatal-signal
  * crash handler (runloom_sched_freeze_for_crash), which clears it so the
- * faulting g stays put while the handler chains out. */
+ * faulting g stays put while the handler chains out.  Relaxed atomics: the
+ * sysmon thread reads it concurrently. */
 static int       runloom_preempt_enabled = 1;
 static long long runloom_sysmon_tick_ns  = 10LL * 1000000LL;   /* scan every 10 ms (base) */
 static long long runloom_sysmon_tick_base_ns = 10LL * 1000000LL; /* unbacked-off tick */

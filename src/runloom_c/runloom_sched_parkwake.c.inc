@@ -855,7 +855,8 @@ static int runloom_sched_sleep_until_ex(runloom_sched_t *s, double wake_at, int 
         uint64_t ticket;
         g = runloom_mn_tls_current_g();
         if (g == NULL) return 0;
-        g->wake_at = wake_at;
+        /* Relaxed atomic: introspection reads it from other threads (TSan C5). */
+        __atomic_store(&g->wake_at, &wake_at, __ATOMIC_RELAXED);
         g->sleep_real = real;
         g->sleep_io = io;
         /* A fresh ticket for THIS sleep, set BEFORE the heap push and the waiter
@@ -922,7 +923,7 @@ static int runloom_sched_sleep_until_ex(runloom_sched_t *s, double wake_at, int 
     /* Single-thread path */
     g = s->current;
     if (g == NULL) return 0;
-    g->wake_at = wake_at;
+    __atomic_store(&g->wake_at, &wake_at, __ATOMIC_RELAXED);   /* TSan C5 */
     g->sleep_real = real;
     g->sleep_io = io;
     if (runloom_sleep_push(s, g) < 0) {

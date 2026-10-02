@@ -221,7 +221,9 @@ static RUNLOOM_TLS runloom_sched_t *runloom_tls_sched = NULL;
  * stays exactly as before, with no eventfd in the shared epoll. */
 static volatile int runloom_sched_count = 0;
 
-runloom_sched_t *runloom_sched_get(void)
+/* Out of line (RUNLOOM_NOINLINE): the park paths call it again after the
+ * fiber resumes, possibly on another thread. */
+RUNLOOM_NOINLINE runloom_sched_t *runloom_sched_get(void)
 {
     runloom_sched_t *s = runloom_tls_sched;
     if (__builtin_expect(s != NULL, 1)) return s;
@@ -576,7 +578,10 @@ void runloom_g_global_reset_after_fork(void)
     runloom_g_global_size = 0;
 }
 
-runloom_g_t *runloom_g_slab_alloc(void)
+/* The slab is per-thread: alloc and free stay out of line (RUNLOOM_NOINLINE)
+ * because spawn_common can decref -- and so run a finalizer that parks --
+ * between its alloc and the free on its error path. */
+RUNLOOM_NOINLINE runloom_g_t *runloom_g_slab_alloc(void)
 {
     runloom_g_t *g = runloom_g_slab;
     /* OOM fault injection (test-only; inert unless RUNLOOM_FAULT_SPAWN_G is set):
@@ -643,7 +648,7 @@ runloom_g_t *runloom_g_slab_alloc(void)
     return g;
 }
 
-void runloom_g_slab_free(runloom_g_t *g)
+RUNLOOM_NOINLINE void runloom_g_slab_free(runloom_g_t *g)
 {
 #ifdef RUNLOOM_DBG_BADCORO
     g->magic = 0xDEADu;   /* source-hunt: freed-g marker (distinguishes UAF from reuse) */
@@ -871,7 +876,7 @@ static PyObject *spawn_common(runloom_sched_t *s, PyObject *callable,
                               int noyield, size_t stack_size, size_t advice_key)
 {
     runloom_g_t *g;
-    if (__builtin_expect(!runloom_pct.inited, 0))
+    if (__builtin_expect(!__atomic_load_n(&runloom_pct.inited, __ATOMIC_RELAXED), 0))
         runloom_pct_init();   /* read RUNLOOM_PCT_SEED once, before any ready-pop */
     /* Backpressure: admit under the max-fibers limit before allocating.
      * adm: 0 rejected, 1 admitted (no limit), 2 admitted+counted. */

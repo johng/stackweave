@@ -11,15 +11,7 @@
 # "in <function>" covers every line of that function and "<file>:<line> in
 # <function>" pins one site of a function that has other, untriaged accesses.
 
-runloom_sched_parkwake.c.inc:858 in runloom_sched_sleep_until_ex | C5 | g->wake_at write vs the C5 introspection read
-in runloom_chan_select                               | A2 | runloom_select_rng TLS address cached across the park (Darwin)
-in runloom_sched_logical_now_or                      | C1 | lazy getenv cache runloom_sched_logical_on, plain int
-in runloom_preempt_init                              | C2 | time-slicer stop flag / quantum, plain ints across threads
-in runloom_preempt_fini                              | C2 | time-slicer stop flag, plain int across threads
-in runloom_sched_freeze_for_crash                    | C3 | crash handler stores runloom_preempt_enabled, plain int
-in RunloomG_stack                                    | C4 | G.stack() reads another fiber's snap.valid / done without sync
-in runloom_fiber_snapshot                            | C5 | introspection reads g->wake_at of a fiber that is re-sleeping
-runloom_sched_datastack.c.inc:375 in runloom_sched_ready_pop | C6 | PCT lazy init (runloom_pct.enabled) vs a hub's ready_pop
+in RunloomG_stack                                    | C4 | G.stack() reads another fiber's snap.valid / done without sync (accepted: L1-L5 snap seam)
 
 # Not races: reports a test provokes on purpose.
 stack-overflow runloom_crash.c in runloom_crash_recurse | T1 | test_swarm_mn_sched overflows a hub's guard page on purpose; TSan reports it itself

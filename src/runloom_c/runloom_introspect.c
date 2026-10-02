@@ -512,7 +512,9 @@ void runloom_dump_fibers_fd(int fd)
             snprintf(detail, sizeof detail, " fd=%d ev=%s%s", pfd,
                      (pev & 1) ? "R" : "", (pev & 2) ? "W" : "");
         } else if (st == RUNLOOM_GST_PARKED_SLEEP) {
-            double dt = g->wake_at - runloom_sched_monotonic_seconds();
+            double wake_at, dt;
+            __atomic_load(&g->wake_at, &wake_at, __ATOMIC_RELAXED);
+            dt = wake_at - runloom_sched_monotonic_seconds();
             snprintf(detail, sizeof detail, " wake_in=%.3fs", dt);
         }
         if (since > 0 && now > 0 && state_is_parked(st)) {
@@ -639,7 +641,12 @@ runloom_g_info_t *runloom_fiber_snapshot(long *count_out)
                          ? __atomic_load_n(&g->park_fd, __ATOMIC_RELAXED) : -1;
         o->park_events = (st == RUNLOOM_GST_PARKED_NETPOLL)
                          ? __atomic_load_n(&g->park_events, __ATOMIC_RELAXED) : 0;
-        o->wake_at     = (st == RUNLOOM_GST_PARKED_SLEEP) ? g->wake_at : 0.0;
+        /* Relaxed: the state can be stale while the fiber, already running
+         * again, writes its next deadline (TSan C5); a torn-free double is
+         * all a diagnostic needs. */
+        o->wake_at = 0.0;
+        if (st == RUNLOOM_GST_PARKED_SLEEP)
+            __atomic_load(&g->wake_at, &o->wake_at, __ATOMIC_RELAXED);
         since          = __atomic_load_n(&g->state_since_ns, __ATOMIC_RELAXED);
         /* Gate on the timestamps flag: note_transition only stamps
          * state_since_ns while tracking is ON, so a g recycled from the slab

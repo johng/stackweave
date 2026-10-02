@@ -641,8 +641,15 @@ static long runloom_spawn_pace(void)
  * (mn_fiber(hub=N), runloom_mn_fiber_pinned).  Routed through THIS function
  * rather than a second spawn path on purpose: a path that bypassed
  * runloom_greg_link would reopen the parked-frame GC blind spot (CLAUDE.md,
- * "Parked-fiber frames are made GC-visible by the frames anchor"). */
-static int runloom_mn_fiber_core(PyObject *callable, runloom_c_entry_fn c_fn,
+ * "Parked-fiber frames are made GC-visible by the frames anchor").
+ *
+ * Out of line (RUNLOOM_NOINLINE): it reads the hub's thread-locals (tls_hub,
+ * tls_current_g, the pace and fast-path counters, steal_rng), and
+ * runloom_mn_fiber_n calls it in a loop around runloom_g_decref, whose
+ * finalizer can park.  Inlined there, a stale tls_hub would push onto the
+ * ORIGIN hub's deque as its owner. */
+static RUNLOOM_NOINLINE int runloom_mn_fiber_core(PyObject *callable,
+                           runloom_c_entry_fn c_fn,
                            void *c_arg, size_t stack_size, long py_index,
                            int force_hub)
 {

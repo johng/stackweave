@@ -630,8 +630,10 @@ void runloom_chunk_pool_reclaim(void)
 }
 
 /* Pop one chunk off the pool.  Returns NULL when empty; caller falls
- * back to letting PyEval arena-allocate. */
-static _PyStackChunk *runloom_chunk_pool_get(void)
+ * back to letting PyEval arena-allocate.  This and runloom_chunk_pool_put are
+ * out of line (RUNLOOM_NOINLINE): the pool and grace ring are per-thread, and
+ * their callers (the drain, the first-run install) run Python between uses. */
+static RUNLOOM_NOINLINE _PyStackChunk *runloom_chunk_pool_get(void)
 {
     _PyStackChunk *c = runloom_chunk_pool;
     if (c == NULL) return NULL;
@@ -672,7 +674,8 @@ static void runloom_chunk_pool_put_now(_PyStackChunk *c, PyObjectArenaAllocator 
  * rather than a reused/overwritten chunk (the mac/arm64 p200 UAF).  The chunk's
  * `previous` link is untouched while parked (the ring uses its own array), so a
  * still-resident parked chunk never re-enters CPython's datastack chain. */
-static void runloom_chunk_pool_put(_PyStackChunk *c, PyObjectArenaAllocator *alloc)
+static RUNLOOM_NOINLINE void runloom_chunk_pool_put(_PyStackChunk *c,
+                                                    PyObjectArenaAllocator *alloc)
 {
     /* Enqueue c at the tail (newest). */
     c->previous = NULL;

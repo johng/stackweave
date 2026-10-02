@@ -8,10 +8,19 @@
 /* Per-thread PRNG driving Go's uniform-pseudo-random select order (below).
  * xorshift64, same generator the PCT scheduler uses (runloom_sched_datastack).
  * Lazily seeded from the address of the thread-local itself, so distinct
- * threads get distinct streams without a shared, contended seed. */
+ * threads get distinct streams without a shared, contended seed.
+ *
+ * noinline, so every draw resolves the thread-local afresh.  Inlined into
+ * runloom_chan_select, the draw shared that function's single TLS address
+ * computation (clang treats it as constant for the whole function; on Darwin
+ * one tlv_get_addr at entry, spilled), and the select_retry draws after
+ * runloom_coro_yield then advanced the ORIGIN hub's PRNG state whenever the
+ * fiber had migrated -- racing that hub's own selects (TSan finding A2,
+ * docs/dev/TSAN.md).  tools/ci/check_tls_after_park.py checks the built .so
+ * for this class. */
 static RUNLOOM_TLS uint64_t runloom_select_rng = 0;
 
-static uint64_t runloom_select_rand(void)
+static __attribute__((noinline)) uint64_t runloom_select_rand(void)
 {
     uint64_t x;
     /* Controlled replay (RUNLOOM_MN_SEED): draw from the baton controller's

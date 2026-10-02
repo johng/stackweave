@@ -117,6 +117,18 @@
 #  define RUNLOOM_NORETURN /* nothing */
 #endif
 
+/* ---- noinline ----
+ * For a function that touches a thread-local and is called from code that can
+ * park the fiber.  Inlined, its thread-local address computation merges with
+ * the caller's, and the compiler reuses that address after the park -- on the
+ * ORIGIN hub's copy if the fiber migrated (TSan finding A2, docs/dev/TSAN.md).
+ * Out of line, every call resolves the address afresh. */
+#if defined(RUNLOOM_CC_GCC) || defined(RUNLOOM_CC_CLANG) || defined(RUNLOOM_CC_ICC)
+#  define RUNLOOM_NOINLINE __attribute__((noinline))
+#else
+#  define RUNLOOM_NOINLINE /* nothing */
+#endif
+
 /* ---- Thread-local storage ---- */
 /* ASan/TSan ship their own initial-exec TLS and can exhaust the static-TLS
  * surplus a dlopen'd extension needs -> "cannot allocate memory in static
