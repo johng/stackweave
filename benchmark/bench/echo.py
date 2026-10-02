@@ -174,6 +174,12 @@ def main(argv=None):
         st = stackweave_c.stats()
         print("  io_uring loop ran: waits=%s polls=%s"
               % (st.get("iouring_loop_waits"), st.get("iouring_loop_polls")))
+        if os.environ.get("STACKWEAVE_IOURING_MS", "0") != "0":
+            # A stream whose hub has no buffer ring runs single-shot, so the
+            # "+ multishot" banner above is only what was asked for.
+            print("  multishot streams: opened=%s fell_back=%s (buffer ring errno %s)"
+                  % (st.get("iouring_loop_ms_opens"), st.get("iouring_loop_ms_fallbacks"),
+                     st.get("iouring_loop_ms_pbuf_errno")))
     print("  (%.1fs)" % (time.perf_counter() - t0))
     s.write(args.out)
 

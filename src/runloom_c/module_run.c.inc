@@ -403,6 +403,14 @@ static PyObject *m_stats(PyObject *self, PyObject *unused)
                       (Py_ssize_t)runloom_iouring_loop_polls());
     RUNLOOM_STATS_SET("iouring_loop_ms_remote_returns",
                       (Py_ssize_t)runloom_iouring_loop_ms_remote_returns());
+    RUNLOOM_STATS_SET("iouring_loop_ms_posted_returns",
+                      (Py_ssize_t)runloom_iouring_loop_ms_posted_returns());
+    RUNLOOM_STATS_SET("iouring_loop_ms_opens",
+                      (Py_ssize_t)runloom_iouring_loop_ms_opens());
+    RUNLOOM_STATS_SET("iouring_loop_ms_fallbacks",
+                      (Py_ssize_t)runloom_iouring_loop_ms_fallbacks());
+    RUNLOOM_STATS_SET("iouring_loop_ms_pbuf_errno",
+                      (Py_ssize_t)runloom_iouring_loop_ms_pbuf_errno());
     RUNLOOM_STATS_SET("foreign_park_inflight", runloom_foreign_park_inflight());
     RUNLOOM_STATS_SET("netpoll_deadline_heap", runloom_netpoll_deadline_heap_total());
     RUNLOOM_STATS_SET("netpoll_fd_armed",  runloom_netpoll_fd_armed_count());

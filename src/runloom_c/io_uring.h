@@ -330,7 +330,7 @@ int runloom_iouring_loop_ms_enabled(void);
  * stream for its whole life (the calling fiber stays free to migrate).  Returns
  * an opaque handle, or NULL if multishot isn't available (not on a hub with a
  * ring, no per-hub buffer pool, alloc failure) -- the caller then falls back to
- * single-shot loop_recv. */
+ * single-shot loop_recv.  Each call counts as an open or a fallback below. */
 void *runloom_iouring_loop_ms_open(int fd);
 
 /* Cooperatively read up to n bytes from the stream into buf.  Returns bytes
@@ -354,5 +354,17 @@ int runloom_iouring_loop_inbox_pending(runloom_iouring_ring_t *r);
  * so far (stats()["iouring_loop_ms_remote_returns"]): a multishot fiber
  * finished them on a hub other than its stream's. */
 unsigned long long runloom_iouring_loop_ms_remote_returns(void);
+/* Buffers fibers finished off their stream's owner hub and posted to its
+ * inbox (stats()["iouring_loop_ms_posted_returns"]): equals the above after
+ * run() unless a posted return was lost. */
+unsigned long long runloom_iouring_loop_ms_posted_returns(void);
+/* Process totals of loop_ms_open calls that armed a multishot stream, and of
+ * those that returned NULL so the stream fell back to single-shot recv
+ * (stats()["iouring_loop_ms_opens"] / ["iouring_loop_ms_fallbacks"]). */
+unsigned long long runloom_iouring_loop_ms_opens(void);
+unsigned long long runloom_iouring_loop_ms_fallbacks(void);
+/* errno of the last hub buffer-ring setup that failed, 0 if none has
+ * (stats()["iouring_loop_ms_pbuf_errno"]): why the hubs have no pool. */
+int runloom_iouring_loop_ms_pbuf_errno(void);
 
 #endif
