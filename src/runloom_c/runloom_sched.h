@@ -745,6 +745,16 @@ runloom_sched_t *runloom_sched_tls_swap(runloom_sched_t *s);
 /* A hub fiber's own single-thread scheduler, created on first use. */
 runloom_sched_t *runloom_g_nest_sched(runloom_g_t *g);
 
+/* runloom_sched_get_here without creating one (NULL if none yet). */
+runloom_sched_t *runloom_sched_peek_here(void);
+
+/* Stop counting g in its nested scheduler's nest_live (it finished or was
+ * dropped unrun). */
+void runloom_g_nest_uncount(runloom_g_t *g);
+
+/* Drop every fiber queued on s to run (woken, ready, sleeping) unrun. */
+void runloom_sched_drop_queued(runloom_sched_t *s, int *n_ready, int *n_sleep);
+
 /* Non-allocating: the g running on this thread's single-thread sched, or NULL. */
 runloom_g_t *runloom_sched_peek_current(void);
 

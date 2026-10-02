@@ -587,6 +587,7 @@ Py_ssize_t runloom_sched_drain(runloom_sched_t *s)
                 s->current = prev;
                 if (runloom_coro_done(g->coro)) {
                     s->completed++;
+                    runloom_g_nest_uncount(g);
                     runloom_cal_record(g);
                     runloom_g_decref(g);
                 }
@@ -659,6 +660,7 @@ Py_ssize_t runloom_sched_drain(runloom_sched_t *s)
                 runloom_drain_g_datastack();
                 runloom_pystate_load(&sched_snap);
                 s->completed++;
+                runloom_g_nest_uncount(g);
                 runloom_cal_record(g);
                 /* Force-unlink any wait_fd parker this g left linked (it can
                  * complete WHILE parked -- e.g. an accept/recv loop torn down
@@ -712,7 +714,9 @@ Py_ssize_t runloom_sched_drain(runloom_sched_t *s)
                 "fiber(s) still blocked on a channel/park and no way to "
                 "wake them:\n", ndead);
             fflush(stderr);
-            runloom_dump_fibers_fd(2);
+            /* A nest's report lists only its own fibers, not the process's. */
+            if (s->is_nest) runloom_dump_fibers_owner_fd(2, (const void *)s);
+            else runloom_dump_fibers_fd(2);
             if (runloom_deadlock_mode() == 2) {
                 PyErr_Format(PyExc_RuntimeError,
                     "stackweave: all fibers are blocked -- deadlock "

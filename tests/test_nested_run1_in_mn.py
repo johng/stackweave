@@ -336,21 +336,152 @@ def test_a_fiber_left_in_a_nested_run1_stays_with_the_fiber_that_ran_it():
     assert "RES 1 0 1 ValueError('from-A')" in out, out
 
 
-def test_a_fiber_left_behind_by_an_ended_fiber_is_never_resumed():
+@pytest.mark.parametrize("woken", [False, True])
+def test_a_fiber_left_behind_by_an_ended_fiber_is_never_resumed(woken):
     # As above, but A ends without another run(1), freeing its thread state,
     # before B's run(1).  Resuming the leftover there was a use-after-free.
-    # It is reported instead, when A ends.
+    # Woken (queued to run), it is dropped when A ends, as sched_reset drops
+    # queued fibers; still parked, it may yet be woken by whoever holds it, so
+    # it is kept -- never resumed -- and reported.
     out = _run(LEFTOVER + """
     def a():
         hub = rc.mn_current_hub()
         res["a first"] = stackweave.run(1, lambda: rc.fiber(leftover))
-        hold["g"].wake()
+        if WOKEN:
+            hold["g"].wake()
         def later():
             rc.sched_sleep(0.05)      # after A has ended
             b()
         rc.mn_fiber(later, 0, hub)
     under_mn(a, busy_fibers=0)
     print("RES", res["a first"], res.get("b ran"), res.get("exc"))
-    """)
+    """.replace("WOKEN", repr(woken)))
     assert "RES 1 0 None" in out, out
-    assert "can no longer run" in out, out
+    assert ("can no longer run" in out) == (not woken), out
+
+
+def test_aio_leftovers_of_a_loop_closed_in_an_mn_fiber_are_dropped():
+    # loop.close() -> sched_reset() drops what the loop left on the fiber's
+    # own scheduler -- an add_reader watcher parked in wait_fd, a server's
+    # accept fiber -- as on a plain thread, so nothing is left when the fiber
+    # ends ("can no longer run") and a second sched_reset finds nothing.
+    out = _run("""
+        import asyncio
+        from stackweave import aio
+        res = {}
+        a, b = socket.socketpair()
+        async def watcher():
+            asyncio.get_running_loop().add_reader(a.fileno(), lambda: None)
+            await asyncio.sleep(0.01)          # never removed
+        async def server():
+            srv = await asyncio.start_server(lambda r, w: None, "127.0.0.1", 0)
+            await asyncio.sleep(0.01)          # never closed
+        def outer():
+            aio.run(watcher())
+            res["after watcher"] = rc.sched_reset()
+            aio.run(server())
+            res["after server"] = rc.sched_reset()
+        under_mn(outer, busy_fibers=0)
+        print("RES", res["after watcher"], res["after server"])
+    """)
+    assert "RES (0, 0, 0) (0, 0, 0)" in out, out
+    assert "can no longer run" not in out, out
+
+
+def test_loops_closed_while_another_fibers_loop_is_open_leave_nothing():
+    # aio skips sched_reset while any other loop is open; each fiber's own
+    # scheduler then still holds the closed loop's call_later timer.  The
+    # fiber's end drops it, since nothing can run it any more.
+    out = _run("""
+        import asyncio
+        from stackweave import aio
+        async def long_main():
+            await asyncio.sleep(0.3)
+        async def small():
+            asyncio.get_running_loop().call_later(30, lambda: None)
+            await asyncio.sleep(0)
+        def root():
+            stackweave.fiber(lambda: aio.run(long_main()))
+            rc.sched_sleep(0.05)
+            for _ in range(20):
+                stackweave.fiber(lambda: aio.run(small()))
+        stackweave.run(2, root)
+        print("DONE")
+    """)
+    assert "DONE" in out, out
+    assert "can no longer run" not in out, out
+
+
+def test_a_finished_fiber_whose_handle_outlives_its_owner_is_not_reported():
+    out = _run("""
+        keep = []
+        def outer():
+            stackweave.run(1, lambda: keep.append(stackweave.fiber(lambda: 1)))
+        under_mn(outer, busy_fibers=0)
+        print("DONE", [k.done for k in keep])
+    """)
+    assert "DONE [True]" in out, out
+    assert "can no longer run" not in out, out
+
+
+def test_set_stack_size_applies_to_an_mn_fibers_own_scheduler():
+    out = _run("""
+        sizes = []
+        def measure():
+            top, soft, hard = rc._c_stack_limits()
+            sizes.append(abs(top - hard) >> 10)
+        def outer():
+            stackweave.run(1, lambda: rc.fiber(measure))
+            rc.set_stack_size(4 << 20)
+            stackweave.run(1, lambda: rc.fiber(measure))
+        under_mn(outer, busy_fibers=0)
+        print("GREW", sizes[1] > 3 * sizes[0], sizes)
+    """)
+    assert "GREW True" in out, out
+
+
+def test_a_nest_moves_with_its_fiber_to_another_hub():
+    # A leaves two fibers in its nested run(1) -- one parked inside an except
+    # block, one in wait_fd -- moves to the other hub (pin, park, woken by a
+    # sibling), and runs run(1) again there: both resume, on A's thread state.
+    out = _run("""
+        res, hold = {}, {}
+        a, b = socket.socketpair(); a.setblocking(False); b.setblocking(False)
+        def exc_parker():
+            try:
+                raise ValueError("from-A")
+            except ValueError:
+                hold["g"] = rc.current_g()
+                rc.park()
+                res["exc"] = repr(sys.exc_info()[1])
+        def fd_parker():
+            res["ready"] = rc.wait_fd(a.fileno(), 1, 5000)
+            res["data"] = a.recv(16)
+        def outer():
+            def main():
+                rc.fiber(exc_parker)
+                rc.fiber(fd_parker)
+                def stop():
+                    rc.sched_sleep(0.02)
+                    rc.sched_stop()       # return with fd_parker still parked
+                rc.fiber(stop)
+            res["hub1"] = rc.mn_current_hub()
+            res["n1"] = stackweave.run(1, main)
+            hold["g"].wake()
+            me = rc.current_g()
+            me.pin(1 - res["hub1"])
+            def waker():
+                while me.stack()["state"] != "parked":
+                    rc.sched_yield()
+                me.wake()
+            stackweave.fiber(waker)
+            rc.park()                     # resumes on the other hub
+            res["moved"] = rc.mn_current_hub() != res["hub1"]
+            b.send(b"ping")
+            res["n2"] = stackweave.run(1)
+            rc.netpoll_unregister(a.fileno())
+        under_mn(outer, busy_fibers=2)
+        print("RES", res.get("n1"), res.get("moved"), res.get("n2"),
+              res.get("exc"), res.get("ready"), res.get("data"))
+    """)
+    assert "RES 2 True 2 ValueError('from-A') 1 b'ping'" in out, out

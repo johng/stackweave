@@ -176,24 +176,10 @@ static PyObject *m_sched_reset(PyObject *self, PyObject *unused)
      * pushes them back to ready; we then drain ready below. */
     n_parked = runloom_netpoll_drain_parked();
 
-    /* Drain ready queue. */
-    while (!runloom_sched_ready_empty(s)) {
-        runloom_g_t *g = runloom_sched_ready_pop(s);
-        if (g != NULL) {
-            __atomic_store_n(&g->done, 1, __ATOMIC_RELEASE);
-            runloom_g_decref(g);
-            n_ready++;
-        }
-    }
-    /* Drain sleep heap. */
-    while (s->sleep_size > 0) {
-        runloom_g_t *g = runloom_sched_sleep_pop(s);
-        if (g != NULL) {
-            __atomic_store_n(&g->done, 1, __ATOMIC_RELEASE);
-            runloom_g_decref(g);
-            n_sleep++;
-        }
-    }
+    /* Drop everything queued to run: woken (a wake from another thread, or
+     * from an M:N fiber's own context, lands on the wake_list), ready and
+     * sleeping. */
+    runloom_sched_drop_queued(s, &n_ready, &n_sleep);
     return Py_BuildValue("(iii)", n_ready, n_sleep, n_parked);
 }
 

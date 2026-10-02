@@ -108,9 +108,11 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   `STACKWEAVE_DEBUG=sleepheap` (aborts on an off-owner edit) +
   `tests/test_cross_hub_migration.py -k sleep`.
 - **Future-completion wakes are call_soon-FIFO.** `wake_safe` keeps its
-  same-thread fast-path (ready-ring push), detected by PEEKing `runloom_tls_sched`
-  — never `runloom_sched_get()` (mallocs on a foreign waker). Guard:
-  `tests/test_differential_asyncio.py` (sc_call_soon_fifo).
+  same-thread fast-path (ready-ring push), detected by PEEKing the caller's own
+  scheduler with `runloom_sched_peek_here` (`runloom_tls_sched`, or an M:N
+  fiber's own) — never `runloom_sched_get()` / `_get_here()` (they malloc a
+  scheduler on a foreign waker). Guard: `tests/test_differential_asyncio.py`
+  (sc_call_soon_fifo).
 - **A thread state runs code only under C-stack limits for the stack it is
   on.** `runloom_coro_rearm_stackprot` arms the attached state's limits at a
   fiber's own coroutine stack on every resume. 3.14's overflow check
@@ -160,17 +162,22 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   snaps' exc_info chain ends in it), and a shared per-thread scheduler let
   another fiber's run(1) on that hub resume them on its tstate, or on the outer
   g's after it was freed (use-after-free). Spawn and drain entry points take it
-  via `runloom_sched_get_here`. The nested scheduler must not outlive the outer
-  g's tstate as a runnable thing: at the outer g's end it is freed, or, if
-  fibers of it are still alive (`nest_live`), reported and kept but never
-  drained again. (3) **Spawns made in a drain stay in it**
+  via `runloom_sched_get_here`; the wake paths treat it as same-thread for the
+  outer g (`runloom_sched_peek_here`). The nested scheduler must not outlive the
+  outer g's tstate as a runnable thing: at the outer g's end
+  (`runloom_g_nest_sched_release`) everything queued, sleeping or
+  in wait_fd is dropped unrun, as `sched_reset` drops it; it is then freed, or,
+  if fibers parked on a channel/`park()` remain (`park(timeout=)` too: `run()`
+  releases its timer entry when the drain returns; `nest_live` counts
+  unfinished fibers, not live handles), reported and kept but never drained. (3) **Spawns made in a drain stay in it**
   (`runloom_mn_spawns_to_hubs`, which every spawn helper routes on instead of
   `mn_hub_count()`): a waiter there parks in the nest, which would return
   without waiting for work sent to the hubs (gather/JoinSet). Liveness cost: a
   nested run(1) holds its hub until it returns, so that hub's other fibers,
   local FIFO, sub-list, poller and ring wait meanwhile (a 10 ms sleeper there
-  took ~600 ms behind a 500 ms nest) -- the same as any long non-yielding
-  fiber, but nest whole programs (aio.run) on purpose. Guard:
+  took ~600 ms behind a 500 ms nest), as behind any long-running fiber that
+  never yields. So running a whole program nested (an aio.run in an M:N fiber)
+  costs its hub for that long. Guard:
   `tests/test_nested_run1_in_mn.py`.
 - **Preemption never yields mid object-destruction.** Both yield sites (the
   `preempt_init` time-slicer, and the seeded controller's frame-count hook,

@@ -340,10 +340,12 @@ static PyObject *m_netpoll_poll(PyObject *self, PyObject *unused)
  * Phase C grows its own introspection hooks. */
 static PyObject *m_stats(PyObject *self, PyObject *unused)
 {
-    runloom_sched_t *s = runloom_sched_get();
+    /* On an M:N fiber, its own scheduler if it has one. */
+    runloom_sched_t *s = runloom_sched_peek_here();
     Py_ssize_t ready;
     PyObject *d;
     (void)self; (void)unused;
+    if (s == NULL) s = runloom_sched_get();
 
     ready = (Py_ssize_t)((s->ready_tail - s->ready_head) & s->ready_mask);
     d = PyDict_New();
