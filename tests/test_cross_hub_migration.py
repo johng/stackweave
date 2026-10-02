@@ -1106,17 +1106,23 @@ def test_sched_local_wake_is_stolen_promptly_by_a_shallow_idle_hub(monkeypatch):
     the scenario runs with the cap and with it turned off
     (STACKWEAVE_IDLE_UNREG_WAIT_US=0), twice each, interleaved.  The measure
     is the mean STEAL DELAY: a stolen round counts its wake-to-run latency, a
-    round the idle hub never stole within the spin counts the whole 2 ms.  On
-    an M5 it is ~10 us capped vs 1.2-1.3 ms uncapped; with QoS timer
-    coalescing (taskpolicy -c utility, a 200 us sleep takes ~1.8 ms, like a
-    loaded 3-vCPU CI runner) ~0.9 ms vs 1.6-1.8 ms.  An absolute bound
-    (capped H=2 against an H=4 reference) failed on the 3-vCPU macOS CI
-    runner for that reason.  Where a 200 us sleep takes several ms (background
-    QoS: 8-10 ms) the cap cannot show and the test skips.  It also skips,
-    instead of failing, when the process was starved of CPU (a spinning
-    thread got under 30% of a core, e.g. utility QoS under default-QoS CPU
-    hogs: 34-40% stolen, capped ~ uncapped); an unstarved run still
-    asserts, so a real regression fails wherever the CPU is there to show it.
+    round the idle hub never stole within the spin counts the whole spin.  On
+    an M5 it is ~10 us capped vs 0.9-1.3 ms uncapped.  The spin is 2 ms, or 4x
+    what a 200 us sleep really takes if that is longer: a capped wait has to
+    end inside it for the cap to show, and with QoS timer coalescing a 200 us
+    sleep takes 1-10 ms (taskpolicy -c utility / -b) and 2.7 ms on the macOS
+    CI runner, where a fixed 2 ms spin left capped 0.7-0.8x uncapped and the
+    test flaked.  An absolute bound (capped H=2 against an H=4 reference)
+    failed on that runner too.  Each run's delay is taken as a share of its
+    own window.  The spin stops growing at 40 ms, to bound the run time, so
+    it skips where a 200 us sleep takes over 10 ms.  It also skips, instead of
+    failing, when the process was starved of CPU (a spinning thread got under
+    30% of a core, e.g. utility QoS under default-QoS CPU hogs: 34-40% stolen,
+    capped ~ uncapped), and when the timers have a floor (in the median run a
+    1600 us sleep took under 3x a 200 us one; 4-8x is usual, even under QoS
+    coalescing or CPU hogs), under which capped and uncapped waits are equally
+    long.  An unstarved, unfloored run still asserts, so a real regression
+    fails wherever the machine can show it.
     """
     monkeypatch.setenv("STACKWEAVE_IDLE_BACKOFF_MS", "32")   # the cap needs the backoff
     runs = {"capped": [], "uncapped": []}
@@ -1128,37 +1134,65 @@ def test_sched_local_wake_is_stolen_promptly_by_a_shallow_idle_hub(monkeypatch):
                 monkeypatch.setenv("STACKWEAVE_IDLE_UNREG_WAIT_US", "0")
             rc, out, err = run_scenario(STEAL_DELAY, timeout=60)
             m = re.search(r"DELAY=([0-9.]+) STOLEN=([0-9.]+) SLEEP200=([0-9.]+) "
-                          r"CPU=([0-9.]+) SLEEP1600=([0-9.]+) GAP=([0-9.]+)", out)
+                          r"CPU=([0-9.]+) SLEEP1600=([0-9.]+) GAP=([0-9.]+) "
+                          r"SPIN=([0-9.]+)", out)
             if rc != 0 or m is None:
                 print("--- %s scenario stdout ---\n%s\n--- stderr ---\n%s" % (kind, out, err))
                 pytest.fail("%s run rc=%s: %s" % (kind, rc, _key_line(out, err)),
                             pytrace=False)
             runs[kind].append(tuple(float(x) for x in m.groups()))
-    capped = sum(r[0] for r in runs["capped"]) / 2
-    uncapped = sum(r[0] for r in runs["uncapped"]) / 2
+    # Each run sizes its own window, so each delay is compared as a share of
+    # its own: in absolute us, two arms whose windows happened to differ
+    # (background QoS: 17-24 ms within one test) could pass with the cap off.
+    capped = sum(r[0] / r[6] for r in runs["capped"]) / 2
+    uncapped = sum(r[0] / r[6] for r in runs["uncapped"]) / 2
+    capped_us = sum(r[0] for r in runs["capped"]) / 2
+    uncapped_us = sum(r[0] for r in runs["uncapped"]) / 2
     stolen = min(r[1] for r in runs["capped"])
     sleep200 = max(r[2] for kinds in runs.values() for r in kinds)
     cpu = min(r[3] for kinds in runs.values() for r in kinds)
     sleep1600 = max(r[4] for kinds in runs.values() for r in kinds)
     gap = max(r[5] for kinds in runs.values() for r in kinds)
+    spin = max(r[6] for kinds in runs.values() for r in kinds)
+    # How much longer a 1600 us sleep takes than a 200 us one: ~8x where timers
+    # stretch waits in proportion (fine timers, QoS coalescing), near 1 where a
+    # fixed floor or added latency swallows the difference.  The median of the
+    # four runs: a floored machine reads low in every run, while one noisy
+    # probe (2.5x among 6.4-7.0x on macOS CI) must not skip a regression.
+    ratios = sorted(r[4] / r[2] for kinds in runs.values() for r in kinds)
+    stretch = (ratios[1] + ratios[2]) / 2
     # Every failure and skip message carries all of this (and each run's
     # numbers): a CI log shows the assertion line, not the captured stdout.
-    measured = ("capped %.0f us (stolen >= %.0f%%), uncapped %.0f us; a 200 us sleep "
-                "takes %.0f us and a 1600 us one %.0f us; a spinning thread gets "
-                "%.0f%% of a core, its longest clock gap %.0f us; runs (delay us, "
-                "stolen, sleep200 us, cpu, sleep1600 us, gap us) %s"
-                % (capped, 100 * stolen, uncapped, sleep200, sleep1600, 100 * cpu, gap,
+    measured = ("capped %.0f us (%.0f%% of its window, stolen >= %.0f%%), uncapped "
+                "%.0f us (%.0f%%), windows up to %.0f us; a 200 us sleep takes %.0f us "
+                "and a 1600 us one %.0f us (median %.1fx); a spinning thread gets %.0f%% of a "
+                "core, its longest clock gap %.0f us; runs (delay us, stolen, "
+                "sleep200 us, cpu, sleep1600 us, gap us, window us) %s"
+                % (capped_us, 100 * capped, 100 * stolen, uncapped_us, 100 * uncapped,
+                   spin, sleep200, sleep1600, stretch, 100 * cpu, gap,
                    {k: [tuple(round(x, 2) for x in r) for r in v]
                     for k, v in runs.items()}))
     print("mean steal delay: " + measured)
-    if sleep200 > 4000:
-        pytest.skip("timers here are too coarse for the cap to show -- %s" % measured)
+    # The window grows with the timers up to 40 ms (see STEAL_DELAY): past
+    # 10 ms per 200 us sleep it no longer covers 4 of them.
+    if sleep200 > 10000:
+        pytest.skip("timers here are too coarse for the window to cover the "
+                    "cap's waits -- %s" % measured)
+    would_fail = stolen < 0.5 or capped >= 0.7 * uncapped
     # 0.3, not 0.5: equal-QoS oversubscription keeps the probe near 1 on
     # macOS, but Linux CFS gives a fresh thread ~1/N of a core, so 0.5 would
     # skip a real regression on a 2x-oversubscribed ubuntu runner.
-    if (stolen < 0.5 or capped >= 0.7 * uncapped) and cpu < 0.3:
+    if would_fail and cpu < 0.3:
         pytest.skip("the process was starved of CPU, so the idle hub could not "
                     "steal in time -- %s" % measured)
+    # The window assumes timers stretch every wait alike.  Where a floor makes
+    # the capped 200 us waits take as long as the uncapped 0.4-1.6 ms ones, both
+    # hubs idle equally long and the cap cannot show, so a failure there is no
+    # evidence; an unfloored run still asserts.
+    if would_fail and stretch < 3:
+        pytest.skip("this machine's timers have a floor (a 1600 us sleep takes a median "
+                    "%.1fx a 200 us one), so the cap's short waits cannot end "
+                    "sooner -- %s" % (stretch, measured))
     # A FAILED steal is a regression too (a skip would hide it): with stealing
     # broken the sender parks on its next send and hub 0 runs the receiver.
     # 0.5, not 0.9, so a briefly starved hub thread on a loaded runner does not
@@ -1171,8 +1205,8 @@ def test_sched_local_wake_is_stolen_promptly_by_a_shallow_idle_hub(monkeypatch):
 
 
 STEAL_DELAY = r'''
-_watchdog(40)
-N, WARM, SPIN_US = 150, 20, 2000
+_watchdog(50)
+N, WARM = 150, 20
 def sleep_us(length_us):
     """Median wall time of a length_us sleep on a fresh thread: how coarse this
     machine's timers are right now.  A 200 us and a 1600 us sleep that take
@@ -1240,10 +1274,19 @@ def steal_delay_us():
     delay = [l / 1e3 if h != 0 else SPIN_US for l, h in zip(lat, where)]
     return sum(delay) / len(delay), sum(h != 0 for h in where) / len(where)
 slept, slept1600 = sleep_us(200), sleep_us(1600)
+# The spin is the window a capped wait must end inside for the idle hub to
+# steal in time, so it follows how long a 200 us wait really takes here: at a
+# fixed 2 ms, a runner whose 200 us waits took 2.7 ms could not let the cap
+# show (capped 1.0-1.3 ms vs uncapped 1.5-1.6 ms on macOS CI).  4x keeps the
+# uncapped hub inside its unregistered 0.4/0.8/1.6 ms waits (14x a 200 us one
+# nominally, ~12x measured on that runner) for the whole window, as on a
+# machine with fine timers.  At most 40 ms, so a run stays well inside the
+# watchdog; past 10 ms per 200 us sleep the test skips.
+SPIN_US = min(max(2000.0, 4 * slept), 40000.0)
 cpu, gap = cpu_share()
 delay, stolen = steal_delay_us()
-print("DELAY=%.1f STOLEN=%.3f SLEEP200=%.0f CPU=%.2f SLEEP1600=%.0f GAP=%.0f"
-      % (delay, stolen, slept, cpu, slept1600, gap),
+print("DELAY=%.1f STOLEN=%.3f SLEEP200=%.0f CPU=%.2f SLEEP1600=%.0f GAP=%.0f "
+      "SPIN=%.0f" % (delay, stolen, slept, cpu, slept1600, gap, SPIN_US),
       flush=True)
 '''
 
