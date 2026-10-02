@@ -445,6 +445,11 @@ void runloom_netpoll_reset_after_fork(void)
         p->link_count = 0;
         p->churn_last_links = 0;
         p->churn_last_ns = 0;
+        /* "A kick is in flight" is cleared only when this pool's wake eventfd
+         * fires, and the child's eventfd is new and empty: a 1 inherited from
+         * the parent (e.g. a hub kicked by mn_fini that exited without
+         * pumping) would make wake_pump skip every later kick to this pool. */
+        p->wake_pending = 0;
         /* The child needs pollers of its own -- fork shares the parent's
          * kernel epoll/kqueue, and fini above closed the inherited handles --
          * but only for the pools it uses.  So a hub pool goes back to

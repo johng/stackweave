@@ -53,10 +53,17 @@ PRELUDE = textwrap.dedent("""
             s.close()
 
     def io_on_every_hub(n):
+        # How many hubs completed a park.  Counted, not asserted in the fiber:
+        # an exception in a fiber is printed and dropped, and run() returns.
+        done = bytearray(n)
+        def on_hub(h):
+            park_once()
+            done[h] = 1
         def driver():
             for h in range(n):
-                rc.mn_fiber(park_once, hub=h)
+                rc.mn_fiber(lambda h=h: on_hub(h), hub=h)
         stackweave.run(n, driver)
+        return sum(done)
 
     def in_child(fn):
         # Run fn() in a forked child; return what it returns (an int).
@@ -65,10 +72,15 @@ PRELUDE = textwrap.dedent("""
         pid = os.fork()
         if pid == 0:
             os.close(r)
+            code = 1
             try:
                 os.write(w, str(fn()).encode())
+                code = 0
+            except BaseException:
+                import traceback
+                traceback.print_exc()
             finally:
-                os._exit(0)
+                os._exit(code)
         os.close(w)
         out = os.read(r, 64)
         os.close(r)
@@ -104,7 +116,7 @@ def test_a_child_of_an_importer_inherits_no_extra_pollers():
 @pytest.mark.skipif(not needs_free_threading(), reason="M:N needs free-threaded CPython")
 def test_a_child_of_a_hub_runner_inherits_no_extra_pollers():
     out = _run("""
-        io_on_every_hub(4)                 # the parent's hub pools are live
+        assert io_on_every_hub(4) == 4     # the parent's hub pools are live
         parent, child = in_child(nfds)
         print("FDS", parent, child)
     """)
@@ -113,14 +125,11 @@ def test_a_child_of_a_hub_runner_inherits_no_extra_pollers():
 
 @pytest.mark.skipif(not needs_free_threading(), reason="M:N needs free-threaded CPython")
 def test_a_child_creates_hub_pollers_on_first_use():
-    # A hub pool the child never inherited a poller for still parks and wakes.
+    # A hub pool the child never inherited a poller for still parks and wakes,
+    # on every hub, twice: once on pools it creates, once on pools it made.
     out = _run("""
-        io_on_every_hub(4)
-        def child():
-            io_on_every_hub(4)
-            io_on_every_hub(4)             # and again, on the pools it made
-            return 1
-        _, ok = in_child(child)
-        print("OK", ok)
+        assert io_on_every_hub(4) == 4
+        _, parks = in_child(lambda: io_on_every_hub(4) + io_on_every_hub(4))
+        print("PARKS", parks)
     """)
-    assert "OK 1" in out, out
+    assert "PARKS 8" in out, out
