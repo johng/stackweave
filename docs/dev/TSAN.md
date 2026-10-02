@@ -312,15 +312,32 @@ after `runloom_coro_yield`) and exits 1. With the fixes it exits 0 on the
 release (`-O2`), `-O3`, `-Os`, `STACKWEAVE_DEBUG=1` (`-O0`),
 `STACKWEAVE_TSAN=1` and `STACKWEAVE_CTXCHECK=1` builds, and on an
 aggressive-inlining build (`-mno-outline -mllvm -inline-threshold=1000`).
-That last one is the check that the invariant holds by construction rather
-than by the inliner's current choices. Before the out-of-line accessors it
-reported 20 stale uses: `runloom_sched_get` inlined into
-`runloom_park_until(_locked)`, the chunk pool and grace ring into
-`runloom_sched_drain`, and the g slab into `spawn_common`. The CTXCHECK build
-had 481, from the inline lockrank push/pop, the same class in debug-only code.
-Those accessors (`runloom_sched_get`, `runloom_g_slab_alloc/free`,
-`runloom_chunk_pool_get/put`, `runloom_parker_pool_release`, and the lockrank
-and CTXCHECK helpers) are now `RUNLOOM_NOINLINE`.
+The aggressive builds check that the fixes do not lean on today's inlining
+choices. Before the out-of-line accessors the threshold-1000 build reported 20
+stale uses: `runloom_sched_get` inlined into `runloom_park_until(_locked)`, the
+chunk pool and grace ring into `runloom_sched_drain`, and the g slab into
+`spawn_common`. At threshold 5000, `runloom_mn_fiber_core` was inlined into
+`runloom_mn_fiber_n`'s bulk-spawn loop, with 28 stale uses of `tls_hub`,
+`tls_current_g`, the pace and fast-path counters, `self_queued` and
+`steal_rng` across `runloom_g_decref` (a stale `tls_hub` pushes onto the
+origin hub's deque as its owner). The CTXCHECK build had 481, from the inline
+lockrank push/pop, the same class in debug-only code. Those functions
+(`runloom_sched_get`, `runloom_g_slab_alloc/free`,
+`runloom_chunk_pool_get/put`, `runloom_parker_pool_release`,
+`runloom_mn_fiber_core`, and the lockrank and CTXCHECK helpers) are now
+`RUNLOOM_NOINLINE`. Measured: clean up to threshold 1000; at 5000 the 11
+reports left are the two inlining limits below, and none is an unaccepted
+reuse.
+
+Cost: in the default build, callers that inlined these accessors now call
+them. That covers `runloom_sched_get` in the single-thread park and wake paths
+and in `runloom_sched_set_default_stack_size` and `runloom_cal_record`; the
+slab in `spawn_common` and `runloom_g_decref`; the chunk pool in the drain;
+and the parker release in `runloom_netpoll_wait_fd`. Single-thread channel
+ping-pong is about 1.2% slower, which is significant (a second, paired 21-round
+A/B here gave +0.7%, 14 of 21 rounds slower). Spawn and yield are within noise
+(`sleep(0)` +0.9% paired). `runloom_mn_fiber_core` was already out of line in
+the default build, so its attribute changes no default code.
 
 Two reviewed lists keep it at zero:
 
@@ -381,6 +398,15 @@ construction.
 - `-Oz` (machine-outlined helpers with control flow), `-flto=thin` (the swap
   inlined into new callers) and GCC builds (emulated TLS, no `__thread_vars`
   descriptors) are not modelled: the lint exits 2 on them rather than vouch.
+- A register-indexed load from the frame (`ldr x0, [x9, w8, uxtw #3]`, a stack
+  array) cannot be keyed to one slot, so it takes the join of every spilled
+  slot. At threshold 5000 that gives 7 false positives in `runloom_sched_drain`
+  (`runloom_tls_sched`, which is spilled elsewhere in the frame).
+- `ACCEPTED` is keyed by function. At high inline thresholds the accepted
+  `runloom_sim_due_scratch` exposure is inlined into `runloom_netpoll_pump` and
+  `runloom_sim_dispatch_due`, so it is reported again there (4 at threshold
+  5000). That fails closed: the lint never accepts a reuse under a name nobody
+  reviewed.
 
 ## Not covered by this run
 
