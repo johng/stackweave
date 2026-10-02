@@ -13,6 +13,7 @@ teardown across many ring create/destroy cycles, and cancel-wakes a fiber parked
 on an in-flight io_uring op (asserts it returns CANCELLED, not hangs).
 """
 import os
+import platform
 import re
 import subprocess
 import sys
@@ -20,7 +21,7 @@ import sys
 import pytest
 
 from adv_util import (IOURING_LOOP_TRAILER, assert_iouring_loop_ran,
-                      needs_free_threading)
+                      kernel_pbuf_ring_errno, needs_free_threading)
 
 FT = needs_free_threading()
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -105,6 +106,23 @@ def test_iouring_loop_echo_exact_once():
 #     loop_recv/loop_send; multishot=1 the stream's owner-hub inbox, and it
 #     asserts buffers really were returned from another hub (the fibers
 #     migrated while their stream was open), or the test would prove nothing.
+#
+#     multishot=1 rests on two things the oracles above can't see, because a
+#     run without either moves the same bytes:
+#       - multishot armed at all.  A stream falls back to single-shot when its
+#         hub has no provided buffer ring, and the kernel can refuse one
+#         (Ubuntu's 6.8.0-142-generic refuses every valid registration).  All
+#         48 streams must open; the case skips only when an independent probe
+#         shows the KERNEL refuses the registration, and fails when the
+#         runtime's own registration fails on a kernel that accepts it.
+#       - a fiber migrated with its stream open.  A woken echo fiber lands on
+#         its waker's deque, i.e. its stream's owner hub (local wake), and
+#         moves only if an idle hub steals it first, so some runs have no
+#         migration at all (about 1 in 200 on an idle 16-CPU box).
+#         POSTED_RETURNS counts the buffers fibers finished off their stream's
+#         hub; zero means no migration, not a bug, so that run is repeated,
+#         and the case skips only if every attempt had none.  Every posted
+#         buffer must get back to its owner (REMOTE_RETURNS).
 # --------------------------------------------------------------------------
 _ECHO_MIGRATE = r"""
 import sys, struct, faulthandler; sys.path.insert(0, "src")
@@ -144,15 +162,25 @@ def main():
         ln.close()
 stackweave.run(4, main)
 faulthandler.cancel_dump_traceback_later()
+st = rc.stats()
 sys.stdout.write("MIGRATE_OK %d\n" % sum(ok))
-sys.stdout.write("REMOTE_RETURNS %d\n" % rc.stats()["iouring_loop_ms_remote_returns"])
-sys.stdout.write("LOOP_POLLS %d\n" % rc.stats()["iouring_loop_polls"])
+sys.stdout.write("LOOP_POLLS %d\n" % st["iouring_loop_polls"])
+sys.stdout.write("MS_OPENS %d\n" % st["iouring_loop_ms_opens"])
+sys.stdout.write("MS_FALLBACKS %d\n" % st["iouring_loop_ms_fallbacks"])
+sys.stdout.write("MS_PBUF_ERRNO %d\n" % st["iouring_loop_ms_pbuf_errno"])
+sys.stdout.write("POSTED_RETURNS %d\n" % st["iouring_loop_ms_posted_returns"])
+sys.stdout.write("REMOTE_RETURNS %d\n" % st["iouring_loop_ms_remote_returns"])
 """
 
+# A run with no fiber finishing a buffer off its stream's hub is rare (1 in
+# ~800 measured on a 16-core box), so four in a row means migration with a
+# stream open has stopped happening -- a regression this guard exists to catch.
+_MIGRATE_ATTEMPTS = 4
 
-@needs_iouring
-@pytest.mark.parametrize("multishot", ["1", "0"])
-def test_iouring_loop_echo_survives_fiber_migration(multishot):
+
+def _run_echo_migrate(multishot):
+    """One echo run, checked against the oracles that hold with or without
+    multishot; returns (CompletedProcess, {stat: int})."""
     env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src",
                STACKWEAVE_IOURING_LOOP="1", STACKWEAVE_IOURING_MS=multishot)
     p = subprocess.run([PY, "-c", _ECHO_MIGRATE + IOURING_LOOP_TRAILER],
@@ -163,18 +191,59 @@ def test_iouring_loop_echo_survives_fiber_migration(multishot):
         "stdout=%s\nstderr=%s" % (p.stdout[-400:], p.stderr[-2000:]))
     assert "MIGRATE_OK 48" in p.stdout, (p.stdout[-400:], p.stderr[-800:])
     assert_iouring_loop_ran(p)
+    st = {k: int(v) for k, v in re.findall(r"^([A-Z_]+) (-?\d+)$",
+                                            p.stdout, re.M)}
     # Completions must be served BETWEEN fibers (the per-round loop_poll at
     # the pick step or the 64-turn self-pump), not only when a hub idles: with
     # 4 hubs and 96 fibers the hubs rarely idle, so an idle-only service would
     # leave ops waiting a whole busy stretch.
-    m = re.search(r"LOOP_POLLS (\d+)", p.stdout)
-    assert m and int(m.group(1)) > 0, (
+    assert st["LOOP_POLLS"] > 0, (
         "no per-round ring poll drained a completion\n" + p.stdout[-400:])
-    if multishot == "1":
-        m = re.search(r"REMOTE_RETURNS (\d+)", p.stdout)
-        assert m and int(m.group(1)) > 0, (
-            "no multishot buffer was returned from another hub: the fibers "
-            "never migrated with a stream open\n" + p.stdout[-400:])
+    return p, st
+
+
+@needs_iouring
+@pytest.mark.parametrize("multishot", ["1", "0"])
+def test_iouring_loop_echo_survives_fiber_migration(multishot):
+    p, st = _run_echo_migrate(multishot)
+    if multishot == "0":
+        return
+    if st["MS_OPENS"] == 0:
+        kerr = kernel_pbuf_ring_errno()
+        assert kerr, (
+            "multishot never armed, yet %s: the runtime's own buffer-ring "
+            "registration failed\n%s\n%s"
+            % ("this kernel accepts a provided buffer ring" if kerr == 0
+               else "the kernel could not be probed",
+               p.stdout[-400:], p.stderr[-800:]))
+        # The fallback must be visible: the errno stat and the one-time
+        # warning are what tell this run from a multishot one.
+        assert st["MS_PBUF_ERRNO"] == kerr, (
+            "the hubs' buffer-ring failure was not recorded as the kernel's "
+            "errno %d\n%s" % (kerr, p.stdout[-400:]))
+        assert "provided buffer ring could not be registered" in p.stderr, (
+            "no capability-degrade warning\n" + p.stderr[-800:])
+        pytest.skip(
+            "multishot recv never armed: this kernel (%s) refuses every valid "
+            "io_uring provided buffer ring (errno %d, %s), so all 48 streams "
+            "fell back to single-shot recv, which passed the run's oracles "
+            "and is what the [0] case covers"
+            % (platform.release(), kerr, os.strerror(kerr)))
+    for attempt in range(1, _MIGRATE_ATTEMPTS + 1):
+        if attempt > 1:
+            p, st = _run_echo_migrate(multishot)
+        assert st["MS_OPENS"] == 48 and st["MS_FALLBACKS"] == 0, (
+            "not every echo stream ran multishot\n" + p.stdout[-400:])
+        assert st["REMOTE_RETURNS"] == st["POSTED_RETURNS"], (
+            "a buffer finished off its stream's hub never got back to the "
+            "owner's pool\n" + p.stdout[-400:])
+        if st["POSTED_RETURNS"] > 0:
+            return
+    pytest.fail(
+        "no echo fiber finished a buffer off its stream's hub in %d runs in a "
+        "row (a woken fiber moves only when an idle hub steals it; a single "
+        "such run is ~1 in 800): migration with a stream open has stopped\n%s"
+        % (_MIGRATE_ATTEMPTS, p.stdout[-400:]), pytrace=False)
 
 
 # --------------------------------------------------------------------------

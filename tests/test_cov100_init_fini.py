@@ -53,7 +53,7 @@ import textwrap
 
 import pytest
 
-from adv_util import needs_free_threading
+from adv_util import needs_free_threading, needs_rlimit_nproc_thread_cap
 
 FT = needs_free_threading()
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -71,6 +71,9 @@ _LINUX_ONLY = pytest.mark.skipif(
     not sys.platform.startswith("linux"),
     reason="RLIMIT_NPROC thread cap + /proc/self/status are Linux-specific "
            "(Darwin RLIMIT_NPROC limits fork() not threads; no /proc)")
+# ...and even on Linux the cap is ignored for root and CAP_SYS_RESOURCE /
+# CAP_SYS_ADMIN, so the spawn-failure drivers below also need it to bite.
+_NPROC_CAPS_THREADS = needs_rlimit_nproc_thread_cap()
 
 
 def _run_worker(body, env_extra=None, timeout=60):
@@ -112,6 +115,7 @@ def _assert_clean(p, marker):
 # L146-172 : runloom_thread_create failure -> mn_init partial-cleanup + OSError
 # --------------------------------------------------------------------------
 @_LINUX_ONLY
+@_NPROC_CAPS_THREADS
 def test_mn_init_thread_spawn_failure_first_hub():
     """All hub pthread_creates fail (RLIMIT_NPROC=1) -> mn_init marks every hub
     stopping, restores the saved tstate, frees runloom_hubs, sets OSError, and
@@ -145,6 +149,7 @@ def test_mn_init_thread_spawn_failure_first_hub():
 
 
 @_LINUX_ONLY
+@_NPROC_CAPS_THREADS
 def test_mn_init_thread_spawn_failure_partial():
     """A FEW hub threads spawn, then EAGAIN -> mn_init also runs the j<i join
     loop (L149-152) over the already-spawned hubs before unwinding.  We grant

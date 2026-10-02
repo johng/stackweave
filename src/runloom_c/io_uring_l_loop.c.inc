@@ -194,6 +194,52 @@ static unsigned runloom_loop_ms_pbuf_count(void)
     return (unsigned)cur;
 }
 
+/* Multishot outcomes, as process totals updated where they happen (once per
+ * hub at arm, once per stream at open: rare next to the per-chunk path).  A
+ * STACKWEAVE_IOURING_MS run whose streams all fell back to single-shot moves
+ * the same bytes as one that ran multishot, so without these the two look
+ * identical from outside: stats()["iouring_loop_ms_opens"] /
+ * ["iouring_loop_ms_fallbacks"] / ["iouring_loop_ms_pbuf_errno"]. */
+static unsigned long long runloom_iouring_loop_ms_opens_total = 0;
+static unsigned long long runloom_iouring_loop_ms_fallbacks_total = 0;
+static int runloom_iouring_loop_ms_pbuf_errno_last = 0;
+
+unsigned long long runloom_iouring_loop_ms_opens(void)
+{
+    return __atomic_load_n(&runloom_iouring_loop_ms_opens_total, __ATOMIC_RELAXED);
+}
+
+unsigned long long runloom_iouring_loop_ms_fallbacks(void)
+{
+    return __atomic_load_n(&runloom_iouring_loop_ms_fallbacks_total,
+                           __ATOMIC_RELAXED);
+}
+
+int runloom_iouring_loop_ms_pbuf_errno(void)
+{
+    return __atomic_load_n(&runloom_iouring_loop_ms_pbuf_errno_last,
+                           __ATOMIC_RELAXED);
+}
+
+/* A hub's buffer ring could not be set up, so every stream opened on that hub
+ * falls back to single-shot recv.  Record why, and say so once: the env var
+ * asked for multishot, and the fallback is otherwise silent.  Seen in the
+ * field: Ubuntu's 6.8.0 kernel (6.8.0-142-generic) answers EVERY valid
+ * IORING_REGISTER_PBUF_RING with EINVAL -- its check of the registration's
+ * reserved words is inverted (it accepts the call only when resv is NONZERO),
+ * so liburing fails the same way there.  Newer kernels register fine. */
+static void runloom_iouring_loop_ms_pbuf_failed(int err)
+{
+    static int warned = 0;
+    __atomic_store_n(&runloom_iouring_loop_ms_pbuf_errno_last, err,
+                     __ATOMIC_RELAXED);
+    if (__atomic_exchange_n(&warned, 1, __ATOMIC_RELAXED) == 0)
+        fprintf(stderr, "[stackweave] io_uring capability degrade: the hub "
+                "provided buffer ring could not be registered (errno %d, %s) "
+                "-- STACKWEAVE_IOURING_MS streams fall back to single-shot "
+                "recv\n", err, strerror(err));
+}
+
 /* Register a provided buffer ring on THIS hub ring (bgid RUNLOOM_LOOP_MS_BGID).
  * Returns 0 on success, -1 on failure (caller leaves ms_pool NULL -> multishot
  * ms_open returns NULL -> the echo falls back to single-shot).  Mirrors the
@@ -213,7 +259,11 @@ static int runloom_iouring_loop_ms_pbuf_setup(runloom_iouring_ring_t *r)
     if (page <= 0) page = 4096;
     if (posix_memalign(&pool, (size_t)page, pool_total) != 0)  pool = NULL;
     if (posix_memalign(&bring, (size_t)page, bring_size) != 0) bring = NULL;
-    if (pool == NULL || bring == NULL) { free(pool); free(bring); return -1; }
+    if (pool == NULL || bring == NULL) {
+        free(pool); free(bring);
+        runloom_iouring_loop_ms_pbuf_failed(ENOMEM);
+        return -1;
+    }
     memset(bring, 0, bring_size);
     memset(&reg, 0, sizeof(reg));
     reg.ring_addr    = (uintptr_t)bring;
@@ -222,7 +272,10 @@ static int runloom_iouring_loop_ms_pbuf_setup(runloom_iouring_ring_t *r)
     reg.flags        = 0;
     if (sys_io_uring_register(r->ring_fd, IORING_REGISTER_PBUF_RING,
                               &reg, 1) != 0) {
-        free(pool); free(bring); return -1;
+        int err = errno;
+        free(pool); free(bring);
+        runloom_iouring_loop_ms_pbuf_failed(err);
+        return -1;
     }
     bufs = (struct runloom_iouring_buf *)bring;
     for (i = 0; i < count; i++) {
@@ -743,6 +796,19 @@ unsigned long long runloom_iouring_loop_ms_remote_returns(void)
                            __ATOMIC_RELAXED);
 }
 
+/* The consumer's side of the same hand-off: buffers a fiber finished off its
+ * stream's owner hub and posted to the owner's inbox.  Counted as they are
+ * posted (an atomic on the already-slow off-owner path), so after run() it
+ * equals ms_remote_returns unless a posted buffer never got back to its pool,
+ * and a zero says no fiber migrated with a stream open. */
+static unsigned long long runloom_iouring_loop_ms_posted_returns_total = 0;
+
+unsigned long long runloom_iouring_loop_ms_posted_returns(void)
+{
+    return __atomic_load_n(&runloom_iouring_loop_ms_posted_returns_total,
+                           __ATOMIC_RELAXED);
+}
+
 /* Tear down the loop wake fd (the polls die with the ring at destroy). */
 void runloom_iouring_loop_hub_disarm(runloom_iouring_ring_t *r)
 {
@@ -971,6 +1037,8 @@ static void runloom_loop_ms_give_back(runloom_loop_ms_t *h, unsigned bid)
     t = h->ret_tail;                     /* fiber-owned */
     h->ret_bid[t % h->q_cap] = (uint16_t)bid;
     __atomic_store_n(&h->ret_tail, t + 1, __ATOMIC_RELEASE);
+    __atomic_add_fetch(&runloom_iouring_loop_ms_posted_returns_total, 1,
+                       __ATOMIC_RELAXED);
     runloom_loop_ms_post(h, 0);
 }
 
@@ -1091,15 +1159,20 @@ void runloom_iouring_loop_inbox_drain(runloom_iouring_ring_t *r)
  * falls back to single-shot recv.  Arms the persistent SQE immediately. */
 void *runloom_iouring_loop_ms_open(int fd)
 {
-    runloom_loop_ms_t *h;
+    runloom_loop_ms_t *h = NULL;
     runloom_iouring_ring_t *r = runloom_mn_current_iouring_ring();
-    unsigned cap;
-    size_t need;
-    if (r == NULL || r->ms_pool == NULL) return NULL;
-    cap  = r->ms_count;
-    need = sizeof(*h) + (size_t)cap * 3u * sizeof(uint16_t);
-    h = (runloom_loop_ms_t *)malloc(need);
-    if (h == NULL) return NULL;
+    unsigned cap = 0;
+    if (r != NULL && r->ms_pool != NULL) {
+        cap = r->ms_count;
+        h = (runloom_loop_ms_t *)malloc(sizeof(*h) +
+                                        (size_t)cap * 3u * sizeof(uint16_t));
+    }
+    if (h == NULL) {
+        __atomic_add_fetch(&runloom_iouring_loop_ms_fallbacks_total, 1,
+                           __ATOMIC_RELAXED);
+        return NULL;
+    }
+    __atomic_add_fetch(&runloom_iouring_loop_ms_opens_total, 1, __ATOMIC_RELAXED);
     memset(h, 0, sizeof(*h));
     h->op.type = RUNLOOM_IOURING_OP_MULTISHOT;
     h->op.ring = r;

@@ -70,7 +70,7 @@ import textwrap
 import pytest
 
 import stackweave_c as rc
-from adv_util import needs_free_threading
+from adv_util import needs_free_threading, needs_rlimit_nproc_thread_cap
 
 FT = needs_free_threading()
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -267,6 +267,7 @@ print("INVAR_OK")
     not sys.platform.startswith("linux"),
     reason="forces thread-create failure via RLIMIT_NPROC + reads /proc/self/status; "
            "both Linux-specific (Darwin RLIMIT_NPROC caps fork() not threads; no /proc)")
+@needs_rlimit_nproc_thread_cap()
 def test_prewarm_background_and_daemon_thread_spawn_failure():
     """Pin RLIMIT_NPROC at the current thread count so no new OS thread can be
     created.  Then:

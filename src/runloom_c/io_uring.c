@@ -403,5 +403,9 @@ int runloom_iouring_loop_inbox_pending(runloom_iouring_ring_t *r)
     (void)r; return 0;
 }
 unsigned long long runloom_iouring_loop_ms_remote_returns(void) { return 0; }
+unsigned long long runloom_iouring_loop_ms_posted_returns(void) { return 0; }
+unsigned long long runloom_iouring_loop_ms_opens(void) { return 0; }
+unsigned long long runloom_iouring_loop_ms_fallbacks(void) { return 0; }
+int runloom_iouring_loop_ms_pbuf_errno(void) { return 0; }
 
 #endif

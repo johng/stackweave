@@ -182,7 +182,16 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   to the ring's inbox, which only the owner drains
   (`runloom_iouring_loop_inbox_drain`, at its loop top). Caching a ring across
   a park (the old all-C echo) lost SQEs and stranded fibers. Guard: `tests/test_cov100b_iouring.py::test_iouring_loop_echo_survives_fiber_migration`
-  (and big_100 p223, which stalls within seconds without it).
+  (and big_100 p223, which stalls within seconds without it). Multishot needs
+  a provided buffer ring per hub and falls back to single-shot when the kernel
+  refuses one -- Ubuntu's 6.8.0-142-generic refuses every valid one (its
+  reserved-word check is inverted) -- so a multishot run there is a
+  single-shot run: `stats()["iouring_loop_ms_opens"]` / `_fallbacks` /
+  `_pbuf_errno` tell them apart, and `adv_util.kernel_pbuf_ring_errno()` asks
+  the kernel directly. Migration with a stream open is opportunistic (a woken
+  fiber moves only when stolen), so the guard reads
+  `iouring_loop_ms_posted_returns`, repeats a run that had none (~1 in 800),
+  and fails if four in a row had none.
 - **The loop backend's ring is serviced every scheduling round, never only at
   hub idle.** `hub_main` calls `runloom_iouring_loop_poll` (submit deferred
   SQEs, post + drain completions, non-blocking) when its local queues run dry,

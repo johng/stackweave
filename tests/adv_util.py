@@ -351,3 +351,96 @@ def assert_iouring_loop_ran(p):
     assert m is not None and int(m.group(1)) > 0, (
         "the io_uring loop backend did not run (no hub ring wait)\n"
         + p.stdout[-400:] + "\n" + p.stderr[-800:])
+
+
+def kernel_pbuf_ring_errno():
+    """The errno with which THIS kernel refuses a valid io_uring provided buffer
+    ring registration (IORING_REGISTER_PBUF_RING), 0 if it accepts one, or None
+    if io_uring itself can't be set up here.
+
+    Multishot recv (STACKWEAVE_IOURING_MS) needs a buffer ring on every hub
+    ring and falls back to single-shot recv when the kernel refuses one, so a
+    multishot test must tell "the kernel can't" from "the runtime broke".  This
+    asks the kernel directly, with raw syscalls and the registration built as
+    the UAPI documents it (page-aligned ring, power-of-two entries, zero flags
+    and reserved words), so a nonzero result is the kernel's verdict and not a
+    runtime bug.  Ubuntu's 6.8.0-142-generic kernel returns EINVAL here for
+    every valid call: its reserved-word check is inverted."""
+    import ctypes
+    import mmap
+    import platform
+    import struct
+    if not sys.platform.startswith("linux") or \
+            platform.machine() not in ("x86_64", "aarch64"):
+        return None
+    nr_setup, nr_register, register_pbuf_ring = 425, 427, 22   # same on both arches
+    libc = ctypes.CDLL(None, use_errno=True)
+    params = ctypes.create_string_buffer(120)          # struct io_uring_params
+    fd = libc.syscall(ctypes.c_long(nr_setup), ctypes.c_long(8), params)
+    if fd < 0:
+        return None
+    ring = mmap.mmap(-1, mmap.PAGESIZE)                # 8 entries x 16 B fit
+    cring = ctypes.c_char.from_buffer(ring)
+    try:
+        reg = ctypes.create_string_buffer(struct.pack(
+            "=QIHH3Q", ctypes.addressof(cring), 8, 0, 0, 0, 0, 0))
+        rc = libc.syscall(ctypes.c_long(nr_register), ctypes.c_long(fd),
+                          ctypes.c_long(register_pbuf_ring), reg,
+                          ctypes.c_long(1))
+        return ctypes.get_errno() if rc < 0 else 0
+    finally:
+        os.close(fd)                                   # drops the kernel's pin
+        del cring
+        ring.close()
+
+
+_NPROC_PROBE = r"""
+import resource, threading
+soft, hard = resource.getrlimit(resource.RLIMIT_NPROC)
+resource.setrlimit(resource.RLIMIT_NPROC, (1, hard))
+try:
+    t = threading.Thread(target=lambda: None)
+    t.start()
+    t.join()
+    print("NOT_CAPPED")
+except RuntimeError:
+    print("CAPPED")
+"""
+
+
+def rlimit_nproc_caps_threads():
+    """True iff lowering RLIMIT_NPROC actually stops this process creating a
+    thread, which the thread-spawn-failure tests rely on.
+
+    It does not for root, nor for any process with CAP_SYS_RESOURCE or
+    CAP_SYS_ADMIN: the kernel exempts them from the limit at clone(), so under
+    those the tests' "no new threads" limit is ignored and every spawn
+    succeeds.  Probed for real in a child (limit 1, start one thread) rather
+    than inferred from the euid, since a capability set can exempt a non-root
+    user, and root in a container that maps it to an unprivileged host uid is
+    capped.  False off Linux, where the limit caps fork()ed processes, not
+    threads.  Only an explicit NOT_CAPPED answer returns False: a probe that
+    crashes or hangs leaves the tests to run and fail loudly rather than skip
+    them everywhere."""
+    import subprocess
+    if not sys.platform.startswith("linux"):
+        return False
+    try:
+        p = subprocess.run([sys.executable, "-c", _NPROC_PROBE],
+                           capture_output=True, text=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        return True
+    return p.stdout.strip() != "NOT_CAPPED"
+
+
+def needs_rlimit_nproc_thread_cap():
+    """A skipif mark for tests that force a thread-spawn failure by lowering
+    RLIMIT_NPROC: skip, saying why, where the limit can't take effect."""
+    import pytest
+    capped = rlimit_nproc_caps_threads()
+    return pytest.mark.skipif(
+        not capped,
+        reason="RLIMIT_NPROC does not stop thread creation here (euid %d: the "
+               "kernel exempts root and CAP_SYS_RESOURCE/CAP_SYS_ADMIN, and "
+               "off Linux it caps processes, not threads), so a thread-spawn "
+               "failure can't be forced" % os.geteuid())
