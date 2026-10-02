@@ -323,6 +323,11 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
     /* trace conformance: this thread just created + gilstate-bound its tstate */
     runloom_gilstate_trace("Create", h->id, h->id);
     PyEval_RestoreThread(hts);
+    /* Arm the hub state's C-stack limits at THIS thread's stack now.  CPython
+     * sets them lazily, on the first deep-enough check, which a hub state that
+     * never runs bytecode may never reach; runloom_iframe_brc_release lends
+     * them to a fiber's state for merges it runs on this stack. */
+    PyUnstable_ThreadState_ResetStackProtection(hts);
     /* Per-OS-thread coro-backend setup (arms this thread's crash-handler
      * sigaltstack).  Must run BEFORE the first runloom_coro_resume. */
     runloom_coro_thread_init();

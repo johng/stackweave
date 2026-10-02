@@ -255,6 +255,24 @@ void runloom_iframe_brc_adopt(PyThreadState *fiber, PyThreadState *hub)
     }
 }
 
+/* Merges release() ran on the hub's stack, and how many of them found the stack
+ * pointer outside the C-stack window of the state they ran under
+ * (stats()["brc_release_merges"] / ["brc_release_merges_off_stack"]; the second
+ * must stay 0, see release()). */
+static unsigned long long runloom_brc_release_merges_total = 0;
+static unsigned long long runloom_brc_release_merges_off_stack_total = 0;
+
+unsigned long long runloom_iframe_brc_release_merges(void)
+{
+    return __atomic_load_n(&runloom_brc_release_merges_total, __ATOMIC_RELAXED);
+}
+
+unsigned long long runloom_iframe_brc_release_merges_off_stack(void)
+{
+    return __atomic_load_n(&runloom_brc_release_merges_off_stack_total,
+                           __ATOMIC_RELAXED);
+}
+
 void runloom_iframe_brc_release(PyThreadState *fiber, PyThreadState *hub)
 {
     _PyThreadStateImpl *f = (_PyThreadStateImpl *)fiber;
@@ -274,10 +292,57 @@ void runloom_iframe_brc_release(PyThreadState *fiber, PyThreadState *hub)
     if (pending) {
         /* The fiber's state is current on this thread, the owner of every
          * object queued to it (its tid is ours), and no fiber frame is
-         * executing: a legitimate safe point for the eval loop's dispatcher. */
+         * executing: a legitimate safe point for the eval loop's dispatcher.
+         *
+         * But this runs on the HUB's stack, and the fiber's C-stack limits
+         * describe its own coroutine stack (runloom_coro_rearm_stackprot arms
+         * them on every resume).  Every _Py_Dealloc in the merge measures the
+         * stack pointer against them, and with the hub's SP below the fiber's
+         * stack that margin comes out negative: each object is parked on the
+         * fiber's trashcan list (delete_later) instead of freed, and only a
+         * later dealloc on that state frees the list -- never, if the fiber
+         * stops deallocating, since PyThreadState_Clear doesn't.  That leaked
+         * a memoryview, and so pinned its array, in
+         * test_memory_array_view_survives_a_migration whenever the stacks
+         * happened to lie that way round.  Lend the fiber the hub's limits for
+         * the merge (runloom_hub_main arms them), then put its own back. */
+        uintptr_t top = f->c_stack_top, soft = f->c_stack_soft_limit;
+        uintptr_t hard = f->c_stack_hard_limit;
+        uintptr_t sp;
+        f->c_stack_top = h->c_stack_top;
+        f->c_stack_soft_limit = h->c_stack_soft_limit;
+        f->c_stack_hard_limit = h->c_stack_hard_limit;
+        sp = _Py_get_machine_stack_pointer();
+        __atomic_add_fetch(&runloom_brc_release_merges_total, 1, __ATOMIC_RELAXED);
+#if _Py_STACK_GROWS_DOWN
+        if (sp < f->c_stack_hard_limit || sp > f->c_stack_top)
+#else
+        if (sp > f->c_stack_hard_limit || sp < f->c_stack_top)
+#endif
+            __atomic_add_fetch(&runloom_brc_release_merges_off_stack_total, 1,
+                               __ATOMIC_RELAXED);
         _Py_set_eval_breaker_bit(fiber, _PY_EVAL_EXPLICIT_MERGE_BIT);
         (void)runloom_iframe_service_merge_queue(fiber);
+        f->c_stack_top = top;
+        f->c_stack_soft_limit = soft;
+        f->c_stack_hard_limit = hard;
     }
+}
+
+/* Per-g states freed with deallocations still parked on their trashcan list
+ * (stats()["fiber_trash_drained"]). */
+static unsigned long long runloom_fiber_trash_drained_total = 0;
+
+unsigned long long runloom_iframe_fiber_trash_drained(void)
+{
+    return __atomic_load_n(&runloom_fiber_trash_drained_total, __ATOMIC_RELAXED);
+}
+
+void runloom_iframe_drain_trashcan(PyThreadState *ts)
+{
+    if (ts == NULL || ts->delete_later == NULL) return;
+    __atomic_add_fetch(&runloom_fiber_trash_drained_total, 1, __ATOMIC_RELAXED);
+    _PyTrash_thread_destroy_chain(ts);
 }
 
 int runloom_tstate_in_destruction(PyThreadState *ts)
