@@ -27,8 +27,13 @@ with the fix (more under load), and could not tell the fix from the bug.
 So that test now arranges the condition instead of racing for it: the signal
 is raised on a helper thread, which leaves the scheduler's block (kevent or
 epoll_wait) running, and only while introspection shows both fibers parked.
-The block then ends exactly at the sleeper's deadline with the signal pending
-and the sleeper due -- every time, on both backends.
+No bytecode runs between the trip and the scheduler's next probe: the block
+ends at the sleeper's deadline -- or earlier, on the sender's writability
+while the connection first fills, when only the sender is ready to run and
+the probe hands it the signal -- with the signal pending.  At the deadline the
+sleeper is due, which is the bug's condition; the scenario reports whether the
+sleeper was still in that same sleep after the trip (VALID), so a run that
+did not reach it is never mistaken for one that did.
 
 ASSERT THE RECIPIENT, NOT THE OUTCOME
 -------------------------------------
@@ -71,7 +76,8 @@ needs_sigalrm = pytest.mark.skipif(
 # in the pump until the observer's deadline -- so the scheduler probes with the
 # observer due in the ready ring, and no fiber has run bytecode since the trip.
 # VALID=1 when the observer was still in that same sleep after the trip; that is
-# what makes the recipient a pure function of the scheduler's choice.
+# what makes the recipient a pure function of the scheduler's choice.  VALID=0
+# (the helper caught the observer between sleeps) proves nothing either way.
 _W1 = r'''
 import faulthandler, os, signal, socket, sys, threading, time
 sys.path.insert(0, "src")
@@ -114,25 +120,34 @@ def client():
     box["done"] = True
     c.close()
 
-def observer_sleep():
-    # The observer's current sleep, if both fibers are parked: its wake_in.
+def observer_sleep(need_io=True):
+    # The observer's current sleep: its wake_in.  Before the trip both fibers
+    # must be parked (the sender on the socket); after it, only the observer's
+    # sleep matters -- the sender may be runnable on a writability wake while
+    # the connection first fills, which the scheduler handles either way.
     fs = rc.fibers()
     sleeping = [f["wake_in"] for f in fs if f["state"] == "sleep"]
     io = [f for f in fs if f["state"] == "io-wait" and f["events"] == "W"]
-    return sleeping[0] if len(fs) == 2 and sleeping and io else None
+    if len(fs) != 2 or len(sleeping) != 1 or (need_io and not io):
+        return None
+    return sleeping[0]
 
 def helper():
     deadline = time.monotonic() + 10
+    valid = 0
     while time.monotonic() < deadline:
         before = observer_sleep()
         # Early in a sleep, so the trip is long done before the deadline.
         if before is not None and before > SLEEP / 2:
             signal.pthread_kill(threading.get_ident(), signal.SIGALRM)
-            after = observer_sleep()
-            box["valid"] = int(after is not None and 0 < after <= before)
-            return
+            after = observer_sleep(need_io=False)
+            valid = int(after is not None and 0 < after <= before)
+            break
         time.sleep(0.0005)
-    box["valid"] = 0
+    box["valid"] = valid
+    # Now, so a run that then hangs or crashes is still labelled.
+    sys.stdout.write("VALID=%d\n" % valid)
+    sys.stdout.flush()
 
 faulthandler.dump_traceback_later(20, exit=True)
 threading.Thread(target=helper, daemon=True).start()
@@ -143,6 +158,7 @@ except KeyboardInterrupt:
     box.setdefault("who", "out-of-run")
 faulthandler.cancel_dump_traceback_later()
 sys.stdout.write("W1 who=%s VALID=%d\n" % (box.get("who", "hung"), box.get("valid", 0)))
+sys.stdout.flush()
 '''
 
 
@@ -166,18 +182,24 @@ def test_parked_fiber_outranks_a_due_sleeper():
     until the faulthandler timeout.  80/80 failures on Linux at that commit.
 
     The scenario (see _W1 and the module docstring) makes that condition hold
-    on every run, so the old gate fails it every time and the fixed one never
-    does.  A run where the helper's trip could not be shown to have happened
-    while both fibers were parked (VALID=0: the machine stalled the helper past
-    half the observer's sleep) proves nothing either way, so it is retried.
+    whenever it reports VALID=1, so the old gate fails it every time and the
+    fixed one never does.  VALID=0 -- the observer was not still in the same
+    sleep after the trip, so the run says nothing about the scheduler's choice
+    -- is the only outcome retried.  A run with no W1 line hung or crashed, and
+    fails at once: retrying it would hide a lost signal.
     """
-    for _ in range(3):
+    for _ in range(5):
         p = _run(_W1)
-        if "VALID=1" in p.stdout:
+        m = re.search(r"W1 who=(\S+) VALID=([01])", p.stdout)
+        if m is None:
+            pytest.fail("the scenario hung or crashed (rc=%s) before reporting "
+                        "who got the signal\nstdout=%s\nstderr=%s"
+                        % (p.returncode, p.stdout, p.stderr[-1500:]))
+        if m.group(2) == "1":
             break
     else:
-        pytest.fail("the helper never raised the signal while both fibers were "
-                    "parked, in 3 tries\nstdout=%s\nstderr=%s"
+        pytest.fail("the helper never tripped the signal inside one observer "
+                    "sleep, in 5 tries\nstdout=%s\nstderr=%s"
                     % (p.stdout, p.stderr[-1500:]))
     assert "W1 who=parked" in p.stdout, (
         "the signal did not come out of the parked send_all; who=%r\n"
