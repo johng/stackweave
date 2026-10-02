@@ -351,3 +351,44 @@ def assert_iouring_loop_ran(p):
     assert m is not None and int(m.group(1)) > 0, (
         "the io_uring loop backend did not run (no hub ring wait)\n"
         + p.stdout[-400:] + "\n" + p.stderr[-800:])
+
+
+def kernel_pbuf_ring_errno():
+    """The errno with which THIS kernel refuses a valid io_uring provided buffer
+    ring registration (IORING_REGISTER_PBUF_RING), 0 if it accepts one, or None
+    if io_uring itself can't be set up here.
+
+    Multishot recv (STACKWEAVE_IOURING_MS) needs a buffer ring on every hub
+    ring and falls back to single-shot recv when the kernel refuses one, so a
+    multishot test must tell "the kernel can't" from "the runtime broke".  This
+    asks the kernel directly, with raw syscalls and the registration built as
+    the UAPI documents it (page-aligned ring, power-of-two entries, zero flags
+    and reserved words), so a nonzero result is the kernel's verdict and not a
+    runtime bug.  Ubuntu's 6.8.0-142-generic kernel returns EINVAL here for
+    every valid call: its reserved-word check is inverted."""
+    import ctypes
+    import mmap
+    import platform
+    import struct
+    if not sys.platform.startswith("linux") or \
+            platform.machine() not in ("x86_64", "aarch64"):
+        return None
+    nr_setup, nr_register, register_pbuf_ring = 425, 427, 22   # same on both arches
+    libc = ctypes.CDLL(None, use_errno=True)
+    params = ctypes.create_string_buffer(120)          # struct io_uring_params
+    fd = libc.syscall(ctypes.c_long(nr_setup), ctypes.c_long(8), params)
+    if fd < 0:
+        return None
+    ring = mmap.mmap(-1, mmap.PAGESIZE)                # 8 entries x 16 B fit
+    cring = ctypes.c_char.from_buffer(ring)
+    try:
+        reg = ctypes.create_string_buffer(struct.pack(
+            "=QIHH3Q", ctypes.addressof(cring), 8, 0, 0, 0, 0, 0))
+        rc = libc.syscall(ctypes.c_long(nr_register), ctypes.c_long(fd),
+                          ctypes.c_long(register_pbuf_ring), reg,
+                          ctypes.c_long(1))
+        return ctypes.get_errno() if rc < 0 else 0
+    finally:
+        os.close(fd)                                   # drops the kernel's pin
+        del cring
+        ring.close()
