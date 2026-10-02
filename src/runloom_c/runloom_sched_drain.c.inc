@@ -140,6 +140,23 @@ long long runloom_sched_sim_advance_clock(runloom_sched_t *s, long long netpoll_
     return target_ns;
 }
 
+/* Resume g on this thread's own state, then put back the C-stack limits the
+ * resume replaced.  runloom_coro_rearm_stackprot arms them at g's stack on the
+ * way in, and nothing else restores them: the drain then freed finished
+ * fibers' objects on its own stack under g's limits, and run()'s caller -- or
+ * the fiber a nested run(1) was called from -- carried on under the last
+ * fiber's, so deep recursion there crashed instead of raising RecursionError.
+ * Saved per resume rather than once per drain, so what goes back is exactly
+ * what this resume replaced. */
+static inline void runloom_drain_resume(runloom_g_t *g)
+{
+    PyThreadState *ts = PyThreadState_GET();
+    runloom_cstack_limits_t own;
+    runloom_cstack_limits_save(ts, &own);
+    runloom_coro_resume(g->coro);
+    runloom_cstack_limits_restore(ts, &own);
+}
+
 /* ---- Drain (main loop) ----
  *
  * sched_snap optimisation: the scheduler's tstate (the Python frame
@@ -555,7 +572,7 @@ Py_ssize_t runloom_sched_drain(runloom_sched_t *s)
              * snap, no install, no drain, no load+resnap on
              * completion. */
             if (g->noyield) {
-                runloom_coro_resume(g->coro);
+                runloom_drain_resume(g);
                 s->current = prev;
                 if (runloom_coro_done(g->coro)) {
                     s->completed++;
@@ -615,7 +632,7 @@ Py_ssize_t runloom_sched_drain(runloom_sched_t *s)
              * cooperative-yield resumes -- so a RESUME with no durable append is a
              * resume-without-wake and deadlocks the replay (the lost-wakeup class). */
             runloom_wake_trace_event("RESUME", (unsigned long)(uintptr_t)g, 0);
-            runloom_coro_resume(g->coro);
+            runloom_drain_resume(g);
 
             s->current = prev;
 

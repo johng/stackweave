@@ -308,12 +308,11 @@ void runloom_iframe_brc_release(PyThreadState *fiber, PyThreadState *hub)
          * the merge, then put its own back.  The hub's describe this stack:
          * attaching a fresh state (_PyThreadState_Attach) sets them from the
          * attaching thread's stack, and nothing re-arms a hub's state. */
-        uintptr_t top = f->c_stack_top, soft = f->c_stack_soft_limit;
-        uintptr_t hard = f->c_stack_hard_limit;
+        runloom_cstack_limits_t own, lent;
         uintptr_t sp;
-        f->c_stack_top = h->c_stack_top;
-        f->c_stack_soft_limit = h->c_stack_soft_limit;
-        f->c_stack_hard_limit = h->c_stack_hard_limit;
+        runloom_cstack_limits_save(fiber, &own);
+        runloom_cstack_limits_save(hub, &lent);
+        runloom_cstack_limits_restore(fiber, &lent);
         sp = _Py_get_machine_stack_pointer();
         __atomic_add_fetch(&runloom_brc_release_merges_total, 1, __ATOMIC_RELAXED);
 #if _Py_STACK_GROWS_DOWN
@@ -325,9 +324,7 @@ void runloom_iframe_brc_release(PyThreadState *fiber, PyThreadState *hub)
                                __ATOMIC_RELAXED);
         _Py_set_eval_breaker_bit(fiber, _PY_EVAL_EXPLICIT_MERGE_BIT);
         (void)runloom_iframe_service_merge_queue(fiber);
-        f->c_stack_top = top;
-        f->c_stack_soft_limit = soft;
-        f->c_stack_hard_limit = hard;
+        runloom_cstack_limits_restore(fiber, &own);
     }
 }
 
@@ -478,6 +475,23 @@ void runloom_arm_fiber_stackprot(PyThreadState *ts, runloom_coro_t *c)
      * the check, better than leaving it stale.  If even that is refused the old
      * limits stay, as before, but no exception leaks. */
     (void)runloom_set_stackprot(ts, base, size);
+}
+
+void runloom_cstack_limits_save(PyThreadState *ts, runloom_cstack_limits_t *out)
+{
+    _PyThreadStateImpl *t = (_PyThreadStateImpl *)ts;
+    out->top = t->c_stack_top;
+    out->soft = t->c_stack_soft_limit;
+    out->hard = t->c_stack_hard_limit;
+}
+
+void runloom_cstack_limits_restore(PyThreadState *ts,
+                                   const runloom_cstack_limits_t *saved)
+{
+    _PyThreadStateImpl *t = (_PyThreadStateImpl *)ts;
+    t->c_stack_top = saved->top;
+    t->c_stack_soft_limit = saved->soft;
+    t->c_stack_hard_limit = saved->hard;
 }
 
 /* offsetof(PyGenObject, gi_exc_state) -- computed in THIS Py_BUILD_CORE-isolated TU,

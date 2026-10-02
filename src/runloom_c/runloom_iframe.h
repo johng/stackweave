@@ -169,6 +169,22 @@ unsigned long long runloom_iframe_fiber_trash_drained(void);
 struct runloom_coro;
 void runloom_arm_fiber_stackprot(PyThreadState *ts, struct runloom_coro *c);
 
+/* A thread state's C-stack limits: the window 3.14's overflow check
+ * (RecursionError) and _Py_Dealloc's trashcan margin both measure the stack
+ * pointer against.  runloom_arm_fiber_stackprot points them at a fiber's stack
+ * on every resume, so whoever resumes a fiber on its OWN thread state -- the
+ * single-thread drain and Coro.resume -- saves them first and restores them as
+ * soon as the resume returns.  Otherwise its code, and the caller's after it
+ * returns, runs under limits for a stack it isn't on: deep recursion runs off
+ * the real stack (SIGSEGV) instead of raising, and the trashcan either never
+ * defers a deep free (the same crash) or defers every one. */
+typedef struct {
+    uintptr_t top, soft, hard;
+} runloom_cstack_limits_t;
+void runloom_cstack_limits_save(PyThreadState *ts, runloom_cstack_limits_t *out);
+void runloom_cstack_limits_restore(PyThreadState *ts,
+                                   const runloom_cstack_limits_t *saved);
+
 /* ---- GC visibility for parked-fiber frames (free-threaded 3.14+) ----
  *
  * The free-threaded GC credits PEP-703 deferred-refcount stackrefs (f_executable
