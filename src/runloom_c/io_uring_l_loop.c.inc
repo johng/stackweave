@@ -176,7 +176,9 @@ int runloom_iouring_any_enabled(void)
 }
 
 /* Per-hub provided buffer ring count (env RUNLOOM_IOURING_MS_BUFS, default
- * 1024).  Rounded up to a power of two, clamped to [16, 65536] (bid is 16-bit). */
+ * 1024).  Rounded up to a power of two, clamped to [16, 32768]: the kernel
+ * refuses a ring of 65536 entries or more (its 16-bit head and tail could not
+ * tell a full ring from an empty one). */
 static unsigned runloom_loop_ms_pbuf_count(void)
 {
     static int v = -1;
@@ -186,7 +188,7 @@ static unsigned runloom_loop_ms_pbuf_count(void)
         long n = (e != NULL) ? atol(e) : RUNLOOM_LOOP_MS_PBUF_COUNT_DEFAULT;
         unsigned p = 16;
         if (n < 16) n = 16;
-        if (n > 65536) n = 65536;
+        if (n > 32768) n = 32768;
         while (p < (unsigned)n) p <<= 1;
         cur = (int)p;
         __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
@@ -289,6 +291,8 @@ static int runloom_iouring_loop_ms_pbuf_setup(runloom_iouring_ring_t *r)
     r->ms_count = count;
     r->ms_size  = size;
     r->ms_mask  = count - 1;
+    r->ms_resv0 = reg.resv[0] != 0;
+    runloom_iouring_pbuf_resv_notice();
     return 0;
 }
 
@@ -301,14 +305,15 @@ static void runloom_iouring_loop_ms_pbuf_teardown(runloom_iouring_ring_t *r)
      * the ring, it may still fill a buffer from it until that close, so leak
      * both (once per hub ring, at shutdown) rather than hand them back to
      * malloc while the kernel can write into them. */
-    if (runloom_iouring_pbuf_ring_unregister(r->ring_fd,
-                                             RUNLOOM_LOOP_MS_BGID) == 0) {
+    if (runloom_iouring_pbuf_ring_unregister(r->ring_fd, RUNLOOM_LOOP_MS_BGID,
+                                             r->ms_resv0) == 0) {
         free(r->ms_pool);
         free(r->ms_bring);
     }
     r->ms_pool = NULL;
     r->ms_bring = NULL;
     r->ms_count = r->ms_size = r->ms_mask = 0;
+    r->ms_resv0 = 0;
 }
 
 static void *runloom_iouring_loop_ms_buf_addr(runloom_iouring_ring_t *r,

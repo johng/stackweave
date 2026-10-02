@@ -112,11 +112,12 @@ def test_iouring_loop_echo_exact_once():
 #     multishot=1 rests on two things the oracles above can't see, because a
 #     run without either moves the same bytes:
 #       - multishot armed at all.  A stream falls back to single-shot when its
-#         hub has no provided buffer ring, and the kernel can refuse one
-#         (Ubuntu's 6.8.0-142-generic refuses every valid registration).  All
+#         hub has no provided buffer ring, and the kernel can refuse one.  All
 #         48 streams must open; the case skips only when an independent probe
-#         shows the KERNEL refuses the registration, and fails when the
-#         runtime's own registration fails on a kernel that accepts it.
+#         shows the KERNEL refuses both registration forms, and fails when the
+#         runtime's own registration fails on a kernel that accepts either --
+#         Ubuntu's 6.8 kernels accept only the workaround's (resv[0] = 1), and
+#         the case checks the workaround engaged exactly there.
 #       - a fiber migrated with its stream open.  A woken echo fiber lands on
 #         its waker's deque, i.e. its stream's owner hub (local wake), and
 #         moves only if an idle hub steals it first, so some runs have no
@@ -284,7 +285,7 @@ def test_iouring_loop_multishot_falls_back_with_one_warning():
         "a stream armed multishot with no buffer ring\n" + p.stdout[-400:])
     assert st["MS_PBUF_ERRNO"] == errno.EINVAL, p.stdout[-400:]
     assert st["PBUF_RESV_QUIRK"] == 0, p.stdout[-400:]
-    assert p.stderr.count("provided buffer ring could not be registered") == 1, (
+    assert p.stderr.count("hub provided buffer ring could not be registered") == 1, (
         "expected exactly one capability-degrade warning\n" + p.stderr[-800:])
 
 

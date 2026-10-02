@@ -56,7 +56,10 @@ int runloom_iouring_pbuf_available(void)
     /* Say once that multishot recv is off, at its first use: otherwise the
      * single-shot fallback is silent. */
     err = __atomic_load_n(&runloom_iouring_pbuf_errno_last, __ATOMIC_RELAXED);
-    if (err != 0 && __atomic_exchange_n(&warned, 1, __ATOMIC_RELAXED) == 0)
+    /* Load before the exchange: every recv lands here while the ring has no
+     * pool, and a locked RMW per recv would bounce this line across hubs. */
+    if (err != 0 && !__atomic_load_n(&warned, __ATOMIC_RELAXED) &&
+            __atomic_exchange_n(&warned, 1, __ATOMIC_RELAXED) == 0)
         fprintf(stderr, "[stackweave] io_uring capability degrade: the "
                 "provided buffer ring could not be registered (errno %d, %s) "
                 "-- io_uring TCPConn recv falls back to single-shot recv\n",

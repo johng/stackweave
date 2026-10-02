@@ -55,6 +55,7 @@ struct runloom_iouring_ring {
     unsigned ms_count;       /* buffer count (power of two) */
     unsigned ms_size;        /* per-buffer size */
     unsigned ms_mask;        /* ms_count - 1 */
+    int      ms_resv0;       /* registered with resv[0] = 1 (io_uring_l_pbuf.c.inc) */
     /* Multishot inbox: handles whose fiber, running on another hub, posted
      * work only this hub may do (buffer returns, re-arm, close).  A lock-free
      * LIFO pushed by those fibers and taken whole by this hub at its loop top

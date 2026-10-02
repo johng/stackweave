@@ -365,8 +365,9 @@ def kernel_pbuf_ring_errno(resv0=0):
     asks the kernel directly, with raw syscalls and the registration built as
     the UAPI documents it (page-aligned ring, power-of-two entries, zero flags
     and reserved words), so a nonzero result is the kernel's verdict and not a
-    runtime bug.  Ubuntu's 6.8 kernels from 6.8.0-139 on return EINVAL here for
-    every valid call: their reserved-word check is inverted.  resv0=1 sets the
+    runtime bug.  Ubuntu's 6.8 kernels (the bad backport is listed in
+    6.8.0-139's changelog; measured on 6.8.0-142) return EINVAL here for every
+    valid call: their reserved-word check is inverted.  resv0=1 sets the
     first reserved word instead, the form the runtime's workaround for them
     sends: a correct kernel refuses it with EINVAL, and those kernels accept
     it."""

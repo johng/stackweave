@@ -138,7 +138,8 @@ struct runloom_iouring_buf_reg {
  * registers the global ring's buffer ring through it. */
 static int runloom_iouring_pbuf_ring_register(int ring_fd,
                                               struct runloom_iouring_buf_reg *reg);
-static int runloom_iouring_pbuf_ring_unregister(int ring_fd, uint16_t bgid);
+static int runloom_iouring_pbuf_ring_unregister(int ring_fd, uint16_t bgid,
+                                                int resv0);
 
 
 /* ---------------------------------------------------------------------------

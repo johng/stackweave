@@ -70,8 +70,9 @@ TCPCONN_ENV = {"STACKWEAVE_TCPCONN_IOURING": "1"}
 def _run(script, env_extra=None, timeout=240):
     # Generous timeout + skip-on-timeout: this box is shared with a CI runner
     # that competes for io_uring + CPU, so a timeout is contention, not a bug.
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src",
-               **(env_extra or {}))
+    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
+    env.pop("STACKWEAVE_IOURING_PBUF_RESV_QUIRK", None)
+    env.update(env_extra or {})
     env.update(TCPCONN_ENV)
     try:
         return subprocess.run([PY, "-c", script], cwd=REPO, env=env,

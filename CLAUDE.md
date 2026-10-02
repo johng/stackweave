@@ -186,16 +186,22 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   a provided buffer ring per hub and falls back to single-shot, with a one-time
   warning, when the kernel refuses one: `stats()["iouring_loop_ms_opens"]` /
   `_fallbacks` / `_pbuf_errno` tell the two runs apart, and
-  `adv_util.kernel_pbuf_ring_errno()` asks the kernel directly. Ubuntu's 6.8
-  kernels (6.8.0-139 on) invert the reserved-word check in buffer-ring
-  register AND unregister, so every buffer ring goes through
-  `io_uring_l_pbuf.c.inc`, which retries a refused 6.8 registration with
-  `resv[0] = 1` and unregisters the same way (`iouring_pbuf_resv_quirk`;
-  `STACKWEAVE_IOURING_PBUF_RESV_QUIRK=0|1` forces it off/on). Never call
-  `IORING_(UN)REGISTER_PBUF_RING` directly. Migration with a stream open is
-  opportunistic (a woken fiber moves only when stolen), so the guard reads
-  `iouring_loop_ms_posted_returns`, repeats a run that had none (~1 in 800),
-  and fails if four in a row had none.
+  `adv_util.kernel_pbuf_ring_errno()` asks the kernel directly. Migration with
+  a stream open is opportunistic (a woken fiber moves only when stolen), so the
+  guard reads `iouring_loop_ms_posted_returns`, repeats a run that had none
+  (~1 in 800), and fails if four in a row had none.
+- **Every provided buffer ring goes through `io_uring_l_pbuf.c.inc`** -- never
+  call `IORING_(UN)REGISTER_PBUF_RING` directly. Ubuntu's 6.8 kernels (the bad
+  backport is in 6.8.0-139's changelog; measured on 6.8.0-142) invert the
+  reserved-word check in buffer-ring register AND unregister: zeroed `resv`
+  gets EINVAL, nonzero goes through. The helper retries a refused 6.8
+  registration with `resv[0] = 1`, and each ring unregisters in the form it
+  registered with -- the plain form fails there, and freeing a ring the kernel
+  still holds lets it write into reused heap (`iouring_pbuf_resv_quirk`;
+  `STACKWEAVE_IOURING_PBUF_RESV_QUIRK=0|1` forces it off/on). Guard:
+  `tests/test_cov100b_iouring.py::test_kernel_accepts_one_buffer_ring_registration_form`
+  (the premise: a kernel takes exactly one form, and the inverted one only on
+  6.8) and `::test_iouring_loop_echo_survives_fiber_migration[1]`.
 - **The loop backend's ring is serviced every scheduling round, never only at
   hub idle.** `hub_main` calls `runloom_iouring_loop_poll` (submit deferred
   SQEs, post + drain completions, non-blocking) when its local queues run dry,
