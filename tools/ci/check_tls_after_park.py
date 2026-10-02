@@ -53,11 +53,19 @@ and did not.
 
 Limits.  Pointer arithmetic beyond the operations above is taken to produce a
 non-pointer.  The pass follows data flow, not equalities: after
-`if (x == tid)` the compiler may use x where it would have re-read tid.  A TLS
-address passed to a call that cannot park is not followed into the callee (-v
-lists those calls).  A value stored through an alias of the function's own
-frame and read back by a direct slot access is not followed.  Data flow
-inside the Python C API and libc is not checked.
+`if (x == tid)` the compiler may use x where it would have re-read tid.  It is
+path-insensitive, so a register holding a TLS address on one path can be
+reported where a correlated path the program cannot take reaches a use (seen
+at -O1).  A TLS address passed to a call that cannot park is not followed into
+the callee (-v lists those calls); one stored in a stack struct whose address
+a parking callee receives is not seen; one returned in x1 rather than x0 is
+lost.  A value stored through an alias of the function's own frame and read
+back by a direct slot access is not followed.  Values loaded FROM a
+thread-local (a cached pointer) are out of scope.  Data flow inside the Python
+C API and libc is not checked.  -Oz (outlined helpers with control flow),
+-flto=thin and GCC's emulated TLS are not modelled: exit 2.  arm64 Mach-O
+only; on Linux nothing checks this class, only the out-of-line accessors
+(RUNLOOM_NOINLINE) protect it.
 
 usage: check_tls_after_park.py [-v] [EXTENSION.so]
        (default: the stackweave_c extension built into src/)

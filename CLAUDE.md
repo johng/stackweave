@@ -110,13 +110,16 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   `runloom_tstate_in_destruction` and defer (trigger stays armed); yielding inside
   a `tp_dealloc` freezes a half-dead object across a GC-safe point → UAF. Don't
   reroute via the eval-breaker.
-- **A thread-local's address never survives a park.** clang computes it once
-  per function (Darwin: one `tlv_get_addr`, kept in a register or spilled) and
-  reuses it after calls; after a park that may have migrated the fiber, the
-  reuse touches the ORIGIN hub's copy (TSan A2: the select PRNG). A TLS access
-  after a park goes through an out-of-line accessor (`noinline`, or another TU
-  like `runloom_mn_tls_current_g()`). Guard: `tools/ci/check_tls_after_park.py`
-  on the release .so (`tests/test_tls_after_park_lint.py`).
+- **A thread-local's address never survives a park.** The compiler computes it
+  once per function and reuses it after calls (macOS keeps the `tlv_get_addr`
+  result, aarch64 Linux the `tpidr_el0` base, x86-64 global-dynamic the
+  `__tls_get_addr` result); after a park that may have migrated the fiber, the
+  reuse touches the ORIGIN hub's copy (TSan A2: the select PRNG). Code that can
+  park reaches a thread-local only through an out-of-line accessor
+  (`RUNLOOM_NOINLINE`, or another TU like `runloom_mn_tls_current_g()`).
+  Guard, **arm64 macOS only**: `tools/ci/check_tls_after_park.py` on the built
+  .so (`tests/test_tls_after_park_lint.py`). Linux, the CI target, has no lint:
+  only the out-of-line accessors protect it there.
 - **Cooperative primitives are foreign-OS-thread-safe.** A non-goroutine thread
   (a patched `Lock` in an mp.Queue `_feed` thread) must detect no-goroutine (TLS
   peek NULL) and block on the real OS — never park a non-existent g, never lazily
