@@ -148,6 +148,18 @@ int runloom_iframe_service_merge_queue(PyThreadState *ts);
  */
 void runloom_iframe_brc_adopt(PyThreadState *fiber, PyThreadState *hub);
 void runloom_iframe_brc_release(PyThreadState *fiber, PyThreadState *hub);
+/* stats()["brc_release_merges"] / ["brc_release_merges_off_stack"]: merges
+ * release() ran on the hub's stack, and those whose stack pointer was outside
+ * the C-stack window of the state they ran under (must stay 0). */
+unsigned long long runloom_iframe_brc_release_merges(void);
+unsigned long long runloom_iframe_brc_release_merges_off_stack(void);
+
+/* Destroy whatever a fiber's per-g state still has parked on its trashcan list
+ * (delete_later): only a later dealloc on that state would, and
+ * PyThreadState_Clear doesn't, so it would leak.  Call before clearing it.
+ * stats()["fiber_trash_drained"] counts the states that had any. */
+void runloom_iframe_drain_trashcan(PyThreadState *ts);
+unsigned long long runloom_iframe_fiber_trash_drained(void);
 
 /* 3.14: arm the SP-based C-stack overflow check at fiber c's private stack, with
  * extra reserved headroom above the guard so a deep-recursion RecursionError

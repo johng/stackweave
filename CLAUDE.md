@@ -111,6 +111,22 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   same-thread fast-path (ready-ring push), detected by PEEKing `runloom_tls_sched`
   — never `runloom_sched_get()` (mallocs on a foreign waker). Guard:
   `tests/test_differential_asyncio.py` (sc_call_soon_fifo).
+- **A fiber's state frees objects only under C-stack limits for the stack it
+  is on.** `runloom_coro_rearm_stackprot` arms a fiber's limits at its own
+  coroutine stack on every resume, but `runloom_iframe_brc_release` drains the
+  fiber's biased-refcount queue on the HUB's stack with that state still
+  attached. `_Py_Dealloc` measures its trashcan margin against the attached
+  state's limits, so on the wrong stack the margin is garbage; below 2 a
+  GC-tracked object is parked on the fiber's trashcan list (`delete_later`),
+  which only a later GC-type dealloc with margin >= 4 on that state frees and
+  `PyThreadState_Clear` never does -- a leak (an undeallocated memoryview
+  pinned its array, but only where the hub's stack lay below the fiber's). So
+  the drain lends the fiber the hub's limits (set from the hub thread's stack
+  when its state first attaches), and a freed per-g state has its trashcan
+  list destroyed first (`runloom_iframe_drain_trashcan`). New code
+  that frees objects on a hub stack under a fiber's state must do the same.
+  Guard: `tests/test_cross_hub_migration.py::test_cross_hub_drops_are_freed_under_the_hub_stacks_limits`
+  (deterministic: `stats()["brc_release_merges_off_stack"]` must stay 0).
 - **Preemption never yields mid object-destruction.** Both yield sites (the
   `preempt_init` time-slicer, and the seeded controller's frame-count hook,
   compiled only with `RUNLOOM_MN_CTRL`) gate on

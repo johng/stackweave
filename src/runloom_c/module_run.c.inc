@@ -415,6 +415,12 @@ static PyObject *m_stats(PyObject *self, PyObject *unused)
                       (Py_ssize_t)runloom_iouring_pbuf_errno());
     RUNLOOM_STATS_SET("iouring_pbuf_resv_quirk",
                       (Py_ssize_t)runloom_iouring_pbuf_resv_quirk());
+    RUNLOOM_STATS_SET("brc_release_merges",
+                      (Py_ssize_t)runloom_iframe_brc_release_merges());
+    RUNLOOM_STATS_SET("brc_release_merges_off_stack",
+                      (Py_ssize_t)runloom_iframe_brc_release_merges_off_stack());
+    RUNLOOM_STATS_SET("fiber_trash_drained",
+                      (Py_ssize_t)runloom_iframe_fiber_trash_drained());
     RUNLOOM_STATS_SET("foreign_park_inflight", runloom_foreign_park_inflight());
     RUNLOOM_STATS_SET("netpoll_deadline_heap", runloom_netpoll_deadline_heap_total());
     RUNLOOM_STATS_SET("netpoll_fd_armed",  runloom_netpoll_fd_armed_count());

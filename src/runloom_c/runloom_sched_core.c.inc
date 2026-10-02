@@ -831,6 +831,9 @@ void runloom_g_decref(runloom_g_t *g)
                 g->tstate = NULL;
             } else {
                 runloom_sysmon_tstate_retire_wait(g->tstate);   /* sysmon may be reading it */
+                /* Anything still parked on its trashcan list would leak:
+                 * Clear never frees it (runloom_iframe_drain_trashcan). */
+                runloom_iframe_drain_trashcan(g->tstate);
                 /* Not a bare PyThreadState_Clear: that frees the CURRENT
                  * tstate's freelists, not g->tstate's (they would leak and pin
                  * their hub's heap segments forever once it is abandoned), and

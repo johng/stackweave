@@ -770,6 +770,11 @@ def test_memory_array_view_survives_a_migration():
     seen so a pass means the gap is really closed, not unexercised.  On an
     interpreter without the hunk (no _Py_ARRAY_EXPORTS_ATOMIC witness) a
     failure is an xfail asking for a rebuild.
+
+    A pinned array has a second cause, fixed in the runtime: a view whose
+    deallocation was parked on a fiber's trashcan list and never run, so it
+    never released its export (see
+    test_cross_hub_drops_are_freed_under_the_hub_stacks_limits).
     """
     try:
         _run_array_view_scenario()
@@ -842,9 +847,82 @@ print("moves=%d arrays=%d pinned=%d unguarded=%d"
       % (state["moves"], len(state["arrays"]), pinned, unguarded), flush=True)
 require_migration(pinned or unguarded or state["moves"] >= 100)
 assert not pinned and not unguarded, (
-    "%d of %d arrays lost export-count updates after a migration "
-    "(%d pinned, %d resizable under a live view)"
+    "%d of %d arrays kept a wrong export count after a migration "
+    "(%d pinned: an export never released; %d resizable under a live view)"
     % (pinned + unguarded, len(state["arrays"]), pinned, unguarded))
+print("PASS", flush=True)
+''', timeout=90)
+
+
+def test_cross_hub_drops_are_freed_under_the_hub_stacks_limits():
+    """A fiber's last decref of an object another hub allocated is queued to
+    that hub's current receiver -- often the fiber running there, whose
+    queue the hub drains on its OWN stack once that fiber parks
+    (runloom_iframe_brc_release), with the fiber's state still attached.
+    That state's C-stack limits describe the fiber's coroutine stack, so
+    every _Py_Dealloc in the drain measured the hub's stack pointer against
+    them.  Wherever the hub's stack lay below the fiber's, the margin came
+    out negative and each object was parked on the fiber's trashcan list
+    instead of freed -- for good, once the fiber stopped deallocating: a
+    leaked memoryview that pinned its array in
+    test_memory_array_view_survives_a_migration on CI.  The drain now
+    borrows the hub's limits.
+
+    Whether a wrong drain LEAKS depends on where the stacks happen to lie,
+    so this checks what holds on every drain instead: stats() counts the
+    drains and those that ran with the stack pointer outside the attached
+    state's C-stack window, and the second must stay 0.
+    """
+    assert_pass(r'''
+_watchdog(50)
+import array
+PAIRS, ROUNDS, MERGES_WANTED, BUDGET_S = 32, 1500, 20, 30
+state = {"moves": 0}
+def batch():
+    wg = stackweave.WaitGroup()
+    wg.add(PAIRS)
+    for _ in range(PAIRS):
+        a, b = stackweave_c.Chan(0), stackweave_c.Chan(0)
+        def ponger(a=a, b=b):
+            while True:
+                v, ok = a.recv()
+                if not ok:
+                    return
+                b.send(v)
+        def pinger(a=a, b=b):
+            arr = array.array("i", range(16))
+            tid = threading.get_ident()
+            try:
+                for r in range(ROUNDS):
+                    mv = memoryview(arr)
+                    a.send(r)
+                    b.recv()
+                    del mv            # often on another hub than allocated it
+                    t = threading.get_ident()
+                    if t != tid:
+                        state["moves"] += 1
+                        tid = t
+            finally:
+                a.close()
+                wg.done()
+        stackweave.fiber(ponger)
+        stackweave.fiber(pinger)
+    wg.wait()
+def main():
+    t0 = time.monotonic()
+    while (stackweave_c.stats()["brc_release_merges"] < MERGES_WANTED
+           and time.monotonic() - t0 < BUDGET_S):
+        batch()
+stackweave.run(8, main)
+st = stackweave_c.stats()
+merges, off = st["brc_release_merges"], st["brc_release_merges_off_stack"]
+print("moves=%d merges=%d off_stack=%d" % (state["moves"], merges, off), flush=True)
+# Checked before anything that could skip: the invariant needs no fiber to
+# move (a ponger on another hub drops onto the pinger's hub just the same).
+assert off == 0, (
+    "%d of %d drains ran deallocations with the stack pointer outside the "
+    "attached state's C-stack window" % (off, merges))
+assert merges > 0, "no parked fiber's queue was drained on its hub's stack"
 print("PASS", flush=True)
 ''', timeout=90)
 
