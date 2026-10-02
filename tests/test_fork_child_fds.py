@@ -104,8 +104,10 @@ def _extra(out):
 
 
 def test_a_child_of_an_importer_inherits_no_extra_pollers():
-    # The parent's pipe ends are open in the child too (one is closed before it
-    # counts), so a child that opened nothing counts one fewer than its parent.
+    # The child re-creates only the default pool's poller (kqueue + self-pipe
+    # = 3 fds, epoll + eventfd = 2) and closes its pipe's read end before it
+    # counts: at most 2 more than the parent.  One hub pool's poller would
+    # make it 3-5 more; all of them, 130-195.
     out = _run("""
         parent, child = in_child(nfds)
         print("FDS", parent, child)

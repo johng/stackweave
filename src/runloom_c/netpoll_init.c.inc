@@ -392,8 +392,8 @@ void runloom_netpoll_fini(void)
              * are 0 -- closing them would close fd 0 (stdin).  fini() runs in the
              * forked child (reset_after_fork), so the >= 0 test silently closed
              * the child's stdin for every uninited pool.  Real fds are > 2; -1 is
-             * not-created.  (backend_create normalizes BSS-zero slots to -1 right
-             * after, line ~510, so a skipped slot is harmless.) */
+             * not-created.  (reset_after_fork then sets every hub slot's fds
+             * to -1, so a skipped slot is harmless.) */
             if (p->wake_efd > 0) { close(p->wake_efd); p->wake_efd = -1; }
             if (p->epoll_fd > 0) { close(p->epoll_fd); p->epoll_fd = -1; }
         }
@@ -457,8 +457,9 @@ void runloom_netpoll_reset_after_fork(void)
          * touch, as in a fresh process.  Creating every slot's here put a
          * poller in every forked child for all RUNLOOM_PARKER_POOL_MAX pools
          * (130 fds on epoll, 195 on kqueue), hub or no hub.  The default pool
-         * stays ready: the fd arm-mask accessors take its lock directly
-         * (netpoll_register.c.inc), not through lock_ensure_inited. */
+         * stays ready: netpoll_register.c.inc (the fd arm-mask accessors),
+         * netpoll_pump.c.inc and netpoll_wake_iouring.c.inc take its lock
+         * directly, not through lock_ensure_inited. */
         if (p == &runloom_pool) {
             runloom_pool_backend_create(p);
             p->lock_inited = 2;
@@ -494,10 +495,13 @@ void runloom_netpoll_reset_after_fork(void)
 #if defined(RUNLOOM_HAVE_EPOLL)
     /* The per-hub io_uring ring registry names the PARENT hubs' rings (dead in
      * the child).  The child's fresh hubs re-register their own; if we keep the
-     * stale entries the pump dispatches CQEs to freed rings -> hang/crash.  The
-     * epoll/eventfd/pump-wake fds were closed with the epoll fd above. */
+     * stale entries the pump dispatches CQEs to freed rings -> hang/crash.
+     * The pump-wake eventfd is the parent's (fork shares it): close the
+     * child's copy, which nothing else does, and let wake_pump_arm make a new
+     * one on first use. */
     runloom_iouring_ring_count = 0;
     runloom_iouring_eventfd_in_epoll = -1;
+    if (runloom_pump_wake_fd > 2) close(runloom_pump_wake_fd);
     runloom_pump_wake_fd = -1;
 #endif
 }
