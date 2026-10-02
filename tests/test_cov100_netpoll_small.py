@@ -198,6 +198,8 @@ def test_lock_init_loser_spin_race():
 # register_at_fork(after_in_child) runs reset_after_fork in the child, taking
 # both memsets.  The child then re-parks to prove the reset left a working
 # runtime (a botched reset would hang or lose the wake).  Child exit 0 == both.
+# Each park is counted, not just asserted in its fiber: an exception in a fiber
+# is printed and dropped, and run() still returns.
 # ---------------------------------------------------------------------------
 @pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_reset_after_fork_memsets():
@@ -218,14 +220,21 @@ def test_reset_after_fork_memsets():
             rc.netpoll_unregister(a.fileno()); a.close()
             rc.netpoll_unregister(b.fileno()); b.close()
 
-        def driver(): rc.mn_fiber(lambda: park_once(b"P"))
-        stackweave.run(2, driver)            # parent: by_fd[] + registered_bm now non-NULL
+        def parked(tag):
+            done = bytearray(1)
+            def fiber():
+                park_once(tag)
+                done[0] = 1
+            stackweave.run(2, lambda: rc.mn_fiber(fiber))
+            return done[0]
+
+        assert parked(b"P") == 1             # parent: by_fd[] + registered_bm now non-NULL
 
         pid = os.fork()
         if pid == 0:
             try:
-                def cd(): rc.mn_fiber(lambda: park_once(b"C"))   # reset ran at fork; re-park
-                stackweave.run(2, cd)
+                if parked(b"C") != 1:        # reset ran at fork; re-park
+                    sys.stderr.write("child: the park did not complete\n"); os._exit(6)
                 os._exit(0)
             except BaseException as e:
                 sys.stderr.write("child: %r\n" % e); os._exit(7)
