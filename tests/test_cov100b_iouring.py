@@ -172,7 +172,10 @@ sys.stdout.write("POSTED_RETURNS %d\n" % st["iouring_loop_ms_posted_returns"])
 sys.stdout.write("REMOTE_RETURNS %d\n" % st["iouring_loop_ms_remote_returns"])
 """
 
-_MIGRATE_ATTEMPTS = 3
+# A run with no fiber finishing a buffer off its stream's hub is rare (1 in
+# ~800 measured on a 16-core box), so four in a row means migration with a
+# stream open has stopped happening -- a regression this guard exists to catch.
+_MIGRATE_ATTEMPTS = 4
 
 
 def _run_echo_migrate(multishot):
@@ -215,8 +218,9 @@ def test_iouring_loop_echo_survives_fiber_migration(multishot):
                p.stdout[-400:], p.stderr[-800:]))
         # The fallback must be visible: the errno stat and the one-time
         # warning are what tell this run from a multishot one.
-        assert st["MS_PBUF_ERRNO"] != 0, (
-            "the hubs' buffer-ring failure was not recorded\n" + p.stdout[-400:])
+        assert st["MS_PBUF_ERRNO"] == kerr, (
+            "the hubs' buffer-ring failure was not recorded as the kernel's "
+            "errno %d\n%s" % (kerr, p.stdout[-400:]))
         assert "provided buffer ring could not be registered" in p.stderr, (
             "no capability-degrade warning\n" + p.stderr[-800:])
         pytest.skip(
@@ -235,10 +239,11 @@ def test_iouring_loop_echo_survives_fiber_migration(multishot):
             "owner's pool\n" + p.stdout[-400:])
         if st["POSTED_RETURNS"] > 0:
             return
-    pytest.skip(
-        "no echo fiber finished a buffer off its stream's hub in %d runs (a "
-        "woken fiber moves only when an idle hub steals it), so the owner-hub "
-        "inbox was not exercised" % _MIGRATE_ATTEMPTS)
+    pytest.fail(
+        "no echo fiber finished a buffer off its stream's hub in %d runs in a "
+        "row (a woken fiber moves only when an idle hub steals it; a single "
+        "such run is ~1 in 800): migration with a stream open has stopped\n%s"
+        % (_MIGRATE_ATTEMPTS, p.stdout[-400:]), pytrace=False)
 
 
 # --------------------------------------------------------------------------

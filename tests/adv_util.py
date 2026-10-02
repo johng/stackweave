@@ -419,7 +419,9 @@ def rlimit_nproc_caps_threads():
     than inferred from the euid, since a capability set can exempt a non-root
     user, and root in a container that maps it to an unprivileged host uid is
     capped.  False off Linux, where the limit caps fork()ed processes, not
-    threads."""
+    threads.  Only an explicit NOT_CAPPED answer returns False: a probe that
+    crashes or hangs leaves the tests to run and fail loudly rather than skip
+    them everywhere."""
     import subprocess
     if not sys.platform.startswith("linux"):
         return False
@@ -427,8 +429,8 @@ def rlimit_nproc_caps_threads():
         p = subprocess.run([sys.executable, "-c", _NPROC_PROBE],
                            capture_output=True, text=True, timeout=60)
     except subprocess.TimeoutExpired:
-        return False
-    return p.stdout.strip() == "CAPPED"
+        return True
+    return p.stdout.strip() != "NOT_CAPPED"
 
 
 def needs_rlimit_nproc_thread_cap():
