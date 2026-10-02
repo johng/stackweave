@@ -246,6 +246,9 @@ typedef struct {
 } runloom_iouring_state_t;
 
 static runloom_iouring_state_t runloom_iouring_state = {0};
+/* Why the global ring has no buffer ring (0 = it has one, or no ring yet):
+ * stats()["iouring_pbuf_errno"], and the warning in pbuf_available. */
+static int runloom_iouring_pbuf_errno_last = 0;
 static volatile long runloom_iouring_lock_inited = 0;
 
 /* Inflight counter: incremented after a successful submit, decremented
@@ -412,6 +415,9 @@ static int runloom_iouring_lazy_init(void)
             pool = NULL;
         if (posix_memalign(&bring, (size_t)page, bring_size) != 0)
             bring = NULL;
+        if (pool == NULL || bring == NULL)
+            __atomic_store_n(&runloom_iouring_pbuf_errno_last, ENOMEM,
+                             __ATOMIC_RELAXED);
         if (pool != NULL && bring != NULL) {
             unsigned i;
             struct runloom_iouring_buf *bufs;
@@ -422,8 +428,7 @@ static int runloom_iouring_lazy_init(void)
             reg.ring_entries = RUNLOOM_IOURING_PBUF_COUNT;
             reg.bgid         = RUNLOOM_IOURING_PBUF_BGID;
             reg.flags        = 0;
-            if (sys_io_uring_register(fd, IORING_REGISTER_PBUF_RING,
-                                      &reg, 1) == 0) {
+            if (runloom_iouring_pbuf_ring_register(fd, &reg) == 0) {
                 /* Populate the ring: each buffer at index i refers to
                  * pool_base + i*BUF_SIZE with bid=i.  After we fill the
                  * descriptors, bump the tail by N so the kernel sees N
@@ -451,6 +456,8 @@ static int runloom_iouring_lazy_init(void)
                 runloom_iouring_state.bring_mask    = RUNLOOM_IOURING_PBUF_COUNT - 1;
                 runloom_mutex_init(&runloom_iouring_state.bring_lock);
             } else {
+                __atomic_store_n(&runloom_iouring_pbuf_errno_last, errno,
+                                 __ATOMIC_RELAXED);
                 free(pool);  free(bring);
             }
         } else {

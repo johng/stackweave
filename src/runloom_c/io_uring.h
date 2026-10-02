@@ -126,8 +126,18 @@ runloom_iouring_ssize_t runloom_iouring_send(int fd, const void *buf, size_t n, 
  * ============================================================ */
 
 /* 1 if the provided-buffer ring is set up (and multishot is usable),
- * 0 otherwise.  Lazy-initialised alongside the main ring. */
+ * 0 otherwise.  Lazy-initialised alongside the main ring.  The first 0 caused
+ * by a failed registration prints a one-time capability-degrade warning. */
 int runloom_iouring_pbuf_available(void);
+
+/* errno with which the global ring's buffer ring registration failed, 0 if it
+ * did not (stats()["iouring_pbuf_errno"]). */
+int runloom_iouring_pbuf_errno(void);
+
+/* 1 once a buffer ring (global or hub) was registered with the workaround for
+ * Ubuntu's 6.8 kernels, whose reserved-word check is inverted
+ * (stats()["iouring_pbuf_resv_quirk"]; io_uring_l_pbuf.c.inc). */
+int runloom_iouring_pbuf_resv_quirk(void);
 
 /* Per-buffer size and total count, for callers that want to know how
  * much data a multishot CQE can deliver per buffer. */

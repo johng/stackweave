@@ -223,11 +223,10 @@ int runloom_iouring_loop_ms_pbuf_errno(void)
 
 /* A hub's buffer ring could not be set up, so every stream opened on that hub
  * falls back to single-shot recv.  Record why, and say so once: the env var
- * asked for multishot, and the fallback is otherwise silent.  Seen in the
- * field: Ubuntu's 6.8.0 kernel (6.8.0-142-generic) answers EVERY valid
- * IORING_REGISTER_PBUF_RING with EINVAL -- its check of the registration's
- * reserved words is inverted (it accepts the call only when resv is NONZERO),
- * so liburing fails the same way there.  Newer kernels register fine. */
+ * asked for multishot, and the fallback is otherwise silent.  Ubuntu's 6.8
+ * kernels, which refuse every plain registration, no longer land here: the
+ * workaround in io_uring_l_pbuf.c.inc registers on them (unless
+ * STACKWEAVE_IOURING_PBUF_RESV_QUIRK=0). */
 static void runloom_iouring_loop_ms_pbuf_failed(int err)
 {
     static int warned = 0;
@@ -270,8 +269,7 @@ static int runloom_iouring_loop_ms_pbuf_setup(runloom_iouring_ring_t *r)
     reg.ring_entries = count;
     reg.bgid         = RUNLOOM_LOOP_MS_BGID;
     reg.flags        = 0;
-    if (sys_io_uring_register(r->ring_fd, IORING_REGISTER_PBUF_RING,
-                              &reg, 1) != 0) {
+    if (runloom_iouring_pbuf_ring_register(r->ring_fd, &reg) != 0) {
         int err = errno;
         free(pool); free(bring);
         runloom_iouring_loop_ms_pbuf_failed(err);
@@ -296,16 +294,20 @@ static int runloom_iouring_loop_ms_pbuf_setup(runloom_iouring_ring_t *r)
 
 static void runloom_iouring_loop_ms_pbuf_teardown(runloom_iouring_ring_t *r)
 {
-    struct runloom_iouring_buf_reg reg;
     if (r == NULL || r->ms_pool == NULL) return;
     /* Unregister BEFORE freeing so the kernel drops its reference to bring/pool
      * (the ring fd is closed right after, which would also drop it, but the
-     * close happens in ring_destroy after this returns). */
-    memset(&reg, 0, sizeof(reg));
-    reg.bgid = RUNLOOM_LOOP_MS_BGID;
-    sys_io_uring_register(r->ring_fd, IORING_UNREGISTER_PBUF_RING, &reg, 1);
-    free(r->ms_pool);  r->ms_pool  = NULL;
-    free(r->ms_bring); r->ms_bring = NULL;
+     * close happens in ring_destroy after this returns).  If the kernel keeps
+     * the ring, it may still fill a buffer from it until that close, so leak
+     * both (once per hub ring, at shutdown) rather than hand them back to
+     * malloc while the kernel can write into them. */
+    if (runloom_iouring_pbuf_ring_unregister(r->ring_fd,
+                                             RUNLOOM_LOOP_MS_BGID) == 0) {
+        free(r->ms_pool);
+        free(r->ms_bring);
+    }
+    r->ms_pool = NULL;
+    r->ms_bring = NULL;
     r->ms_count = r->ms_size = r->ms_mask = 0;
 }
 

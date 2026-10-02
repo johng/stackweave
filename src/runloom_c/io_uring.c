@@ -54,6 +54,7 @@
 #include <sys/mman.h>
 #include <sys/socket.h>   /* direct-first recv/send in the loop backend */
 #include <sys/syscall.h>
+#include <sys/utsname.h>   /* the pbuf-ring workaround's kernel gate */
 #include <unistd.h>
 
 #include "io_uring.h"
@@ -133,6 +134,12 @@ struct runloom_iouring_buf_reg {
     uint64_t resv[3];
 };
 
+/* Defined in io_uring_l_pbuf.c.inc; io_uring_l_sys.c.inc (included first)
+ * registers the global ring's buffer ring through it. */
+static int runloom_iouring_pbuf_ring_register(int ring_fd,
+                                              struct runloom_iouring_buf_reg *reg);
+static int runloom_iouring_pbuf_ring_unregister(int ring_fd, uint16_t bgid);
+
 
 /* ---------------------------------------------------------------------------
  * io_uring.c is split across the io_uring_*.c.inc fragments below for readability.
@@ -141,6 +148,7 @@ struct runloom_iouring_buf_reg {
  * standalone.  setup.py compiles only io_uring.c.
  * --------------------------------------------------------------------------- */
 #include "io_uring_l_sys.c.inc"   /* defines RUNLOOM_IOURING_WAIT_* used below */
+#include "io_uring_l_pbuf.c.inc"  /* buffer ring (un)registration + the Ubuntu 6.8 workaround */
 
 /* ---- io_uring SINGLE-op park/wake FSM (OBSERVATIONAL) -----------------------
  * The op->wait commit handshake (INFLIGHT/PARKED/DONE), GenMC-proven in
@@ -407,5 +415,7 @@ unsigned long long runloom_iouring_loop_ms_posted_returns(void) { return 0; }
 unsigned long long runloom_iouring_loop_ms_opens(void) { return 0; }
 unsigned long long runloom_iouring_loop_ms_fallbacks(void) { return 0; }
 int runloom_iouring_loop_ms_pbuf_errno(void) { return 0; }
+int runloom_iouring_pbuf_errno(void) { return 0; }
+int runloom_iouring_pbuf_resv_quirk(void) { return 0; }
 
 #endif

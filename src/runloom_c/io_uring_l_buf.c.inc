@@ -49,8 +49,24 @@ int runloom_iouring_inflight(void)
 
 int runloom_iouring_pbuf_available(void)
 {
+    static int warned = 0;
+    int err;
     if (!runloom_iouring_available()) return 0;
-    return runloom_iouring_state.pool_base != NULL;
+    if (runloom_iouring_state.pool_base != NULL) return 1;
+    /* Say once that multishot recv is off, at its first use: otherwise the
+     * single-shot fallback is silent. */
+    err = __atomic_load_n(&runloom_iouring_pbuf_errno_last, __ATOMIC_RELAXED);
+    if (err != 0 && __atomic_exchange_n(&warned, 1, __ATOMIC_RELAXED) == 0)
+        fprintf(stderr, "[stackweave] io_uring capability degrade: the "
+                "provided buffer ring could not be registered (errno %d, %s) "
+                "-- io_uring TCPConn recv falls back to single-shot recv\n",
+                err, strerror(err));
+    return 0;
+}
+
+int runloom_iouring_pbuf_errno(void)
+{
+    return __atomic_load_n(&runloom_iouring_pbuf_errno_last, __ATOMIC_RELAXED);
 }
 
 unsigned runloom_iouring_pbuf_size(void)

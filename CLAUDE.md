@@ -183,13 +183,17 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   (`runloom_iouring_loop_inbox_drain`, at its loop top). Caching a ring across
   a park (the old all-C echo) lost SQEs and stranded fibers. Guard: `tests/test_cov100b_iouring.py::test_iouring_loop_echo_survives_fiber_migration`
   (and big_100 p223, which stalls within seconds without it). Multishot needs
-  a provided buffer ring per hub and falls back to single-shot when the kernel
-  refuses one -- Ubuntu's 6.8.0-142-generic refuses every valid one (its
-  reserved-word check is inverted) -- so a multishot run there is a
-  single-shot run: `stats()["iouring_loop_ms_opens"]` / `_fallbacks` /
-  `_pbuf_errno` tell them apart, and `adv_util.kernel_pbuf_ring_errno()` asks
-  the kernel directly. Migration with a stream open is opportunistic (a woken
-  fiber moves only when stolen), so the guard reads
+  a provided buffer ring per hub and falls back to single-shot, with a one-time
+  warning, when the kernel refuses one: `stats()["iouring_loop_ms_opens"]` /
+  `_fallbacks` / `_pbuf_errno` tell the two runs apart, and
+  `adv_util.kernel_pbuf_ring_errno()` asks the kernel directly. Ubuntu's 6.8
+  kernels (6.8.0-139 on) invert the reserved-word check in buffer-ring
+  register AND unregister, so every buffer ring goes through
+  `io_uring_l_pbuf.c.inc`, which retries a refused 6.8 registration with
+  `resv[0] = 1` and unregisters the same way (`iouring_pbuf_resv_quirk`;
+  `STACKWEAVE_IOURING_PBUF_RESV_QUIRK=0|1` forces it off/on). Never call
+  `IORING_(UN)REGISTER_PBUF_RING` directly. Migration with a stream open is
+  opportunistic (a woken fiber moves only when stolen), so the guard reads
   `iouring_loop_ms_posted_returns`, repeats a run that had none (~1 in 800),
   and fails if four in a row had none.
 - **The loop backend's ring is serviced every scheduling round, never only at

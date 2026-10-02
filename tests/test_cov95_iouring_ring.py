@@ -30,13 +30,15 @@ complete with ECANCELED (not hang), and a multishot handle that is freed both
 while still armed (cancel branch) and after the peer EOF terminated it
 (immediate-free branch).
 """
+import errno
 import os
 import subprocess
 import sys
 
 import pytest
 
-from adv_util import needs_free_threading
+from adv_util import (kernel_needs_pbuf_resv_quirk, kernel_pbuf_ring_errno,
+                      needs_free_threading)
 
 FT = needs_free_threading()
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -509,7 +511,13 @@ stackweave.run(2, main)
 ''' + _POST + r'''
 sys.stdout.write("MS_CLOSE a=%r b1=%r b2=%r\n" %
                  (res.get("a"), res.get("b1"), res.get("b2")))
+st = rc.stats()
+sys.stdout.write("PBUF_ERRNO %d\n" % st["iouring_pbuf_errno"])
+sys.stdout.write("PBUF_RESV_QUIRK %d\n" % st["iouring_pbuf_resv_quirk"])
 '''
+
+_MS_CLOSE_OK = "MS_CLOSE a=b'ARMEDXX1' b1=b'EOFCLOSE' b2=b''"
+_TCPCONN_DEGRADE = "io_uring TCPConn recv falls back to single-shot recv"
 
 
 @needs_iouring
@@ -521,10 +529,50 @@ def test_multishot_close_armed_and_immediate_free_branches():
     # conn A delivered its bytes (multishot armed at close), conn B delivered its
     # bytes then saw a clean EOF (empty second recv) -- so both ms_close branches
     # ran and neither double-freed a buffer nor stranded the handle.
-    assert "MS_CLOSE a=b'ARMEDXX1' b1=b'EOFCLOSE' b2=b''" in p.stdout, (
+    assert _MS_CLOSE_OK in p.stdout, (
         "the multishot recv/close lifecycle did not produce the expected "
         "armed-close + EOF-close outcomes\nstdout=%s\nstderr=%s"
         % (p.stdout, p.stderr[-1200:]))
+    # The recvs above ran multishot only if the global ring got its buffer
+    # ring; without it they ran single-shot and still passed.  So pin it: it
+    # registers wherever the kernel takes either form, with the workaround
+    # exactly where the kernel needs that.
+    plain = kernel_pbuf_ring_errno()
+    quirk = kernel_needs_pbuf_resv_quirk()
+    if plain != 0 and not quirk:
+        pytest.skip("this kernel refuses every provided buffer ring (errno "
+                    "%s), so these recvs ran single-shot" % plain)
+    assert "PBUF_ERRNO 0" in p.stdout and _TCPCONN_DEGRADE not in p.stderr, (
+        "the global ring's buffer ring failed to register, so multishot never "
+        "armed\nstdout=%s\nstderr=%s" % (p.stdout, p.stderr[-1200:]))
+    assert ("PBUF_RESV_QUIRK %d" % quirk) in p.stdout, (
+        "the Ubuntu 6.8 workaround %s\n%s"
+        % ("never engaged on a kernel that needs it" if quirk
+           else "engaged on a kernel that takes the plain registration",
+           p.stdout))
+
+
+@needs_iouring
+def test_multishot_falls_back_to_single_shot_with_one_warning():
+    # With no buffer ring the same lifecycle runs single-shot, and the first
+    # recv that wanted multishot says so on stderr -- once.  Driven on any
+    # kernel by sending the registration form THIS kernel refuses.
+    plain, resv0 = kernel_pbuf_ring_errno(), kernel_pbuf_ring_errno(resv0=1)
+    if plain == 0:
+        knob = "1"      # resv[0] = 1 on a correct kernel: EINVAL
+    elif resv0 == 0:
+        knob = "0"      # workaround off on an inverted-check kernel: EINVAL
+    else:
+        pytest.skip("this kernel refuses both registration forms (%s, %s)"
+                    % (plain, resv0))
+    p = _run(_MS_CLOSE, {"STACKWEAVE_IOURING_PBUF_RESV_QUIRK": knob})
+    _no_crash(p, "multishot fallback")
+    assert p.returncode == 0 and _MS_CLOSE_OK in p.stdout, (
+        "the single-shot fallback did not deliver the same outcomes\n"
+        "stdout=%s\nstderr=%s" % (p.stdout, p.stderr[-1200:]))
+    assert ("PBUF_ERRNO %d" % errno.EINVAL) in p.stdout, p.stdout
+    assert p.stderr.count(_TCPCONN_DEGRADE) == 1, (
+        "expected exactly one capability-degrade warning\n" + p.stderr[-1200:])
 
 
 # ===========================================================================
