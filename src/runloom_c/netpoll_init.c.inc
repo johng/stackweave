@@ -392,8 +392,8 @@ void runloom_netpoll_fini(void)
              * are 0 -- closing them would close fd 0 (stdin).  fini() runs in the
              * forked child (reset_after_fork), so the >= 0 test silently closed
              * the child's stdin for every uninited pool.  Real fds are > 2; -1 is
-             * not-created.  (backend_create normalizes BSS-zero slots to -1 right
-             * after, line ~510, so a skipped slot is harmless.) */
+             * not-created.  (reset_after_fork then sets every hub slot's fds
+             * to -1, so a skipped slot is harmless.) */
             if (p->wake_efd > 0) { close(p->wake_efd); p->wake_efd = -1; }
             if (p->epoll_fd > 0) { close(p->epoll_fd); p->epoll_fd = -1; }
         }
@@ -435,7 +435,6 @@ void runloom_netpoll_reset_after_fork(void)
     for (i = 0; i < (size_t)RUNLOOM_PARKER_POOL_MAX; i++) {
         runloom_parker_pool_t *p = &runloom_pools[i];
         runloom_mutex_init(&p->lock);
-        p->lock_inited = 2;     /* ready (re-inited above) */
         p->head = NULL;
         __atomic_store_n(&p->total, 0, __ATOMIC_RELAXED);
         if (p->by_fd != NULL)
@@ -446,12 +445,29 @@ void runloom_netpoll_reset_after_fork(void)
         p->link_count = 0;
         p->churn_last_links = 0;
         p->churn_last_ns = 0;
-        /* Fresh per-hub kqueue + self-pipe for the child: fork shares the
-         * parent's kernel kqueue, so the inherited handles (closed by fini above,
-         * set -1) must not be reused.  lock_inited is set to 2 directly here, so
-         * the lazy backend path is skipped -- create it explicitly.  No-op on
-         * epoll/select. */
-        runloom_pool_backend_create(p);
+        /* "A kick is in flight" is cleared only when this pool's wake eventfd
+         * fires, and the child's eventfd is new and empty: a 1 inherited from
+         * the parent (e.g. a hub kicked by mn_fini that exited without
+         * pumping) would make wake_pump skip every later kick to this pool. */
+        p->wake_pending = 0;
+        /* The child needs pollers of its own -- fork shares the parent's
+         * kernel epoll/kqueue, and fini above closed the inherited handles --
+         * but only for the pools it uses.  So a hub pool goes back to
+         * never-used, and lock_ensure_inited creates its backend on first
+         * touch, as in a fresh process.  Creating every slot's here put a
+         * poller in every forked child for all RUNLOOM_PARKER_POOL_MAX pools
+         * (130 fds on epoll, 195 on kqueue), hub or no hub.  The default pool
+         * stays ready: netpoll_register.c.inc (the fd arm-mask accessors),
+         * netpoll_pump.c.inc and netpoll_wake_iouring.c.inc take its lock
+         * directly, not through lock_ensure_inited. */
+        if (p == &runloom_pool) {
+            runloom_pool_backend_create(p);
+            p->lock_inited = 2;
+        } else {
+            p->epoll_fd = p->wake_efd = -1;
+            p->kqueue_fd = p->selfpipe_r = p->selfpipe_w = -1;
+            p->lock_inited = 0;
+        }
     }
     /* The per-fd registration bitmap says "fd X is already armed in the
      * poller"; against the child's BRAND-NEW poller every such bit is a lie
@@ -479,10 +495,13 @@ void runloom_netpoll_reset_after_fork(void)
 #if defined(RUNLOOM_HAVE_EPOLL)
     /* The per-hub io_uring ring registry names the PARENT hubs' rings (dead in
      * the child).  The child's fresh hubs re-register their own; if we keep the
-     * stale entries the pump dispatches CQEs to freed rings -> hang/crash.  The
-     * epoll/eventfd/pump-wake fds were closed with the epoll fd above. */
+     * stale entries the pump dispatches CQEs to freed rings -> hang/crash.
+     * The pump-wake eventfd is the parent's (fork shares it): close the
+     * child's copy, which nothing else does, and let wake_pump_arm make a new
+     * one on first use. */
     runloom_iouring_ring_count = 0;
     runloom_iouring_eventfd_in_epoll = -1;
+    if (runloom_pump_wake_fd > 2) close(runloom_pump_wake_fd);
     runloom_pump_wake_fd = -1;
 #endif
 }
