@@ -596,6 +596,7 @@ runloom_iouring_ms_t *runloom_iouring_ms_open(int fd)
         return NULL;
     }
     RUNLOOM_RUNLOCK(&h->lock, RUNLOOM_RANK_HUB);
+    runloom_iouring_pbuf_resv_notice();
     return h;
 }
 

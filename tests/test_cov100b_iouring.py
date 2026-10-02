@@ -12,6 +12,7 @@ Oracles are real: exact-once byte echo, a closed-form channel sum, a clean
 teardown across many ring create/destroy cycles, and cancel-wakes a fiber parked
 on an in-flight io_uring op (asserts it returns CANCELLED, not hangs).
 """
+import errno
 import os
 import platform
 import re
@@ -21,7 +22,8 @@ import sys
 import pytest
 
 from adv_util import (IOURING_LOOP_TRAILER, assert_iouring_loop_ran,
-                      kernel_pbuf_ring_errno, needs_free_threading)
+                      kernel_needs_pbuf_resv_quirk, kernel_pbuf_ring_errno,
+                      needs_free_threading)
 
 FT = needs_free_threading()
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -110,11 +112,12 @@ def test_iouring_loop_echo_exact_once():
 #     multishot=1 rests on two things the oracles above can't see, because a
 #     run without either moves the same bytes:
 #       - multishot armed at all.  A stream falls back to single-shot when its
-#         hub has no provided buffer ring, and the kernel can refuse one
-#         (Ubuntu's 6.8.0-142-generic refuses every valid registration).  All
+#         hub has no provided buffer ring, and the kernel can refuse one.  All
 #         48 streams must open; the case skips only when an independent probe
-#         shows the KERNEL refuses the registration, and fails when the
-#         runtime's own registration fails on a kernel that accepts it.
+#         shows the KERNEL refuses both registration forms, and fails when the
+#         runtime's own registration fails on a kernel that accepts either --
+#         Ubuntu's 6.8 kernels accept only the workaround's (resv[0] = 1), and
+#         the case checks the workaround engaged exactly there.
 #       - a fiber migrated with its stream open.  A woken echo fiber lands on
 #         its waker's deque, i.e. its stream's owner hub (local wake), and
 #         moves only if an idle hub steals it first, so some runs have no
@@ -168,6 +171,7 @@ sys.stdout.write("LOOP_POLLS %d\n" % st["iouring_loop_polls"])
 sys.stdout.write("MS_OPENS %d\n" % st["iouring_loop_ms_opens"])
 sys.stdout.write("MS_FALLBACKS %d\n" % st["iouring_loop_ms_fallbacks"])
 sys.stdout.write("MS_PBUF_ERRNO %d\n" % st["iouring_loop_ms_pbuf_errno"])
+sys.stdout.write("PBUF_RESV_QUIRK %d\n" % st["iouring_pbuf_resv_quirk"])
 sys.stdout.write("POSTED_RETURNS %d\n" % st["iouring_loop_ms_posted_returns"])
 sys.stdout.write("REMOTE_RETURNS %d\n" % st["iouring_loop_ms_remote_returns"])
 """
@@ -178,11 +182,13 @@ sys.stdout.write("REMOTE_RETURNS %d\n" % st["iouring_loop_ms_remote_returns"])
 _MIGRATE_ATTEMPTS = 4
 
 
-def _run_echo_migrate(multishot):
+def _run_echo_migrate(multishot, **env_extra):
     """One echo run, checked against the oracles that hold with or without
     multishot; returns (CompletedProcess, {stat: int})."""
     env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src",
                STACKWEAVE_IOURING_LOOP="1", STACKWEAVE_IOURING_MS=multishot)
+    env.pop("STACKWEAVE_IOURING_PBUF_RESV_QUIRK", None)
+    env.update(env_extra)
     p = subprocess.run([PY, "-c", _ECHO_MIGRATE + IOURING_LOOP_TRAILER],
                        cwd=REPO, env=env, capture_output=True, text=True,
                        timeout=240)
@@ -208,13 +214,15 @@ def test_iouring_loop_echo_survives_fiber_migration(multishot):
     p, st = _run_echo_migrate(multishot)
     if multishot == "0":
         return
+    quirk = kernel_needs_pbuf_resv_quirk()
     if st["MS_OPENS"] == 0:
         kerr = kernel_pbuf_ring_errno()
-        assert kerr, (
+        assert kerr and not quirk, (
             "multishot never armed, yet %s: the runtime's own buffer-ring "
             "registration failed\n%s\n%s"
             % ("this kernel accepts a provided buffer ring" if kerr == 0
-               else "the kernel could not be probed",
+               else "the kernel could not be probed" if kerr is None
+               else "this kernel accepts the Ubuntu 6.8 workaround's form",
                p.stdout[-400:], p.stderr[-800:]))
         # The fallback must be visible: the errno stat and the one-time
         # warning are what tell this run from a multishot one.
@@ -224,11 +232,21 @@ def test_iouring_loop_echo_survives_fiber_migration(multishot):
         assert "provided buffer ring could not be registered" in p.stderr, (
             "no capability-degrade warning\n" + p.stderr[-800:])
         pytest.skip(
-            "multishot recv never armed: this kernel (%s) refuses every valid "
+            "multishot recv never armed: this kernel (%s) refuses every "
             "io_uring provided buffer ring (errno %d, %s), so all 48 streams "
             "fell back to single-shot recv, which passed the run's oracles "
             "and is what the [0] case covers"
             % (platform.release(), kerr, os.strerror(kerr)))
+    # The Ubuntu 6.8 workaround engages exactly where the kernel needs it, and
+    # says so.
+    assert st["PBUF_RESV_QUIRK"] == int(quirk), (
+        "the workaround %s\n%s"
+        % ("never engaged on a kernel that needs it" if quirk
+           else "engaged on a kernel that takes the plain registration",
+           p.stdout[-400:]))
+    assert ("inverted check" in p.stderr) == quirk, (
+        "the workaround's one-time notice is %s\n%s"
+        % ("missing" if quirk else "printed without it", p.stderr[-800:]))
     for attempt in range(1, _MIGRATE_ATTEMPTS + 1):
         if attempt > 1:
             p, st = _run_echo_migrate(multishot)
@@ -244,6 +262,54 @@ def test_iouring_loop_echo_survives_fiber_migration(multishot):
         "row (a woken fiber moves only when an idle hub steals it; a single "
         "such run is ~1 in 800): migration with a stream open has stopped\n%s"
         % (_MIGRATE_ATTEMPTS, p.stdout[-400:]), pytrace=False)
+
+
+@needs_iouring
+def test_iouring_loop_multishot_falls_back_with_one_warning():
+    # When no hub can register a buffer ring, every multishot stream runs
+    # single-shot -- the same bytes -- and the run says so: once on stderr, and
+    # in the stats.  Driven on any kernel by sending the registration form THIS
+    # kernel refuses: resv[0] = 1 on a correct kernel, or the plain form with
+    # the workaround off on an inverted-check one.
+    plain, resv0 = kernel_pbuf_ring_errno(), kernel_pbuf_ring_errno(resv0=1)
+    if plain == 0:
+        knob = "1"
+    elif resv0 == 0:
+        knob = "0"
+    else:
+        pytest.skip("this kernel refuses both registration forms (%s, %s): "
+                    "test_iouring_loop_echo_survives_fiber_migration[1] "
+                    "covers its fallback" % (plain, resv0))
+    p, st = _run_echo_migrate("1", STACKWEAVE_IOURING_PBUF_RESV_QUIRK=knob)
+    assert st["MS_OPENS"] == 0 and st["MS_FALLBACKS"] == 48, (
+        "a stream armed multishot with no buffer ring\n" + p.stdout[-400:])
+    assert st["MS_PBUF_ERRNO"] == errno.EINVAL, p.stdout[-400:]
+    assert st["PBUF_RESV_QUIRK"] == 0, p.stdout[-400:]
+    assert p.stderr.count("hub provided buffer ring could not be registered") == 1, (
+        "expected exactly one capability-degrade warning\n" + p.stderr[-800:])
+
+
+@needs_iouring
+def test_kernel_accepts_one_buffer_ring_registration_form():
+    # The workaround's premise.  A kernel accepts the plain registration (zeroed
+    # reserved words) or, with the check inverted, the one with resv[0] = 1 --
+    # never both, else the retry would not be harmless; and every kernel that
+    # needs the second is a 6.8 one, else the runtime's gate misses it.
+    plain, resv0 = kernel_pbuf_ring_errno(), kernel_pbuf_ring_errno(resv0=1)
+    if plain is None:
+        pytest.skip("io_uring cannot be set up here")
+    assert not (plain == 0 and resv0 == 0), (
+        "kernel %s accepts a nonzero reserved word" % platform.release())
+    if plain != 0 and resv0 != 0:
+        pytest.skip("this kernel (%s) refuses both forms (%d, %d): no "
+                    "provided buffer rings" % (platform.release(), plain, resv0))
+    if plain == 0:
+        assert resv0 == errno.EINVAL, resv0
+    else:
+        assert plain == errno.EINVAL and platform.release().startswith("6.8."), (
+            "kernel %s has the inverted reserved-word check, but the runtime's "
+            "workaround only retries on 6.8 kernels: widen the gate in "
+            "src/runloom_c/io_uring_l_pbuf.c.inc" % platform.release())
 
 
 # --------------------------------------------------------------------------

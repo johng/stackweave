@@ -29,6 +29,7 @@ import sys
 import time
 import threading
 import contextlib
+import errno
 
 sys.path.insert(0, os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
@@ -353,7 +354,7 @@ def assert_iouring_loop_ran(p):
         + p.stdout[-400:] + "\n" + p.stderr[-800:])
 
 
-def kernel_pbuf_ring_errno():
+def kernel_pbuf_ring_errno(resv0=0):
     """The errno with which THIS kernel refuses a valid io_uring provided buffer
     ring registration (IORING_REGISTER_PBUF_RING), 0 if it accepts one, or None
     if io_uring itself can't be set up here.
@@ -364,8 +365,12 @@ def kernel_pbuf_ring_errno():
     asks the kernel directly, with raw syscalls and the registration built as
     the UAPI documents it (page-aligned ring, power-of-two entries, zero flags
     and reserved words), so a nonzero result is the kernel's verdict and not a
-    runtime bug.  Ubuntu's 6.8.0-142-generic kernel returns EINVAL here for
-    every valid call: its reserved-word check is inverted."""
+    runtime bug.  Ubuntu's 6.8 kernels (the bad backport is listed in
+    6.8.0-139's changelog; measured on 6.8.0-142) return EINVAL here for every
+    valid call: their reserved-word check is inverted.  resv0=1 sets the
+    first reserved word instead, the form the runtime's workaround for them
+    sends: a correct kernel refuses it with EINVAL, and those kernels accept
+    it."""
     import ctypes
     import mmap
     import platform
@@ -383,7 +388,7 @@ def kernel_pbuf_ring_errno():
     cring = ctypes.c_char.from_buffer(ring)
     try:
         reg = ctypes.create_string_buffer(struct.pack(
-            "=QIHH3Q", ctypes.addressof(cring), 8, 0, 0, 0, 0, 0))
+            "=QIHH3Q", ctypes.addressof(cring), 8, 0, 0, resv0, 0, 0))
         rc = libc.syscall(ctypes.c_long(nr_register), ctypes.c_long(fd),
                           ctypes.c_long(register_pbuf_ring), reg,
                           ctypes.c_long(1))
@@ -392,6 +397,16 @@ def kernel_pbuf_ring_errno():
         os.close(fd)                                   # drops the kernel's pin
         del cring
         ring.close()
+
+
+def kernel_needs_pbuf_resv_quirk():
+    """True iff this kernel refuses the plain buffer-ring registration but
+    accepts the workaround's form, and the runtime's 6.8 gate covers it -- so
+    the runtime is expected to register with the workaround."""
+    import platform
+    return (kernel_pbuf_ring_errno() == errno.EINVAL
+            and kernel_pbuf_ring_errno(resv0=1) == 0
+            and platform.release().startswith("6.8."))
 
 
 _NPROC_PROBE = r"""
