@@ -124,7 +124,9 @@ def client():
         box["who"] = "parked"                    # <-- the contract
         # The observer's sleep in progress at the trip had ended (it was DUE)
         # before the signal got here -- the condition under test, not a probe
-        # on an otherwise empty ready ring.
+        # on an otherwise empty ready ring.  Relies on the drain's FIFO ring
+        # (due sleepers are pushed before the probe's wake); STACKWEAVE_PCT_SEED
+        # reorders it, so this can read parked-before-due under PCT.
         if box.get("n", 0) <= box.get("n_at_trip", -1):
             box["who"] = "parked-before-due"
     box["done"] = True
