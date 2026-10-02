@@ -184,7 +184,7 @@ def _check_migration_build():
     with; compare it with what this interpreter was built with."""
     built = bool(getattr(stackweave_c, "migration_patched", 1))
     running = _interpreter_migration_patched()
-    if built != running:
+    if built != running and sys.stderr is not None:
         sys.stderr.write(
             "[stackweave] stackweave_c was built %s the migration patches, but "
             "this interpreter (%s) was built %s them: the two disagree about "

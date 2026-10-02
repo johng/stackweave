@@ -314,8 +314,9 @@ static void runloom_mn_global_runq_repin(runloom_g_t *g, int new_pin1)
  * alloc-home (Py_TSTATE_ALLOC_HOME: a per-g tstate allocates on the hub now
  * running it, so no mimalloc heap migrates OS threads) and exec-home
  * (Py_TSTATE_EXEC_HOME: _PyThreadState_GET()/_Py_ThreadId() stay uncacheable
- * across a park/resume).  Nothing checks for them; on a stock interpreter the
- * scheduler migrates anyway and can crash under churn at H>=2. */
+ * across a park/resume).  On a stock interpreter the scheduler migrates anyway
+ * and can crash under churn at H>=2; it only warns (mn_init, and the import
+ * check in stackweave/runtime.py). */
 static int runloom_use_global_runq(void)
 {
     return runloom_get_per_g_tstate_mode();

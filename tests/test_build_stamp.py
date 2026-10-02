@@ -138,11 +138,33 @@ def test_an_asm_fallback_is_remembered(setup_ns, monkeypatch, tmp_path):
     forced, out = _build(setup_ns, monkeypatch, tmp_path, compile_stub=_rejects_asm)
     assert forced and "retrying with ucontext" in out, out
     assert _stamp(tmp_path)["asm_failed"] is True
-    # The next build starts with ucontext: no failed asm, no rebuild.
+    # The next build starts with ucontext, and says so: no failed asm, no
+    # rebuild.
     forced, out = _build(_load(monkeypatch), monkeypatch, tmp_path,
                          compile_stub=_rejects_asm)
     assert not forced and "retrying" not in out, out
+    assert "the asm failed last time" in out, out
     # --force tries the asm again.
     forced, out = _build(_load(monkeypatch), monkeypatch, tmp_path,
                          compile_stub=_rejects_asm, force=True)
     assert forced and "retrying with ucontext" in out, out
+
+
+def test_an_asm_fallback_is_not_kept_across_a_toolchain_change(setup_ns, monkeypatch, tmp_path):
+    if not any(s.endswith((".S", ".s")) for s in setup_ns["ext"].sources):
+        pytest.skip("this platform builds without asm")
+    _build(setup_ns, monkeypatch, tmp_path, compile_stub=_rejects_asm)
+    assert _stamp(tmp_path)["asm_failed"] is True
+    # Another compiler may take the asm: try it rather than stay on ucontext.
+    monkeypatch.setenv("CC", "another-cc")
+    tried = []
+
+    def accepts_asm(cmd):
+        tried.append(any(s.endswith((".S", ".s"))
+                         for e in cmd.extensions for s in e.sources))
+
+    forced, out = _build(_load(monkeypatch), monkeypatch, tmp_path,
+                         compile_stub=accepts_asm)
+    assert forced and tried == [True], (tried, out)
+    assert "the asm failed last time" not in out, out
+    assert _stamp(tmp_path)["asm_failed"] is False

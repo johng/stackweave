@@ -340,6 +340,15 @@ def _fall_back_to_ucontext(extensions):
         e_obj.extra_compile_args = detect_compile_args()
 
 
+def _restore_asm_build(saved):
+    """Undo _fall_back_to_ucontext: saved is [(ext, sources, compile_args)]."""
+    global USE_UCONTEXT
+    USE_UCONTEXT = False
+    for e_obj, sources, compile_args in saved:
+        e_obj.sources = sources
+        e_obj.extra_compile_args = compile_args
+
+
 # --------------------------------------------------------------------
 # Custom build_ext with graceful fallback to ucontext if asm fails
 # --------------------------------------------------------------------
@@ -361,9 +370,19 @@ class runloom_build_ext(_build_ext):
     def run(self):
         stamp = os.path.join(self.build_temp, _BUILD_STAMP)
         previous = _read_build_stamp(stamp) or {}
-        asm_failed = bool(previous.get("asm_failed")) and not self.force
-        if asm_failed and not USE_UCONTEXT:
+        asm_failed = False
+        if previous.get("asm_failed") and not self.force and not USE_UCONTEXT:
+            # Start with ucontext only if that rebuilds exactly what the last
+            # build did; anything else changed (a new CC, say) tries the asm.
+            asm_build = [(e, e.sources, e.extra_compile_args)
+                         for e in self.extensions]
             _fall_back_to_ucontext(self.extensions)
+            if build_identity(self.extensions, self.build_lib) == previous.get("identity"):
+                asm_failed = True
+                print("stackweave build: the asm failed last time; building "
+                      "with ucontext (--force retries the asm)")
+            else:
+                _restore_asm_build(asm_build)
         identity = build_identity(self.extensions, self.build_lib)
         if previous.get("identity") != identity:
             if previous:
