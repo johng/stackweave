@@ -184,8 +184,10 @@ corrupts:
   thread, so a resumed fiber keeps using the origin hub's tstate. Fixed by
   `Py_TSTATE_EXEC_HOME`.
 
-Both patches (`src/patches/`) are required for a sound M:N run; nothing checks
-for them at runtime.
+Both patches (`src/patches/`) are required for a sound M:N run. stackweave
+warns but doesn't refuse: `import stackweave` warns when the extension was
+built for another patch set than the interpreter's, and `mn_init` warns once
+at 2+ hubs when it was built without both (`stackweave_c.migration_patched`).
 
 **slab** — the allocator for `runloom_g` structs. A freed g is **retained**,
 never returned to the OS: a stale dup-wake still dereferences it, so freeing
