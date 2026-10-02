@@ -464,7 +464,12 @@ void runloom_sched_wake(runloom_g_t *g)
     runloom_sched_t *self, *owner;
     if (g == NULL) return;
     runloom_g_state_set(g, RUNLOOM_GST_RUNNABLE);
-    self  = runloom_sched_get();
+    /* _peek_here: an M:N fiber waking a fiber of its OWN scheduler outside its
+     * run(1) -- loop.close() -> sched_reset -> drain_parked -- is that
+     * scheduler's consumer, so the push belongs on its ready ring, where the
+     * reset sweeps, not on its wake_list. */
+    self  = runloom_sched_peek_here();
+    if (self == NULL) self = runloom_sched_get();
     owner = g->owner ? g->owner : self;
     if (owner == self) {
         /* Same thread (the common single-loop / same-loop case): push onto our
@@ -647,7 +652,7 @@ void runloom_sched_wake_safe(runloom_g_t *g)
              * foreign paths are unchanged: runloom_sched_get() is still reached
              * only when g->owner == NULL (never on a foreign waker, whose woken
              * g always has an owner). */
-            runloom_sched_t *cur = runloom_tls_sched;
+            runloom_sched_t *cur = runloom_sched_peek_here();   /* never allocates */
             runloom_sched_t *s = g->owner ? g->owner : runloom_sched_get();
             if (cur != NULL && s == cur) {
                 /* Same-thread wake -- the single-hub asyncio bridge's common

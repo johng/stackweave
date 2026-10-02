@@ -453,6 +453,11 @@ static void emit(int fd, const char *buf, size_t len)
 
 void runloom_dump_fibers_fd(int fd)
 {
+    runloom_dump_fibers_owner_fd(fd, NULL);
+}
+
+void runloom_dump_fibers_owner_fd(int fd, const void *owner)
+{
     char buf[256];
     int  m;
     runloom_g_t *g;
@@ -480,6 +485,7 @@ void runloom_dump_fibers_fd(int fd)
     for (g = runloom_greg_head; g != NULL; g = g->reg_next) {
         unsigned int st = __atomic_load_n(&g->state, __ATOMIC_ACQUIRE);
         if (st == RUNLOOM_GST_FREED) continue;
+        if (owner != NULL && (const void *)g->owner != owner) continue;
         if (st < (unsigned)RUNLOOM_GST__LAST) counts[st]++;
         live++;
     }
@@ -502,6 +508,7 @@ void runloom_dump_fibers_fd(int fd)
         long long since;
         char detail[96];
         if (st == RUNLOOM_GST_FREED) continue;
+        if (owner != NULL && (const void *)g->owner != owner) continue;
         id    = __atomic_load_n(&g->id, __ATOMIC_RELAXED);
         rc    = __atomic_load_n(&g->refcount, __ATOMIC_RELAXED);
         since = __atomic_load_n(&g->state_since_ns, __ATOMIC_RELAXED);

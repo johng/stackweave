@@ -79,7 +79,7 @@ def _spawn(fn):
     passes; it must run under the M:N scheduler (mn_run) too, not only the
     single-thread one -- otherwise the deadline silently never fires under
     mn_run.  mn_hub_count() > 0 means mn_init() is in effect."""
-    if stackweave_c.mn_hub_count() > 0:
+    if stackweave_c.mn_spawns_to_hubs():   # not inside a nested run(1)
         return stackweave_c.mn_fiber(fn)
     return stackweave_c.fiber(fn)
 

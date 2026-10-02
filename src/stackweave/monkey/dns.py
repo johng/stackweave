@@ -28,7 +28,7 @@ def _spawn(fn):
     M:N (mn_hub_count() > 0), else the single-thread go.  A runner spawned via
     the single-thread fiber() never runs under mn_run, so the parker.park() in
     _resolve_dual would hang forever (the M:N getaddrinfo deadlock)."""
-    if stackweave_c.mn_hub_count() > 0:
+    if stackweave_c.mn_spawns_to_hubs():   # not inside a nested run(1)
         return stackweave_c.mn_fiber(fn)
     return stackweave_c.fiber(fn)
 

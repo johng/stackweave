@@ -5,7 +5,13 @@ from typing import Any, Literal, overload
 # ---- Coroutine handle (raw, no scheduler) -----------------------------
 
 class Coro:
-    """A raw stackful coroutine.  Most users want fiber()/run() instead."""
+    """A raw stackful coroutine.  Most users want fiber()/run() instead.
+
+    Resumed from an M:N fiber, the body runs on that fiber's stack but is not
+    itself a fiber: the hub is hidden from it, so current_g() is None,
+    in_fiber() is False and mn_current_hub() is None there, stackweave.sleep()
+    falls back to time.sleep(), and sysmon does not preempt it.  Its spawns
+    still go to the hubs (mn_spawns_to_hubs())."""
     def __init__(self, callable: Callable[..., Any], stack_size: int = ...) -> None: ...
     @property
     def done(self) -> bool: ...
@@ -50,7 +56,9 @@ class Chan:
 
 def fiber(fn: Callable[[], Any], stack_size: int = ...) -> G:
     """Spawn a goroutine on the single-thread C scheduler.  Returns handle.
-    stack_size > 0 overrides the default C stack for this one fiber."""
+    stack_size > 0 overrides the default C stack for this one fiber.  Called
+    from an M:N fiber, the scheduler is that fiber's own, which only its own
+    run() drives."""
     ...
 
 def fiber_noyield(callable_: Callable[[], Any], /) -> G:
@@ -60,7 +68,10 @@ def fiber_noyield(callable_: Callable[[], Any], /) -> G:
     ...
 
 def run() -> int:
-    """Drive the scheduler until all goroutines complete.  Returns count."""
+    """Drive the scheduler until all goroutines complete.  Returns count.
+
+    Called from an M:N fiber it drives that fiber's own scheduler and holds
+    the hub until it returns, so the hub's other fibers wait meanwhile."""
     ...
 
 def yield_() -> None:
@@ -159,6 +170,12 @@ def mn_fini() -> None:
 
 def mn_hub_count() -> int:
     """Number of M:N hubs currently running (0 outside an M:N run)."""
+    ...
+
+def mn_spawns_to_hubs() -> bool:
+    """Whether a spawn from here goes to the M:N hubs: an M:N runtime is up
+    and the caller is not inside a run(1) nested on an M:N fiber, whose
+    spawns stay in it."""
     ...
 
 # ---- Preemption ------------------------------------------------------

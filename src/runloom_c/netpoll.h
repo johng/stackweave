@@ -107,6 +107,9 @@ int runloom_netpoll_sweep_idle(void *hub_opaque, long long threshold_ns);
  * sched_reset() on paio.run cleanup so leftover accept loops /
  * tickers don't block the next runloom_c.run(). */
 int runloom_netpoll_drain_parked(void);
+/* The same, for the parkers of one scheduler (a nested one being torn down). */
+struct runloom_sched;
+int runloom_netpoll_drain_parked_owner(struct runloom_sched *owner);
 
 /* Wake ONE wait_fd parker owned by the calling thread's scheduler with a
  * benign (ready_mask=0) result, so it resumes and runs PyErr_CheckSignals in

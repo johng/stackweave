@@ -156,8 +156,15 @@ static PyObject *RunloomCoro_resume(RunloomCoro *self, PyObject *unused)
 
     /* executing was claimed atomically above; hold it across the swap and
      * the tstate save/restore so a racing thread can neither re-enter the
-     * fiber nor observe a half-written tstate_snap. */
-    runloom_coro_resume(self->coro);
+     * fiber nor observe a half-written tstate_snap.  On a hub's fiber the
+     * coro runs on that fiber's stack and state: hide the hub from it, as a
+     * nested run(1) does (runloom_mn_nested_enter). */
+    {
+        runloom_mn_nest_t mn_nest;
+        runloom_mn_nested_enter(&mn_nest, 0);
+        runloom_coro_resume(self->coro);
+        runloom_mn_nested_exit(&mn_nest);
+    }
 
     /* Snapshot the coro's tstate at the yield/return point, then
      * restore the caller's counters.  A finished coro's frames are all

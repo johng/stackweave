@@ -406,6 +406,19 @@ struct runloom_g {
      * which keeps the runq counters consistent.  Contract: mn_sched.h,
      * runloom_mn_fiber_pinned. */
     int pin_hub1;
+    /* A hub's current fiber can host a run(1) drain or a Coro, which run other
+     * fibers on its stack and thread state.  nest_depth > 0 while either runs
+     * hides the hub from the code running there (runloom_mn_nested_here);
+     * nest_drains counts the drains alone, which take the spawns made inside
+     * them (runloom_mn_spawns_to_hubs).  nest_sched is the g's OWN single-
+     * thread scheduler, which every drain, spawn and park of it uses: never
+     * the hub thread's, which every fiber on that hub would share (see
+     * runloom_g_nest_sched).  Touched only by the thread running this g. */
+    int nest_depth;
+    int nest_drains;
+    runloom_sched_t *nest_sched;
+    /* 1 once spawn_common has counted this g in its nest sched's nest_live. */
+    unsigned char nest_counted;
     /* MPSC link for the home sched's cross-thread wake list.  Used
      * only while g is parked via park_safe AND a cross-thread wake
      * is in flight (between wake_safe's enqueue and drain's
@@ -694,6 +707,11 @@ struct runloom_sched {
      * one-loop-iteration semantics, iterated to quiescence. */
     runloom_g_t *quiescence_head;
     runloom_g_t *quiescence_tail;
+    /* A hub fiber's own scheduler (runloom_g_nest_sched) has is_nest = 1, and
+     * nest_live counts its fibers not yet freed, so that when the hub fiber
+     * ends it knows whether any of them can now never run. */
+    int is_nest;
+    long nest_live;
 };
 
 /* Is the ready queue empty?  Hot-path predicate; inline-friendly.
@@ -711,9 +729,31 @@ RUNLOOM_INLINE int runloom_sched_ready_empty(const runloom_sched_t *s) {
         == __atomic_load_n(&s->ready_tail, __ATOMIC_RELAXED);
 }
 
-/* Module-level: one sched per OS thread once Phase C lands.  For now
- * a single global. */
+/* The calling thread's single-thread scheduler.  Inside a run(1) drain or
+ * Coro on a hub fiber it is that fiber's own (the nest swaps it in). */
 runloom_sched_t *runloom_sched_get(void);
+
+/* The scheduler a spawn or run() from here means: on a hub fiber, that
+ * fiber's own (runloom_g_nest_sched), else runloom_sched_get().  For the
+ * entry points that create or drive single-thread work. */
+runloom_sched_t *runloom_sched_get_here(void);
+
+/* Swap this thread's single-thread scheduler; returns the previous one.  Only
+ * the nest bracket uses it (runloom_mn_nested_enter/_exit). */
+runloom_sched_t *runloom_sched_tls_swap(runloom_sched_t *s);
+
+/* A hub fiber's own single-thread scheduler, created on first use. */
+runloom_sched_t *runloom_g_nest_sched(runloom_g_t *g);
+
+/* runloom_sched_get_here without creating one (NULL if none yet). */
+runloom_sched_t *runloom_sched_peek_here(void);
+
+/* Stop counting g in its nested scheduler's nest_live (it finished or was
+ * dropped unrun). */
+void runloom_g_nest_uncount(runloom_g_t *g);
+
+/* Drop every fiber queued on s to run (woken, ready, sleeping) unrun. */
+void runloom_sched_drop_queued(runloom_sched_t *s, int *n_ready, int *n_sleep);
 
 /* Non-allocating: the g running on this thread's single-thread sched, or NULL. */
 runloom_g_t *runloom_sched_peek_current(void);

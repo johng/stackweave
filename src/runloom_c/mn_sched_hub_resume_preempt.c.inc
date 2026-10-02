@@ -1177,6 +1177,22 @@ static PyInterpreterState *runloom_mn_interp = NULL;
  * right hub without each call site needing to look it up. */
 static RUNLOOM_TLS runloom_hub_t *runloom_tls_hub = NULL;
 static RUNLOOM_TLS runloom_g_t   *runloom_tls_current_g = NULL;
+
+/* A run(1) drain (or a Coro) on the hub's current fiber runs other fibers on
+ * that fiber's stack and thread state, as on any thread with no hub.  While
+ * one is active the hub is not theirs: whatever asks "which M:N fiber is
+ * running here" must get no answer.  Otherwise a sleep, park, yield or
+ * preemption there queued or parked the HUB's fiber -- still running, its
+ * stack hosting the drain -- while only the inner coroutine was swapped out:
+ * the inner fiber was never resumed (run(1) returned without it) and the
+ * hub's fiber was left on a queue to be resumed again while it ran.  The
+ * per-g snapshot skip (runloom_pystate_snap) keyed on it too, so the inner
+ * fibers shared one frame chain.  runloom_mn_nested_enter/_exit bracket it. */
+static inline int runloom_mn_nested_here(void)
+{
+    runloom_g_t *g = runloom_tls_current_g;
+    return g != NULL && g->nest_depth > 0;
+}
 /* Set by runloom_mn_yield_current() before runloom_coro_yield(); read by
  * hub_main after runloom_coro_resume returns.  Tells hub_main "the g
  * has already put itself on a queue, you don't need to requeue".
@@ -1250,7 +1266,8 @@ static PyObject *runloom_preempt_eval_frame(PyThreadState *ts,
         if (runloom_mn_ctrl.preempt_frames > 0) runloom_mn_preempt_ctr = 0;
         else __atomic_store_n(&h->preempt_requested, 0, __ATOMIC_RELAXED);
     }
-    if (h != NULL && do_preempt && (g = runloom_tls_current_g) != NULL) {
+    if (h != NULL && do_preempt && (g = runloom_tls_current_g) != NULL &&
+            !runloom_mn_nested_here()) {
         /* The trigger (frame-count or watchdog flag) was already consumed above,
          * so one trigger => one yield; the wall-clock watchdog re-arms each tick
          * the wedge persists, the frame counter re-fills from the next resume.
@@ -1333,7 +1350,7 @@ static int runloom_mn_liveness_pending_cb(void *arg)
     if (runloom_tstate_in_destruction(PyThreadState_GET())) {
         return 0;
     }
-    if (h != NULL && (g = runloom_tls_current_g) != NULL) {
+    if (h != NULL && (g = runloom_tls_current_g) != NULL && !runloom_mn_nested_here()) {
 #if defined(RUNLOOM_FSM_VALIDATE)
         /* Same p69b witness as the eval-frame wrapper: the guard at the top of
          * this callback returned already if in_destruction, so this is unreachable

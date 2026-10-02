@@ -57,7 +57,51 @@ long runloom_mn_deque_depth_total(void)
 
 void *runloom_mn_current_hub_opaque(void)
 {
-    return (void *)runloom_tls_hub;
+    return runloom_mn_nested_here() ? NULL : (void *)runloom_tls_hub;
+}
+
+/* Bracket a run(1) drain (drain = 1) or a Coro resume (drain = 0) on a hub
+ * fiber (see runloom_mn_nested_here).  Also swaps in the fiber's own single-
+ * thread scheduler, so nothing in the nest touches the hub thread's: a drain
+ * creates it now, a Coro only if its body reaches for one (runloom_sched_get's
+ * slow path).  A no-op off a hub fiber.  Nests. */
+void runloom_mn_nested_enter(runloom_mn_nest_t *n, int drain)
+{
+    runloom_g_t *g = runloom_tls_current_g;
+    n->g = NULL;
+    n->prev = NULL;
+    n->drain = drain;
+    if (runloom_tls_hub == NULL || g == NULL) return;
+    n->g = g;
+    g->nest_depth++;
+    if (drain) g->nest_drains++;
+    n->prev = runloom_sched_tls_swap(drain ? runloom_g_nest_sched(g) : g->nest_sched);
+}
+
+void runloom_mn_nested_exit(runloom_mn_nest_t *n)
+{
+    runloom_g_t *g = (runloom_g_t *)n->g;
+    if (g == NULL) return;
+    (void)runloom_sched_tls_swap(n->prev);
+    if (n->drain) g->nest_drains--;
+    g->nest_depth--;
+}
+
+void *runloom_mn_hub_fiber_raw(void)
+{
+    return runloom_tls_hub != NULL ? (void *)runloom_tls_current_g : NULL;
+}
+
+void *runloom_mn_nest_owner(void)
+{
+    return runloom_mn_nested_here() ? (void *)runloom_tls_current_g : NULL;
+}
+
+int runloom_mn_spawns_to_hubs(void)
+{
+    runloom_g_t *g = runloom_tls_current_g;
+    if (runloom_mn_hub_count() <= 0) return 0;
+    return !(runloom_tls_hub != NULL && g != NULL && g->nest_drains > 0);
 }
 
 int runloom_mn_hub_id_of(void *hub_opaque)
@@ -68,7 +112,7 @@ int runloom_mn_hub_id_of(void *hub_opaque)
 
 runloom_g_t *runloom_mn_tls_current_g(void)
 {
-    return runloom_tls_current_g;
+    return runloom_mn_nested_here() ? NULL : runloom_tls_current_g;
 }
 
 void runloom_mn_tls_mark_parked(void)
@@ -88,13 +132,13 @@ void runloom_mn_tls_mark_parked_foreign(void)
 
 runloom_sched_t *runloom_mn_current_sched(void)
 {
-    runloom_hub_t *h = runloom_tls_hub;
+    runloom_hub_t *h = runloom_mn_nested_here() ? NULL : runloom_tls_hub;
     return h ? &h->sched : NULL;
 }
 
 struct runloom_iouring_ring *runloom_mn_current_iouring_ring(void)
 {
-    runloom_hub_t *h = runloom_tls_hub;
+    runloom_hub_t *h = runloom_mn_nested_here() ? NULL : runloom_tls_hub;
     return h ? h->iouring_ring : NULL;
 }
 
@@ -167,7 +211,7 @@ static void runloom_mn_hub_submit(runloom_hub_t *h, runloom_g_t *g)
         runloom_hub_t *cur = runloom_tls_hub;
         if (runloom_mn_ctrl.enabled && runloom_mn_ctrl.barrier &&
             cur != NULL && cur != h && cur->stage_head != NULL &&
-            runloom_tls_current_g != NULL &&
+            runloom_tls_current_g != NULL && !runloom_mn_nested_here() &&
             h->id >= 0 && h->id < runloom_hub_count) {
             RUNLOOM_NEXT_SET(g, NULL, 5);   /* staging (controlled mode) */
             if (cur->stage_tail[h->id] != NULL)
@@ -311,7 +355,9 @@ int runloom_mn_pin_for_wake(runloom_g_t *g, int hub_id)
 static void runloom_mn_woken_enqueue(runloom_g_t *g)
 {
     runloom_hub_t *cur = runloom_tls_hub;
-    if (cur != NULL && runloom_hubs != NULL &&
+    /* Not while a nested run(1) holds this hub: it runs nothing of ours
+     * until the drain ends, so leave the woken g where any hub takes it. */
+    if (cur != NULL && runloom_hubs != NULL && !runloom_mn_nested_here() &&
         !runloom_mn_ctrl_no_steal() &&
         __atomic_load_n(&g->pin_hub1, __ATOMIC_ACQUIRE) == 0 &&
         runloom_cldeque_push(&cur->deque, g) == 0) {
@@ -569,7 +615,7 @@ int runloom_mn_yield_current(void)
 {
     runloom_hub_t *h = runloom_tls_hub;
     runloom_g_t *g = runloom_tls_current_g;
-    if (h == NULL || g == NULL) {
+    if (h == NULL || g == NULL || runloom_mn_nested_here()) {
         return 0;
     }
     /* Trivial-switch fast path: if there's no other work for this hub

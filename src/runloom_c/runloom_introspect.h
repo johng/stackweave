@@ -180,6 +180,8 @@ long long runloom_introspect_monotonic_ns(void);
  * Python objects, so it is safe from a signal handler and when the
  * interpreter is wedged. */
 void runloom_dump_fibers_fd(int fd);
+/* The same, limited to the fibers whose owner scheduler is `owner` (NULL: all). */
+void runloom_dump_fibers_owner_fd(int fd, const void *owner);
 
 /* ---- crash-handler helpers ----
  * runloom_fiber_for_addr: find the live fiber whose stack region (its

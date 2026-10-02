@@ -187,6 +187,17 @@ Py_ssize_t runloom_sched_drain(runloom_sched_t *s)
      * PyErr_Restore it so it propagates out of m_run -> run_forever. */
     int sig_break = 0;
     PyObject *sig_t = NULL, *sig_v = NULL, *sig_b = NULL;
+    /* On a hub's fiber (run(1) nested in an M:N fiber, or an aio loop driven
+     * there) this drain owns the thread until it returns: hide the hub before
+     * the first snap, so it and the fibers below take the single-thread paths
+     * (runloom_mn_nested_here), and make the fiber's own scheduler -- `s`,
+     * from runloom_sched_get_here -- the thread's for the duration. */
+    runloom_mn_nest_t mn_nest;
+    runloom_mn_nested_enter(&mn_nest, 1);
+    /* A nest's fibers can be woken from other threads (a fiber on another hub
+     * sharing a channel, a blockpool worker): their wakes go to its wake_list
+     * and kick the pump, as for a second per-thread scheduler. */
+    if (s->is_nest) runloom_netpoll_wake_pump_arm();
 
     s->stopping = 0;
     runloom_pystate_snap(&sched_snap);
@@ -576,6 +587,7 @@ Py_ssize_t runloom_sched_drain(runloom_sched_t *s)
                 s->current = prev;
                 if (runloom_coro_done(g->coro)) {
                     s->completed++;
+                    runloom_g_nest_uncount(g);
                     runloom_cal_record(g);
                     runloom_g_decref(g);
                 }
@@ -648,6 +660,7 @@ Py_ssize_t runloom_sched_drain(runloom_sched_t *s)
                 runloom_drain_g_datastack();
                 runloom_pystate_load(&sched_snap);
                 s->completed++;
+                runloom_g_nest_uncount(g);
                 runloom_cal_record(g);
                 /* Force-unlink any wait_fd parker this g left linked (it can
                  * complete WHILE parked -- e.g. an accept/recv loop torn down
@@ -691,7 +704,8 @@ Py_ssize_t runloom_sched_drain(runloom_sched_t *s)
      * loop down via sched_stop (s->stopping), so a clean aio teardown with
      * pending background tasks is excluded.  Single-thread only (M:N hubs have
      * their own liveness, and the registry count is process-global). */
-    if (!s->stopping && !sig_break && runloom_mn_hub_count() == 0 &&
+    if (!s->stopping && !sig_break &&
+        (runloom_mn_hub_count() == 0 || s->is_nest) &&
         runloom_deadlock_mode() != 0) {
         long ndead = runloom_count_deadlockable_fibers((const void *)s);
         if (ndead > 0) {
@@ -700,7 +714,9 @@ Py_ssize_t runloom_sched_drain(runloom_sched_t *s)
                 "fiber(s) still blocked on a channel/park and no way to "
                 "wake them:\n", ndead);
             fflush(stderr);
-            runloom_dump_fibers_fd(2);
+            /* A nest's report lists only its own fibers, not the process's. */
+            if (s->is_nest) runloom_dump_fibers_owner_fd(2, (const void *)s);
+            else runloom_dump_fibers_fd(2);
             if (runloom_deadlock_mode() == 2) {
                 PyErr_Format(PyExc_RuntimeError,
                     "stackweave: all fibers are blocked -- deadlock "
@@ -738,6 +754,7 @@ Py_ssize_t runloom_sched_drain(runloom_sched_t *s)
         Py_CLEAR(s->signal_exc);
     }
     s->signal_target = NULL;
+    runloom_mn_nested_exit(&mn_nest);
     return s->completed - completed_before;
 }
 

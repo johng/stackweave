@@ -295,6 +295,10 @@ static PyMethodDef module_methods[] = {
      "mn_hub_count(): number of M:N hubs currently running (0 if mn_init "
      "was never called or after mn_fini).  Lets the stackweave.fiber() wrapper "
      "dispatch to mn_fiber inside an M:N run."},
+    {"mn_spawns_to_hubs", m_mn_spawns_to_hubs, METH_NOARGS,
+     "mn_spawns_to_hubs() -> bool: whether a spawn from here goes to the M:N "
+     "hubs -- a runtime is up and the caller is not inside a run(1) nested on "
+     "a hub fiber, whose spawns stay in it.  What the spawn helpers route on."},
     {"mn_hub_states", m_mn_hub_states, METH_NOARGS,
      "mn_hub_states() -> list[dict].  A snapshot of every M:N hub: id, state "
      "('detached'/'attached'/'suspended'), running_g (goid being resumed, or "
