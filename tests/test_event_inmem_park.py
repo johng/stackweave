@@ -15,6 +15,7 @@ import time
 
 import stackweave
 import stackweave.monkey as monkey
+import stackweave_c
 
 monkey.patch()
 import threading as th   # noqa: E402  (patched -> Co* primitives)
@@ -27,12 +28,34 @@ def _count_fds():
         return -1
 
 
+def _wait_all_hubs_started():
+    # Each hub opens its own wake fds (an epoll fd and an eventfd) as its
+    # thread starts, and run() does not wait for that before main runs.  So
+    # a baseline taken first in main can miss the hubs still starting, whose
+    # fds then land in the delta: under load that was 10 with 8 hubs (CI, and
+    # reproduced on one busy CPU).  A hub opens them before it runs any fiber,
+    # so once every hub has run one, the baseline holds them all.
+    n = stackweave_c.mn_hub_count()
+    ran = bytearray(n)
+
+    def mark(h):
+        ran[h] = 1
+
+    for h in range(n):
+        stackweave_c.mn_fiber(lambda h=h: mark(h), hub=h)
+    deadline = time.monotonic() + 10.0
+    while sum(ran) < n and time.monotonic() < deadline:
+        stackweave.sleep(0.005)
+    assert sum(ran) == n, "only %d/%d hubs started" % (sum(ran), n)
+
+
 def test_untimed_event_waiters_are_fd_free():
     out = {}
 
     def main():
         ev = th.Event()
         woke = bytearray(300)
+        _wait_all_hubs_started()
         before = _count_fds()
 
         entered = bytearray(300)
@@ -202,6 +225,7 @@ def test_timed_event_waiters_are_fd_free():
     def main():
         evs = [th.Event() for _ in range(150)]
         done = bytearray(150)
+        _wait_all_hubs_started()
         before = _count_fds()
 
         def waiter(i):
