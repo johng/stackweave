@@ -13,16 +13,31 @@ the time this was written, and 0/100 on Linux.  Its OBSERVER_POLL constant was
 tuned UP to 0.5s to make the failure rare, and its own comment says that is "a
 probability shift, not a fix".
 
-Turning that constant DOWN is what makes the bug structural.
-runloom_netpoll_pump rounds its epoll/kevent timeout UP to whole milliseconds,
-so a 20us sleeper still blocks a full millisecond -- which means the sleeper is
-ALWAYS overdue when the pump returns, the ready ring is ALWAYS non-empty, and
-the scheduler's signal probe is ALWAYS suppressed.  Measured at 80/80 failures
-on Linux before the fix, where the stock 0.5s poll gives 0/100.
+The bug needs one condition: the scheduler's idle block ends with a signal
+pending AND a sleeper due, so the ready ring is non-empty when it probes.  The
+first version of test_parked_fiber_outranks_a_due_sleeper got there with a
+20us sleeper, relying on the pump rounding its timeout up to a whole
+millisecond.  epoll does (80/80 failures on Linux before the fix); kqueue takes
+a nanosecond timespec, so on macOS the sleeper really woke every ~25us and was
+running Python for much of the time.  A signal that lands while a fiber runs
+bytecode is handled in that fiber's eval loop -- CPython's rule, which no
+scheduler can overrule -- so that test failed 5-55% of the time on macOS even
+with the fix (more under load), and could not tell the fix from the bug.
 
-That also explains why the old test only ever failed on macOS: epoll_wait
-returns EINTR immediately and is not restarted, so at a 0.5s poll the signal
-reliably cuts the block before the deadline and the probe runs.
+So that test now arranges the condition instead of racing for it: the signal
+is raised on a helper thread, which leaves the scheduler's block (kevent or
+epoll_wait) running, and only while introspection shows both fibers parked.
+No bytecode runs between the trip and the scheduler's next probe.  The block
+ends at the sleeper's deadline -- or earlier, on the sender's writability
+while the connection first fills; the sender then only re-parks in C, no
+probe runs (the woken parker no longer counts as parked and the ready ring is
+not empty), and the next block ends at the deadline.  There the sleeper is
+due with the signal pending, which is the bug's condition.  The scenario
+reports whether the sleeper was still in that same sleep after the trip
+(VALID), so a run that did not reach it is never mistaken for one that did,
+and the recipient checks that the sleeper had finished that sleep before the
+signal reached it -- so a change that made the trip wake the scheduler early,
+with nothing due, would fail here rather than pass by default.
 
 ASSERT THE RECIPIENT, NOT THE OUTCOME
 -------------------------------------
@@ -60,14 +75,19 @@ needs_sigalrm = pytest.mark.skipif(
 
 
 # A fiber parked in send_all against a peer that never reads, plus an observer
-# sleeping on a period far below the pump's 1ms timeout floor.  W1_POLL=20us
-# makes a sleeper due on essentially every drain iteration.
+# sleeping in sched_sleep.  A helper thread raises SIGALRM ON ITSELF once both
+# are parked: the handler only trips the flag, and the main thread stays blocked
+# in the pump until the observer's deadline -- so the scheduler probes with the
+# observer due in the ready ring, and no fiber has run bytecode since the trip.
+# VALID=1 when the observer was still in that same sleep after the trip; that is
+# what makes the recipient a pure function of the scheduler's choice.  VALID=0
+# (the helper caught the observer between sleeps) proves nothing either way.
 _W1 = r'''
-import faulthandler, os, signal, socket, sys
+import faulthandler, os, signal, socket, sys, threading, time
 sys.path.insert(0, "src")
 import stackweave_c as rc
 
-POLL = 0.00002
+SLEEP = 0.05
 box = {}
 
 def raiser(signum, frame):
@@ -85,7 +105,8 @@ def server():
     # unraisable -- that print is the failure signature.
     try:
         while "done" not in box:
-            rc.sched_sleep(POLL)
+            rc.sched_sleep(SLEEP)
+            box["n"] = box.get("n", 0) + 1     # sleeps the observer finished
     except KeyboardInterrupt:
         box["who"] = "observer"
         raise
@@ -97,22 +118,60 @@ def client():
     c = rc.TCPConn.connect("127.0.0.1", box["port"])
     c.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, (4096).to_bytes(4, "little"))
     try:
-        signal.setitimer(signal.ITIMER_REAL, 0.2)
         c.send_all(b"Z" * (8 * 1024 * 1024))     # parks in wait_fd(WRITE)
         box["who"] = "nobody-sent"
     except KeyboardInterrupt:
         box["who"] = "parked"                    # <-- the contract
+        # The observer's sleep in progress at the trip had ended (it was DUE)
+        # before the signal got here -- the condition under test, not a probe
+        # on an otherwise empty ready ring.  Relies on the drain's FIFO ring
+        # (due sleepers are pushed before the probe's wake); STACKWEAVE_PCT_SEED
+        # reorders it, so this can read parked-before-due under PCT.
+        if box.get("n", 0) <= box.get("n_at_trip", -1):
+            box["who"] = "parked-before-due"
     box["done"] = True
     c.close()
 
+def observer_sleep(need_io=True):
+    # The observer's current sleep: its wake_in.  Before the trip both fibers
+    # must be parked (the sender on the socket); after it, only the observer's
+    # sleep matters -- the sender may be runnable on a writability wake while
+    # the connection first fills, which the scheduler handles either way.
+    fs = rc.fibers()
+    sleeping = [f["wake_in"] for f in fs if f["state"] == "sleep"]
+    io = [f for f in fs if f["state"] == "io-wait" and f["events"] == "W"]
+    if len(fs) != 2 or len(sleeping) != 1 or (need_io and not io):
+        return None
+    return sleeping[0]
+
+def helper():
+    deadline = time.monotonic() + 10
+    valid = 0
+    while time.monotonic() < deadline:
+        before = observer_sleep()
+        # Early in a sleep, so the trip is long done before the deadline.
+        if before is not None and before > SLEEP / 2:
+            box["n_at_trip"] = box.get("n", 0)
+            signal.pthread_kill(threading.get_ident(), signal.SIGALRM)
+            after = observer_sleep(need_io=False)
+            valid = int(after is not None and 0 < after <= before)
+            break
+        time.sleep(0.0005)
+    box["valid"] = valid
+    # Now, so a run that then hangs or crashes is still labelled.
+    sys.stdout.write("VALID=%d\n" % valid)
+    sys.stdout.flush()
+
 faulthandler.dump_traceback_later(20, exit=True)
+threading.Thread(target=helper, daemon=True).start()
 rc.fiber(server); rc.fiber(client)
 try:
     rc.run()
 except KeyboardInterrupt:
     box.setdefault("who", "out-of-run")
 faulthandler.cancel_dump_traceback_later()
-sys.stdout.write("W1 who=%s\n" % box.get("who", "hung"))
+sys.stdout.write("W1 who=%s VALID=%d\n" % (box.get("who", "hung"), box.get("valid", 0)))
+sys.stdout.flush()
 '''
 
 
@@ -134,12 +193,33 @@ def test_parked_fiber_outranks_a_due_sleeper():
     observer's sched_sleep then collected the KeyboardInterrupt, died as
     "Exception ignored in: <function server>", and the client stayed parked
     until the faulthandler timeout.  80/80 failures on Linux at that commit.
+
+    The scenario (see _W1 and the module docstring) makes that condition hold
+    whenever it reports VALID=1, so the old gate fails it every time and the
+    fixed one never does.  VALID=0 -- the observer was not still in the same
+    sleep after the trip, so the run says nothing about the scheduler's choice
+    -- is the only outcome retried.  A run with no W1 line hung or crashed, and
+    fails at once: retrying it would hide a lost signal.
     """
-    p = _run(_W1)
-    assert "W1 who=parked" in p.stdout, (
-        "the signal did not come out of the parked send_all; who=%r\n"
-        "stdout=%s\nstderr=%s"
-        % (p.stdout.strip(), p.stdout, p.stderr[-1500:]))
+    for _ in range(5):
+        p = _run(_W1)
+        m = re.search(r"W1 who=(\S+) VALID=([01])", p.stdout)
+        if m is None:
+            pytest.fail("the scenario hung or crashed (rc=%s) before reporting "
+                        "who got the signal\nstdout=%s\nstderr=%s"
+                        % (p.returncode, p.stdout, p.stderr[-1500:]))
+        if m.group(2) == "1":
+            break
+    else:
+        pytest.fail("the helper never tripped the signal inside one observer "
+                    "sleep, in 5 tries\nstdout=%s\nstderr=%s"
+                    % (p.stdout, p.stderr[-1500:]))
+    # Exact: "parked-before-due" (the signal reached the parked call before
+    # the observer's sleep had ended) must not pass as "parked".
+    assert m.group(1) == "parked", (
+        "the signal did not come out of the parked send_all after the observer "
+        "came due; who=%r\nstdout=%s\nstderr=%s"
+        % (m.group(1), p.stdout, p.stderr[-1500:]))
     assert "Exception ignored in" not in p.stderr, (
         "the interrupt escaped a fiber entry point instead of being delivered "
         "to the parked call\n%s" % p.stderr[-1500:])
