@@ -55,19 +55,40 @@
  *    into freed memory and spins forever.  Saving/restoring it keeps the
  *    coro's live frames off the caller's chain (the GC descends only via
  *    ->previous from current_frame, so a parked coro's frames become
- *    invisible while still resident in the shared datastack for a later
- *    resume).  We restore only the topmost pointer, never datastack_top --
- *    reclaiming the coro's frame slots would let the caller overwrite a
- *    still-parked coro.
+ *    invisible while still resident in the coro's datastack, below, for a
+ *    later resume).
  *  - the C-stack limits (3.14).  Every resume arms them at the coro's stack
  *    (runloom_coro_rearm_stackprot); unrestored, the caller ran on under
  *    them, and deep recursion or a deep free there crashed off the end of
  *    its own stack instead of raising RecursionError.  Only caller_snap's
- *    copy matters: the re-arm overwrites the coro's own before it runs. */
+ *    copy matters: the re-arm overwrites the coro's own before it runs.
+ *  - the critical-section chain and the c_stack_refs list (free-threaded),
+ *    swapped exactly as the scheduler's snap does for a fiber.  Both are
+ *    linked lists of nodes on the C stack that owns them, headed in the
+ *    thread state.  Left shared, a coro parked inside list(map())'s critical
+ *    section left its node at the head of the caller's chain (and kept the
+ *    list's mutex locked); the next Coro to push or the caller to pop then
+ *    linked through the other's stack, and two Coros taking turns that way
+ *    SIGSEGVed.  Saving suspends the chain (unlocking its mutexes) and takes
+ *    the list; restoring re-locks and puts them back.
+ *  - the datastack (the chunks the interpreter pushes Python frames onto).
+ *    A coro starts with none (Coro.resume), so CPython allocates its first
+ *    chunk on the first push, as for a new thread, and frees the coro's chunks
+ *    to the arena when it finishes (runloom_coro_free_datastack) -- never
+ *    through the scheduler's per-thread chunk pool, which a plain thread
+ *    never flushes.  On one shared datastack, Coros taking turns interleaved
+ *    their frames, and the first to return popped the top back below frames
+ *    another still owned, which the next push overwrote: eight Coros
+ *    recursing 50 Python levels deep, taking turns, SIGSEGVed. */
 typedef struct {
     int py_recursion_remaining;
     struct _PyInterpreterFrame *current_frame;
     runloom_cstack_limits_t c_stack;
+    uintptr_t critical_section;
+    void *c_stack_refs;
+    _PyStackChunk *datastack_chunk;
+    PyObject **datastack_top;
+    PyObject **datastack_limit;
     int initialised;
 } RunloomTstateSnapshot;
 
@@ -88,10 +109,62 @@ RUNLOOM_INLINE void runloom_tstate_save(RunloomTstateSnapshot *s)
     s->py_recursion_remaining = ts->py_recursion_remaining;
     s->current_frame = ts->current_frame;
     runloom_cstack_limits_save(ts, &s->c_stack);
+    s->critical_section = runloom_critsec_suspend(ts);
+    s->c_stack_refs = runloom_tstate_take_cstack_refs(ts);
+    s->datastack_chunk = ts->datastack_chunk;
+    s->datastack_top = ts->datastack_top;
+    s->datastack_limit = ts->datastack_limit;
     s->initialised = 1;
 }
 
-RUNLOOM_INLINE void runloom_tstate_restore(const RunloomTstateSnapshot *s)
+/* A coro dropped (dealloc / re-init) while parked.  Its frames are abandoned
+ * unpopped, as before, and so are its datastack chunks: a frame object made
+ * while it ran (a kept traceback, sys._getframe()) can still point into them,
+ * so reusing the memory would turn a later read of that frame into a
+ * use-after-free.  The scheduler leaves a destroyed parked fiber's chunks the
+ * same way.  Its critical sections were unlocked when it parked, and its
+ * c_stack_refs nodes die with its stack. */
+RUNLOOM_INLINE void runloom_tstate_snap_drop(RunloomTstateSnapshot *s)
+{
+    if (s->initialised) {
+        s->datastack_chunk = NULL;
+        s->datastack_top = s->datastack_limit = NULL;
+        s->critical_section = 0;
+        s->c_stack_refs = NULL;
+    }
+    s->initialised = 0;
+}
+
+/* A coro finished: every frame is popped (a frame object that outlives its
+ * frame has taken a copy), so its chunks are free.  The root goes into the
+ * thread state's one-chunk cache when that is empty -- CPython's own
+ * push_chunk takes it for the next coro's first frame, and clearing the
+ * thread state frees it -- so a coro doesn't cost an mmap + munmap (8x on
+ * create-and-run); the rest go to the arena, as CPython frees a popped
+ * chunk. */
+RUNLOOM_INLINE void runloom_coro_free_datastack(void)
+{
+    PyThreadState *ts = PyThreadState_GET();
+    _PyStackChunk *chunk = ts->datastack_chunk;
+    PyObjectArenaAllocator alloc;
+    ts->datastack_chunk = NULL;
+    ts->datastack_top = NULL;
+    ts->datastack_limit = NULL;
+    if (chunk == NULL) return;
+    PyObject_GetArenaAllocator(&alloc);
+    while (chunk != NULL) {
+        _PyStackChunk *prev = chunk->previous;
+        if (prev == NULL && ts->datastack_cached_chunk == NULL) {
+            chunk->top = 0;
+            ts->datastack_cached_chunk = chunk;
+        } else {
+            alloc.free(alloc.ctx, chunk, chunk->size);
+        }
+        chunk = prev;
+    }
+}
+
+RUNLOOM_INLINE void runloom_tstate_restore(RunloomTstateSnapshot *s)
 {
     PyThreadState *ts;
     if (!s->initialised) {
@@ -101,6 +174,13 @@ RUNLOOM_INLINE void runloom_tstate_restore(const RunloomTstateSnapshot *s)
     ts->py_recursion_remaining = s->py_recursion_remaining;
     ts->current_frame = s->current_frame;
     runloom_cstack_limits_restore(ts, &s->c_stack);
+    ts->datastack_chunk = s->datastack_chunk;
+    ts->datastack_top = s->datastack_top;
+    ts->datastack_limit = s->datastack_limit;
+    runloom_tstate_set_cstack_refs(ts, s->c_stack_refs);
+    s->c_stack_refs = NULL;
+    runloom_critsec_restore(ts, s->critical_section);
+    s->critical_section = 0;
 }
 
 

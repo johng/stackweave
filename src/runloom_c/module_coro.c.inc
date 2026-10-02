@@ -72,7 +72,7 @@ static int RunloomCoro_init(RunloomCoro *self, PyObject *args, PyObject *kw)
     Py_CLEAR(self->callable);
     Py_CLEAR(self->result);
     Py_CLEAR(self->error);
-    self->tstate_snap.initialised = 0;
+    runloom_tstate_snap_drop(&self->tstate_snap);
 
     Py_INCREF(callable);
     self->callable = callable;
@@ -91,6 +91,7 @@ static int RunloomCoro_init(RunloomCoro *self, PyObject *args, PyObject *kw)
 
 static void RunloomCoro_dealloc(RunloomCoro *self)
 {
+    runloom_tstate_snap_drop(&self->tstate_snap);
     if (self->coro != NULL) {
         runloom_coro_destroy(self->coro);
         self->coro = NULL;
@@ -143,6 +144,14 @@ static PyObject *RunloomCoro_resume(RunloomCoro *self, PyObject *unused)
     runloom_tstate_save(&caller_snap);
     if (self->tstate_snap.initialised) {
         runloom_tstate_restore(&self->tstate_snap);
+    } else {
+        /* First resume: no datastack, so the first push gives the coro chunks
+         * of its own (see RunloomTstateSnapshot) and Coros taking turns never
+         * interleave their frames. */
+        PyThreadState *ts = PyThreadState_GET();
+        ts->datastack_chunk = NULL;
+        ts->datastack_top = NULL;
+        ts->datastack_limit = NULL;
     }
 
     /* executing was claimed atomically above; hold it across the swap and
@@ -151,7 +160,10 @@ static PyObject *RunloomCoro_resume(RunloomCoro *self, PyObject *unused)
     runloom_coro_resume(self->coro);
 
     /* Snapshot the coro's tstate at the yield/return point, then
-     * restore the caller's counters. */
+     * restore the caller's counters.  A finished coro's frames are all
+     * popped: free its datastack chunks first. */
+    if (runloom_coro_done(self->coro))
+        runloom_coro_free_datastack();
     runloom_tstate_save(&self->tstate_snap);
     runloom_tstate_restore(&caller_snap);
     __atomic_store_n(&self->executing, 0, __ATOMIC_RELEASE);
