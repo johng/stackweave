@@ -21,9 +21,12 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
 - Migration is only sound on a free-threaded
   CPython built with BOTH `src/patches/` halves (alloc-home + exec-home) — on a
   stock interpreter it crashes under churn at H≥2 (mimalloc `_mi_page_retire`,
-  or a dict free under `_Py_MergeZeroLocalRefcount`). The interpreter can't be
-  checked at runtime, but an extension built without both says so:
-  `stackweave_c.migration_patched` is 0 and `mn_init` warns once at H≥2.
+  or a dict free under `_Py_MergeZeroLocalRefcount`). Nothing in the ABI tells
+  the two thread-state layouts apart, so stackweave compares the build with the
+  interpreter: `import stackweave` warns when `stackweave_c.migration_patched`
+  differs from what `sysconfig` says the interpreter was built with (a stale
+  build from the other interpreter, or `-D` flags forced on a stock one), and
+  `mn_init` warns once at H≥2 when the extension was built without both.
 - **Free-threaded CPython 3.14+ only** (M:N is only real with the GIL off):
   `setup.py` refuses GIL builds and anything older, and the C sources have no
   other code paths (`#error` in `runloom_sched.h`). Every fiber stack is >= 256 KB

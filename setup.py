@@ -287,26 +287,30 @@ def detect_link_flags():
 # --------------------------------------------------------------------
 # Rebuild everything when the interpreter or the build flags change
 # --------------------------------------------------------------------
-# build_ext reuses an object, and a built extension, whenever it is newer than
-# its sources.  A stock and a patched interpreter of one version share every
-# build path (both are cp3NNt), so building with one after the other compiled
-# nothing and copied the first one's extension back into src/ -- which
-# disagrees with the second about the _PyThreadStateImpl layout and segfaulted
-# at the first M:N test.  A change of compile flags (STACKWEAVE_TSAN,
-# STACKWEAVE_DEBUG, STACKWEAVE_EXTRA_CFLAGS, ...) is just as invisible to it.
-# So each build leaves a stamp of what it was built for in build_temp, and a
-# build whose stamp differs, or that has none, recompiles everything.
+# build_ext skips an extension entirely -- no compile, no link -- whenever the
+# built extension is newer than its sources and depends.  A stock and a patched
+# interpreter of one version share every build path (both are cp3NNt), so
+# building with one after the other built nothing and copied the first one's
+# extension back into src/ -- which disagrees with the second about the
+# _PyThreadStateImpl layout, and segfaulted at the first M:N test.  A change of
+# compile flags (STACKWEAVE_TSAN, STACKWEAVE_DEBUG, STACKWEAVE_EXTRA_CFLAGS, ...)
+# or of --build-lib is just as invisible to it.  So each build leaves a stamp of
+# what it was built for in build_temp, and a build whose stamp differs, or that
+# has none, rebuilds everything.
 _BUILD_STAMP = "stackweave-build.json"
 
 
-def build_identity(extensions):
-    """What a build's objects depend on besides their sources."""
+def build_identity(extensions, build_lib):
+    """What a build's output depends on besides its sources."""
     return {
         "include": os.path.realpath(sysconfig.get_path("include")),
         "version": sys.version,
         "patch_problems": patched_cpython_problems(),
+        "build_lib": os.path.realpath(build_lib),
         "env": {k: os.environ.get(k, "")
-                for k in ("CC", "CFLAGS", "CPPFLAGS", "LDFLAGS")},
+                for k in ("CC", "CXX", "LDSHARED", "CFLAGS", "CPPFLAGS",
+                          "LDFLAGS", "ARCHFLAGS", "MACOSX_DEPLOYMENT_TARGET",
+                          "SDKROOT")},
         "extensions": [
             {"name": e.name, "sources": list(e.sources),
              "macros": [list(m) for m in e.define_macros],
@@ -320,9 +324,20 @@ def build_identity(extensions):
 def _read_build_stamp(path):
     try:
         with open(path) as f:
-            return json.load(f)
+            stamp = json.load(f)
     except (OSError, ValueError):
         return None
+    return stamp if isinstance(stamp, dict) else None
+
+
+def _fall_back_to_ucontext(extensions):
+    """Drop the .S sources and the asm define: build with ucontext."""
+    global USE_UCONTEXT
+    USE_UCONTEXT = True
+    for e_obj in extensions:
+        e_obj.sources = [s for s in e_obj.sources
+                         if not s.endswith((".S", ".s"))]
+        e_obj.extra_compile_args = detect_compile_args()
 
 
 # --------------------------------------------------------------------
@@ -335,19 +350,25 @@ class runloom_build_ext(_build_ext):
     Solaris/illumos assemblers) reject the .S files even on x86_64 /
     aarch64.  Instead of crashing the install, we drop the .S source
     and the asm define, then retry the build with ucontext semantics.
+    The stamp remembers that, so later builds start with ucontext rather
+    than failing the asm again and rebuilding everything (--force retries
+    the asm).
 
-    It also recompiles everything when the build stamp says the interpreter
+    It also rebuilds everything when the build stamp says the interpreter
     or the flags changed (see build_identity).
     """
 
     def run(self):
-        global USE_UCONTEXT
         stamp = os.path.join(self.build_temp, _BUILD_STAMP)
-        previous = _read_build_stamp(stamp)
-        if previous != build_identity(self.extensions):
-            if previous is not None:
+        previous = _read_build_stamp(stamp) or {}
+        asm_failed = bool(previous.get("asm_failed")) and not self.force
+        if asm_failed and not USE_UCONTEXT:
+            _fall_back_to_ucontext(self.extensions)
+        identity = build_identity(self.extensions, self.build_lib)
+        if previous.get("identity") != identity:
+            if previous:
                 print("stackweave build: the interpreter or the build flags "
-                      "changed since the last build in %s; recompiling "
+                      "changed since the last build in %s; rebuilding "
                       "everything" % self.build_temp)
             self.force = True
         try:
@@ -358,16 +379,17 @@ class runloom_build_ext(_build_ext):
             # Already failed once with asm; switch to ucontext and retry.
             print("stackweave build: asm path failed (%s); retrying with ucontext"
                   % e.__class__.__name__)
-            USE_UCONTEXT = True
-            for e_obj in self.extensions:
-                e_obj.sources = [s for s in e_obj.sources
-                                 if not s.endswith((".S", ".s"))]
-                e_obj.extra_compile_args = detect_compile_args()
-            self.force = True   # objects built with the asm flags don't fit
+            _fall_back_to_ucontext(self.extensions)
+            asm_failed = True
+            self.force = True   # its objects were built with the asm flags
             super().run()
+        # Only a finished build may stamp: a stamp left by a failed one would
+        # pass off the previous build's extension as current.
         os.makedirs(self.build_temp, exist_ok=True)
         with open(stamp, "w") as f:
-            json.dump(build_identity(self.extensions), f, indent=1)
+            json.dump({"identity": build_identity(self.extensions,
+                                                  self.build_lib),
+                       "asm_failed": asm_failed}, f, indent=1)
 
 
 # --------------------------------------------------------------------

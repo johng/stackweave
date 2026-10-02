@@ -57,12 +57,14 @@
  *       Py_TSTATE_EXEC_HOME.  An arm64 SIGSEGV that looks benign on x86-TSO,
  *       so it survives local x86 review and only dies on weak memory.
  *   Both patches, the build recipe, and the measured validation live in
- *   src/patches/README.md.  The interpreter can't be checked at runtime, so
- *   build the extension against a patched interpreter with both features
- *   defined (the setup.py install gate refuses a pip install without them).
- *   Missing either, migration still runs and can crash under churn at H>=2;
- *   an extension built that way says so (RUNLOOM_MIGRATION_PATCHED below):
- *   mn_init warns once when it starts 2+ hubs.
+ *   src/patches/README.md.  Build the extension against a patched
+ *   interpreter with both features defined (the setup.py install gate
+ *   refuses a pip install without them).  Missing either, migration still
+ *   runs and can crash under churn at H>=2; an extension built that way says
+ *   so (RUNLOOM_MIGRATION_PATCHED below): mn_init warns once when it starts
+ *   2+ hubs.  Nothing in the ABI tells the two layouts apart, so `import
+ *   stackweave` also compares RUNLOOM_MIGRATION_PATCHED with what sysconfig
+ *   says the interpreter was built with (runtime._check_migration_build).
  *
  *   Historical note: the old "handoff-rescue" pool (run a wedged hub's fibers
  *   on a standby thread) was REMOVED (2026-06) because it migrated suspended

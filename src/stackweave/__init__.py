@@ -61,6 +61,9 @@ from .runtime import (
     grow_down_enabled,
 )
 import stackweave_c as _core  # noqa: F401  – C extension lives at top level
+from .runtime import _check_migration_build  # noqa: E402
+_check_migration_build()   # a build for another interpreter's layout crashes
+del _check_migration_build
 
 backend = _core.backend
 netpoll_backend = _core.netpoll_backend
