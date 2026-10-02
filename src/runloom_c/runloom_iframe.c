@@ -305,7 +305,9 @@ void runloom_iframe_brc_release(PyThreadState *fiber, PyThreadState *hub)
          * a memoryview, and so pinned its array, in
          * test_memory_array_view_survives_a_migration whenever the stacks
          * happened to lie that way round.  Lend the fiber the hub's limits for
-         * the merge (runloom_hub_main arms them), then put its own back. */
+         * the merge, then put its own back.  The hub's describe this stack:
+         * attaching a fresh state (_PyThreadState_Attach) sets them from the
+         * attaching thread's stack, and nothing re-arms a hub's state. */
         uintptr_t top = f->c_stack_top, soft = f->c_stack_soft_limit;
         uintptr_t hard = f->c_stack_hard_limit;
         uintptr_t sp;

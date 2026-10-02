@@ -917,11 +917,12 @@ stackweave.run(8, main)
 st = stackweave_c.stats()
 merges, off = st["brc_release_merges"], st["brc_release_merges_off_stack"]
 print("moves=%d merges=%d off_stack=%d" % (state["moves"], merges, off), flush=True)
-require_migration(state["moves"] > 0)
-assert merges > 0, "no parked fiber's queue was drained on its hub's stack"
+# Checked before anything that could skip: the invariant needs no fiber to
+# move (a ponger on another hub drops onto the pinger's hub just the same).
 assert off == 0, (
     "%d of %d drains ran deallocations with the stack pointer outside the "
     "attached state's C-stack window" % (off, merges))
+assert merges > 0, "no parked fiber's queue was drained on its hub's stack"
 print("PASS", flush=True)
 ''', timeout=90)
 
