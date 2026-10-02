@@ -57,7 +57,23 @@ long runloom_mn_deque_depth_total(void)
 
 void *runloom_mn_current_hub_opaque(void)
 {
-    return (void *)runloom_tls_hub;
+    return runloom_mn_nested_here() ? NULL : (void *)runloom_tls_hub;
+}
+
+/* Bracket a run(1) drain or a Coro resume (see runloom_mn_nested_here).
+ * Returns the hub fiber it marked, or NULL off a hub fiber; pass it back to
+ * runloom_mn_nested_exit.  Nests. */
+void *runloom_mn_nested_enter(void)
+{
+    runloom_g_t *g = runloom_tls_current_g;
+    if (runloom_tls_hub == NULL || g == NULL) return NULL;
+    g->nested_drains++;
+    return g;
+}
+
+void runloom_mn_nested_exit(void *g)
+{
+    if (g != NULL) ((runloom_g_t *)g)->nested_drains--;
 }
 
 int runloom_mn_hub_id_of(void *hub_opaque)
@@ -68,7 +84,7 @@ int runloom_mn_hub_id_of(void *hub_opaque)
 
 runloom_g_t *runloom_mn_tls_current_g(void)
 {
-    return runloom_tls_current_g;
+    return runloom_mn_nested_here() ? NULL : runloom_tls_current_g;
 }
 
 void runloom_mn_tls_mark_parked(void)
@@ -88,13 +104,13 @@ void runloom_mn_tls_mark_parked_foreign(void)
 
 runloom_sched_t *runloom_mn_current_sched(void)
 {
-    runloom_hub_t *h = runloom_tls_hub;
+    runloom_hub_t *h = runloom_mn_nested_here() ? NULL : runloom_tls_hub;
     return h ? &h->sched : NULL;
 }
 
 struct runloom_iouring_ring *runloom_mn_current_iouring_ring(void)
 {
-    runloom_hub_t *h = runloom_tls_hub;
+    runloom_hub_t *h = runloom_mn_nested_here() ? NULL : runloom_tls_hub;
     return h ? h->iouring_ring : NULL;
 }
 
@@ -311,7 +327,9 @@ int runloom_mn_pin_for_wake(runloom_g_t *g, int hub_id)
 static void runloom_mn_woken_enqueue(runloom_g_t *g)
 {
     runloom_hub_t *cur = runloom_tls_hub;
-    if (cur != NULL && runloom_hubs != NULL &&
+    /* Not while a nested run(1) holds this hub: it runs nothing of ours
+     * until the drain ends, so leave the woken g where any hub takes it. */
+    if (cur != NULL && runloom_hubs != NULL && !runloom_mn_nested_here() &&
         !runloom_mn_ctrl_no_steal() &&
         __atomic_load_n(&g->pin_hub1, __ATOMIC_ACQUIRE) == 0 &&
         runloom_cldeque_push(&cur->deque, g) == 0) {
@@ -569,7 +587,7 @@ int runloom_mn_yield_current(void)
 {
     runloom_hub_t *h = runloom_tls_hub;
     runloom_g_t *g = runloom_tls_current_g;
-    if (h == NULL || g == NULL) {
+    if (h == NULL || g == NULL || runloom_mn_nested_here()) {
         return 0;
     }
     /* Trivial-switch fast path: if there's no other work for this hub

@@ -537,7 +537,10 @@ def run(n, main_fn=None):
     # already live deadlocks (the nested mn_init/mn_run never makes progress
     # because the outer hub thread is blocked in run()).  Detect the active
     # runtime and raise instead of hanging.  (run(1) re-entrancy IS supported --
-    # it re-drives the same single-thread scheduler -- so only n > 1 is guarded.)
+    # it re-drives the same single-thread scheduler -- so only n > 1 is guarded.
+    # Nested in an M:N fiber it holds that fiber's hub until it returns, and its
+    # fibers sleep, park and yield on the single-thread scheduler; see
+    # runloom_mn_nested_here.)
     #
     # The check-and-claim must be atomic: a bare `if mn_hub_count() > 0: raise`
     # is a check-then-act, so two OS threads calling run(n>1) at once both read

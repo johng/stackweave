@@ -406,6 +406,11 @@ struct runloom_g {
      * which keeps the runq counters consistent.  Contract: mn_sched.h,
      * runloom_mn_fiber_pinned. */
     int pin_hub1;
+    /* run(1) drains and Coro resumes running other fibers on this g's stack
+     * and thread state while it is a hub's current fiber.  > 0 hides the hub
+     * from the code running there (runloom_mn_nested_here).  Touched only by
+     * the hub thread, while this g runs. */
+    int nested_drains;
     /* MPSC link for the home sched's cross-thread wake list.  Used
      * only while g is parked via park_safe AND a cross-thread wake
      * is in flight (between wake_safe's enqueue and drain's

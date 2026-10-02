@@ -139,6 +139,20 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   (deterministic: `stats()["brc_release_merges_off_stack"]` must stay 0) and
   `tests/test_c_stack_limits.py` (`stackweave_c._c_stack_limits()` before and
   after must match).
+- **A run(1) drain or Coro on a hub's fiber hides the hub from what it runs.**
+  The single-thread drain (`run(1)`, stackweave's asyncio loop) and
+  `Coro.resume` run other fibers on the calling fiber's stack and thread state.
+  On a hub's fiber, `runloom_tls_hub`/`runloom_tls_current_g` still name the hub
+  and the OUTER g there, so a sleep, park, yield or preemption that asked "am I
+  a hub fiber?" queued or parked the outer g -- still running -- while only the
+  inner coroutine swapped out: the inner fiber was lost and the outer one queued
+  to run twice (and the per-g snapshot skip made inner fibers share one frame
+  chain). `runloom_mn_nested_enter`/`_exit` bracket both; while
+  `g->nested_drains > 0` the `runloom_mn_current_*` / `runloom_mn_tls_current_g`
+  accessors return NULL, `runloom_mn_yield_current` returns 0, and both
+  preemption yields skip, so everything below takes the single-thread paths.
+  New fiber-context code must ask through those accessors, never read the hub
+  TLS directly. Guard: `tests/test_nested_run1_in_mn.py`.
 - **Preemption never yields mid object-destruction.** Both yield sites (the
   `preempt_init` time-slicer, and the seeded controller's frame-count hook,
   compiled only with `RUNLOOM_MN_CTRL`) gate on

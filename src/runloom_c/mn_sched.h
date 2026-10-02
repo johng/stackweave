@@ -237,9 +237,19 @@ typedef struct runloom_hub_info {
 runloom_hub_info_t *runloom_mn_hub_snapshot(long *count_out);
 
 /* Return an opaque handle to the hub running on this thread (or NULL
- * if the calling thread isn't a hub).  Used by netpoll to record where
- * to route a parked g when it becomes ready. */
+ * if the calling thread isn't a hub, or the code runs in a run(1) drain or
+ * Coro nested on the hub's fiber).  Used by netpoll to record where to
+ * route a parked g when it becomes ready. */
 void *runloom_mn_current_hub_opaque(void);
+
+/* Bracket a single-thread drain or a Coro resume that runs fibers on the
+ * calling hub fiber's stack and thread state: in between, the hub is hidden
+ * from the code running there (runloom_mn_current_*, runloom_mn_tls_current_g,
+ * runloom_mn_yield_current, preemption), which then takes the single-thread
+ * paths, as on a thread with no hub.  enter returns the marked fiber (NULL off
+ * a hub fiber) to pass to exit. */
+void *runloom_mn_nested_enter(void);
+void runloom_mn_nested_exit(void *g);
 
 /* Persistent PyThreadState for a runloom-owned worker OS thread (e.g. a
  * blockpool offload worker).  Created serialized against the hub-startup

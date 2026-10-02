@@ -187,6 +187,11 @@ Py_ssize_t runloom_sched_drain(runloom_sched_t *s)
      * PyErr_Restore it so it propagates out of m_run -> run_forever. */
     int sig_break = 0;
     PyObject *sig_t = NULL, *sig_v = NULL, *sig_b = NULL;
+    /* On a hub's fiber (run(1) nested in an M:N fiber, or an aio loop driven
+     * there) this drain owns the thread until it returns: hide the hub before
+     * the first snap, so it and every fiber below take the single-thread
+     * paths (runloom_mn_nested_here). */
+    void *mn_nested = runloom_mn_nested_enter();
 
     s->stopping = 0;
     runloom_pystate_snap(&sched_snap);
@@ -738,6 +743,7 @@ Py_ssize_t runloom_sched_drain(runloom_sched_t *s)
         Py_CLEAR(s->signal_exc);
     }
     s->signal_target = NULL;
+    runloom_mn_nested_exit(mn_nested);
     return s->completed - completed_before;
 }
 
