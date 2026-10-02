@@ -21,6 +21,7 @@ since a regression here is a crash.
 """
 import os
 import pathlib
+import signal
 import subprocess
 import sys
 
@@ -34,14 +35,12 @@ import sys
 import stackweave, stackweave_c
 sys.setrecursionlimit(1_000_000)
 PADS = 8
-deepest = bytearray(PADS)   # one slot per fiber; how deep it got, mod 256
 
-def crec(n, park, slot):
+def crec(n, park):
     # Parks, then one Python -> C -> Python level: list(map()) calls back into
     # crec from C, so the C stack deepens with n.
     park()
-    deepest[slot] = n & 0xFF
-    list(map(lambda k: crec(k, park, slot), [n + 1]))
+    list(map(lambda k: crec(k, park), [n + 1]))
 
 def pad(j, then):
     # j levels of a differently shaped C recursion first (sorted calls key()
@@ -52,7 +51,7 @@ def pad(j, then):
 
 def down(j, park):
     try:
-        pad(j, lambda: crec(0, park, j))
+        pad(j, lambda: crec(0, park))
     except RecursionError:
         pass
 
@@ -131,5 +130,8 @@ def test_copy_grow_when_turned_on(case):
     if rc > 0 or (rc == 0 and (done is None or done[1] == 0)):
         pytest.fail("the run did not exercise copy-grow: rc=%s %r %s"
                     % (rc, out, err[-1000:]))
-    # The known break: a signal (SIGSEGV/SIGBUS) once the fiber resumes grown.
+    if rc < 0 and -rc not in (signal.SIGSEGV, signal.SIGBUS):
+        pytest.fail("killed by signal %d, not the known SIGSEGV/SIGBUS: %s"
+                    % (-rc, err[-1000:]))
+    # The known break: SIGSEGV/SIGBUS once the fiber resumes grown.
     assert rc == 0, ("copy-grow crashed the fiber", rc, out, err[-500:])
