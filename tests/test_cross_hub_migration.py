@@ -1050,7 +1050,7 @@ def test_sched_local_wake_is_stolen_promptly_by_a_shallow_idle_hub(monkeypatch):
                 monkeypatch.setenv("STACKWEAVE_IDLE_UNREG_WAIT_US", "0")
             rc, out, err = run_scenario(STEAL_DELAY, timeout=60)
             m = re.search(r"DELAY=([0-9.]+) STOLEN=([0-9.]+) SLEEP200=([0-9.]+) "
-                          r"CPU=([0-9.]+)", out)
+                          r"CPU=([0-9.]+) SLEEP1600=([0-9.]+) GAP=([0-9.]+)", out)
             if rc != 0 or m is None:
                 print("--- %s scenario stdout ---\n%s\n--- stderr ---\n%s" % (kind, out, err))
                 pytest.fail("%s run rc=%s: %s" % (kind, rc, _key_line(out, err)),
@@ -1061,40 +1061,50 @@ def test_sched_local_wake_is_stolen_promptly_by_a_shallow_idle_hub(monkeypatch):
     stolen = min(r[1] for r in runs["capped"])
     sleep200 = max(r[2] for kinds in runs.values() for r in kinds)
     cpu = min(r[3] for kinds in runs.values() for r in kinds)
-    print("mean steal delay: capped %.0f us (stolen >= %.0f%%), uncapped %.0f us; "
-          "a 200 us sleep takes %.0f us, a spinning thread gets %.0f%% of a core here"
-          % (capped, 100 * stolen, uncapped, sleep200, 100 * cpu))
+    sleep1600 = max(r[4] for kinds in runs.values() for r in kinds)
+    gap = max(r[5] for kinds in runs.values() for r in kinds)
+    # Every failure and skip message carries all of this (and each run's
+    # numbers): a CI log shows the assertion line, not the captured stdout.
+    measured = ("capped %.0f us (stolen >= %.0f%%), uncapped %.0f us; a 200 us sleep "
+                "takes %.0f us and a 1600 us one %.0f us; a spinning thread gets "
+                "%.0f%% of a core, its longest clock gap %.0f us; runs (delay us, "
+                "stolen, sleep200 us, cpu, sleep1600 us, gap us) %s"
+                % (capped, 100 * stolen, uncapped, sleep200, sleep1600, 100 * cpu, gap,
+                   {k: [tuple(round(x, 2) for x in r) for r in v]
+                    for k, v in runs.items()}))
+    print("mean steal delay: " + measured)
     if sleep200 > 4000:
-        pytest.skip("timers here are too coarse for the cap to show (a 200 us sleep "
-                    "takes %.1f ms)" % (sleep200 / 1e3))
+        pytest.skip("timers here are too coarse for the cap to show -- %s" % measured)
     # 0.3, not 0.5: equal-QoS oversubscription keeps the probe near 1 on
     # macOS, but Linux CFS gives a fresh thread ~1/N of a core, so 0.5 would
     # skip a real regression on a 2x-oversubscribed ubuntu runner.
     if (stolen < 0.5 or capped >= 0.7 * uncapped) and cpu < 0.3:
-        pytest.skip("the process was starved of CPU (a spinning thread got %.0f%% of a "
-                    "core), so the idle hub could not steal in time" % (100 * cpu))
+        pytest.skip("the process was starved of CPU, so the idle hub could not "
+                    "steal in time -- %s" % measured)
     # A FAILED steal is a regression too (a skip would hide it): with stealing
     # broken the sender parks on its next send and hub 0 runs the receiver.
     # 0.5, not 0.9, so a briefly starved hub thread on a loaded runner does not
     # flake it.
     assert stolen >= 0.5, (
-        "only %.0f%% of wakes were stolen by the idle hub with the cap" % (100 * stolen))
+        "only %.0f%% of wakes were stolen by the idle hub with the cap -- %s"
+        % (100 * stolen, measured))
     assert capped < 0.7 * uncapped, (
-        "mean steal delay %.0f us with the unregistered-wait cap vs %.0f us without: "
-        "the cap no longer shortens an idle hub's unregistered waits" % (capped, uncapped))
+        "the cap no longer shortens an idle hub's unregistered waits -- %s" % measured)
 
 
 STEAL_DELAY = r'''
 _watchdog(40)
 N, WARM, SPIN_US = 150, 20, 2000
-def sleep200_us():
-    """Median wall time of a 200 us sleep on a fresh thread: how coarse this
-    machine's timers are right now."""
+def sleep_us(length_us):
+    """Median wall time of a length_us sleep on a fresh thread: how coarse this
+    machine's timers are right now.  A 200 us and a 1600 us sleep that take
+    about as long point at a fixed timer floor, under which the cap's short
+    waits cannot end sooner than the uncapped ones."""
     out = []
     def probe():
         for _ in range(30):
             t0 = time.perf_counter_ns()
-            time.sleep(0.0002)
+            time.sleep(length_us / 1e6)
             out.append(time.perf_counter_ns() - t0)
     t = threading.Thread(target=probe)
     t.start()
@@ -1103,19 +1113,28 @@ def sleep200_us():
     return out[len(out) // 2] / 1e3
 def cpu_share():
     """The smaller share of a core two threads (one per hub) get while each
-    spins 20 ms: well under 1 when higher-priority load starves this process."""
-    out = []
+    spins 20 ms -- well under 1 when higher-priority load starves this
+    process -- and the largest gap between consecutive clock reads in either
+    spin.  A gap of several ms with a share near 1 points at the host taking
+    the vCPU away, which the guest still charges as this thread's CPU time."""
+    out, gaps = [], []
     def probe():
         w0, c0 = time.perf_counter_ns(), time.thread_time_ns()
-        while time.perf_counter_ns() - w0 < 20_000_000:
-            pass
+        last, gap = w0, 0
+        while True:
+            now = time.perf_counter_ns()
+            gap = max(gap, now - last)
+            last = now
+            if now - w0 >= 20_000_000:
+                break
         out.append((time.thread_time_ns() - c0) / (time.perf_counter_ns() - w0))
+        gaps.append(gap)
     ts = [threading.Thread(target=probe) for _ in range(2)]
     for t in ts:
         t.start()
     for t in ts:
         t.join()
-    return min(out)
+    return min(out), max(gaps) / 1e3
 def steal_delay_us():
     ch, lat, where = stackweave_c.Chan(0), [], []
     def sender():
@@ -1142,9 +1161,11 @@ def steal_delay_us():
     # next send: the idle hub missed the whole spin, so charge it the spin.
     delay = [l / 1e3 if h != 0 else SPIN_US for l, h in zip(lat, where)]
     return sum(delay) / len(delay), sum(h != 0 for h in where) / len(where)
-slept, cpu = sleep200_us(), cpu_share()
+slept, slept1600 = sleep_us(200), sleep_us(1600)
+cpu, gap = cpu_share()
 delay, stolen = steal_delay_us()
-print("DELAY=%.1f STOLEN=%.3f SLEEP200=%.0f CPU=%.2f" % (delay, stolen, slept, cpu),
+print("DELAY=%.1f STOLEN=%.3f SLEEP200=%.0f CPU=%.2f SLEEP1600=%.0f GAP=%.0f"
+      % (delay, stolen, slept, cpu, slept1600, gap),
       flush=True)
 '''
 
