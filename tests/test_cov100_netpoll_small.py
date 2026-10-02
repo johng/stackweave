@@ -216,7 +216,8 @@ def test_reset_after_fork_memsets():
             rc.mn_fiber(w)
             r = rc.wait_fd(a.fileno(), 1, 5000)   # real epoll park+wake: alloc by_fd + reg bitmap
             assert r == 1, (tag, r)
-            buf = bytearray(1); rc.tcp_recv(a.fileno(), buf, 1)
+            buf = bytearray(1)
+            assert rc.tcp_recv(a.fileno(), buf, 1) == 1 and bytes(buf) == tag, (tag, buf)
             rc.netpoll_unregister(a.fileno()); a.close()
             rc.netpoll_unregister(b.fileno()); b.close()
 
@@ -359,6 +360,8 @@ def test_pump_iouring_ring_eventfd_match():
         import stackweave, stackweave_c as rc
         from stackweave.sync import WaitGroup
         assert rc.iouring_available()
+        res = {}
+        N = 12
         def main():
             def handler(conn):
                 while True:
@@ -367,8 +370,6 @@ def test_pump_iouring_ring_eventfd_match():
                     conn.send_all(d)
                 conn.close()
             port, listeners = rc.serve("127.0.0.1", 0, handler, 2, 128)
-            res = {}
-            N = 12
             wg = WaitGroup(); wg.add(N)
             def client(cid):
                 try:
@@ -389,9 +390,13 @@ def test_pump_iouring_ring_eventfd_match():
                 rc.mn_fiber(lambda cid=cid: client(cid))
             wg.wait()
             for L in listeners: L.close()
-            assert sum(res.values()) == N, res
         stackweave.run(4, main)
-        sys.stdout.write("IOURING_ECHO_OK\n")
+        # Checked here, not in main: main is a fiber, where a failed assert is
+        # printed and dropped.  A client whose echo failed never sets res[cid].
+        if sum(res.values()) == N:
+            sys.stdout.write("IOURING_ECHO_OK\n")
+        else:
+            sys.stdout.write("IOURING_ECHO_SHORT %r\n" % (res,))
     """, timeout=60)
     assert p.returncode == 0, p.stderr[-1500:]
     assert "IOURING_ECHO_OK" in p.stdout, (p.stdout, p.stderr[-800:])
