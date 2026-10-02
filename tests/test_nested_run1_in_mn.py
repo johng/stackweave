@@ -57,7 +57,7 @@ def _run(body, timeout=120):
                        cwd=ROOT, env=dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src"),
                        capture_output=True, text=True, timeout=timeout)
     assert p.returncode == 0, (p.returncode, p.stdout[-2000:] + p.stderr[-3000:])
-    return p.stdout
+    return p.stdout + p.stderr
 
 
 def test_inner_fibers_that_sleep_all_finish():
@@ -206,3 +206,151 @@ def test_a_long_coro_body_in_an_mn_fiber_is_not_preempted_out_of():
         print("DONE", res.get("done"), "AFTER", res.get("after"))
     """)
     assert "DONE True AFTER True" in out, out
+
+
+def test_a_coro_body_that_calls_python_is_not_preempted_out_of():
+    # Same as above, but each iteration enters a Python frame, so the sysmon
+    # eval-frame hook gets its chance (the loop above only meets the
+    # liveness pending call).
+    out = _run("""
+        res = {}
+        def step(n):
+            return n + 1
+        def outer():
+            def body():
+                end = time.monotonic() + 0.3
+                n = 0
+                while time.monotonic() < end:
+                    n = step(n)
+                return n
+            c = rc.Coro(body)
+            c.resume()
+            res["done"] = c.done
+        under_mn(outer, busy_fibers=8)
+        print("DONE", res.get("done"))
+    """)
+    assert "DONE True" in out, out
+
+
+def test_gather_inside_a_nested_run1_waits_for_its_runners():
+    # gather() used to send its runners to the hubs (mn_hub_count() > 0) and
+    # park its waiter in the nest, which did not count that park: run(1)
+    # returned 0 with the gather unfinished.  Spawns made in a nest now stay
+    # in it.
+    out = _run("""
+        from stackweave.sync import gather
+        res = {}
+        def outer():
+            def main():
+                res["gather"] = gather(lambda: rc.sched_sleep(0.01) or 1,
+                                       lambda: 2, lambda: 3)
+            res["n"] = stackweave.run(1, main)
+        under_mn(outer)
+        print("N", res.get("n"), "GATHER", res.get("gather"))
+    """)
+    assert "N 4 GATHER [1, 2, 3]" in out, out
+
+
+def test_spawns_stay_in_a_nested_run1_and_go_to_the_hubs_outside_it():
+    out = _run("""
+        res = {}
+        def outer():
+            res["outside"] = rc.mn_spawns_to_hubs()
+            def main():
+                res["inside"] = rc.mn_spawns_to_hubs()
+                c = rc.Coro(lambda: res.setdefault("coro in run(1)", rc.mn_spawns_to_hubs()))
+                c.resume()
+            stackweave.run(1, main)
+            c = rc.Coro(lambda: res.setdefault("coro", rc.mn_spawns_to_hubs()))
+            c.resume()
+            res["after"] = rc.mn_spawns_to_hubs()
+        under_mn(outer, busy_fibers=0)
+        print("RES", res["outside"], res["inside"], res["coro in run(1)"],
+              res["coro"], res["after"])
+    """)
+    # A Coro body has no drain of its own, so outside a run(1) its spawns
+    # still go to the hubs, where they run.
+    assert "RES True False False True True" in out, out
+
+
+def test_asyncio_on_the_stackweave_loop_inside_an_mn_fiber():
+    out = _run("""
+        import asyncio
+        from stackweave import aio
+        res = {}
+        async def amain():
+            async def t(i):
+                await asyncio.sleep(0.005 * (i % 3))
+                return i
+            r = await asyncio.gather(*(t(i) for i in range(6)))
+            q = asyncio.Queue()
+            async def prod():
+                for i in range(10):
+                    await q.put(i)
+            async def cons():
+                return [await q.get() for _ in range(10)]
+            _, got = await asyncio.gather(prod(), cons())
+            return r, got
+        def outer():
+            res["r"] = aio.run(amain())
+            res["hub after"] = rc.mn_current_hub() is not None
+        under_mn(outer)
+        print("R", res.get("r"), "HUB", res.get("hub after"))
+    """)
+    assert ("R ([0, 1, 2, 3, 4, 5], [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]) HUB True"
+            in out), out
+
+
+LEFTOVER = """
+    res, hold = {}, {}
+    def leftover():
+        # Parks inside an except block, so its snapshot holds the exc_info
+        # chain of the thread state it ran on: the nesting fiber's.
+        try:
+            raise ValueError("from-A")
+        except ValueError:
+            hold["g"] = rc.current_g()
+            rc.park()                # not counted: run(1) returns without it
+            res["exc"] = repr(sys.exc_info()[1])
+    def b():
+        res["b ran"] = stackweave.run(1)   # drains whatever "this thread's" sched has
+"""
+
+
+def test_a_fiber_left_in_a_nested_run1_stays_with_the_fiber_that_ran_it():
+    # A's run(1) returns with `leftover` parked; A wakes it.  B, pinned to the
+    # same hub thread, then runs run(1): it must not resume A's fiber, which
+    # would run on B's thread state with A's exception chain.  A's own next
+    # run(1) resumes it, with its exception intact.
+    out = _run(LEFTOVER + """
+    def a():
+        hub = rc.mn_current_hub()
+        res["a first"] = stackweave.run(1, lambda: rc.fiber(leftover))
+        hold["g"].wake()
+        rc.mn_fiber(b, 0, hub)
+        rc.sched_sleep(0.05)          # B runs on A's hub meanwhile
+        res["a again"] = stackweave.run(1)
+    under_mn(a, busy_fibers=0)
+    print("RES", res["a first"], res["b ran"], res["a again"], res.get("exc"))
+    """)
+    assert "RES 1 0 1 ValueError('from-A')" in out, out
+
+
+def test_a_fiber_left_behind_by_an_ended_fiber_is_never_resumed():
+    # As above, but A ends without another run(1), freeing its thread state,
+    # before B's run(1).  Resuming the leftover there was a use-after-free.
+    # It is reported instead, when A ends.
+    out = _run(LEFTOVER + """
+    def a():
+        hub = rc.mn_current_hub()
+        res["a first"] = stackweave.run(1, lambda: rc.fiber(leftover))
+        hold["g"].wake()
+        def later():
+            rc.sched_sleep(0.05)      # after A has ended
+            b()
+        rc.mn_fiber(later, 0, hub)
+    under_mn(a, busy_fibers=0)
+    print("RES", res["a first"], res.get("b ran"), res.get("exc"))
+    """)
+    assert "RES 1 0 None" in out, out
+    assert "can no longer run" in out, out

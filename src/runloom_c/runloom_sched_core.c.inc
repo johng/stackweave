@@ -154,6 +154,8 @@ void runloom_sched_init(runloom_sched_t *s)
     s->wake_list_tail = NULL;
     s->quiescence_head = NULL;
     s->quiescence_tail = NULL;
+    s->is_nest = 0;
+    s->nest_live = 0;
 }
 
 /* Pop the cross-thread wake list and push each entry onto the
@@ -227,6 +229,16 @@ RUNLOOM_NOINLINE runloom_sched_t *runloom_sched_get(void)
 {
     runloom_sched_t *s = runloom_tls_sched;
     if (__builtin_expect(s != NULL, 1)) return s;
+    {
+        /* A Coro on a hub fiber whose body reaches for a scheduler before the
+         * fiber has one: create the fiber's own, never the hub thread's. */
+        runloom_g_t *ng = (runloom_g_t *)runloom_mn_nest_owner();
+        if (ng != NULL) {
+            s = runloom_g_nest_sched(ng);
+            runloom_tls_sched = s;
+            return s;
+        }
+    }
     s = (runloom_sched_t *)PyMem_RawMalloc(sizeof(*s));
     if (s == NULL) {
         Py_FatalError("stackweave: per-thread scheduler allocation failed");
@@ -241,6 +253,74 @@ RUNLOOM_NOINLINE runloom_sched_t *runloom_sched_get(void)
         runloom_netpoll_wake_pump_arm();
     }
     return s;
+}
+
+RUNLOOM_NOINLINE runloom_sched_t *runloom_sched_tls_swap(runloom_sched_t *s)
+{
+    runloom_sched_t *prev = runloom_tls_sched;
+    runloom_tls_sched = s;
+    return prev;
+}
+
+/* A hub fiber's own single-thread scheduler, created on first use.
+ *
+ * Hub threads used to have one per-thread scheduler like any thread, and every
+ * M:N fiber that ran there shared it.  A run(1) nested on fiber A suspends its
+ * fibers on A's per-g thread state (their snaps keep A's exc_info chain, which
+ * ends in A's tstate), and whatever was still parked or queued when A's run(1)
+ * returned stayed on that shared scheduler -- so the next run(1) of ANY fiber
+ * on that hub (B, or an aio loop B drives) resumed them on B's thread state, or
+ * on A's after A had ended and freed it (use-after-free).  Keyed on the fiber
+ * instead, a nested fiber can only ever be resumed by a later drain of the
+ * same fiber, on the thread state it was suspended on, whichever hub that
+ * fiber runs on by then (the per-g tstate moves with it).  Freed with the
+ * fiber: runloom_g_nest_sched_release. */
+runloom_sched_t *runloom_g_nest_sched(runloom_g_t *g)
+{
+    runloom_sched_t *s = g->nest_sched;
+    if (s != NULL) return s;
+    s = (runloom_sched_t *)PyMem_RawMalloc(sizeof(*s));
+    if (s == NULL) {
+        Py_FatalError("stackweave: nested scheduler allocation failed");
+    }
+    runloom_sched_init(s);
+    s->is_nest = 1;
+    g->nest_sched = s;
+    return s;
+}
+
+runloom_sched_t *runloom_sched_get_here(void)
+{
+    runloom_g_t *g = (runloom_g_t *)runloom_mn_hub_fiber_raw();
+    return g != NULL ? runloom_g_nest_sched(g) : runloom_sched_get();
+}
+
+/* g is ending: free its nested scheduler, or, if fibers of it are still alive,
+ * say so and keep it.  Those fibers ran on g's thread state, which is about to
+ * be cleared, so nothing may resume them: and nothing will, since only g's own
+ * drains run this scheduler.  It stays allocated because they can still be
+ * woken (a wake appends to its wake_list), and they stay memory-safe parked --
+ * the GC anchor walks only their own frames, never the tstate their snap's
+ * exc_info chain ends in.  Plain run(1) on a thread leaves such fibers on the
+ * thread's scheduler for the next run(1); a fiber's has no next one. */
+static void runloom_g_nest_sched_release(runloom_g_t *g)
+{
+    runloom_sched_t *s = g->nest_sched;
+    long live = __atomic_load_n(&s->nest_live, __ATOMIC_ACQUIRE);
+    g->nest_sched = NULL;
+    if (live > 0) {
+        fprintf(stderr,
+            "stackweave: an M:N fiber (g%lld) ended with %ld fiber(s) of its "
+            "nested run(1) not finished; they ran on its thread state, so they "
+            "can no longer run\n", (long long)g->id, live);
+        fflush(stderr);
+        return;
+    }
+    PyMem_Free(s->ready_ring);
+    PyMem_Free(s->sleep_heap);
+    PyMem_Free(s->timer_heap);
+    runloom_mutex_destroy(&s->wake_list_lock);
+    PyMem_RawFree(s);
 }
 
 /* Non-allocating peek at the fiber currently running on THIS thread's
@@ -774,6 +854,13 @@ void runloom_g_decref(runloom_g_t *g)
      * are observable on the last reference's owner before free. */
     new_count = __atomic_sub_fetch(&g->refcount, 1, __ATOMIC_ACQ_REL);
     if (new_count <= 0) {
+        if (g->nest_counted) {
+            g->nest_counted = 0;
+            __atomic_sub_fetch(&g->owner->nest_live, 1, __ATOMIC_ACQ_REL);
+        }
+        if (g->nest_sched != NULL) {
+            runloom_g_nest_sched_release(g);
+        }
         runloom_pystate_snap_clear(&g->snap);
         if (g->tstate != NULL) {
             /* per-g tstate (M:N): g is done + detached, so its
@@ -926,6 +1013,10 @@ static PyObject *spawn_common(runloom_sched_t *s, PyObject *callable,
     runloom_delay_inject(RUNLOOM_DLY_SPAWN_PUBLISH);
     __atomic_store_n(&g->refcount, 1, __ATOMIC_RELAXED);  /* one ref for the sched queue */
     __atomic_store_n(&g->owner, s, __ATOMIC_RELAXED);     /* owning per-thread sched (Phase C) */
+    if (s->is_nest) {                     /* see runloom_g_nest_sched_release */
+        __atomic_add_fetch(&s->nest_live, 1, __ATOMIC_ACQ_REL);
+        g->nest_counted = 1;
+    }
     __atomic_store_n(&g->noyield, noyield, __ATOMIC_RELAXED);
     __atomic_store_n(&g->id, runloom_next_goid(), __ATOMIC_RELAXED);
     g->park_fd = -1;   /* not parked on any fd yet (reset after slab reuse) */
@@ -942,6 +1033,10 @@ static PyObject *spawn_common(runloom_sched_t *s, PyObject *callable,
         if (g->limit_counted) {             /* release the admission slot we took */
             runloom_fiber_release();
             g->limit_counted = 0;
+        }
+        if (g->nest_counted) {
+            g->nest_counted = 0;
+            __atomic_sub_fetch(&s->nest_live, 1, __ATOMIC_ACQ_REL);
         }
         runloom_g_slab_free(g);
         PyErr_SetString(PyExc_MemoryError, "runloom_coro_new failed");

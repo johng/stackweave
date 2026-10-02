@@ -57,7 +57,8 @@ def fiber(callable_, *args, **kwargs):
     # else the single-thread scheduler.  stackweave_c.fiber() lands on the calling
     # thread's single-thread ring, which the M:N drain loop never services -- the
     # fiber would silently never run and run() would return as if it were done.
-    if stackweave_c.mn_hub_count() > 0:
+    # Inside a run(1) nested on an M:N fiber, the spawn stays in that run(1).
+    if stackweave_c.mn_spawns_to_hubs():
         return stackweave_c.mn_fiber(target)
     return stackweave_c.fiber(target)
 
@@ -571,7 +572,10 @@ def gather(*callables):
     # Spawn on whichever scheduler is live: mn_fiber under M:N (run/mn_run), else
     # the single-thread go.  A runner spawned via stackweave_c.fiber never runs under
     # mn_run, so wg.wait() would hang -- same routing as monkey's _spawn helper.
-    mn = stackweave_c.mn_hub_count() > 0
+    # Inside a run(1) nested on an M:N fiber the runners stay in that run(1):
+    # wg.wait() parks there, and the nested run(1) would return without
+    # waiting for runners sent to the hubs.
+    mn = stackweave_c.mn_spawns_to_hubs()
     # Fail loud instead of hanging: with no hub (not mn) AND not inside a fiber
     # (a single-thread run() would give current_g()), the stackweave_c.fiber()
     # spawns below queue on THIS thread's single-thread ring, which nothing
@@ -1203,7 +1207,7 @@ class JoinSet(object):
             finally:
                 self._wg.done()
 
-        if stackweave_c.mn_hub_count() > 0:
+        if stackweave_c.mn_spawns_to_hubs():   # see gather()
             stackweave_c.mn_fiber(runner)
         else:
             stackweave_c.fiber(runner)

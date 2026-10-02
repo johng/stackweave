@@ -81,7 +81,7 @@ int runloom_netpoll_drain_parked_mn(void)
 
 int runloom_netpoll_drain_parked(void)
 {
-    runloom_sched_t *owner = runloom_sched_get();
+    runloom_sched_t *owner = runloom_sched_get_here();
     int n = 0;
     int pi;
     for (pi = 0; pi < RUNLOOM_PARKER_POOL_MAX; pi++) {

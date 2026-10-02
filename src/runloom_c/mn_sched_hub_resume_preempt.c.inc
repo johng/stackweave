@@ -1191,7 +1191,7 @@ static RUNLOOM_TLS runloom_g_t   *runloom_tls_current_g = NULL;
 static inline int runloom_mn_nested_here(void)
 {
     runloom_g_t *g = runloom_tls_current_g;
-    return g != NULL && g->nested_drains > 0;
+    return g != NULL && g->nest_depth > 0;
 }
 /* Set by runloom_mn_yield_current() before runloom_coro_yield(); read by
  * hub_main after runloom_coro_resume returns.  Tells hub_main "the g

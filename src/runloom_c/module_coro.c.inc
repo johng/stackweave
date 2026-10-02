@@ -160,9 +160,10 @@ static PyObject *RunloomCoro_resume(RunloomCoro *self, PyObject *unused)
      * coro runs on that fiber's stack and state: hide the hub from it, as a
      * nested run(1) does (runloom_mn_nested_enter). */
     {
-        void *mn_nested = runloom_mn_nested_enter();
+        runloom_mn_nest_t mn_nest;
+        runloom_mn_nested_enter(&mn_nest, 0);
         runloom_coro_resume(self->coro);
-        runloom_mn_nested_exit(mn_nested);
+        runloom_mn_nested_exit(&mn_nest);
     }
 
     /* Snapshot the coro's tstate at the yield/return point, then

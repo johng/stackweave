@@ -8,7 +8,7 @@ def _spawn(fn):
     """Spawn the worker fiber on whichever scheduler is active: mn_fiber under
     M:N (mn_hub_count() > 0), else the single-thread go.  A task spawned via the
     single-thread fiber() never runs under mn_run, so future.result() would hang."""
-    if stackweave_c.mn_hub_count() > 0:
+    if stackweave_c.mn_spawns_to_hubs():   # not inside a nested run(1)
         return stackweave_c.mn_fiber(fn)
     return stackweave_c.fiber(fn)
 

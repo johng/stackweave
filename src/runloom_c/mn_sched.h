@@ -242,14 +242,35 @@ runloom_hub_info_t *runloom_mn_hub_snapshot(long *count_out);
  * route a parked g when it becomes ready. */
 void *runloom_mn_current_hub_opaque(void);
 
-/* Bracket a single-thread drain or a Coro resume that runs fibers on the
- * calling hub fiber's stack and thread state: in between, the hub is hidden
- * from the code running there (runloom_mn_current_*, runloom_mn_tls_current_g,
- * runloom_mn_yield_current, preemption), which then takes the single-thread
- * paths, as on a thread with no hub.  enter returns the marked fiber (NULL off
- * a hub fiber) to pass to exit. */
-void *runloom_mn_nested_enter(void);
-void runloom_mn_nested_exit(void *g);
+/* Bracket a single-thread drain (drain = 1) or a Coro resume (drain = 0) that
+ * runs fibers on the calling hub fiber's stack and thread state.  In between:
+ *   - the hub is hidden from the code running there: runloom_mn_current_*,
+ *     runloom_mn_tls_current_g and runloom_mn_yield_current answer as off a
+ *     hub, and the sysmon eval-frame hook and the liveness pending call skip;
+ *   - the thread's single-thread scheduler is the fiber's own
+ *     (runloom_g_nest_sched), so nested fibers only ever run on the thread
+ *     state they were suspended on;
+ *   - inside a drain, spawns stay in it (runloom_mn_spawns_to_hubs).
+ * A no-op off a hub fiber.  Nests; pass the same token to exit. */
+typedef struct runloom_mn_nest {
+    void *g;                      /* the hub fiber marked, or NULL */
+    runloom_sched_t *prev;        /* the thread's scheduler before the swap */
+    int drain;
+} runloom_mn_nest_t;
+void runloom_mn_nested_enter(runloom_mn_nest_t *n, int drain);
+void runloom_mn_nested_exit(runloom_mn_nest_t *n);
+
+/* The hub's running fiber, nested or not; NULL off a hub fiber. */
+void *runloom_mn_hub_fiber_raw(void);
+
+/* The hub fiber hosting the nest the caller is in, or NULL. */
+void *runloom_mn_nest_owner(void);
+
+/* Whether a spawn from here goes to the hubs: an M:N runtime is up and the
+ * caller is not inside a run(1) drain nested on a hub fiber, where a spawn
+ * belongs to that drain (a waiter there parks on it, so work sent to the hubs
+ * would finish after the drain had already given up on it). */
+int runloom_mn_spawns_to_hubs(void);
 
 /* Persistent PyThreadState for a runloom-owned worker OS thread (e.g. a
  * blockpool offload worker).  Created serialized against the hub-startup

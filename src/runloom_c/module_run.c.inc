@@ -91,11 +91,11 @@ static PyObject *m_run(PyObject *self, PyObject *unused)
 {
     Py_ssize_t completed;
     (void)self; (void)unused;
-    completed = runloom_sched_drain(runloom_sched_get());
+    completed = runloom_sched_drain(runloom_sched_get_here());
     /* Release g-refs held by any leftover timed-park entries (a g woken early by
      * a real wake leaves a future-deadline entry the run never fired); the
      * timer_push incref would otherwise pin those gs past run end. */
-    runloom_sched_release_timers(runloom_sched_get());
+    runloom_sched_release_timers(runloom_sched_get_here());
     /* drain may have run a pending Python signal handler that RAISED
      * (Ctrl-C -> KeyboardInterrupt); surface it instead of a result so it
      * aborts run_forever()/run_until_complete like stock asyncio. */
@@ -613,6 +613,12 @@ static PyObject *m_mn_hub_count(PyObject *self, PyObject *unused)
     return PyLong_FromLong(runloom_mn_hub_count());
 }
 
+static PyObject *m_mn_spawns_to_hubs(PyObject *self, PyObject *unused)
+{
+    (void)self; (void)unused;
+    return PyBool_FromLong(runloom_mn_spawns_to_hubs());
+}
+
 /* ---- fiber() fast entry --------------------------------------------------
  * runloom.fiber is bound to this C function (METH_FASTCALL) instead of the
  * Python wrapper.  The common Go-style spawn -- fiber(callable), no extra args,
@@ -631,7 +637,7 @@ static PyObject *m_fiber_fast(PyObject *self, PyObject *const *args,
 {
     (void)self;
     if (nargs == 1 && kwnames == NULL
-            && runloom_mn_hub_count() > 0 && PyCallable_Check(args[0])) {
+            && runloom_mn_spawns_to_hubs() && PyCallable_Check(args[0])) {
         return runloom_mn_fiber(args[0], 0);   /* fire-and-forget M:N spawn */
     }
     if (runloom_py_fiber_full == NULL) {
@@ -708,7 +714,7 @@ static PyObject *m_fiber_grow(PyObject *self, PyObject *const *args,
          * the user explicitly chose max spawn rate, which is incompatible with
          * routing every spawn through the Python _fiber_full frame that
          * grow-down's sampling needs. */
-        if (nargs == 1 && kwnames == NULL && runloom_mn_hub_count() > 0
+        if (nargs == 1 && kwnames == NULL && runloom_mn_spawns_to_hubs()
                 && PyCallable_Check(args[0]))
             return runloom_mn_fiber(args[0], 0);
         if (runloom_py_fiber_full != NULL)   /* rich/single-thread: delegate */
@@ -716,7 +722,7 @@ static PyObject *m_fiber_grow(PyObject *self, PyObject *const *args,
                                        (size_t)nargs, kwnames);
     }
     if (runloom_grow_down_active && nargs == 1
-            && kwnames == NULL && runloom_mn_hub_count() > 0
+            && kwnames == NULL && runloom_mn_spawns_to_hubs()
             && runloom_grow_down_key != NULL && PyFunction_Check(args[0])) {
         PyObject *fn = args[0];
         PyObject *d = ((PyFunctionObject *)fn)->func_dict;   /* borrowed, may be NULL */

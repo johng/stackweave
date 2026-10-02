@@ -406,11 +406,13 @@ def _fiber_full(callable_, *args, **kwargs):
     # by name as a safety margin), and grow-down's measured shrink would silently
     # override that conservative choice.  Two sizers shouldn't fight -- the one
     # the user explicitly turned on wins.
-    mn = stackweave_c.mn_hub_count()
-    if (mn > 0 and stack_size <= 0 and grow_down_active
+    # mn_spawns_to_hubs(), not mn_hub_count(): inside a run(1) nested on an M:N
+    # fiber a spawn belongs to that run(1) (see its docstring).
+    mn = stackweave_c.mn_spawns_to_hubs()
+    if (mn and stack_size <= 0 and grow_down_active
             and not stackweave_c.stack_autosize_enabled()):
         stack_size, target = grow_down_prepare(callable_, target)
-    if mn > 0:
+    if mn:
         stackweave_c.mn_fiber(target, stack_size)
         return None
     g = stackweave_c.fiber(target, stack_size)
@@ -538,9 +540,11 @@ def run(n, main_fn=None):
     # because the outer hub thread is blocked in run()).  Detect the active
     # runtime and raise instead of hanging.  (run(1) re-entrancy IS supported --
     # it re-drives the same single-thread scheduler -- so only n > 1 is guarded.
-    # Nested in an M:N fiber it holds that fiber's hub until it returns, and its
-    # fibers sleep, park and yield on the single-thread scheduler; see
-    # runloom_mn_nested_here.)
+    # Nested in an M:N fiber it drives that fiber's OWN single-thread scheduler,
+    # spawns made inside stay inside, and its fibers sleep, park and yield there;
+    # see runloom_mn_nested_enter.  It holds the fiber's hub until it returns:
+    # the hub's other fibers, run queues and poller wait meanwhile, as behind
+    # any long non-yielding fiber.)
     #
     # The check-and-claim must be atomic: a bare `if mn_hub_count() > 0: raise`
     # is a check-then-act, so two OS threads calling run(n>1) at once both read

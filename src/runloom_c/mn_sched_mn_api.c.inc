@@ -60,20 +60,48 @@ void *runloom_mn_current_hub_opaque(void)
     return runloom_mn_nested_here() ? NULL : (void *)runloom_tls_hub;
 }
 
-/* Bracket a run(1) drain or a Coro resume (see runloom_mn_nested_here).
- * Returns the hub fiber it marked, or NULL off a hub fiber; pass it back to
- * runloom_mn_nested_exit.  Nests. */
-void *runloom_mn_nested_enter(void)
+/* Bracket a run(1) drain (drain = 1) or a Coro resume (drain = 0) on a hub
+ * fiber (see runloom_mn_nested_here).  Also swaps in the fiber's own single-
+ * thread scheduler, so nothing in the nest touches the hub thread's: a drain
+ * creates it now, a Coro only if its body reaches for one (runloom_sched_get's
+ * slow path).  A no-op off a hub fiber.  Nests. */
+void runloom_mn_nested_enter(runloom_mn_nest_t *n, int drain)
 {
     runloom_g_t *g = runloom_tls_current_g;
-    if (runloom_tls_hub == NULL || g == NULL) return NULL;
-    g->nested_drains++;
-    return g;
+    n->g = NULL;
+    n->prev = NULL;
+    n->drain = drain;
+    if (runloom_tls_hub == NULL || g == NULL) return;
+    n->g = g;
+    g->nest_depth++;
+    if (drain) g->nest_drains++;
+    n->prev = runloom_sched_tls_swap(drain ? runloom_g_nest_sched(g) : g->nest_sched);
 }
 
-void runloom_mn_nested_exit(void *g)
+void runloom_mn_nested_exit(runloom_mn_nest_t *n)
 {
-    if (g != NULL) ((runloom_g_t *)g)->nested_drains--;
+    runloom_g_t *g = (runloom_g_t *)n->g;
+    if (g == NULL) return;
+    (void)runloom_sched_tls_swap(n->prev);
+    if (n->drain) g->nest_drains--;
+    g->nest_depth--;
+}
+
+void *runloom_mn_hub_fiber_raw(void)
+{
+    return runloom_tls_hub != NULL ? (void *)runloom_tls_current_g : NULL;
+}
+
+void *runloom_mn_nest_owner(void)
+{
+    return runloom_mn_nested_here() ? (void *)runloom_tls_current_g : NULL;
+}
+
+int runloom_mn_spawns_to_hubs(void)
+{
+    runloom_g_t *g = runloom_tls_current_g;
+    if (runloom_mn_hub_count() <= 0) return 0;
+    return !(runloom_tls_hub != NULL && g != NULL && g->nest_drains > 0);
 }
 
 int runloom_mn_hub_id_of(void *hub_opaque)
@@ -183,7 +211,7 @@ static void runloom_mn_hub_submit(runloom_hub_t *h, runloom_g_t *g)
         runloom_hub_t *cur = runloom_tls_hub;
         if (runloom_mn_ctrl.enabled && runloom_mn_ctrl.barrier &&
             cur != NULL && cur != h && cur->stage_head != NULL &&
-            runloom_tls_current_g != NULL &&
+            runloom_tls_current_g != NULL && !runloom_mn_nested_here() &&
             h->id >= 0 && h->id < runloom_hub_count) {
             RUNLOOM_NEXT_SET(g, NULL, 5);   /* staging (controlled mode) */
             if (cur->stage_tail[h->id] != NULL)

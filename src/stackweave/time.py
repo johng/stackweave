@@ -69,7 +69,7 @@ def _spawn(fn):
     so route through mn_fiber; else use the single-thread go.  Reading
     stackweave_c.fiber / mn_fiber at call time also picks up monkey's
     fiber-context wrapper when patch() is active."""
-    if stackweave_c.mn_hub_count() > 0:
+    if stackweave_c.mn_spawns_to_hubs():   # not inside a nested run(1)
         return stackweave_c.mn_fiber(fn)
     return stackweave_c.fiber(fn)
 

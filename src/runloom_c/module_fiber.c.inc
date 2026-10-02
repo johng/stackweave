@@ -71,7 +71,7 @@ static PyObject *m_fiber(PyObject *self, PyObject *args, PyObject *kw)
         PyErr_SetString(PyExc_TypeError, "fiber(): callable required");
         return NULL;
     }
-    s = runloom_sched_get();
+    s = runloom_sched_get_here();
     if (stack_size > 0) {
         cap = runloom_sched_spawn_sized(s, callable, (size_t)stack_size);
     } else {
@@ -109,7 +109,7 @@ static PyObject *m_fiber_noyield(PyObject *self, PyObject *callable)
         PyErr_SetString(PyExc_TypeError, "fiber_noyield(): callable required");
         return NULL;
     }
-    s = runloom_sched_get();
+    s = runloom_sched_get_here();
     cap = runloom_sched_spawn_noyield(s, callable);
     if (cap == NULL) return NULL;
     g = (runloom_g_t *)PyCapsule_GetPointer(cap, "runloom_g");
@@ -140,7 +140,7 @@ static PyObject *m_sched_yield(PyObject *self, PyObject *unused)
  * background fibers parked on I/O (accept loops, etc). */
 static PyObject *m_sched_stop(PyObject *self, PyObject *unused)
 {
-    runloom_sched_t *s = runloom_sched_get();
+    runloom_sched_t *s = runloom_sched_get_here();
     (void)self; (void)unused;
     s->stopping = 1;
     Py_RETURN_NONE;
@@ -168,7 +168,7 @@ static PyObject *m_sched_stop(PyObject *self, PyObject *unused)
  * frame-walker hardened across 3.11/3.12/3.13t. */
 static PyObject *m_sched_reset(PyObject *self, PyObject *unused)
 {
-    runloom_sched_t *s = runloom_sched_get();
+    runloom_sched_t *s = runloom_sched_get_here();
     int n_ready = 0, n_sleep = 0, n_parked;
     (void)self; (void)unused;
 

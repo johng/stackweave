@@ -139,20 +139,39 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   (deterministic: `stats()["brc_release_merges_off_stack"]` must stay 0) and
   `tests/test_c_stack_limits.py` (`stackweave_c._c_stack_limits()` before and
   after must match).
-- **A run(1) drain or Coro on a hub's fiber hides the hub from what it runs.**
-  The single-thread drain (`run(1)`, stackweave's asyncio loop) and
-  `Coro.resume` run other fibers on the calling fiber's stack and thread state.
-  On a hub's fiber, `runloom_tls_hub`/`runloom_tls_current_g` still name the hub
-  and the OUTER g there, so a sleep, park, yield or preemption that asked "am I
-  a hub fiber?" queued or parked the outer g -- still running -- while only the
-  inner coroutine swapped out: the inner fiber was lost and the outer one queued
-  to run twice (and the per-g snapshot skip made inner fibers share one frame
-  chain). `runloom_mn_nested_enter`/`_exit` bracket both; while
-  `g->nested_drains > 0` the `runloom_mn_current_*` / `runloom_mn_tls_current_g`
-  accessors return NULL, `runloom_mn_yield_current` returns 0, and both
-  preemption yields skip, so everything below takes the single-thread paths.
-  New fiber-context code must ask through those accessors, never read the hub
-  TLS directly. Guard: `tests/test_nested_run1_in_mn.py`.
+- **A run(1) drain or Coro nested on a hub's fiber is its own world.** The
+  single-thread drain (`run(1)`, stackweave's asyncio loop) and `Coro.resume`
+  run other fibers on the calling fiber's stack and thread state.
+  `runloom_mn_nested_enter`/`_exit` bracket both, and three things hold inside:
+  (1) **The hub is hidden.** `runloom_tls_hub`/`runloom_tls_current_g` still name
+  the hub and the OUTER g there, so a sleep, park or yield that asked "am I a hub
+  fiber?" parked or queued the still-running outer g while only the inner
+  coroutine swapped out (inner fiber lost, outer g resumed twice; the per-g
+  snapshot skip also made inner fibers share one frame chain). While
+  `g->nest_depth > 0` the `runloom_mn_current_*` / `runloom_mn_tls_current_g`
+  accessors return NULL, `runloom_mn_yield_current` returns 0, and the two
+  preemption hooks this applies to -- the sysmon eval-frame wrapper
+  (`runloom_preempt_eval_frame`) and the liveness pending call
+  (`runloom_mn_liveness_pending_cb`) -- skip. Code that asks through those
+  accessors takes its single-thread branch; new fiber-context code must do the
+  same, never read the hub TLS directly. (2) **The single-thread scheduler is
+  the outer g's own** (`g->nest_sched`, `runloom_g_nest_sched`), never the hub
+  thread's: nested fibers are suspended on the outer g's per-g tstate (their
+  snaps' exc_info chain ends in it), and a shared per-thread scheduler let
+  another fiber's run(1) on that hub resume them on its tstate, or on the outer
+  g's after it was freed (use-after-free). Spawn and drain entry points take it
+  via `runloom_sched_get_here`. The nested scheduler must not outlive the outer
+  g's tstate as a runnable thing: at the outer g's end it is freed, or, if
+  fibers of it are still alive (`nest_live`), reported and kept but never
+  drained again. (3) **Spawns made in a drain stay in it**
+  (`runloom_mn_spawns_to_hubs`, which every spawn helper routes on instead of
+  `mn_hub_count()`): a waiter there parks in the nest, which would return
+  without waiting for work sent to the hubs (gather/JoinSet). Liveness cost: a
+  nested run(1) holds its hub until it returns, so that hub's other fibers,
+  local FIFO, sub-list, poller and ring wait meanwhile (a 10 ms sleeper there
+  took ~600 ms behind a 500 ms nest) -- the same as any long non-yielding
+  fiber, but nest whole programs (aio.run) on purpose. Guard:
+  `tests/test_nested_run1_in_mn.py`.
 - **Preemption never yields mid object-destruction.** Both yield sites (the
   `preempt_init` time-slicer, and the seeded controller's frame-count hook,
   compiled only with `RUNLOOM_MN_CTRL`) gate on
