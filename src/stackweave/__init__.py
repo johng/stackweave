@@ -61,6 +61,9 @@ from .runtime import (
     grow_down_enabled,
 )
 import stackweave_c as _core  # noqa: F401  – C extension lives at top level
+from .runtime import _check_migration_build  # noqa: E402
+_check_migration_build()   # a build for another interpreter's layout crashes
+del _check_migration_build
 
 backend = _core.backend
 netpoll_backend = _core.netpoll_backend
@@ -120,7 +123,10 @@ if hasattr(_os, "register_at_fork"):
 # hub: work stranded behind a wedged hub gets rescued and load spreads to free
 # cores.  Soundness needs CPython built with both patches in src/patches/
 # (alloc-home + exec-home), and every other extension in the process rebuilt
-# against it; nothing checks for them at runtime.
+# against it.  stackweave_c can't run without migrating, but it says when it
+# can't do so safely: the import check above warns when it was built for
+# another patch set than this interpreter's, and mn_init warns once at H>=2
+# when it was built without both (stackweave_c.migration_patched).
 
 # Runtime introspection -- `stackweave.inspect.dump()`, fibers(), stack(), etc.
 # See stackweave/inspect.py.  Exposed as a submodule plus a couple of top-level

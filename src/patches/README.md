@@ -30,9 +30,12 @@ makes false. 3.15 moved `_Py_ThreadId` from `Include/object.h` to
 series' patch with `-F3` can fuzz superseded hunks back in and yield a silently wrong
 interpreter — so don't.
 
-Every M:N run migrates, and nothing checks for the patches at runtime: run
-`run(n > 1)` on an interpreter missing either half and a migrated fiber can
-corrupt memory under churn.
+Every M:N run migrates: run `run(n > 1)` on an interpreter missing either half
+and a migrated fiber can corrupt memory under churn. stackweave says so but
+doesn't refuse: `import stackweave` warns when the extension was built for
+another patch set than the running interpreter's, and `mn_init` warns once at
+2+ hubs when the extension was built without both
+(`stackweave_c.migration_patched` is 0).
 
 ## `cpython314t-tstate-alloc-home.patch` — per-tstate allocation home
 

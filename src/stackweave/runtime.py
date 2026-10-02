@@ -157,6 +157,43 @@ def gil_enabled():
     return is_enabled()
 
 
+_MIGRATION_FEATURES = ("Py_TSTATE_ALLOC_HOME", "Py_TSTATE_EXEC_HOME")
+
+
+def _interpreter_migration_patched():
+    """Whether this interpreter was built with both migration patches, read
+    from its build configuration: its pyconfig.h, or its configure CPPFLAGS
+    (setup.py's patched_cpython_problems() applies the same rule)."""
+    import sysconfig
+    cppflags = (sysconfig.get_config_var("CONFIGURE_CPPFLAGS") or "").split()
+    defined = {f[2:].split("=", 1)[0] for f in cppflags if f.startswith("-D")}
+    return all(sysconfig.get_config_var(f) or f in defined
+               for f in _MIGRATION_FEATURES)
+
+
+def _check_migration_build():
+    """Say so when stackweave_c was built for another patch set than this
+    interpreter's.
+
+    The two migration patches change the _PyThreadStateImpl layout, and nothing
+    in the ABI tells an extension built for one layout from one built for the
+    other: both are cp3NNt.  So a stale build left by the other interpreter
+    (build_ext used to reuse it), or one forced to "patched" with -D flags on a
+    stock interpreter, loads fine and then crashes in M:N -- a SIGSEGV with no
+    hint.  stackweave_c.migration_patched says what the extension was compiled
+    with; compare it with what this interpreter was built with."""
+    built = bool(getattr(stackweave_c, "migration_patched", 1))
+    running = _interpreter_migration_patched()
+    if built != running and sys.stderr is not None:
+        sys.stderr.write(
+            "[stackweave] stackweave_c was built %s the migration patches, but "
+            "this interpreter (%s) was built %s them: the two disagree about "
+            "the thread-state layout, and M:N will crash -- rebuild the "
+            "extension with this interpreter (python setup.py build_ext "
+            "--inplace)\n" % ("with" if built else "without", sys.executable,
+                               "with" if running else "without"))
+
+
 def _tlbc_reexec_if_needed():
     """Fall back to PYTHON_TLBC=0 ONLY when the GC frames anchor is inactive.
 

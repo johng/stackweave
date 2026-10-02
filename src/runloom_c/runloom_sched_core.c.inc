@@ -788,7 +788,9 @@ void runloom_g_decref(runloom_g_t *g)
              *   PyThreadState_Clear -> _PyMem_AbandonDelayed -> ... -> _mi_page_retire
              * you ran M:N on an interpreter that LACKS the alloc-home patch, or
              * built this extension without -DPy_TSTATE_ALLOC_HOME -- migration is
-             * always on and nothing checks for the patch.  This crash is
+             * always on; the only checks are warnings (`import stackweave` on a
+             * build/interpreter mismatch, mn_init at H>=2 on an unpatched
+             * build), so check stderr for them.  This crash is
              * CHARACTERIZED and FIXED by the alloc-home patch (src/patches/
              * README.md); do not re-derive it.
              *

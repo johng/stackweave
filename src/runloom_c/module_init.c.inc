@@ -581,6 +581,12 @@ PyMODINIT_FUNC PyInit_stackweave_c(void)
         Py_DECREF(m);
         return NULL;
     }
+    /* Whether this build has both migration patches (mn_sched.h). */
+    if (PyModule_AddIntConstant(m, "migration_patched",
+                                RUNLOOM_MIGRATION_PATCHED) < 0) {
+        Py_DECREF(m);
+        return NULL;
+    }
     /* Install the blockpool worker-thread teardown hook so each offload worker
      * releases the persistent Python tstate it lazily created (see
      * py_blocking_worker) on its own thread at exit -- before any worker starts
