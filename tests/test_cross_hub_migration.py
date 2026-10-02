@@ -1118,7 +1118,7 @@ def test_sched_local_wake_is_stolen_promptly_by_a_shallow_idle_hub(monkeypatch):
     it skips where a 200 us sleep takes over 10 ms.  It also skips, instead of
     failing, when the process was starved of CPU (a spinning thread got under
     30% of a core, e.g. utility QoS under default-QoS CPU hogs: 34-40% stolen,
-    capped ~ uncapped), and when the timers have a floor (in some run a
+    capped ~ uncapped), and when the timers have a floor (in the median run a
     1600 us sleep took under 3x a 200 us one; 4-8x is usual, even under QoS
     coalescing or CPU hogs), under which capped and uncapped waits are equally
     long.  An unstarved, unfloored run still asserts, so a real regression
@@ -1156,13 +1156,16 @@ def test_sched_local_wake_is_stolen_promptly_by_a_shallow_idle_hub(monkeypatch):
     spin = max(r[6] for kinds in runs.values() for r in kinds)
     # How much longer a 1600 us sleep takes than a 200 us one: ~8x where timers
     # stretch waits in proportion (fine timers, QoS coalescing), near 1 where a
-    # fixed floor or added latency swallows the difference.
-    stretch = min(r[4] / r[2] for kinds in runs.values() for r in kinds)
+    # fixed floor or added latency swallows the difference.  The median of the
+    # four runs: a floored machine reads low in every run, while one noisy
+    # probe (2.5x among 6.4-7.0x on macOS CI) must not skip a regression.
+    ratios = sorted(r[4] / r[2] for kinds in runs.values() for r in kinds)
+    stretch = (ratios[1] + ratios[2]) / 2
     # Every failure and skip message carries all of this (and each run's
     # numbers): a CI log shows the assertion line, not the captured stdout.
     measured = ("capped %.0f us (%.0f%% of its window, stolen >= %.0f%%), uncapped "
                 "%.0f us (%.0f%%), windows up to %.0f us; a 200 us sleep takes %.0f us "
-                "and a 1600 us one %.0f us (%.1fx); a spinning thread gets %.0f%% of a "
+                "and a 1600 us one %.0f us (median %.1fx); a spinning thread gets %.0f%% of a "
                 "core, its longest clock gap %.0f us; runs (delay us, stolen, "
                 "sleep200 us, cpu, sleep1600 us, gap us, window us) %s"
                 % (capped_us, 100 * capped, 100 * stolen, uncapped_us, 100 * uncapped,
@@ -1187,7 +1190,7 @@ def test_sched_local_wake_is_stolen_promptly_by_a_shallow_idle_hub(monkeypatch):
     # hubs idle equally long and the cap cannot show, so a failure there is no
     # evidence; an unfloored run still asserts.
     if would_fail and stretch < 3:
-        pytest.skip("this machine's timers have a floor (a 1600 us sleep takes "
+        pytest.skip("this machine's timers have a floor (a 1600 us sleep takes a median "
                     "%.1fx a 200 us one), so the cap's short waits cannot end "
                     "sooner -- %s" % (stretch, measured))
     # A FAILED steal is a regression too (a skip would hide it): with stealing
