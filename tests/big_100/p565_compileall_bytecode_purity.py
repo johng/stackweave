@@ -21,7 +21,7 @@ table, the small-int / singleton caches, the marshal writer).  Under M:N with th
 GIL off, many hubs each compiling a DISTINCT fiber-local source module at the same
 time is exactly the concurrency that would surface a torn compile: a code object
 whose bytecode was corrupted mid-codegen by a sibling's concurrent compilation, or
-a non-deterministic .pyc for a source that must compile bit-identically.
+a non-deterministic compile of a source that must compile identically.
 
 WHERE M:N COULD BREAK IT (the gap this program probes).  stackweave runs each fiber's
 compileall.compile_file call in parallel across hubs.  If the C compiler's global
@@ -30,9 +30,9 @@ that compiles its OWN source and gets back a code object could observe:
   * WRONG bytecode -- executing the compiled module yields a RESULT that differs
     from the independently-recomputed closed-form value (a codegen corruption);
   * NON-DETERMINISTIC bytecode -- compiling the SAME fiber-local source twice
-    (once before a yield, once after) produces DIFFERENT .pyc bytes, which for a
-    hash-invalidation .pyc of a fixed source must be bit-identical (a torn compile
-    under a sibling's concurrent compilation);
+    (once before a yield, once after) produces a DIFFERENT code object, which for
+    a fixed source must be identical field for field (a torn compile under a
+    sibling's concurrent compilation);
   * a compile that spuriously FAILS on valid source, or a SIGSEGV in the compiler.
 
 WHICH ORACLE IS LOAD-BEARING, AND WHY (single-owner, closed-form).  Each fiber owns
@@ -47,30 +47,47 @@ PURITY / round-trip law:
   compile the fiber-local source with compileall.compile_file (hash-invalidation,
   force) -> read the .pyc -> marshal.loads the code object -> exec it in a FRESH
   namespace -> the module's RESULT MUST equal reference(...).  Across a yield,
-  recompile the SAME source and assert the .pyc bytes are bit-identical to the
-  first compile (deterministic compilation) and RESULT is still exactly the closed
-  form.  Everything is single-owner: the temp dir, the source file, the .pyc, and
-  the exec namespace are never shared between fibers.
+  recompile the SAME source and assert the .pyc header is byte-identical and the
+  marshalled code object is identical field for field, nested code included
+  (deterministic compilation), and RESULT is still exactly the closed form.
+  Everything is single-owner: the temp dir, the source file, the .pyc, and the
+  exec namespace are never shared between fibers.
+
+WHY NOT RAW .pyc BYTES.  The marshalled bytes can legitimately differ in one bit
+per object: marshal sets FLAG_REF unless the object is uniquely referenced, and on
+a free-threaded build that test (_PyObject_IsUniquelyReferenced) also requires the
+object to be OWNED by the marshalling thread.  Ownership is not fixed at creation:
+the free-threaded GC resets ob_tid to the owner of the object's mimalloc segment
+(gc_restore_tid), which moves an object onto another thread when its memory came
+off a freelist fed by that thread.  CPython 3.15.0rc3's gh-157838 (a thread merges
+a detached thread's queued biased refcounts, and frees what drops to zero, on its
+behalf) feeds exactly those freelists, and monkey.patch() compiles on the offload
+pool and marshals on the hub -- so the module's co_consts tuple sometimes reaches
+marshal owned by the hub, sometimes not.  Verified: the code objects compare equal
+and re-marshal identically every time; reverting gh-157838 alone makes the bytes
+identical again.  The byte differences are counted (ref_flag_only_diffs) but are
+not a fault.
 
 Verified against plain threads: 8 OS threads each compiling their own distinct
-source (GIL on and off) produce correct + bit-identical bytecode 100% of the time
+source (GIL on and off) produce correct + identical bytecode 100% of the time
 -- 0 wrong-value, 0 non-deterministic.  Under a CORRECT stackweave it must also hold,
-so this program EXITS 0 when there is no bug.  A wrong RESULT, a byte-differing
-recompile of a fixed source, a spurious compile failure, or a crash is a real
+so this program EXITS 0 when there is no bug.  A wrong RESULT, a differing code
+object for a fixed source, a spurious compile failure, or a crash is a real
 runtime (or CPython-compiler) fault, not documented Python semantics.
 
 ORACLES:
   * LOAD-BEARING -- BYTECODE PURITY + DETERMINISM (worker, HARD, fail-fast).
     Single-owner source -> compileall.compile_file -> code object; executed RESULT
     == independently recomputed closed form, and a second compile of the same
-    source is bit-identical, across a yield.
+    source yields the same .pyc header and an identical code object, across a
+    yield.
   * COMPLETENESS (post, HARD): require_no_lost -- a fiber stranded inside the
     compiler / file write / marshal never returns; the watchdog + require_no_lost
     catch it.
   * NON-VACUITY (post, HARD): the load-bearing arm actually ran (compile_checks>0).
 
 FAIL ON: compile_file returning False on valid source, executed RESULT != closed
-form, a non-deterministic .pyc for a fixed source across a yield, or a crash.
+form, a non-deterministic compile of a fixed source across a yield, or a crash.
 
 File/compile-heavy: each fiber holds a private temp dir + writes + invokes the C
 compiler, so max_funcs is capped (the forever-loop --funcs 1000000 would otherwise
@@ -88,6 +105,7 @@ import marshal
 import os
 import shutil
 import tempfile
+import types
 
 import py_compile
 
@@ -97,15 +115,41 @@ import stackweave
 MASK32 = 0xFFFFFFFF
 
 # Hash-based .pyc (UNCHECKED_HASH) embeds a sha256 of the SOURCE bytes in the
-# header instead of the source mtime, so compiling a FIXED source twice produces a
-# bit-identical .pyc regardless of filesystem timestamps -- which is exactly what
-# makes the cross-yield determinism check load-bearing (any byte difference is a
-# torn compile, not a benign mtime change).
+# header instead of the source mtime, so compiling a FIXED source twice produces
+# the same header regardless of filesystem timestamps -- which is exactly what
+# makes the cross-yield determinism check load-bearing (a header or code-object
+# difference is a torn compile, not a benign mtime change).
 INVMODE = py_compile.PycInvalidationMode.UNCHECKED_HASH
 
 # .pyc header is 16 bytes (magic[4] + bitfield[4] + hash-or-mtime+size[8]); the
 # marshalled code object follows.
 PYC_HEADER = 16
+
+# Every code-object field marshal writes, so a torn compile cannot hide in one
+# that code.__eq__ skips (it ignores co_filename and co_qualname, for instance).
+_CODE_FIELDS = ("co_argcount", "co_posonlyargcount", "co_kwonlyargcount",
+                "co_stacksize", "co_flags", "co_code", "co_names", "co_varnames",
+                "co_freevars", "co_cellvars", "co_filename", "co_name",
+                "co_qualname", "co_firstlineno", "co_linetable",
+                "co_exceptiontable")
+
+
+def same_code(a, b):
+    """True iff code objects a and b are identical field for field, recursing
+    into nested code in co_consts.  Constants compare by type and value."""
+    if any(getattr(a, f) != getattr(b, f) for f in _CODE_FIELDS):
+        return False
+    if len(a.co_consts) != len(b.co_consts):
+        return False
+    for x, y in zip(a.co_consts, b.co_consts):
+        if type(x) is not type(y):
+            return False
+        if isinstance(x, types.CodeType):
+            if not same_code(x, y):
+                return False
+        elif x != y:
+            return False
+    return True
 
 
 def reference(mul, a, b):
@@ -207,14 +251,18 @@ def check_once(H, wid, idx, src_path, state):
                "recompile (wid {0} idx {1}) -- spurious compiler failure under "
                "M:N".format(wid, idx))
         return
-    if data2 != data1:
+    if data2[:PYC_HEADER] != data1[:PYC_HEADER] or not same_code(code1, code2):
         H.fail("compilation NON-DETERMINISTIC across a yield: recompiling the SAME "
-               "fiber-local source (hash-invalidation .pyc) produced different .pyc "
-               "bytes ({0} vs {1} bytes; first differing at offset {2}) for wid {3} "
-               "idx {4} -- a torn compile: a sibling's concurrent compilation "
-               "corrupted this fiber's codegen/marshal output".format(
-                   len(data1), len(data2), _first_diff(data1, data2), wid, idx))
+               "fiber-local source (hash-invalidation .pyc) produced a different "
+               "header or code object ({0} vs {1} bytes; first differing byte at "
+               "offset {2}) for wid {3} idx {4} -- a torn compile: a sibling's "
+               "concurrent compilation corrupted this fiber's codegen/marshal "
+               "output".format(len(data1), len(data2), _first_diff(data1, data2),
+                               wid, idx))
         return
+    if data2 != data1:
+        # Same code, different FLAG_REF bits: benign (see WHY NOT RAW .pyc BYTES).
+        state["ref_flag_only_diffs"][wid] += 1
     ns2 = {}
     exec(code2, ns2)
     got2 = ns2.get("RESULT")
@@ -264,6 +312,7 @@ def setup(H):
     # allocated here where H.funcs is known.
     H.state = {
         "compile_checks": [0] * H.funcs,
+        "ref_flag_only_diffs": [0] * H.funcs,
     }
 
 
@@ -275,8 +324,9 @@ def post(H):
     checks = sum(H.state["compile_checks"])
     H.log("compileall single-owner PURITY+determinism checks: {0} (each compiled a "
           "distinct fiber-local module, verified executed RESULT == closed form and "
-          "bit-identical recompile across a yield); ops={1}".format(
-              checks, H.total_ops()))
+          "an identical recompile across a yield; {1} differed only in marshal "
+          "FLAG_REF bits); ops={2}".format(
+              checks, sum(H.state["ref_flag_only_diffs"]), H.total_ops()))
 
     # NON-VACUITY: the load-bearing compile hazard was actually exercised.
     H.check(checks > 0,
@@ -296,6 +346,6 @@ if __name__ == "__main__":
                  "compileall.compile_file in parallel; single-owner PURITY law: the "
                  "executed module RESULT must equal an independently-recomputed "
                  "closed form, and recompiling the same source (hash-invalidation "
-                 ".pyc) must be bit-identical across a yield -- a wrong RESULT, a "
+                 ".pyc) must give an identical code object across a yield -- a wrong RESULT, a "
                  "non-deterministic recompile, a spurious compile failure, or a "
                  "crash is a torn-compile runtime/compiler bug")
