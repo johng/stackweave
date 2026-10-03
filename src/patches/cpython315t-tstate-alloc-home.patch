@@ -1,6 +1,7 @@
 # CPython 3.15t OPTIONAL feature patch: per-tstate allocation "home"
 #   build flag:  -DPy_TSTATE_ALLOC_HOME      (OFF by default)
-#   pinned to:   Python-3.15.0rc2  (applies at ZERO fuzz: patch -p1 -F0; so does rc1)
+#   pinned to:   Python-3.15.0rc3  (applies at ZERO fuzz: patch -p1 -F0; so do rc1
+#                and rc2, one hunk 3 lines off)
 #   series pair: this is the ALLOCATION half for the 3.15 series.  The matching
 #                EXECUTION half is cpython315t-tstate-exec-home.patch; migration
 #                needs BOTH.  Ports of cpython314t-tstate-alloc-home.patch -- NOT
@@ -9,7 +10,7 @@
 # Same feature, flag, and accessor API as the 3.14 patch -- see
 # cpython314t-tstate-alloc-home.patch for the full WHAT/WHY.
 #
-# WHAT CHANGED vs the 3.14 patch (both purely re-anchoring; no semantic change):
+# WHAT CHANGED vs the 3.14 patch (all purely re-anchoring; no semantic change):
 #
 # 1. pycore_tstate.h -- 3.15 inserted `_PyInterpreterFrame base_frame;` right
 #    after `PyThreadState base;`, so the field-insert hunk needed new context.
@@ -22,6 +23,11 @@
 #    the relaxed _PyMem_mi_page_reclaimed assert (added for 3.14, kept by 3.15)
 #    are unchanged.  The debug-only `current_object_heap->debug_offset` read is
 #    deliberately NOT redirected -- it is not an allocation path, matching 3.14.
+#
+# 3. pycore_tstate.h again -- 3.15.0rc3 (gh-142349) added a 3-line
+#    `PyObject *lazy_imports;` member to _PyThreadStateImpl, so the accessor
+#    hunk after `} _PyThreadStateImpl;` moved down 3 lines.  Its context is
+#    unchanged; the `_alloc_home` insert after `base` is unaffected.
 #
 # ZERO IMPACT BY DEFAULT / ENABLE / rebuild-everything: identical to the 3.14
 # patch.  With Py_TSTATE_ALLOC_HOME undefined every redirect macro-expands back
@@ -85,7 +91,7 @@
      // Embedded base frame - sentinel at the bottom of the frame stack.
      // Used by profiling/sampling to detect incomplete stack traces.
      _PyInterpreterFrame base_frame;
-@@ -110,6 +127,26 @@
+@@ -113,6 +130,26 @@
  #endif
  } _PyThreadStateImpl;
  

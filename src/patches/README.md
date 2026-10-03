@@ -16,7 +16,7 @@ series — take the pair matching your interpreter:
 | target | allocation | execution |
 |---|---|---|
 | **CPython 3.14.4t** | `cpython314t-tstate-alloc-home.patch` | `cpython314t-tstate-exec-home.patch` |
-| **CPython 3.15.0rc2t** | `cpython315t-tstate-alloc-home.patch` | `cpython315t-tstate-exec-home.patch` |
+| **CPython 3.15.0rc3t** | `cpython315t-tstate-alloc-home.patch` | `cpython315t-tstate-exec-home.patch` |
 
 All four apply at **zero fuzz** (`patch -p1 -F0`) to their pinned release, and
 `tools/ci/check_patches.sh` enforces that in seconds. The cross-version deltas
@@ -286,7 +286,7 @@ buffer bumps it on creation and drops it on release/dealloc — is a plain
 is updated atomically by `memory_getbuf`/`memory_releasebuf`, but 3.14.4's
 `memoryview.hex()` and `memory_hash()` still bump it with a plain `++`/`--`, so
 the 3.14 hunk also backports the 3.14 branch's `FT_ATOMIC_ADD_SSIZE` there
-(3.15.0rc2 already has it). A fiber that holds
+(3.15 already has it). A fiber that holds
 `sl = view[0:]` across a park and drops it on another hub has the old hub run
 `--exports` while it runs `exports++` for its next slice. A lost increment
 releases the buffer under the live `view` (`ValueError: operation forbidden on
