@@ -153,7 +153,7 @@ void runloom_iframe_hand_over_freelists(PyThreadState *dead)
  * whenever they need memory (mimalloc's reclaim-on-allocate) and on their
  * exit.  So when the state provably owns nothing, point its segment tld at an
  * empty private pool for the duration of the Clear.  Checked against the
- * mimalloc 2.1.2 that CPython 3.14 and 3.15 vendor (3.15.0rc1/rc2's
+ * mimalloc 2.1.2 that CPython 3.14 and 3.15 vendor (3.15.0rc1-rc3's
  * Objects/mimalloc/segment.c, mi_abandoned_pool_t and pycore_mimalloc.h are
  * byte-identical to 3.14.4's); other versions keep the plain Clear until
  * checked. */
@@ -255,12 +255,14 @@ void runloom_iframe_brc_adopt(PyThreadState *fiber, PyThreadState *hub)
     }
 }
 
-/* Merges release() ran on the hub's stack, and how many of them found the stack
- * pointer outside the C-stack window of the state they ran under
- * (stats()["brc_release_merges"] / ["brc_release_merges_off_stack"]; the second
- * must stay 0, see release()). */
+/* Merges release() ran on the hub's stack; how many of them found the stack
+ * pointer outside the C-stack window of the state they ran under; and how many
+ * ran while the hub's (detached) state, not the fiber's, was the one a dropper
+ * would find (stats()["brc_release_merges"] / ["brc_release_merges_off_stack"] /
+ * ["brc_release_merges_hub_first"]; the last two must stay 0, see release()). */
 static unsigned long long runloom_brc_release_merges_total = 0;
 static unsigned long long runloom_brc_release_merges_off_stack_total = 0;
+static unsigned long long runloom_brc_release_merges_hub_first_total = 0;
 
 unsigned long long runloom_iframe_brc_release_merges(void)
 {
@@ -273,58 +275,119 @@ unsigned long long runloom_iframe_brc_release_merges_off_stack(void)
                            __ATOMIC_RELAXED);
 }
 
+unsigned long long runloom_iframe_brc_release_merges_hub_first(void)
+{
+    return __atomic_load_n(&runloom_brc_release_merges_hub_first_total,
+                           __ATOMIC_RELAXED);
+}
+
+/* Is `ts` the state a dropper of an object owned by `tid` would queue it to?
+ * find_thread_state() in Python/brc.c takes the first state in the bucket with
+ * that thread id.  Call with the bucket mutex held. */
+static int runloom_brc_first_is(struct _brc_bucket *bucket, uintptr_t tid,
+                                _PyThreadStateImpl *ts)
+{
+    struct llist_node *node;
+    llist_for_each(node, &bucket->root) {
+        _PyThreadStateImpl *t = llist_data(node, _PyThreadStateImpl,
+                                           brc.bucket_node);
+        if (t->brc.tid == tid) {
+            return t == ts;
+        }
+    }
+    return 0;
+}
+
+/* Merge what other threads queued to the fiber while it ran.  The fiber's state
+ * is current on this thread, the owner of every object queued to it (its tid is
+ * ours), and no fiber frame is executing: a legitimate safe point for the eval
+ * loop's dispatcher.
+ *
+ * But this runs on the HUB's stack, and the fiber's C-stack limits describe its
+ * own coroutine stack (runloom_coro_rearm_stackprot arms them on every resume).
+ * Every _Py_Dealloc in the merge measures the stack pointer against them, and
+ * with the hub's SP below the fiber's stack that margin comes out negative: each
+ * object is parked on the fiber's trashcan list (delete_later) instead of freed,
+ * and only a later dealloc on that state frees the list -- never, if the fiber
+ * stops deallocating, since PyThreadState_Clear doesn't.  That leaked a
+ * memoryview, and so pinned its array, in
+ * test_memory_array_view_survives_a_migration whenever the stacks happened to
+ * lie that way round.  Lend the fiber the hub's limits for the merge, then put
+ * its own back.  The hub's describe this stack: attaching a fresh state
+ * (_PyThreadState_Attach) sets them from the attaching thread's stack, and
+ * nothing re-arms a hub's state. */
+static void runloom_brc_release_drain(PyThreadState *fiber, PyThreadState *hub,
+                                      int hub_first)
+{
+    _PyThreadStateImpl *f = (_PyThreadStateImpl *)fiber;
+    runloom_cstack_limits_t own, lent;
+    uintptr_t sp;
+    runloom_cstack_limits_save(fiber, &own);
+    runloom_cstack_limits_save(hub, &lent);
+    runloom_cstack_limits_restore(fiber, &lent);
+    sp = _Py_get_machine_stack_pointer();
+    __atomic_add_fetch(&runloom_brc_release_merges_total, 1, __ATOMIC_RELAXED);
+#if _Py_STACK_GROWS_DOWN
+    if (sp < f->c_stack_hard_limit || sp > f->c_stack_top)
+#else
+    if (sp > f->c_stack_hard_limit || sp < f->c_stack_top)
+#endif
+        __atomic_add_fetch(&runloom_brc_release_merges_off_stack_total, 1,
+                           __ATOMIC_RELAXED);
+    if (hub_first)
+        __atomic_add_fetch(&runloom_brc_release_merges_hub_first_total, 1,
+                           __ATOMIC_RELAXED);
+    _Py_set_eval_breaker_bit(fiber, _PY_EVAL_EXPLICIT_MERGE_BIT);
+    (void)runloom_iframe_service_merge_queue(fiber);
+    runloom_cstack_limits_restore(fiber, &own);
+}
+
+/* Drain rounds release() runs with the fiber still at the head of the bucket
+ * before it gives up and drains with the hub there (see below). */
+#define RUNLOOM_BRC_RELEASE_ROUNDS 16
+
 void runloom_iframe_brc_release(PyThreadState *fiber, PyThreadState *hub)
 {
     _PyThreadStateImpl *f = (_PyThreadStateImpl *)fiber;
     _PyThreadStateImpl *h = (_PyThreadStateImpl *)hub;
     struct _brc_bucket *b = runloom_brc_bucket(fiber->interp, h->brc.tid);
-    int pending;
+    int rounds;
     /* Parked: an id that is no OS thread's (the state's own address), see adopt. */
     fiber->thread_id = (unsigned long)(uintptr_t)fiber;
     fiber->native_thread_id = 0;
-    PyMutex_Lock(&b->mutex);
-    runloom_brc_move_to_front(b, &h->brc.bucket_node);
-    /* Read under the bucket mutex: a dropper pushes under it and sets the
-     * fiber's merge bit only AFTER releasing it, so the bit alone could miss
-     * an object pushed just before we took the lock. */
-    pending = (f->brc.objects_to_merge.head != NULL);
-    PyMutex_Unlock(&b->mutex);
-    if (pending) {
-        /* The fiber's state is current on this thread, the owner of every
-         * object queued to it (its tid is ours), and no fiber frame is
-         * executing: a legitimate safe point for the eval loop's dispatcher.
-         *
-         * But this runs on the HUB's stack, and the fiber's C-stack limits
-         * describe its own coroutine stack (runloom_coro_rearm_stackprot arms
-         * them on every resume).  Every _Py_Dealloc in the merge measures the
-         * stack pointer against them, and with the hub's SP below the fiber's
-         * stack that margin comes out negative: each object is parked on the
-         * fiber's trashcan list (delete_later) instead of freed, and only a
-         * later dealloc on that state frees the list -- never, if the fiber
-         * stops deallocating, since PyThreadState_Clear doesn't.  That leaked
-         * a memoryview, and so pinned its array, in
-         * test_memory_array_view_survives_a_migration whenever the stacks
-         * happened to lie that way round.  Lend the fiber the hub's limits for
-         * the merge, then put its own back.  The hub's describe this stack:
-         * attaching a fresh state (_PyThreadState_Attach) sets them from the
-         * attaching thread's stack, and nothing re-arms a hub's state. */
-        runloom_cstack_limits_t own, lent;
-        uintptr_t sp;
-        runloom_cstack_limits_save(fiber, &own);
-        runloom_cstack_limits_save(hub, &lent);
-        runloom_cstack_limits_restore(fiber, &lent);
-        sp = _Py_get_machine_stack_pointer();
-        __atomic_add_fetch(&runloom_brc_release_merges_total, 1, __ATOMIC_RELAXED);
-#if _Py_STACK_GROWS_DOWN
-        if (sp < f->c_stack_hard_limit || sp > f->c_stack_top)
-#else
-        if (sp > f->c_stack_hard_limit || sp < f->c_stack_top)
-#endif
-            __atomic_add_fetch(&runloom_brc_release_merges_off_stack_total, 1,
-                               __ATOMIC_RELAXED);
-        _Py_set_eval_breaker_bit(fiber, _PY_EVAL_EXPLICIT_MERGE_BIT);
-        (void)runloom_iframe_service_merge_queue(fiber);
-        runloom_cstack_limits_restore(fiber, &own);
+    /* Drain BEFORE handing the head of the bucket back to the hub.  The hub's
+     * state is detached for the whole resume, and from CPython 3.15.0rc3
+     * (gh-157838) a dropper that finds a DETACHED owner suspends it and merges
+     * its queue itself -- _Py_ExplicitMergeRefcount() rewrites ob_ref_local /
+     * ob_tid of objects this thread owns -- on the promise that a suspended
+     * owner cannot touch them.  This thread can: the drain below runs
+     * deallocators, i.e. arbitrary code, under the fiber's state, which shares
+     * the hub's thread id and so takes the non-atomic ob_ref_local path on
+     * those same objects.  With the fiber at the head (attached), a dropper
+     * finds an attached owner and just queues + sets its merge bit, which the
+     * next round picks up.  So: drain while anything is queued, and move the
+     * hub to the head only once the queue is empty, under the same bucket-mutex
+     * hold as the emptiness check, so nothing can slip in between.  Read under
+     * the mutex: a dropper pushes under it and sets the merge bit only AFTER
+     * releasing it, so the bit alone could miss an object pushed just before we
+     * took the lock.  Bounded: past RUNLOOM_BRC_RELEASE_ROUNDS (a dropper
+     * refilling the queue faster than we drain), fall back to the old order --
+     * hub at the head, one last drain -- rather than stall the hub; that drain
+     * counts in brc_release_merges_hub_first. */
+    for (rounds = 0; ; rounds++) {
+        int pending, hub_first;
+        PyMutex_Lock(&b->mutex);
+        pending = (f->brc.objects_to_merge.head != NULL);
+        if (!pending || rounds == RUNLOOM_BRC_RELEASE_ROUNDS) {
+            runloom_brc_move_to_front(b, &h->brc.bucket_node);
+            PyMutex_Unlock(&b->mutex);
+            if (pending)
+                runloom_brc_release_drain(fiber, hub, 1);
+            return;
+        }
+        hub_first = !runloom_brc_first_is(b, h->brc.tid, f);
+        PyMutex_Unlock(&b->mutex);
+        runloom_brc_release_drain(fiber, hub, hub_first);
     }
 }
 

@@ -87,7 +87,7 @@
 # PyMemoryViewObject.exports is updated atomically by memory_getbuf /
 # memory_releasebuf, but 3.14.4's memoryview.hex() and memory_hash() still
 # bump it with a plain ++/--; the hunk backports the 3.14 branch's
-# FT_ATOMIC_ADD_SSIZE there (3.15.0rc2 already has it).
+# FT_ATOMIC_ADD_SSIZE there (3.15 already has it).
 # A fiber holding `sl = view[0:]` across a park and dropping it on another hub
 # has the old hub run `--exports` while it runs `exports++` for the next slice;
 # a lost increment releases the buffer under the live `view` ("operation

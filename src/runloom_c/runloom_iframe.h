@@ -140,19 +140,25 @@ int runloom_iframe_service_merge_queue(PyThreadState *ts);
  * fiber lets them pile up (300 x 1 MiB in one 100 ms resume).  adopt() gives
  * the fiber's thread state the hub's thread id and puts it at the head of the
  * hub's bucket, so drops during the resume go to the fiber, whose own eval
- * loop merges them at its next eval-breaker check.  release() puts the hub's
- * state back at the head and drains anything still queued on the fiber,
- * while the fiber's state is still attached on this thread (the owner).
+ * loop merges them at its next eval-breaker check.  release() drains anything
+ * still queued on the fiber, while the fiber's state is still attached on this
+ * thread (the owner) and still at the head, and only then puts the hub's state
+ * back at the head.
  * Both take the bucket mutexes, so both must be called ATTACHED: adopt right
  * after the fiber's state is attached, release right before it is detached.
  */
 void runloom_iframe_brc_adopt(PyThreadState *fiber, PyThreadState *hub);
 void runloom_iframe_brc_release(PyThreadState *fiber, PyThreadState *hub);
-/* stats()["brc_release_merges"] / ["brc_release_merges_off_stack"]: merges
- * release() ran on the hub's stack, and those whose stack pointer was outside
- * the C-stack window of the state they ran under (must stay 0). */
+/* stats()["brc_release_merges"] / ["brc_release_merges_off_stack"] /
+ * ["brc_release_merges_hub_first"]: merges release() ran on the hub's stack;
+ * those whose stack pointer was outside the C-stack window of the state they ran
+ * under (must stay 0); and those that ran while the hub's detached state, not
+ * the fiber's, headed the bucket (must stay 0: on CPython 3.15.0rc3+ a dropper
+ * suspends a detached owner and merges its objects itself, racing the drain's
+ * deallocators on this thread -- see release()). */
 unsigned long long runloom_iframe_brc_release_merges(void);
 unsigned long long runloom_iframe_brc_release_merges_off_stack(void);
+unsigned long long runloom_iframe_brc_release_merges_hub_first(void);
 
 /* Destroy whatever a fiber's per-g state still has parked on its trashcan list
  * (delete_later): only a later dealloc on that state would, and
