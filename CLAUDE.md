@@ -141,6 +141,19 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   (deterministic: `stats()["brc_release_merges_off_stack"]` must stay 0) and
   `tests/test_c_stack_limits.py` (`stackweave_c._c_stack_limits()` before and
   after must match).
+- **`runloom_iframe_brc_release` drains with the FIBER heading the bucket.** A
+  hub's own state is detached for the whole fiber resume, and from CPython
+  3.15.0rc3 (gh-157838) a dropper that finds a DETACHED owner suspends it and
+  merges its queue itself -- rewriting `ob_ref_local`/`ob_tid` of objects that
+  thread owns, on the promise a suspended owner can't touch them. The hub's
+  thread can: the drain runs deallocators under the fiber's state, which shares
+  the hub's thread id. So release() drains while the fiber (attached) still
+  heads the bucket, and moves the hub to the head only once the queue is empty,
+  in the same bucket-mutex hold as the emptiness check. Never put the hub at the
+  head before a drain, and never run object code on a hub thread while its
+  detached hub state heads the bucket. Guard:
+  `tests/test_cross_hub_migration.py::test_cross_hub_drops_drain_before_the_hub_heads_the_bucket`
+  (`stats()["brc_release_merges_hub_first"]` must stay 0).
 - **A run(1) drain or Coro nested on a hub's fiber is its own world.** The
   single-thread drain (`run(1)`, stackweave's asyncio loop) and `Coro.resume`
   run other fibers on the calling fiber's stack and thread state.

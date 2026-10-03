@@ -854,26 +854,10 @@ print("PASS", flush=True)
 ''', timeout=90)
 
 
-def test_cross_hub_drops_are_freed_under_the_hub_stacks_limits():
-    """A fiber's last decref of an object another hub allocated is queued to
-    that hub's current receiver -- often the fiber running there, whose
-    queue the hub drains on its OWN stack once that fiber parks
-    (runloom_iframe_brc_release), with the fiber's state still attached.
-    That state's C-stack limits describe the fiber's coroutine stack, so
-    every _Py_Dealloc in the drain measured the hub's stack pointer against
-    them.  Wherever the hub's stack lay below the fiber's, the margin came
-    out negative and each object was parked on the fiber's trashcan list
-    instead of freed -- for good, once the fiber stopped deallocating: a
-    leaked memoryview that pinned its array in
-    test_memory_array_view_survives_a_migration on CI.  The drain now
-    borrows the hub's limits.
-
-    Whether a wrong drain LEAKS depends on where the stacks happen to lie,
-    so this checks what holds on every drain instead: stats() counts the
-    drains and those that ran with the stack pointer outside the attached
-    state's C-stack window, and the second must stay 0.
-    """
-    assert_pass(r'''
+# Ping-pong pairs whose memoryviews are dropped on another hub than allocated
+# them, until at least MERGES_WANTED parked fibers' queues were drained on their
+# hub's stack (runloom_iframe_brc_release).  Shared by the drain invariants below.
+_CROSS_HUB_DROP_WORKLOAD = r'''
 _watchdog(50)
 import array
 PAIRS, ROUNDS, MERGES_WANTED, BUDGET_S = 32, 1500, 20, 30
@@ -914,6 +898,29 @@ def main():
            and time.monotonic() - t0 < BUDGET_S):
         batch()
 stackweave.run(8, main)
+'''
+
+
+def test_cross_hub_drops_are_freed_under_the_hub_stacks_limits():
+    """A fiber's last decref of an object another hub allocated is queued to
+    that hub's current receiver -- often the fiber running there, whose
+    queue the hub drains on its OWN stack once that fiber parks
+    (runloom_iframe_brc_release), with the fiber's state still attached.
+    That state's C-stack limits describe the fiber's coroutine stack, so
+    every _Py_Dealloc in the drain measured the hub's stack pointer against
+    them.  Wherever the hub's stack lay below the fiber's, the margin came
+    out negative and each object was parked on the fiber's trashcan list
+    instead of freed -- for good, once the fiber stopped deallocating: a
+    leaked memoryview that pinned its array in
+    test_memory_array_view_survives_a_migration on CI.  The drain now
+    borrows the hub's limits.
+
+    Whether a wrong drain LEAKS depends on where the stacks happen to lie,
+    so this checks what holds on every drain instead: stats() counts the
+    drains and those that ran with the stack pointer outside the attached
+    state's C-stack window, and the second must stay 0.
+    """
+    assert_pass(_CROSS_HUB_DROP_WORKLOAD + r'''
 st = stackweave_c.stats()
 merges, off = st["brc_release_merges"], st["brc_release_merges_off_stack"]
 print("moves=%d merges=%d off_stack=%d" % (state["moves"], merges, off), flush=True)
@@ -922,6 +929,38 @@ print("moves=%d merges=%d off_stack=%d" % (state["moves"], merges, off), flush=T
 assert off == 0, (
     "%d of %d drains ran deallocations with the stack pointer outside the "
     "attached state's C-stack window" % (off, merges))
+assert merges > 0, "no parked fiber's queue was drained on its hub's stack"
+print("PASS", flush=True)
+''', timeout=90)
+
+
+def test_cross_hub_drops_drain_before_the_hub_heads_the_bucket():
+    """release() drains a parked fiber's biased-refcount queue while the
+    FIBER's state still heads the hub's bucket, and only then hands the head
+    back to the hub's state.
+
+    The hub's state is detached for the whole resume.  From CPython 3.15.0rc3
+    (gh-157838) a dropper that finds a DETACHED owner suspends it and merges
+    its queue itself, rewriting ob_ref_local/ob_tid of objects that thread
+    owns -- safe only because a suspended thread cannot touch them.  The hub's
+    thread can: the drain runs deallocators under the fiber's state, which
+    shares the hub's thread id.  With the hub at the head during the drain,
+    the two race on the same objects' local refcounts (lost updates -> leak
+    or use-after-free).  With the fiber at the head (attached), a dropper only
+    queues and sets the merge bit.
+
+    The race is rare; the ordering is not, so check the ordering on every
+    drain: stats() counts drains that ran with the hub's state heading the
+    bucket, and that must stay 0 (the old order made it equal to every drain).
+    Holds on every interpreter; it only matters on 3.15.0rc3+.
+    """
+    assert_pass(_CROSS_HUB_DROP_WORKLOAD + r'''
+st = stackweave_c.stats()
+merges, hub_first = st["brc_release_merges"], st["brc_release_merges_hub_first"]
+print("merges=%d hub_first=%d" % (merges, hub_first), flush=True)
+assert hub_first == 0, (
+    "%d of %d drains ran with the hub's detached state heading the bucket, "
+    "where a CPython 3.15.0rc3+ dropper merges on its behalf" % (hub_first, merges))
 assert merges > 0, "no parked fiber's queue was drained on its hub's stack"
 print("PASS", flush=True)
 ''', timeout=90)
