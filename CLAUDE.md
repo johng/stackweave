@@ -46,6 +46,11 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   patches (setup.py install gate), so they refuse a stock 3.14t.
   `build_ext --inplace` is ungated; set
   `STACKWEAVE_ALLOW_STOCK_CPYTHON=1` to let pip through. Guard: `tests/test_install_gate.py`.
+- On a patched interpreter, build greenlet from source
+  (`pip install --no-binary greenlet greenlet`). The PyPI wheel is built
+  against stock headers and hangs on its first `switch()` there, which makes
+  every `tests/test_greenlet_interop.py` test time out. Hosted CI doesn't
+  install greenlet, so that file skips there.
 - Run the suite via `tests/run_isolated.py` (one file/subprocess — in-process
   `pytest tests/` flakes on cross-file state leaks).
 
