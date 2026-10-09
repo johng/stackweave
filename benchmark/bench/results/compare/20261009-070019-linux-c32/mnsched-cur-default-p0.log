@@ -1,0 +1,52 @@
+==============================================================================
+suite: mnsched
+python 3.14.4 CPython  gil=False  | stackweave fcontext-asm/epoll @ 
+cpu: Intel(R) Xeon(R) Platinum 8280 CPU @ 2.70GHz  | 32 vCPU / 1 NUMA  | pinned=16 cpus [0..15]  aslr=2  load=0.21/0.05/0.02
+tlbc: on (gc_frames_active=1, PYTHON_TLBC=None)  | build: -  | env: -
+==============================================================================
+hubs: 4 (scaling: [1, 2, 4, 8, 16]), one fresh interpreter per entry
+
+park/wake routing
+  pingpong local-wake                  867279.7 ops/s      1153.0 ns/op  med= 115.303ms  rsd= 1.7%
+  pingpong same-hub pinned             801436.6 ops/s      1247.8 ns/op  med= 124.776ms  rsd= 1.5%
+  pingpong cross-hub pinned             69791.1 ops/s     14328.5 ns/op  med= 143.285ms  rsd= 1.9%
+  pingpong cross-hub pinned drifted     67421.8 ops/s     14832.0 ns/op  med=  29.664ms  rsd= 2.9%
+  pingpong cross-hub busy                1002.9 ops/s    997154.9 ns/op  med= 997.155ms  rsd= 7.5%
+
+throughput
+  spawn noop mn_fiber                   72334.5 ops/s     13824.7 ns/op  med= 276.493ms  rsd= 2.3%
+  spawn noop stackweave.fiber           57017.5 ops/s     17538.5 ns/op  med= 350.770ms  rsd= 4.6%
+  yield 1000 fibers x200              6477406.1 ops/s       154.4 ns/op  med=  30.877ms  rsd= 2.3%
+  64 pairs pingpong                   2960771.4 ops/s       337.7 ns/op  med=  43.232ms  rsd= 3.3%
+  fan-out 1->32 buf64                 1036061.5 ops/s       965.2 ns/op  med=  96.519ms  rsd= 1.9%
+  mutex 64 fibers contended           1238460.8 ops/s       807.5 ns/op  med= 103.354ms  rsd= 1.2%
+  waitgroup fork-join 100x50            55726.9 ops/s     17944.7 ns/op  med=  89.723ms  rsd= 3.4%
+  select 2 chans                       965387.0 ops/s      1035.9 ns/op  med=  51.793ms  rsd= 0.9%
+  blocking() sleep(100us)               26661.6 ops/s     37507.1 ns/op  med= 120.023ms  rsd= 1.8%
+
+scaling: 64 pairs pingpong
+  64 pairs pingpong @1h                932992.7 ops/s      1071.8 ns/op  med= 137.193ms  rsd= 5.2%
+  64 pairs pingpong @2h               1614766.6 ops/s       619.3 ns/op  med=  79.268ms  rsd= 0.2%
+  64 pairs pingpong @4h               2904896.3 ops/s       344.2 ns/op  med=  44.064ms  rsd= 2.3%
+  64 pairs pingpong @8h               4846987.9 ops/s       206.3 ns/op  med=  26.408ms  rsd= 2.7%
+  64 pairs pingpong @16h              5714903.5 ops/s       175.0 ns/op  med=  22.398ms  rsd= 2.6%
+
+latency
+  foreign thread -> fiber wake       p50=    10.1us  p90=    12.7us  p99=    20.0us  max=     41.6us  n=4000
+  cross-hub pinned wake              p50=     7.7us  p90=     8.1us  p99=     8.8us  max=     68.8us  n=4000
+  spawn->run own hub                 p50=    12.2us  p90=    13.1us  p99=    19.4us  max=    123.9us  n=1000
+  spawn->run remote idle hub         p50=    27.0us  p90=    35.1us  p99=    44.2us  max=    122.6us  n=1000
+  spawn->run round-robin             p50=    34.8us  p90=    50.6us  p99=    61.0us  max=    138.0us  n=1000
+  timer lateness 1ms                 p50=    43.1us  p90=    74.8us  p99=   117.4us  max=    149.1us  n=10000
+
+after a load
+  spawn->run remote idle hub, after fork-join load p50=    20.4us  p90=    27.5us  p99=    42.3us  max=    117.0us  n=1000
+
+  hubs      round-trips/s     vs 1h
+  1h               932993     1.00x
+  2h              1614767     1.73x
+  4h              2904896     3.11x
+  8h              4846988     5.20x
+  16h             5714904     6.13x
+
+wrote /root/sw/benchmark/bench/results/compare/20261009-070019-linux-c32/mnsched-cur-default-p0.json

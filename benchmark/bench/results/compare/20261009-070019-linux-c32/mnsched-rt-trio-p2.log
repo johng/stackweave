@@ -1,0 +1,17 @@
+runtime: trio  python 3.14.4  gil=False
+
+  pingpong local-wake                   48824.8 ops/s     20481.4 ns/op  med=2048.137ms  rsd= 0.7%
+  spawn noop mn_fiber                  147705.1 ops/s      6770.2 ns/op  med= 135.405ms  rsd= 1.0%
+  spawn noop stackweave.fiber          147705.1 ops/s      6770.2 ns/op  med= 135.405ms  rsd= 1.0%
+  yield 1000 fibers x200               431916.3 ops/s      2315.3 ns/op  med= 463.053ms  rsd= 0.6%
+  64 pairs pingpong                     61710.0 ops/s     16204.8 ns/op  med=2074.219ms  rsd= 0.5%
+  fan-out 1->32 buf64                   58292.7 ops/s     17154.8 ns/op  med=1715.481ms  rsd= 0.3%
+  mutex 64 fibers contended            104128.4 ops/s      9603.5 ns/op  med=1229.252ms  rsd= 0.9%
+  waitgroup fork-join 100x50           143051.8 ops/s      6990.5 ns/op  med=  34.952ms  rsd= 1.9%
+  blocking() sleep(100us)               33726.0 ops/s     29650.7 ns/op  med=  94.882ms  rsd=14.8%
+  foreign thread -> fiber wake       p50=    37.9us  p90=    49.0us  p99=   146.2us  max=    230.4us  n=4000
+  cross-hub pinned wake              p50=    20.5us  p90=    33.0us  p99=    82.8us  max=    129.8us  n=4000
+  spawn->run round-robin             p50=    26.1us  p90=    36.8us  p99=   113.9us  max=    128.0us  n=1000
+  timer lateness 1ms                 p50= 19941.8us  p90= 29351.2us  p99= 38997.0us  max=  40125.1us  n=10000
+
+wrote /root/sw/benchmark/bench/results/compare/20261009-070019-linux-c32/mnsched-rt-trio-p2.json

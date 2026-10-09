@@ -16,13 +16,13 @@ cannot be compared, and a regression is invisible.  This module fixes that:
     * writes machine-readable JSON so runs are diffable and a regression
       gate can compare against a committed baseline.
 
-Primary target runtime is free-threaded CPython 3.13t: stackweave's M:N hub pool
+Primary target runtime is free-threaded CPython 3.14t: stackweave's M:N hub pool
 only gets real core-level parallelism with the GIL off.  Everything here is
-stdlib-only so it runs under 3.13t with no extra wheels to build.
+stdlib-only so the other-runtime baselines can use it on a stock interpreter.
 
 Run a suite with, e.g.::
 
-    PYTHONPATH=src ~/.pyenv/versions/3.14.4t/bin/python -m bench.micro
+    PYTHONPATH=src:benchmark PYTHON_GIL=0 python -m bench.mnsched
 """
 import json
 import os
@@ -302,6 +302,7 @@ class Suite:
         self.env["optimize"] = optimized
         self.results = []
         self.latency_results = []
+        self.memory_results = []
 
     def bench(self, name, fn, *, inner=1, samples=None, warmup=None, note="",
               setup=None, teardown=None):
@@ -345,12 +346,29 @@ class Suite:
         finally:
             if teardown is not None:
                 teardown()
+        return self.record(name, times, inner=inner, note=note)
+
+    def record(self, name, times, *, inner=1, note=""):
+        """Record per-sample wall seconds timed by the caller (a runtime that
+        must own the loop around its samples, e.g. one trio.run)."""
         stats = summarize(times, inner)
         stats["name"] = name
         stats["note"] = note
         stats["raw_s"] = times
         self.results.append(stats)
         self.print_row(stats)
+        return stats
+
+    def memory(self, name, units, rss_before, rss_after, *, note=""):
+        """Record RSS growth while ``units`` parked units were alive.  Kept
+        apart from ``results`` (not a throughput) and ``latency``."""
+        stats = {"name": name, "note": note, "units": units,
+                 "rss_before": rss_before, "rss_after": rss_after,
+                 "bytes_per_unit": (rss_after - rss_before) / units}
+        self.memory_results.append(stats)
+        print("  %-34s %8.2f KB/unit  (%d units, RSS %.1f -> %.1f MB)"
+              % (name, stats["bytes_per_unit"] / 1024, units,
+                 rss_before / 2**20, rss_after / 2**20))
         return stats
 
     def latency(self, name, samples_ns, *, note=""):
@@ -400,6 +418,8 @@ class Suite:
         }
         if self.latency_results:
             doc["latency"] = self.latency_results
+        if self.memory_results:
+            doc["memory"] = self.memory_results
         with open(path, "w") as f:
             json.dump(doc, f, indent=2, sort_keys=True)
             f.write("\n")

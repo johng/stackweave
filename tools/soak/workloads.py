@@ -222,8 +222,8 @@ def _wl_mixed(ctx):
 
 
 def _wl_cserve_echo(ctx):
-    # The production server shape, verbatim from the benchmark suite's fastest
-    # regular-fiber tier (benchmark/suite/servers/runloom_epoll_py_tcpcon.py,
+    # The production server shape, from the old benchmark suite's fastest
+    # regular-fiber tier (runloom_epoll_py_tcpcon.py, removed with that suite;
     # "stackweave_c": 624K rps peak, above Go): stackweave_c.serve's C scaffold
     # (SO_REUSEPORT listeners + C accept loops) spawning a plain-Python handler
     # fiber per connection that echoes via the C-level TCPConn recv_into/

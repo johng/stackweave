@@ -1,55 +1,51 @@
 #!/usr/bin/env sh
-# bench.sh -- run the stackweave benchmark suite in the cleanest env this box allows,
-# write JSON + a dated report, and gate each suite against its committed
-# baseline. This is the LOCAL perf gate, the perf-side analogue of
-# scripts/check_all.sh.
-#
-# Free-threaded 3.13t with the GIL forced off; ASLR off (setarch -R, inherited
-# across the harness's gil=0 re-exec) for layout-stable numbers; the harness
-# pins to one NUMA node itself.
+# bench.sh -- run the runtime comparison (bench.compare: stackweave per
+# feature config vs threads / asyncio / uvloop / trio / gevent / Go) into
+# benchmark/bench/results/compare/<stamp>/, and optionally gate stackweave's
+# default config against an earlier run of the same box.
 #
 # Usage:
-#   scripts/bench.sh                 # micro + mn, gate vs committed baseline
-#   STACKWEAVE_BENCH_NOGATE=1 scripts/bench.sh    # run + report, don't fail on regress
-#   PYTHON=~/.pyenv/versions/3.14.4t/bin/python3 scripts/bench.sh
+#   scripts/bench.sh                              # every config + runtime, 2 passes
+#   scripts/bench.sh --quick --passes 1           # args go to bench.compare
+#   STACKWEAVE_BENCH_BASE=benchmark/bench/results/compare/<old> scripts/bench.sh
+#                                                 # + gate default vs that run
+#
+#   PYTHON                      patched free-threaded 3.14t that runs stackweave
+#                               (default ~/.pyenv/versions/3.14.4t-mig/bin/python3.14t)
+#   STACKWEAVE_BASELINE_PYTHON  stock free-threaded interpreter with uvloop, trio
+#                               and gevent installed (default: $PYTHON)
+#   STACKWEAVE_GIL_PYTHON       a GIL build, for --runtimes asyncio-gil,uvloop-gil
+#   STACKWEAVE_BENCH_TOL        gate tolerance on min_s (default 0.15)
+#
+# Compare runs of the same day on the same box: cross-day deltas on a shared
+# or laptop box are mostly noise (see benchmark/README.md).
 set -eu
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO"
-PY="${PYTHON:-python3}"
-RESULTS="benchmark/bench/results"
-REPORT_DIR="$RESULTS/reports"
-mkdir -p "$REPORT_DIR"
+PY="${PYTHON:-$HOME/.pyenv/versions/3.14.4t-mig/bin/python3.14t}"
 STAMP="$(date -u +%Y%m%d-%H%M%S)"
-REPORT="$REPORT_DIR/bench-$STAMP.md"
-# 15% default: even with >25ms samples the shared-VM noise floor is ~6-8% on
-# the fastest micros, so a tighter gate false-positives. Use interleaved A/B
-# (like the F6a TLS A/B) for smaller, real deltas.
+OUT="benchmark/bench/results/compare/$STAMP"
 TOL="${STACKWEAVE_BENCH_TOL:-0.15}"
-
-RUN="env PYTHONPATH=src:benchmark PYTHON_GIL=0"   # benchmark/ on path so `-m bench.X` resolves benchmark/bench
+RUN="env PYTHONPATH=src:benchmark PYTHON_GIL=0"
 SETARCH=""
-command -v setarch >/dev/null 2>&1 && SETARCH="setarch -R"
+command -v setarch >/dev/null 2>&1 && SETARCH="setarch -R"   # ASLR off on Linux
 
-printf '# stackweave bench run %s\n\n' "$STAMP" | tee "$REPORT"
+WRAP=""
+command -v caffeinate >/dev/null 2>&1 && WRAP="caffeinate -i"  # macOS: no sleep mid-run
+$WRAP $SETARCH $RUN "$PY" -m bench.compare --out-dir "$OUT" "$@"
+
+BASE="${STACKWEAVE_BENCH_BASE:-}"
+[ -n "$BASE" ] || exit 0
 rc=0
-for suite in micro mn; do
-    printf '>> bench.%s\n' "$suite"
-    # snapshot the committed baseline BEFORE the harness overwrites it in-tree
-    base="/tmp/runloom_base_$suite.json"
-    have_base=0
-    git show "HEAD:$RESULTS/$suite.json" > "$base" 2>/dev/null && have_base=1
-    $SETARCH $RUN "$PY" -m "bench.$suite" | tee -a "$REPORT"
-    if [ "$have_base" = 1 ]; then
-        printf '\n## %s regression gate (min_s, tol %s)\n' "$suite" "$TOL" | tee -a "$REPORT"
-        if $RUN "$PY" -m bench.regress "$base" "$RESULTS/$suite.json" \
-               --metric min_s --tol "$TOL" | tee -a "$REPORT"; then :; else rc=1; fi
-    fi
-    printf '\n' | tee -a "$REPORT"
+for suite in mnsched echo; do
+    old="$BASE/$suite-cur-default-p0.json"
+    new="$OUT/$suite-cur-default-p0.json"
+    [ -f "$old" ] && [ -f "$new" ] || continue
+    printf '\n## %s regression gate vs %s (min_s, tol %s)\n' "$suite" "$BASE" "$TOL"
+    $RUN "$PY" -m bench.regress "$old" "$new" --metric min_s --tol "$TOL" || rc=1
 done
-
-printf 'report: %s\n' "$REPORT"
-if [ "$rc" = 1 ] && [ "${STACKWEAVE_BENCH_NOGATE:-0}" != 1 ]; then
-    printf 'PERF GATE: regression detected (set STACKWEAVE_BENCH_NOGATE=1 to ignore)\n'
+if [ "$rc" = 1 ]; then
+    printf 'PERF GATE: regression detected\n'
     exit 1
 fi
 printf 'PERF GATE: ok\n'

@@ -31,26 +31,40 @@ def main():
 stackweave.run(8, main)   # 8 hub threads -> real cores on 3.14t (GIL off)
 ```
 
-## Stackweave vs Go
+## Stackweave vs Go and the Python runtimes
 
-Same box (64c, free-threaded CPython 3.13t), 8 hubs / `GOMAXPROCS=8`, warm
-steady-state. Go ≈ 2.1 M spawn/s here.
+One set of workloads, run on stackweave and on threads, asyncio, uvloop, trio,
+gevent and Go (`benchmark/bench`, `python -m bench.compare`). DigitalOcean c-32
+(32-core Xeon 8280, kernel 7.0), every CPython 3.14.4 built the same way
+(clang-19, PGO, no LTO), 4 hubs / `GOMAXPROCS=4` unless noted, median of 3
+interleaved passes. Higher is better unless marked.
 
-| metric | stackweave | Go | verdict |
-| --- | ---: | ---: | --- |
-| **spawn** — pure C (`c_entry`) | **2.29 M/s** | 2.10 M/s | **beats Go** |
-| **spawn** — Python (`stackweave.fiber`) | 1.35 M/s | 2.10 M/s | 0.65× |
-| **context switch** | ~75 ns yield · ~560 ns chan RT | ~50 ns `Gosched` | ~parity |
-| **conn/s** — churn (new conn per req) | ~75–78 k/s | ~75–78 k/s | **parity** |
-| **req/s** — keep-alive echo, Python handler | 596 k/s | 603 k/s | **0.99× — parity** (C handler beats Go) |
-| **memory** — empty parked fiber | 8.8 KB | 2.7 KB | 3.3× (the one real gap) |
+| workload | stackweave | best Python runtime | Go |
+| --- | ---: | ---: | ---: |
+| ping-pong, one unbuffered pair (round-trips/s) | 867 k | 196 k (uvloop, GIL build) | 2.62 M |
+| 64 ping-pong pairs (round-trips/s) | 2.94 M | 265 k (uvloop, GIL build) | 4.21 M |
+| yield, 1000 fibers (switches/s) | **6.47 M** | 1.64 M (threads) | 2.66 M |
+| fan-out 1→32 over a buffered channel (items/s) | 1.03 M | 493 k (uvloop, GIL build) | 3.54 M |
+| spawn a no-op fiber (/s) | 57–81 k | 400 k (uvloop, GIL build) | 2.93 M |
+| TCP echo, Python handler, 16 hubs, io_uring loop (round-trips/s) | 315 k | 583 k (thread per conn, 64 conns) | 900 k |
+| HTTP/1.1 JSON API, 64 keep-alive conns (req/s) | 70 k (90 k on the io_uring loop) | 244 k (thread per conn, all 32 cores) | 71 k (net/http) |
+| API gateway: 8 × 1 ms backend calls per request (req/s) | 6.6 k | 19 k (uvloop, GIL build) | 67 k |
+| JSON parse + sha256 pipeline, 4 workers (records/s) | 386 k | 172 k (threads) | 685 k |
+| pub/sub broadcast to 256 subscribers (deliveries/s) | 3.80 M | 1.29 M (gevent) | 4.29 M |
+| crawler: 10k concurrent tasks × 3 slow fetches (fetches/s) | 57 k | 198 k (uvloop, GIL build) | 1.64 M |
+| memory per parked fiber at 100k (lower is better) | 23 KB | 1.0 KB (asyncio task) | 2.4 KB |
+| foreign thread → fiber wake, p50 (lower is better) | **10 µs** | 13 µs (threads) | — |
+| 1 ms timer lateness, p50, io_uring loop (lower is better) | **8 µs** | 62 µs (threads) | 399 µs |
 
-The short story: on **spawn, scheduling, and throughput, stackweave trades blows
-with Go and beats it on raw spawn** — a stackful coroutine runtime on CPython
-matching a compiled language even with a Python handler (596 k vs 603 k req/s at
-saturation; a C handler beats Go). The one honest gap left is **memory**: a
-suspended fiber carries a CPython eval frame, ~3.3× Go's per-fiber RSS.
-Full cross-runtime numbers + cold spawn-vs-N curves: **[benchmark report](https://github.com/johng/stackweave/blob/main/benchmark/report.html)**.
+The short story: stackweave runs message-passing workloads 3–15× faster than
+any Python event loop, scales CPU-bound pipelines across cores where they
+can't, out-yields Go, and has the tightest wakes and timers here. It matches Go
+on a 4-hub HTTP API, but Go is still 1.1–3.4× ahead on channel hand-offs and
+far ahead on spawn and on timer-heavy fan-out (the gateway and crawler rows,
+where the event loops also win). The honest gaps are memory -- a parked fiber
+carries a C stack and a thread state, ~10× a goroutine -- and spawn / sleep
+cost at 10k+ fibers. Every row and caveat:
+**[latest comparison](benchmark/bench/results/compare/20261009-070019-linux-c32/summary.md)**.
 
 ```python
 stackweave.optimize("throughput")   # stackweave.fiber -> max spawn rate (fiber_fast)

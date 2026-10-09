@@ -1,17 +1,19 @@
-"""Regression gate: compare a benchmark run against a committed baseline.
+"""Regression gate: compare a benchmark run against an earlier one.
 
-Reads two harness JSON files (bench/results/<suite>.json) and, per bench
-(matched by name), flags any that got slower by more than a tolerance. Uses
-``min_s`` (best sample) by default -- it's the most noise-robust lower bound
-on a shared box, so a flagged regression is much more likely real than noise.
+Reads two harness JSON files -- e.g. the `<suite>-cur-default-p0.json` of two
+bench.compare runs -- and, per bench (matched by name), flags any that got
+slower by more than a tolerance. Uses ``min_s`` (best sample) by default --
+it's the most noise-robust lower bound on a shared box, so a flagged
+regression is much more likely real than noise.
 
 Exit status is non-zero if any bench regressed past the tolerance, so this
-can gate a local pre-merge check.
+can gate a local pre-merge check (scripts/bench.sh with
+STACKWEAVE_BENCH_BASE does exactly that).
 
 Usage:
-    # compare a fresh run against the committed baseline
-    PYTHONPATH=src python3 -m bench.regress \
-        bench/results/micro.json bench/results/micro.new.json
+    PYTHONPATH=benchmark python3 -m bench.regress \
+        results/compare/OLD/mnsched-cur-default-p0.json \
+        results/compare/NEW/mnsched-cur-default-p0.json
     # custom metric / tolerance
     ... --metric median_s --tol 0.15
 """

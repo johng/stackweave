@@ -1,0 +1,10 @@
+==============================================================================
+suite: memory
+python 3.14.4 CPython  gil=False  | stackweave fcontext-asm/epoll @ 
+cpu: Intel(R) Xeon(R) Platinum 8280 CPU @ 2.70GHz  | 32 vCPU / 1 NUMA  | pinned=none  aslr=2  load=2.06/1.50/0.75
+tlbc: on (gc_frames_active=1, PYTHON_TLBC=None)  | build: -  | env: STACKWEAVE_STACK_ARENA=1
+==============================================================================
+  rss per parked unit @10k              25.77 KB/unit  (10000 units, RSS 35.5 -> 287.2 MB)
+  rss per parked unit @100k             24.53 KB/unit  (100000 units, RSS 504.6 -> 2900.3 MB)
+
+wrote /root/sw/benchmark/bench/results/compare/20261009-070019-linux-c32/memory-cur-stack-arena-p0.json

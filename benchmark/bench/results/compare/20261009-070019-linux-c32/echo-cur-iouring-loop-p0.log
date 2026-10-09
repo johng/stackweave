@@ -1,0 +1,20 @@
+==============================================================================
+suite: echo
+python 3.14.4 CPython  gil=False  | stackweave fcontext-asm/epoll @ 
+cpu: Intel(R) Xeon(R) Platinum 8280 CPU @ 2.70GHz  | 32 vCPU / 1 NUMA  | pinned=32 cpus [0..31]  aslr=2  load=5.88/3.30/1.94
+tlbc: on (gc_frames_active=1, PYTHON_TLBC=None)  | build: -  | env: STACKWEAVE_IOURING_LOOP=1 STACKWEAVE_IOURING_MS=0
+==============================================================================
+io path: io_uring loop
+
+  c-echo @2h                            47596.1 ops/s     21010.1 ns/op  med= 672.324ms  rsd= 1.7%
+  py-echo @2h                          111538.4 ops/s      8965.5 ns/op  med= 286.897ms  rsd= 2.4%
+  c-echo @4h                            93086.3 ops/s     10742.7 ns/op  med= 343.767ms  rsd= 1.6%
+  py-echo @4h                          203695.6 ops/s      4909.3 ns/op  med= 157.097ms  rsd= 1.9%
+  c-echo @8h                           161875.5 ops/s      6177.6 ns/op  med= 197.683ms  rsd= 2.5%
+  py-echo @8h                          322723.4 ops/s      3098.6 ns/op  med=  99.156ms  rsd= 1.6%
+  c-echo @16h                          272900.8 ops/s      3664.3 ns/op  med= 117.259ms  rsd= 3.0%
+  py-echo @16h                         320353.6 ops/s      3121.6 ns/op  med=  99.890ms  rsd= 3.8%
+  io_uring loop ran: waits=29623 polls=548941
+  (24.0s)
+
+wrote /root/sw/benchmark/bench/results/compare/20261009-070019-linux-c32/echo-cur-iouring-loop-p0.json

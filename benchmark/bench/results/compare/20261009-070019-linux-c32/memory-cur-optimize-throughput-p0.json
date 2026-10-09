@@ -1,0 +1,68 @@
+{
+  "env": {
+    "aslr": "2",
+    "build_label": "",
+    "cpu_model": "Intel(R) Xeon(R) Platinum 8280 CPU @ 2.70GHz",
+    "cpu_perflevels": null,
+    "gc_frames_active": 1,
+    "gil_enabled": false,
+    "git_dirty": false,
+    "git_sha": "",
+    "governor": "n/a (virtualized)",
+    "host": "stackweave-bench-c32",
+    "iouring_available": true,
+    "kernel": "7.0.0-38-generic",
+    "loadavg": [
+      "2.18",
+      "1.61",
+      "0.82"
+    ],
+    "nproc": 32,
+    "numa_nodes": 1,
+    "optimize": {
+      "effective": {
+        "STACKWEAVE_BLOCKPOOL_WORKERS": "16",
+        "spawn": "fast"
+      },
+      "goals": [
+        "throughput"
+      ]
+    },
+    "perf_event_paranoid": "4",
+    "pinned_cpus": null,
+    "py_cflags": "-fno-strict-overflow -Wsign-compare -Wunreachable-code -DNDEBUG -g -O3 -Wall",
+    "py_config_args": "'--prefix=/opt/py-mig' '--enable-optimizations' '--with-tail-call-interp' '--disable-gil' 'CC=clang-19' 'CPPFLAGS=-DPy_TSTATE_ALLOC_HOME -DPy_TSTATE_EXEC_HOME'",
+    "python": "3.14.4",
+    "python_build": "main Oct  9 2026 06:52:37",
+    "python_impl": "CPython",
+    "python_tlbc_env": null,
+    "runloom_backend": "fcontext-asm",
+    "runloom_netpoll": "epoll",
+    "runloom_so": "/root/sw/src/stackweave_c.cpython-314t-x86_64-linux-gnu.so",
+    "stackweave_env": {
+      "STACKWEAVE_BENCH_OPTIMIZE": "throughput",
+      "STACKWEAVE_BLOCKPOOL_WORKERS": "16"
+    },
+    "timestamp": "2026-10-09T09:06:34+00:00"
+  },
+  "memory": [
+    {
+      "bytes_per_unit": 25088.0,
+      "name": "rss per parked unit @10k",
+      "note": "stackweave.fiber parked on Chan(0).recv",
+      "rss_after": 288169984,
+      "rss_before": 37289984,
+      "units": 10000
+    },
+    {
+      "bytes_per_unit": 23824.95744,
+      "name": "rss per parked unit @100k",
+      "note": "stackweave.fiber parked on Chan(0).recv",
+      "rss_after": 2817781760,
+      "rss_before": 435286016,
+      "units": 100000
+    }
+  ],
+  "results": [],
+  "suite": "memory"
+}

@@ -1,0 +1,5 @@
+runtime: threads  python 3.14.4  gil=False
+
+  rss per parked unit @10k             172.49 KB/unit  (10000 units, RSS 21.1 -> 1705.6 MB)
+
+wrote /root/sw/benchmark/bench/results/compare/20261009-070019-linux-c32/memory-rt-threads-p0.json
