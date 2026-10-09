@@ -46,28 +46,19 @@ passes even when the wrong fiber takes it -- which is the failure, since the
 unrelated sleeper dies and the fiber that should have been interrupted stays
 parked forever.
 """
-import os
 import re
-import subprocess
 import sys
 
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from adv_util import needs_free_threading  # noqa: E402
+from adv_util import run_python
+from known_gaps import INTERMITTENT
 
-FT = needs_free_threading()
-needs_mn = pytest.mark.skipif(not FT, reason="M:N needs a GIL-disabled build")
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + "/src")
 try:
     import stackweave_c as _rc
     _IOURING = bool(_rc.iouring_available())
 except Exception:                                    # pragma: no cover
     _IOURING = False
-
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY = sys.executable
 
 needs_sigalrm = pytest.mark.skipif(
     not hasattr(__import__("signal"), "SIGALRM"),
@@ -84,7 +75,6 @@ needs_sigalrm = pytest.mark.skipif(
 # (the helper caught the observer between sleeps) proves nothing either way.
 _W1 = r'''
 import faulthandler, os, signal, socket, sys, threading, time
-sys.path.insert(0, "src")
 import stackweave_c as rc
 
 SLEEP = 0.05
@@ -176,11 +166,7 @@ sys.stdout.flush()
 
 
 def _run(script, timeout=90, env_extra=None):
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
-    if env_extra:
-        env.update(env_extra)
-    return subprocess.run([PY, "-c", script], cwd=REPO, env=env,
-                          capture_output=True, text=True, timeout=timeout)
+    return run_python(script, timeout=timeout, env=env_extra)
 
 
 @needs_sigalrm
@@ -229,7 +215,6 @@ def test_parked_fiber_outranks_a_due_sleeper():
 # only possible deliverer is the scheduler -- it holds no netpoll parker at all.
 _IOU = r"""
 import faulthandler, os, signal, socket, sys
-sys.path.insert(0, "src")
 import stackweave_c as rc
 box = {}
 def raiser(signum, frame):
@@ -301,7 +286,6 @@ def test_signal_reaches_a_fiber_parked_on_io_uring():
 # that distinguishes them.
 _COPOLL = r'''
 import faulthandler, signal, socket, sys, time
-sys.path.insert(0, "src")
 import stackweave_c as rc
 import stackweave.monkey
 stackweave.monkey.patch()
@@ -349,6 +333,8 @@ sys.stdout.write("COPOLL who=%s elapsed=%.2f\n"
 '''
 
 
+@INTERMITTENT("a signal is rarely not delivered (who=nobody after 10 s); "
+             "measured 1 in 15 on Linux, not root-caused")
 @needs_sigalrm
 def test_selector_outranks_a_dense_unrelated_sleeper():
     """A select.poll wrapper beats an application sleep to its own signal.
@@ -382,7 +368,6 @@ def test_selector_outranks_a_dense_unrelated_sleeper():
 # would exercise a hole fill.
 _HEAP = r"""
 import faulthandler, signal, socket, sys
-sys.path.insert(0, "src")
 import stackweave_c as rc
 import stackweave.monkey
 stackweave.monkey.patch()
@@ -478,7 +463,6 @@ def test_sleep_heap_survives_removing_a_signalled_sleeper():
 # ---------------------------------------------------------------------------
 _MN = r'''
 import faulthandler, os, signal, socket, sys
-sys.path.insert(0, "src")
 import stackweave_c as rc
 
 HUBS = int(os.environ.get("MN_HUBS", "4"))
@@ -521,7 +505,6 @@ sys.stdout.write("MN who=%s finally_ran=%s\n"
 
 
 @needs_sigalrm
-@needs_mn
 @pytest.mark.parametrize("hubs", ["2", "8"])
 def test_signal_reaches_a_hub_fiber(hubs):
     """A fiber parked on a hub gets the interrupt in its own stack.
@@ -538,7 +521,6 @@ def test_signal_reaches_a_hub_fiber(hubs):
 
 
 @needs_sigalrm
-@needs_mn
 @pytest.mark.skipif(not _IOURING, reason="io_uring not available")
 def test_mn_signal_reaches_a_hub_fiber_parked_on_io_uring():
     """Same contract as the netpoll M:N test, but parked on a CQE.
@@ -583,7 +565,6 @@ def test_mn_signal_reaches_a_hub_fiber_parked_on_io_uring():
 # global-ring runloom_iouring_do).
 _MN_SINGLEOP = r'''
 import faulthandler, os, signal, socket, sys
-sys.path.insert(0, "src")
 import stackweave_c as rc
 HUBS = int(os.environ.get("MN_HUBS", "4"))
 box = {}
@@ -631,7 +612,6 @@ sys.stdout.write("MN-SINGLEOP who=%s finally_ran=%s\n"
 
 
 @needs_sigalrm
-@needs_mn
 @pytest.mark.skipif(not _IOURING, reason="io_uring not available")
 def test_mn_signal_reaches_a_hub_fiber_parked_on_a_single_shot_op():
     """A blocked send parks on a SINGLE-SHOT CQE, and gets the signal in-fiber.
@@ -664,7 +644,6 @@ def test_mn_signal_reaches_a_hub_fiber_parked_on_a_single_shot_op():
 
 _MN_POLL = r'''
 import faulthandler, os, signal, socket, sys
-sys.path.insert(0, "src")
 import stackweave_c as rc
 # PATCH BEFORE SPAWNING (and before importing selectors), so the worker's
 # PollSelector is the cooperative CoPoll.  _co_sleep_io asks the runtime
@@ -719,7 +698,6 @@ sys.stdout.write("MN-POLL who=%s finally_ran=%s inner=%s\n"
 
 
 @needs_sigalrm
-@needs_mn
 def test_mn_signal_reaches_a_hub_fiber_sleeping_in_select_poll():
     """select.poll in a HUB fiber gets its own signal.  The last gap, closed.
 
@@ -755,3 +733,7 @@ def test_mn_signal_reaches_a_hub_fiber_sleeping_in_select_poll():
         "the interrupt did not reach the hub fiber sleeping in select.poll: "
         "%r\nstdout=%s\nstderr=%s"
         % (p.stdout.strip(), p.stdout, p.stderr[-1500:]))
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

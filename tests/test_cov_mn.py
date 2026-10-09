@@ -1,15 +1,15 @@
 """Coverage-driven unit tests for the M:N scheduler (src/runloom_c/mn_sched.c
 and its mn_sched_*.c.inc fragments).
 
-Half the M:N scheduler's lines live behind env-gated modes the normal corpus
-never enables: the controlled-replay / PCT barrier, fiber_n bulk spawn, the sysmon
-stalled-hub detector, the DETACHED-tstate handoff rescue, ATTACHED preemption,
-the idle-condvar-vs-nanosleep wake, a 1 ms stack-park idle sweep, world-yield,
-hub-affinity, the io_uring-as-loop backend, and the gated-off migratable-mode
-warn path.  Each `test_mn_mode_*` runs the shared diverse workload
-(tests/cov_workload.py) in a subprocess with that mode's env set, driving its C
-paths; the in-process tests cover the default-scheduler surfaces (varied hub
-counts, fiber_n bulk, serve(), deadlock-raise, and the hubinfo/diag introspection).
+Some of the M:N scheduler's paths sit behind env knobs the normal corpus never
+sets: fiber_n bulk spawn (ignored under migration, so this drives the guard), the
+sysmon stalled-hub detector, a 1 ms stack-park idle sweep, the io_uring-as-loop
+backend, a short deadlock-census interval, a tight ready-ring starvation bound,
+and the migration debug oracle.  Each `test_mn_scheduler_mode[...]` runs the
+shared diverse workload (tests/cov_workload.py) in a subprocess with that mode's
+env set, driving its C paths; the in-process tests cover the default-scheduler
+surfaces (varied hub counts, fiber_n bulk, serve(), deadlock-raise, and the
+hubinfo/diag introspection).
 
 The subprocess assertion is "the mode ran the workload to completion (exit 0,
 WORKLOAD_OK) without crashing or hanging" -- the coverage benefit is the C lines
@@ -24,10 +24,9 @@ import pytest
 
 import stackweave
 import stackweave_c as rc
-from adv_util import hang_guard, needs_free_threading
 
-FT = needs_free_threading()
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from adv_util import REPO, child_env, hang_guard
+
 PY = sys.executable
 _DEVNULL = os.open(os.devnull, os.O_WRONLY)
 
@@ -48,13 +47,12 @@ MODES = [
 
 
 def _run_workload(env_extra, hubs=4, timeout=60):
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src", **env_extra)
+    env = child_env(**env_extra)
     p = subprocess.run([PY, "tests/cov_workload.py", "--hubs", str(hubs)],
                        cwd=REPO, env=env, capture_output=True, text=True, timeout=timeout)
     return p
 
 
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 @pytest.mark.parametrize("label,env", MODES, ids=[m[0] for m in MODES])
 def test_mn_scheduler_mode(label, env):
     p = _run_workload(env)
@@ -67,7 +65,6 @@ def test_mn_scheduler_mode(label, env):
 # --------------------------------------------------------------------------
 # in-process default-scheduler coverage
 # --------------------------------------------------------------------------
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 @pytest.mark.parametrize("hubs", [1, 2, 3, 8])
 def test_mn_varied_hub_counts(hubs):
     from stackweave.sync import WaitGroup
@@ -88,7 +85,6 @@ def test_mn_varied_hub_counts(hubs):
         stackweave.run(hubs, main)
 
 
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_mn_fiber_n_bulk_indexed():
     # fiber_n is the bulk/arena spawn path (mn_sched_init_fini.c.inc).
     seen = bytearray(256)
@@ -102,7 +98,6 @@ def test_mn_fiber_n_bulk_indexed():
     assert sum(seen) == 256
 
 
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_mn_serve_echo():
     # serve() spawns SO_REUSEPORT acceptors + per-conn handler fibers (module_io
     # + the hub path); requires the M:N runtime.
@@ -128,7 +123,6 @@ def test_mn_serve_echo():
     assert result.get("reply") == b"s:hi"
 
 
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_mn_deadlock_raise():
     prev = rc.get_deadlock_mode()
     rc.set_deadlock_mode(2)               # raise
@@ -143,7 +137,6 @@ def test_mn_deadlock_raise():
         rc.set_deadlock_mode(prev)
 
 
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_mn_hubinfo_and_diag_introspection():
     # mn_hub_states / fibers / dump_fibers / _dump_parkers / _diag_dump while gs
     # run + park -> mn_sched_hubinfo.c.inc + the netpoll diag.
@@ -169,4 +162,4 @@ def test_mn_hubinfo_and_diag_introspection():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

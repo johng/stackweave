@@ -13,7 +13,10 @@ import asyncio
 import collections
 import os
 import random
+import sys
 import unittest
+
+import pytest
 
 import stackweave_c
 import stackweave.aio as paio
@@ -311,4 +314,4 @@ class TestQueueChaos(_Seeded):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

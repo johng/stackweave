@@ -9,8 +9,10 @@ Own file = own subprocess (run_isolated), so the low-level mn_init/mn_fini here
 never shares runtime state with the high-level stackweave.run tests.
 """
 import os
+import sys
 
-os.environ.setdefault("PYTHON_GIL", "0")
+import pytest
+
 # Quiet sysmon (the spawn/drain lifecycle is scheduler-independent for this count check).
 os.environ.setdefault("STACKWEAVE_SYSMON", "0")
 
@@ -42,3 +44,7 @@ def test_fiber_n_small_n_still_correct():
         assert stackweave_c.mn_run() == 100
     finally:
         stackweave_c.mn_fini()
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

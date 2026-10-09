@@ -7,6 +7,8 @@ CPython's real selector test classes unchanged to prove the cooperative
 versions keep CPython's observable contract.  Complements the hand-adapted
 tests/test_selectors_compat.py.
 """
+import sys
+
 import pytest
 
 from _monkey_stdlib import HAVE_CPYTHON_TESTS, hosted, patch_module, unpatch_module
@@ -42,3 +44,7 @@ if HAVE_CPYTHON_TESTS:
     # independent scheduler/wait_fd core (runloom_netpoll_signal_wake +
     # RUNLOOM_NETPOLL_SIGNALED), so epoll / kqueue / select all pass -- no skip.
     # See tests/test_signal_interrupt.py for the focused regression test.
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

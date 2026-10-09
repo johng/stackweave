@@ -31,17 +31,12 @@ import pytest
 import stackweave  # noqa: F401  (ensures the extension + interlock are importable)
 import stackweave_c as rc
 
-_FT = not sys._is_gil_enabled()
-pytestmark = pytest.mark.skipif(
-    not _FT, reason="parked-frame GC visibility fix is free-threaded 3.14+ only")
-
-_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_SRC = os.path.join(_REPO, "src")
+from adv_util import REPO, child_env
 
 
 def test_anchor_active_by_default():
     # The interlock (stackweave.runtime._tlbc_reexec_if_needed) keeps TLBC on only
-    # while this is 1; it must be active out of the box on FT 3.14+.
+    # while this is 1; it must be active out of the box.
     assert rc.gc_frames_active == 1
 
 
@@ -71,11 +66,10 @@ def test_gc_freeze_keeps_anchor_thawed_and_collect_clean():
 
 
 def _run_big100(prog, hubs, duration, timeout):
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH=_SRC)
     p = subprocess.run(
-        [sys.executable, os.path.join(_REPO, "tests", "big_100", prog),
+        [sys.executable, os.path.join(REPO, "tests", "big_100", prog),
          "--hubs", str(hubs), "--duration", str(duration)],
-        env=env, cwd=_REPO, timeout=timeout,
+        env=child_env(), cwd=REPO, timeout=timeout,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     return p.returncode, p.stdout.decode("utf-8", "replace")
 
@@ -87,3 +81,7 @@ def test_p565_passes_tlbc_on_with_anchor():
     rc0, out = _run_big100(
         "p565_compileall_bytecode_purity.py", hubs=8, duration=8, timeout=90)
     assert rc0 == 0 and "VERDICT       : PASS" in out, out[-2500:]
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

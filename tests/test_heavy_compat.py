@@ -16,14 +16,15 @@ small calls stay inline, and non-fiber callers pass straight through.
 Adapted from CPython Lib/test (test_hashlib, test_zlib, test_gzip, test_bz2,
 test_lzma) -- the same vectors, asserted to match under auto-offload.
 """
-import unittest
-
-# References captured with the STOCK functions, BEFORE setUpModule patches.
 import bz2
 import gzip
 import hashlib
 import lzma
+import sys
+import unittest
 import zlib
+
+import pytest
 
 import stackweave
 import stackweave.monkey
@@ -32,6 +33,7 @@ import stackweave_c
 # ~4 MiB, comfortably above the 256 KiB default threshold.
 DATA = b"the quick brown fox jumps over the lazy dog\n" * 100_000
 
+# References captured with the STOCK functions, BEFORE setUpModule patches.
 REF = {
     "sha1":     hashlib.sha1(DATA).hexdigest(),
     "sha256":   hashlib.sha256(DATA).hexdigest(),
@@ -195,4 +197,4 @@ class TestPassthrough(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

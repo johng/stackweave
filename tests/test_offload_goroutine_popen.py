@@ -17,6 +17,8 @@ import sys
 import time
 import unittest
 
+import pytest
+
 import stackweave
 import stackweave.monkey
 
@@ -85,4 +87,4 @@ class TestGoroutinePopen(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

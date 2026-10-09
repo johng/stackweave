@@ -11,12 +11,12 @@ fiber STACKS, never through a Chan buffer.  The g/task types are deliberately NO
 GC-tracked (manual refcounting), so Chan is the whole GC-trackable surface.
 """
 import gc
-import os
 import sys
 import unittest
 import weakref
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
+import pytest
+
 import stackweave_c
 
 
@@ -84,4 +84,4 @@ class TestChanGCTraverse(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

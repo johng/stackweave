@@ -149,7 +149,7 @@ static RUNLOOM_THREAD_RET runloom_sysmon_main(void *arg)
                 (now - start) > runloom_sysmon_preempt_ns &&
                 tss == RUNLOOM_TS_ATTACHED &&
                 __atomic_load_n(&runloom_preempt_enabled, __ATOMIC_RELAXED)) {
-                __atomic_store_n(&h->preempt_requested, 1, __ATOMIC_RELAXED);
+                __atomic_store_n(&h->preempt_seq, seq, __ATOMIC_RELAXED);
                 /* Single-frame liveness backstop: the eval-frame flag above only
                  * fires at a Python FRAME boundary, so it cannot break a
                  * single-frame `while: pass` (no calls -> no frame entry).  Post

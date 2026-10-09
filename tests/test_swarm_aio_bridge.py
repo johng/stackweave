@@ -55,20 +55,11 @@ import time
 
 import pytest
 
-# TODO(stackweave): QUARANTINE -- the foreign-OS-thread -> event-loop wake path
-# (call_soon_threadsafe from a ThreadPoolExecutor worker / run_coroutine_threadsafe)
-# has a lost-wakeup bug that hard-DEADLOCKS this file on free-threaded CI (both
-# 3.13t and 3.14t; reproduced on a Linux 2-core box, un-interruptible even by
-# SIGALRM).  The identical load under stock asyncio is clean, so it is stackweave,
-# not CPython.  The deadlock is process-wide (poisons the loop for later tests),
-
 import stackweave.aio as aio
 import stackweave_c as rc
-from adv_util import (hang_guard, assert_faster_than, raw_thread,
-                      free_tcp_port_pair, RealBarrier)
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_ENV = dict(os.environ, PYTHON_GIL="0", PYTHONPATH=os.path.join(REPO, "src"))
+from adv_util import (REPO, hang_guard, assert_faster_than, raw_thread,
+                      RealBarrier, child_env)
 
 
 # --------------------------------------------------------------------------
@@ -90,14 +81,18 @@ def _fd_count():
 
 def _run_subprocess(script, timeout=60, env_extra=None):
     """Run a self-contained driver script in a child interpreter so a SEGV is
-    contained.  Returns the CompletedProcess.  A negative returncode == killed
-    by a signal (the crash we are guarding against)."""
-    env = dict(_ENV)
-    if env_extra:
-        env.update(env_extra)
-    return subprocess.run([sys.executable, "-c", script],
-                          cwd=REPO, env=env, timeout=timeout,
-                          capture_output=True)
+    contained.  Returns the CompletedProcess, output as bytes.  A negative
+    returncode == killed by a signal (the crash we are guarding against).  A
+    child still running after `timeout` fails the test with what it printed."""
+    try:
+        return subprocess.run([sys.executable, "-c", script], cwd=REPO,
+                              env=child_env(**(env_extra or {})),
+                              timeout=timeout, capture_output=True)
+    except subprocess.TimeoutExpired as e:
+        pytest.fail("child still running after %ss\nSTDOUT:%s\nSTDERR:%s"
+                    % (timeout, (e.stdout or b"").decode(errors="replace"),
+                       (e.stderr or b"").decode(errors="replace")),
+                    pytrace=False)
 
 
 def _assert_no_signal(cp):
@@ -191,18 +186,7 @@ def test_cancelled_call_later_does_not_leak_callback_graph():
     cancel() (which nulls _callback/_args) drops the closure graph immediately.
     A closure-capture leak would keep the sentinel alive until the deadline; we
     cancel far before the deadline and assert the sentinel is collectable."""
-    import sys
     import weakref
-
-    # 3.14 free-threaded defers reclamation of the cancelled-timer fiber's frame
-    # graph: the sentinel IS reclaimed at run teardown, but not via an in-fiber
-    # gc.collect(), so the in-fiber collectability assert flips True/False per
-    # cycle. This is the 3.14-FT deferred-reclamation family (cf. gh-149816), not
-    # a bridge leak -- the closure graph is dropped correctly. Revisit when
-    # 3.14-FT reclaims promptly under an in-fiber collect.
-    if not sys._is_gil_enabled():
-        pytest.skip("3.14 free-threaded defers in-fiber GC reclamation "
-                    "(deferred-reclamation family, cf. gh-149816); not a bridge leak")
 
     class Sentinel:
         pass
@@ -658,7 +642,8 @@ def test_gather_first_exception_does_not_swallow_or_hang():
         # task registry BEFORE this run's teardown -- otherwise a lingering (but
         # done) cancelled task makes the NEXT aio.run see `sibling_busy` and skip
         # sched_reset(), stranding an unrelated server's accept-fiber parker.
-        # See test_gather_first_exc_strands_next_run_accept_parker (the FINDING).
+        # (Fixed since; test_gather_first_exc_does_not_strand_next_run_accept_parker
+        # checks it without the collection.)
         await asyncio.sleep(0.03)
         gc.collect()
         return out
@@ -667,18 +652,17 @@ def test_gather_first_exception_does_not_swallow_or_hang():
     assert out == ("raised", "boom"), out
 
 
-# REGRESSION (was finding #7): after a gather() first-exception cancels its
+# REGRESSION: after a gather() first-exception cancels its
 # siblings, those zombie tasks linger not-done on the now-closed loop -- they no
 # longer block the NEXT run's sched_reset().  _cancel_outstanding_tasks's
 # sibling_busy check now ignores tasks on a CLOSED loop (they can never be
 # driven), so the accept-fiber parker drains to 0 without a gc.collect() and no
 # longer accumulates per run.  (Open sibling loops stay protected.)
-def test_gather_first_exc_strands_next_run_accept_parker():
+def test_gather_first_exc_does_not_strand_next_run_accept_parker():
     """Deterministic in-subprocess repro of the cross-run parker strand: run a
     gather-first-exception (NO gc), then a streams server create/close in a
     fresh aio.run, then assert the global netpoll parker is back to 0 WITHOUT a
-    gc.collect().  It currently is NOT (the stranded accept-fiber parker), so
-    this xfails until the teardown drains it independent of GC timing."""
+    gc.collect(), so the teardown drains it independent of GC timing."""
     script = r"""
 import asyncio, time, sys
 import stackweave.aio as aio
@@ -903,7 +887,7 @@ def test_readexactly_streamed_in_chunks_with_delay():
         assert aio.run(body()) == b"X" * 20
 
 
-# REGRESSION (was finding #9): readuntil now honors `limit` -- when the
+# REGRESSION: readuntil now honors `limit` -- when the
 # separator is not found within `limit` bytes it raises LimitOverrunError (and
 # leaves the data in the buffer), matching stock asyncio.
 def test_readuntil_limit_overflow_raises_limitoverrun():
@@ -930,7 +914,7 @@ def test_readuntil_limit_overflow_raises_limitoverrun():
             "readuntil did not enforce the limit")
 
 
-# REGRESSION (was finding #10): readuntil now accepts a tuple of separators
+# REGRESSION: readuntil now accepts a tuple of separators
 # (asyncio 3.13 feature); the shortest match wins.
 def test_readuntil_tuple_separators():
     async def body():
@@ -1166,12 +1150,10 @@ def test_tls_streams_echo():
 # 14. subprocess_exec pipe bridging + wait.
 # ==========================================================================
 # NOTE: each subprocess body runs in its OWN child interpreter (one aio.run-
-# with-a-subprocess per process).  This is REQUIRED, not cosmetic: the SECOND
-# consecutive aio.run that spawns a subprocess in the SAME process hangs in
-# communicate()/wait() -- the child's pidfd reaper never wakes (see the FINDING
-# test_second_subprocess_run_never_reaps_hangs).  Running each in a fresh child
-# both avoids that cross-run hang AND keeps the SIGSEGV containment of the
-# subprocess-for-crashes mandate.
+# with-a-subprocess per process), which keeps the SIGSEGV containment of the
+# subprocess-for-crashes mandate.  It also once avoided a hang: the SECOND
+# consecutive aio.run that spawned a subprocess in the same process never
+# reaped its child (fixed; test_second_subprocess_run_reaps_its_child).
 def test_subprocess_exec_communicate_uppercase():
     script = r"""
 import asyncio, sys
@@ -1256,15 +1238,14 @@ print("RESULT", outcome, "%.3f" % el)
     assert el < 2.0, "wait_for on subprocess slow-returned: %.3fs" % el
 
 
-# REGRESSION (was finding #2): a 2nd consecutive aio.run() spawning a subprocess
+# REGRESSION: a 2nd consecutive aio.run() spawning a subprocess
 # no longer hangs.  Root cause was stale netpoll arm caches on fd reuse across
 # the aio.run boundary -- BOTH the pidfd (reaper) AND the subprocess stdout/stderr
 # pipe fds.  The reaper and the pipe transports now netpoll_release_if_idle the fd
 # before closing it, so the reused fd numbers re-register cleanly.
-def test_second_subprocess_run_never_reaps_hangs():
-    """Two consecutive aio.run()s each spawning + awaiting a trivial child.  The
-    CORRECT behavior is both complete; currently the second hangs, so the child
-    is killed by its own timeout and we observe only one RESULT line."""
+def test_second_subprocess_run_reaps_its_child():
+    """Two consecutive aio.run()s each spawning + awaiting a trivial child: both
+    must complete."""
     script = r"""
 import asyncio, sys
 import stackweave.aio as aio
@@ -1282,19 +1263,9 @@ run_one("first")
 run_one("second")
 print("BOTH-DONE", flush=True)
 """
-    # The child must itself terminate; a generous timeout bounds the hang so the
-    # test asserts the CURRENT (buggy) behavior rather than wedging the suite.
+    # A hang (only the first RESULT line) fails on the child's own timeout.
     with hang_guard(40, "second subprocess run reap"):
-        try:
-            cp = _run_subprocess(script, timeout=20)
-        except subprocess.TimeoutExpired as e:
-            # The hang manifested: only the first RESULT printed before the
-            # child wedged.  Assert the CORRECT behavior (both done) so this
-            # registers as the xfail FINDING.
-            partial = (e.stdout or b"").decode(errors="replace")
-            assert "BOTH-DONE" in partial, (
-                "second subprocess aio.run hung (no BOTH-DONE): %s" % partial)
-            return
+        cp = _run_subprocess(script, timeout=20)
     out = cp.stdout.decode(errors="replace")
     assert "BOTH-DONE" in out, (
         "second subprocess aio.run did not complete: %s\n%s"
@@ -1504,11 +1475,7 @@ aio.run(body())
     env = {"STACKWEAVE_AIO_IO_STACK": str(64 * 1024),
            "STACKWEAVE_GOROUTINE_PANIC": "silent"}
     with hang_guard(90, "guard-page in data_received"):
-        try:
-            cp = _run_subprocess(script, timeout=60, env_extra=env)
-        except subprocess.TimeoutExpired:
-            pytest.fail("guard-page recursion in data_received HUNG the child "
-                        "(no termination within 60s)")
+        cp = _run_subprocess(script, timeout=60, env_extra=env)
     combined = (cp.stdout + cp.stderr).decode(errors="replace")
     classified = ("GOROUTINE STACK OVERFLOW" in combined
                   and "guard page" in combined)
@@ -1523,8 +1490,6 @@ aio.run(body())
 # 18. Many concurrent echo connections under the create_server/create_connection
 #     transport stack (not just the streams path).
 # ==========================================================================
-# TODO(stackweave): 60 concurrent loopback echo connections through the full
-# create_server/create_connection transport stack intermittently stalls under the
 def test_many_concurrent_transport_echo_connections():
     N = 60
 
@@ -1616,7 +1581,7 @@ def test_consecutive_independent_runs_do_not_wedge():
 # on the foreign-thread run_coroutine_threadsafe path, on the rest of the
 # StreamReader/Writer surface, and on several fault sites / env-gated modes.
 # It also never exercised __del__ robustness for a HALF-CONSTRUCTED task, which
-# is a real defect (see test_rejected_noncoro_task_del_is_clean).
+# was a real defect (see test_rejected_noncoro_task_del_is_clean).
 # ==========================================================================
 
 
@@ -1751,16 +1716,16 @@ def test_remove_done_callback_count_and_effect():
 
 
 # ==========================================================================
-# A2. __del__ ROBUSTNESS for a half-constructed task (FINDING).
+# A2. __del__ ROBUSTNESS for a half-constructed task.
 # ==========================================================================
-# REGRESSION (was finding #11): a rejected create_task(non_coro) no longer
+# REGRESSION: a rejected create_task(non_coro) no longer
 # leaves a half-built object whose __del__ AttributeErrors at GC -- the inherited
 # _RunloomFutureMixin.__del__ now guards its _pglogtb/_pgexc reads with getattr,
 # so stderr stays clean.
 def test_rejected_noncoro_task_del_is_clean():
     """A subprocess that rejects several non-coroutine create_task() calls then
-    gc.collect()s.  The CORRECT behavior is a CLEAN stderr (no 'Exception
-    ignored in __del__'); currently __del__ AttributeErrors on _pglogtb."""
+    gc.collect()s.  Its stderr must stay clean: no 'Exception ignored in
+    __del__' from an AttributeError on _pglogtb."""
     script = r"""
 import asyncio, gc, sys
 import stackweave.aio as aio
@@ -2432,23 +2397,16 @@ except BaseException as e:
 
 
 # ==========================================================================
-# A15. Env-gated M:N modes under the aio bridge (sysmon / preempt / handoff)
-#      with a CPU-heavy executor offload + concurrent echo -- the detectors
-#      must not crash or corrupt the round-trips.  Run in a subprocess so the
-#      env mode is contained.
+# A15. Env-gated modes under the aio bridge (sysmon) with a CPU-heavy
+#      executor offload + concurrent echo -- the detectors must not crash or
+#      corrupt the round-trips.  Run in a subprocess so the env mode is
+#      contained.  The executor results come back through the foreign-thread
+#      -> loop wake (call_soon_threadsafe from the worker thread); a lost wake
+#      there once stranded runs on a Linux 2-core box, and a hang fails the
+#      test on the child's timeout.
 # ==========================================================================
-# TODO(stackweave): FOREIGN-THREAD LOST WAKEUP -- a genuine stackweave bug, NOT a
-# 3.13t/CPython issue.  run_in_executor's ThreadPoolExecutor workers finish, but
-# the marshal-back wake (call_soon_threadsafe from the foreign worker thread) is
-# intermittently lost: at the hang every executor + blockpool worker is idle-
-# parked (executors in SimpleQueue.get -> _PyParkingLot_Park) and the loop keeps
-# pumping netpoll but never resumes the fibers.  Reproduced on a Linux 2-core box
-# on BOTH 3.13t AND 3.14t (~13%); the same load under stock asyncio is 0/40 and
-# gc.disable() does not help -- so gh-116738/gh-137433 are falsified.  Skipped on
-# stackweave's foreign-thread -> loop wake path is fixed.
 @pytest.mark.parametrize("mode", [
     {"STACKWEAVE_SYSMON": "1", "STACKWEAVE_SYSMON_QUIET": "1", "STACKWEAVE_SYSMON_MS": "8"},
-    {"STACKWEAVE_HANDOFF": "1", "STACKWEAVE_HANDOFF_POOL": "2"},
 ])
 def test_env_gated_modes_under_aio_echo(mode):
     script = r"""
@@ -2482,29 +2440,14 @@ print("RESULT", aio.run(body()), flush=True)
 """
     env = dict(mode)
     env["STACKWEAVE_GOROUTINE_PANIC"] = "silent"
-    try:
-        # Generous budget: the body runs 8x loop.run_in_executor(burn)
-        # (2M-iteration CPU bursts), so it is genuinely CPU-bound and gets
-        # slowed many-fold on a SHARED box (continuous soak loops + sibling
-        # worktree suites).  The actual work is only seconds, so 180s is huge
-        # headroom that still trips a genuine deadlock -- it just stops a busy
-        # box from turning starvation into a false failure.
-        with hang_guard(210, "env mode %r" % sorted(mode)):
-            cp = _run_subprocess(script, timeout=180, env_extra=env)
-    except subprocess.TimeoutExpired:
-        # Even past 180s on a BUSY box this can be pure starvation, not a wrong
-        # echo (confirmed: under forced 1-core saturation every copy times out,
-        # none crashes or returns RESULT False; docs/dev/VALIDATION.md says not to
-        # run the stress suite under heavy oversubscription).  Skip when the box
-        # is meaningfully loaded; a timeout on an essentially-idle box is a real
-        # hang, so re-raise (fail) then -- never masks a deadlock on an idle box.
-        load = os.getloadavg()[0]
-        ncpu = os.cpu_count() or 1
-        if load > ncpu * 0.5:
-            pytest.skip("box loaded (load %.1f > %.0f): CPU-heavy env-mode echo "
-                        "timed out even at 180s -- benign starvation, run isolated"
-                        % (load, ncpu * 0.5))
-        raise
+    # Generous budget: the body runs 8x loop.run_in_executor(burn)
+    # (2M-iteration CPU bursts), so it is genuinely CPU-bound and gets
+    # slowed many-fold on a SHARED box (continuous soak loops + sibling
+    # worktree suites).  The actual work is only seconds, so 180s is huge
+    # headroom that still trips a genuine deadlock -- it just stops a busy
+    # box from turning starvation into a false failure.
+    with hang_guard(210, "env mode %r" % sorted(mode)):
+        cp = _run_subprocess(script, timeout=180, env_extra=env)
     _assert_no_signal(cp)
     out = cp.stdout.decode(errors="replace")
     assert "RESULT True" in out, (
@@ -2609,4 +2552,4 @@ def test_cancelled_task_finally_cleanup_completes():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v", "-p", "no:cacheprovider"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

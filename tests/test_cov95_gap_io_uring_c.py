@@ -38,8 +38,8 @@ What this drives (source line refs are into io_uring.c's #included fragments):
 
 These are all SMALL bounded transfers (a few bytes / a few hundred bytes) and
 peer FIN/RST, never a large repeatedly-backpressured recv, so none of them can
-hit the iouring_recv_backpressure_deadlock path.  A TimeoutExpired is treated as
-box contention (this host shares io_uring + CPU with a CI runner) -> skip.
+hit the iouring_recv_backpressure_deadlock path.  A child still running at its
+timeout fails the test.
 
 Lines this file does NOT cover, with reasons, are in the structured notes.
 """
@@ -50,17 +50,11 @@ import sys
 
 import pytest
 
-from adv_util import (IOURING_LOOP_TRAILER, assert_iouring_loop_ran,
-                      needs_free_threading)
+from adv_util import (IOURING_LOOP_TRAILER, REPO, assert_iouring_loop_ran,
+                      child_env, run_python)
 
-FT = needs_free_threading()
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY = sys.executable
 FAULTINJ_SO = os.path.join(REPO, "tools", "faultinj", "faultinj.so")
 STRACE = shutil.which("strace")
-
-pytestmark = pytest.mark.skipif(
-    not FT, reason="io_uring per-hub rings + multishot are M:N (free-threaded)")
 
 
 def _iou_available():
@@ -91,27 +85,14 @@ needs_faultinj = pytest.mark.skipif(
 
 
 def _run(script, env_extra=None, timeout=120):
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
-    if env_extra:
-        env.update(env_extra)
-    try:
-        return subprocess.run([PY, "-c", script], cwd=REPO, env=env,
-                              capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        pytest.skip("io_uring workload timed out (box under heavy load)")
+    return run_python(script, timeout=timeout, env=env_extra)
 
 
 def _run_strace(script, inject, env_extra=None, timeout=120):
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
-    if env_extra:
-        env.update(env_extra)
     cmd = [STRACE, "-f", "-e", "signal=none", "-e", "inject=" + inject,
-           PY, "-c", script]
-    try:
-        return subprocess.run(cmd, cwd=REPO, env=env,
-                              capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        pytest.skip("strace-injected workload timed out (box under heavy load)")
+           sys.executable, "-c", script]
+    return subprocess.run(cmd, cwd=REPO, env=child_env(**(env_extra or {})),
+                          capture_output=True, text=True, timeout=timeout)
 
 
 # ===========================================================================
@@ -125,7 +106,7 @@ def _run_strace(script, inject, env_extra=None, timeout=120):
 # the failure-cleanup path neither crashed nor wedged the hub.
 # ===========================================================================
 _BARE_RUN = r'''
-import sys; sys.path.insert(0, "src")
+import sys
 import stackweave, stackweave_c as rc
 done = [0]
 def main():
@@ -202,7 +183,7 @@ def test_ring_create_register_eventfd_failure_cleanup():
 #   the unconsumed 2nd buffer must not double-free / leak / wedge).
 # ===========================================================================
 _MS_DEARM_CLOSE = r'''
-import sys, struct; sys.path.insert(0, "src")
+import sys, struct
 import stackweave, stackweave_c as rc
 from stackweave.sync import WaitGroup
 N = 16
@@ -255,7 +236,7 @@ def test_global_ms_close_immediate_free_reclaim():
 #   Oracle: the partial recv read the right 4 bytes + clean exit.
 # ===========================================================================
 _MS_DEARM_CLOSE_INFLIGHT = r'''
-import sys, struct; sys.path.insert(0, "src")
+import sys, struct
 import stackweave, stackweave_c as rc
 from stackweave.sync import WaitGroup
 N = 16
@@ -309,7 +290,7 @@ def test_global_ms_close_immediate_free_reclaim_with_inflight():
 #   Oracle: every client got its 1st echo + clean exit.
 # ===========================================================================
 _MS_ARMED_CLOSE = r'''
-import sys, struct; sys.path.insert(0, "src")
+import sys, struct
 import stackweave, stackweave_c as rc
 from stackweave.sync import WaitGroup
 N = 16
@@ -362,7 +343,7 @@ def test_global_ms_on_cqe_closing_reclaim():
 # inflight buffer (io_uring_l_do.c.inc L278).
 # ===========================================================================
 _MS_ARMED_CLOSE_INFLIGHT = r'''
-import sys, struct; sys.path.insert(0, "src")
+import sys, struct
 import stackweave, stackweave_c as rc
 from stackweave.sync import WaitGroup
 N = 16
@@ -420,7 +401,7 @@ def test_global_ms_on_cqe_closing_reclaim_with_inflight():
 #   buffers are returned to the pool, no leak / no wedge).
 # ===========================================================================
 _LOOP_RECLAIM = r'''
-import sys, struct, socket, threading; sys.path.insert(0, "src")
+import sys, struct, socket, threading
 import stackweave, stackweave_c as rc
 RealThread = threading.Thread          # captured pre-import; never patched
 N = 12
@@ -469,4 +450,4 @@ def test_loop_ms_close_queued_buffer_reclaim():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

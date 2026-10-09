@@ -91,3 +91,7 @@ def test_gate_refuses_when_no_header_has_the_exec_home_witness(monkeypatch, tmp_
         "object.h": "", "cpython/object.h": "",
     })
     assert len(problems) == 1 and "Py_TSTATE_EXEC_HOME" in problems[0], problems
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

@@ -16,20 +16,13 @@ import errno
 import os
 import platform
 import re
-import subprocess
 import sys
 
 import pytest
 
 from adv_util import (IOURING_LOOP_TRAILER, assert_iouring_loop_ran,
                       kernel_needs_pbuf_resv_quirk, kernel_pbuf_ring_errno,
-                      needs_free_threading)
-
-FT = needs_free_threading()
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY = sys.executable
-
-pytestmark = pytest.mark.skipif(not FT, reason="io_uring loop is an M:N backend")
+                      run_python)
 
 
 def _iou_available():
@@ -45,15 +38,10 @@ needs_iouring = pytest.mark.skipif(not _iou_available(), reason="io_uring unavai
 
 def _run(script, env_extra, timeout=240):
     # Generous timeout: these io_uring-loop workloads can run slow under a loaded
-    # box (a concurrent build/CI run competing for io_uring + CPU); a timeout
-    # there is contention, not a bug.  We make them robust rather than flaky.
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src",
-               STACKWEAVE_IOURING_LOOP="1", STACKWEAVE_IOURING_MS="1", **env_extra)
-    try:
-        return subprocess.run([PY, "-c", script], cwd=REPO, env=env,
-                              capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        pytest.skip("io_uring-loop workload timed out (box under heavy load)")
+    # box (a concurrent build/CI run competing for io_uring + CPU).
+    return run_python(script, timeout=timeout,
+                      env=dict(STACKWEAVE_IOURING_LOOP="1",
+                               STACKWEAVE_IOURING_MS="1", **env_extra))
 
 
 # --------------------------------------------------------------------------
@@ -61,7 +49,7 @@ def _run(script, env_extra, timeout=240):
 #    cross-hub CQE wake path.  Exact-once byte oracle.
 # --------------------------------------------------------------------------
 _ECHO = r'''
-import sys, struct; sys.path.insert(0, "src")
+import sys, struct
 import stackweave, stackweave_c as rc
 from stackweave.sync import WaitGroup
 N = 64
@@ -103,8 +91,8 @@ def test_iouring_loop_echo_exact_once():
 #     whole connection, so after a migration it wrote SQEs into another hub's
 #     ring from a foreign thread and a lost SQE parked the fiber forever.  Many
 #     round trips per connection on 4 hubs give every echo fiber hundreds of
-#     parks.  A hang must FAIL, not skip like _run's timeout, hence the
-#     in-child watchdog.  multishot=0 covers the per-op ring lookup of
+#     parks.  A hang must FAIL fast, hence the in-child watchdog (60 s, with
+#     a traceback).  multishot=0 covers the per-op ring lookup of
 #     loop_recv/loop_send; multishot=1 the stream's owner-hub inbox, and it
 #     asserts buffers really were returned from another hub (the fibers
 #     migrated while their stream was open), or the test would prove nothing.
@@ -128,7 +116,7 @@ def test_iouring_loop_echo_exact_once():
 #         buffer must get back to its owner (REMOTE_RETURNS).
 # --------------------------------------------------------------------------
 _ECHO_MIGRATE = r"""
-import sys, struct, faulthandler; sys.path.insert(0, "src")
+import sys, struct, faulthandler
 faulthandler.dump_traceback_later(60, exit=True)
 import stackweave, stackweave_c as rc
 from stackweave.sync import WaitGroup
@@ -185,13 +173,10 @@ _MIGRATE_ATTEMPTS = 4
 def _run_echo_migrate(multishot, **env_extra):
     """One echo run, checked against the oracles that hold with or without
     multishot; returns (CompletedProcess, {stat: int})."""
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src",
-               STACKWEAVE_IOURING_LOOP="1", STACKWEAVE_IOURING_MS=multishot)
-    env.pop("STACKWEAVE_IOURING_PBUF_RESV_QUIRK", None)
+    env = dict(STACKWEAVE_IOURING_LOOP="1", STACKWEAVE_IOURING_MS=multishot,
+               STACKWEAVE_IOURING_PBUF_RESV_QUIRK=None)
     env.update(env_extra)
-    p = subprocess.run([PY, "-c", _ECHO_MIGRATE + IOURING_LOOP_TRAILER],
-                       cwd=REPO, env=env, capture_output=True, text=True,
-                       timeout=240)
+    p = run_python(_ECHO_MIGRATE + IOURING_LOOP_TRAILER, timeout=240, env=env)
     assert p.returncode == 0, (
         "echo run failed or hung (the watchdog exits 1 after 60 s)\n"
         "stdout=%s\nstderr=%s" % (p.stdout[-400:], p.stderr[-2000:]))
@@ -317,7 +302,7 @@ def test_kernel_accepts_one_buffer_ring_registration_form():
 #    proactor ops through a Python handler (different code path than all-C).
 # --------------------------------------------------------------------------
 _PYHANDLER = r'''
-import sys, struct; sys.path.insert(0, "src")
+import sys, struct
 import stackweave, stackweave_c as rc
 from stackweave.sync import WaitGroup
 N = 40
@@ -359,7 +344,7 @@ def test_iouring_loop_python_handler():
 #    per-hub ring CREATE on init AND DESTROY on teardown (hub_main L219-236).
 # --------------------------------------------------------------------------
 _TEARDOWN = r'''
-import sys, struct; sys.path.insert(0, "src")
+import sys, struct
 import stackweave, stackweave_c as rc
 from stackweave.sync import WaitGroup
 def one_round():
@@ -398,7 +383,7 @@ def test_iouring_loop_ring_create_destroy_cycles():
 #    ASYNC_CANCEL + the cancel_g pool-relock path under the loop backend.
 # --------------------------------------------------------------------------
 _CANCEL = r'''
-import sys; sys.path.insert(0, "src")
+import sys
 import stackweave, stackweave_c as rc
 res = {}
 def main():
@@ -457,7 +442,7 @@ def test_iouring_loop_cancel_parked_fiber():
 #    the global-ring eventfd drain.
 # --------------------------------------------------------------------------
 _FILEIO = r'''
-import sys, os, tempfile; sys.path.insert(0, "src")
+import sys, os, tempfile
 import stackweave, stackweave_c as rc
 ok = bytearray(24)
 def main():
@@ -500,7 +485,7 @@ def test_iouring_loop_file_io():
 #    hub: the ring wait is clamped to the sleep heap, only not to netpoll's).
 # --------------------------------------------------------------------------
 _TIMED_PARK = r'''
-import os, sys, time; sys.path.insert(0, "src")
+import os, sys, time
 import stackweave, stackweave_c as rc
 import stackweave.context as ctx
 READ = 1
@@ -542,4 +527,4 @@ def test_iouring_loop_timed_park_expires():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

@@ -23,8 +23,7 @@ branch.  The oracle is "every park completed and the workload exited cleanly"
 
 Env-gated regions (STACKWEAVE_DBG_EXCSTATE excobj validator; the multi-hub
 calibration-freeze race) run in
-SUBPROCESSES that exit cleanly so gcov flushes their counters; a
-TimeoutExpired is treated as box contention (skip), not a bug.
+SUBPROCESSES that exit cleanly so gcov flushes their counters.
 
 UNREACHABLE-from-a-test lines are NOT faked -- they are catalogued in the
 structured report's exclusions[]: the OOM-cleanup branches with no fault hook,
@@ -34,38 +33,21 @@ the cross-thread runloom_sched_wake delivery between two independent
 single-thread run() loops (an unsupported topology that deadlock-detects rather
 than delivering).
 """
-import os
-import subprocess
 import sys
 import threading
 import time
 
 import pytest
 
-sys.path.insert(0, os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
-
 import stackweave
 import stackweave_c as rc
-from adv_util import needs_free_threading, hang_guard
 
-FT = needs_free_threading()
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY = sys.executable
-
-mn = pytest.mark.skipif(not FT, reason="M:N scheduler needs the GIL off (3.13t)")
+from adv_util import hang_guard, run_python
 
 
 def _spawn(code, env_extra=None, timeout=240):
-    """Run `code` in a clean child; return CompletedProcess or skip on timeout."""
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
-    if env_extra:
-        env.update(env_extra)
-    try:
-        return subprocess.run([PY, "-c", code], cwd=REPO, env=env,
-                              capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        pytest.skip("subprocess timed out (shared CI box under contention)")
+    """Run `code` in a clean child; return the CompletedProcess."""
+    return run_python(code, timeout=timeout, env=env_extra)
 
 
 # ==========================================================================
@@ -83,7 +65,7 @@ def _spawn(code, env_extra=None, timeout=240):
 # no fault hook -> classified SPAWNFAIL in exclusions[].
 # ==========================================================================
 _PREEMPT = r'''
-import sys, time; sys.path.insert(0, "src")
+import sys, time
 import stackweave, stackweave_c as rc
 from stackweave.sync import WaitGroup
 rc.preempt_init(2000)          # 2ms quantum -> the timer fires many times
@@ -106,7 +88,6 @@ sys.stdout.write("PREEMPT_OK\n")
 '''
 
 
-@mn
 def test_preempt_timer_thread_posts_and_yields_subprocess():
     p = _spawn(_PREEMPT, timeout=120)
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1500:])
@@ -118,7 +99,7 @@ def test_preempt_timer_thread_posts_and_yields_subprocess():
 # fallback (preempt.c L17-22: runloom_sched_get()->current != NULL ->
 # runloom_sched_yield) -- the branch the M:N hog above doesn't exercise.
 _PREEMPT_ST = r'''
-import sys, time; sys.path.insert(0, "src")
+import sys, time
 import stackweave, stackweave_c as rc
 rc.preempt_init(2000)          # 2ms quantum
 done = []
@@ -136,7 +117,6 @@ sys.stdout.write("PREEMPT_ST_OK %d\n" % len(done))
 '''
 
 
-@mn
 def test_preempt_single_thread_yield_fallback_subprocess():
     p = _spawn(_PREEMPT_ST, timeout=120)
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1500:])
@@ -167,7 +147,6 @@ def test_preempt_init_validates_quantum_and_idempotent_fini():
 # L265-270).  A hub fiber parks with a deadline and nobody wakes it -> the
 # hub_main timer drain fires it, and park() returns True (timed out).
 # ==========================================================================
-@mn
 def test_timed_park_in_hub_times_out_via_timer_drain():
     res = {}
 
@@ -193,7 +172,6 @@ def test_timed_park_in_hub_times_out_via_timer_drain():
     assert res.get("timed_out") is True
 
 
-@mn
 def test_timed_park_in_hub_woken_before_deadline_and_release_timers():
     """A hub fiber timed-parks with a LONG (30s) deadline and is woken EARLY by
     a sibling's G.wake() -> park() returns False (woken), exercising the WOKEN
@@ -263,7 +241,6 @@ def test_sched_sleep_real_single_thread():
     assert out[0] >= 0.02, out
 
 
-@mn
 def test_sched_sleep_real_in_hub():
     """sched_sleep_real inside an M:N hub takes the hub branch of
     sleep_until_ex (target != NULL); a clean completion proves the real-clock
@@ -314,7 +291,6 @@ def test_run_ready_quiescence_two_fibers_single_thread():
     assert sorted(out) == [1, 2]
 
 
-@mn
 def test_run_ready_in_hub_degrades_to_yield():
     """run_ready() inside an M:N hub has no hub-local quiescence list, so it
     degrades to a single classic yield (L593-596).  Oracle: the fiber runs
@@ -401,7 +377,6 @@ def test_park_safe_dekker_abort_under_foreign_wake_storm():
     assert res.get("n") == PARKS
 
 
-@mn
 def test_park_generic_hub_dekker_under_foreign_wake_storm():
     PARKS = 20000
     hbox = {}
@@ -458,14 +433,14 @@ def test_park_generic_hub_dekker_under_foreign_wake_storm():
 # The runtime guard (a per-session generation stamped on the handle at creation,
 # bumped at every mn_fini) turns that into a no-op instead of following a
 # dangling park_hub into freed hub memory.  This is the belt-and-suspenders the
-# dekker FINDING calls for (docs/dev/repro/DEKKER_SIGSEGV_FINDING.md).
+# dekker crash called for (a foreign thread's wake storm outliving its run).
 #
 # These are STAYS-SAFE nets, not deterministic crash-catchers: the guarded read
 # is undefined behaviour, but it does not reliably fault, because (a) PyMem
 # retains the freed arena mapping and (b) wake_safe short-circuits on a DONE g
 # (the normal post-run() state) before it would dereference the hub.  A poison-
 # the-freed-array control confirmed even the unguarded path does not segfault
-# here -- consistent with the FINDING, whose actual crash was Python-eval-state
+# here -- consistent with the dekker crash, which was Python-eval-state
 # corruption in the foreign thread, removed by bounding the storm (the landed
 # test fix).  The value of THIS guard is eliminating the UB read outright; these
 # tests assert the safe behaviour holds across teardown and re-init aliasing.
@@ -500,7 +475,6 @@ def _run_capture_hub_parker(hbox, done):
         stackweave.run(3, main)
 
 
-@mn
 def test_wake_after_mn_teardown_is_noop():
     ROUNDS = 30
     handles = []                         # hold every handle alive across rounds
@@ -526,7 +500,6 @@ def test_wake_after_mn_teardown_is_noop():
     assert all(bool(h.done) for h in handles)
 
 
-@mn
 def test_stale_handle_wake_during_reinit_is_noop():
     """The re-init aliasing case a bare `runloom_hubs != NULL` guard would MISS:
     a stale handle from pool #1 is stormed throughout pool #2's life.  Its
@@ -582,7 +555,6 @@ def test_stale_handle_wake_during_reinit_is_noop():
 # the snap->exc_info==NULL default-reset L377-381 for a sibling that parks
 # without an exception).  Oracle: sys.exc_info() survives the park intact.
 # ==========================================================================
-@mn
 def test_exception_state_survives_park_in_hub():
     """INTERLEAVE exc-carrying and exc-FREE fibers on shared hub tstates.
       * The exc-carrying fibers park inside `except` -> snap saves the exc
@@ -666,7 +638,7 @@ def test_exception_state_survives_park_single_thread():
 # CRASHONLY -- it would kill the process, so gcov never flushes it).
 # ==========================================================================
 _DBG_EXCSTATE = r'''
-import sys; sys.path.insert(0, "src")
+import sys
 import stackweave, stackweave_c as rc
 from stackweave.sync import WaitGroup
 N = 12
@@ -692,7 +664,6 @@ sys.stdout.write("DBGEXC_OK %d\n" % sum(ok))
 '''
 
 
-@mn
 def test_dbg_excstate_validator_passes_live_exceptions_subprocess():
     p = _spawn(_DBG_EXCSTATE, env_extra={"STACKWEAVE_DBG_EXCSTATE": "1"})
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1500:])
@@ -726,7 +697,6 @@ def test_g_entry_and_refcount_machine_nested_spawn():
     assert rc._self_check(0) == 0
 
 
-@mn
 def test_g_entry_fiber_n_indexed_pass_index():
     """fiber_n(indexed=True) drives runloom_g_entry's pass_index branch
     (L398-408: mint a PyLong from the raw index, CallFunctionObjArgs)."""
@@ -760,7 +730,7 @@ def test_g_entry_fiber_n_indexed_pass_index():
 # >=1000 completions with the runtime structurally intact.
 # ==========================================================================
 _CAL_FREEZE = r'''
-import sys, threading; sys.path.insert(0, "src")
+import sys, threading
 import stackweave, stackweave_c as rc
 THREADS = 6
 PER = 700               # 6*700 = 4200 >> RUNLOOM_CAL_TARGET (1000)
@@ -783,7 +753,6 @@ sys.stdout.write("CALFREEZE_OK completed=%d cal=%s\n" % (
 '''
 
 
-@mn
 def test_calibration_freeze_race_multi_thread_subprocess():
     # Fresh subprocess: calibration is a process-global one-shot, so it must
     # start unfrozen.  STACKWEAVE_SYSMON left OFF (no need; avoids stderr noise).
@@ -793,4 +762,4 @@ def test_calibration_freeze_race_multi_thread_subprocess():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

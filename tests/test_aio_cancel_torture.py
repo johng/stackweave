@@ -12,7 +12,7 @@ import os
 import socket
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+import pytest
 
 import stackweave.aio as aio
 
@@ -121,3 +121,7 @@ def test_repeated_cancel_no_fd_leak():
             leaked = _fd_count() - base
             assert leaked <= 0, "leaked {0} fd(s) across cancel cycles".format(leaked)
     _run(main)
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

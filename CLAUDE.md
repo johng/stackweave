@@ -14,7 +14,10 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   migration keeps its code and env var, is guarded off with a one-time stderr
   note, and has strict xfails that assert it actually ran (`[GON_TIMING]` for
   bulk spawn), after the test's own correctness checks. Known gaps are xfail,
-  never skip (`tests/conftest.py`). Fixing one turns its xfails into XPASSes;
+  never skip, and every one is marked at its test with a `tests/known_gaps.py`
+  helper (`KNOWN_GAP`, `MIGRATION_GAP`, `INTERMITTENT`, `SEEDED_MN_TODO`,
+  `GON_BULK_GAP`; conftest rejects a bare xfail, and `pytest -m known_gap`
+  lists them). Fixing one turns its xfails into XPASSes;
   then drop the xfails and keep a positive it-ran check (the loop backend's
   `assert_iouring_loop_ran` in `tests/adv_util.py` reads the hub ring-wait
   count).
@@ -52,7 +55,13 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   every `tests/test_greenlet_interop.py` test time out. Hosted CI doesn't
   install greenlet, so that file skips there.
 - Run the suite via `tests/run_isolated.py` (one file/subprocess — in-process
-  `pytest tests/` flakes on cross-file state leaks).
+  `pytest tests/` flakes on cross-file state leaks). It and `tests/conftest.py`
+  refuse to run unless migration is sound: the GIL off, and both the
+  interpreter and the extension built with both patches. Nothing in the suite
+  skips for want of free threading or M:N any more, so a stock run fails
+  loudly instead of passing on a fraction of the tests. A child interpreter
+  goes through `adv_util.run_python()` / `child_env()`, which fail the test on
+  a timeout rather than skip it.
 
 ## Gating
 - **Locally: `scripts/check_all_fast.sh` before any merge**;
@@ -259,12 +268,38 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   because the owner may be mid-fiber and never reach its pick step --
   restoring the old `>1` there reopens a lost-wake vs park_enter.
   Guard: `tests/test_local_wake.py`.
+- **A yield or an ended sleep re-queues where another hub can take it; a
+  preemption does not.** `runloom_mn_requeue_local` puts an unpinned g its hub
+  switched out still runnable (a yield, a sleep whose timer fired there, a
+  fresh g the full deque refused) on `h->yieldq`, a Chase-Lev deque every
+  consumer takes from the TOP (the owner too, so its order stays FIFO), and
+  idle hubs steal from it. Two rules: (1) push only from hub_main, after the
+  g switched out and its tstate is detached, never from inside the fiber: a
+  thief resumes it the moment it is queued; (2) a preempted g goes back on the
+  ready ring (`runloom_mn_preempt_yield`), which only its hub reads: a time
+  slice ends wherever the fiber is, maybe inside `with rlock:` or an import,
+  whose locks key on the OS thread. A timer for a g pinned to another hub
+  wakes it like a channel wake (QUEUED, global run-queue), so the pin holds.
+  Guards: `tests/test_cross_hub_migration.py -k "idle_hub_takes or
+  preempted_fiber_keeps or pinned_fiber_resumes"` (`stats()["mn_yield_steals"]`).
+- **A sysmon preemption request names the resume it is for.** sysmon asks two
+  ways at once, a flag the eval-frame wrapper reads at the next call and a
+  pending call run at the next backward jump; `h->preempt_seq` holds the
+  wedged resume's `resume_seq`, and each path yields only while it still
+  matches (`runloom_mn_preempt_due`). As a plain flag, whichever came second
+  preempted the next fiber the hub ran before its first line, so a sibling on
+  a CPU-bound fiber's hub never got a turn. Still open (KNOWN_GAP): a fiber
+  preempted from the pending call is suspended inside CPython's
+  `make_pending_calls`, which keeps the interpreter's pending-call slot
+  (`handling_thread`) until it resumes, so a second single-frame loop cannot
+  be preempted meanwhile. Guard:
+  `tests/test_sched_fairness.py::test_preemption_takes_turns_between_fibers_on_one_hub`.
 - **The seeded M:N scheduler is disabled (TODO).** `STACKWEAVE_MN_SEED` /
   `STACKWEAVE_SIM_MN` runs are refused by `mn_init`: woken fibers run from the
   global run-queue, which the seeded baton does not order, so replay would not
   be deterministic. The controller is compiled in behind `RUNLOOM_MN_CTRL`
-  (default 0) until it is re-implemented; its tests are skipped via
-  `_SEEDED_MN_TODO` in `tests/conftest.py`.
+  (default 0) until it is re-implemented; its tests are `SEEDED_MN_TODO`
+  xfails (`tests/known_gaps.py`).
 - **A hub's io_uring ring has one producer: its own hub thread.** Under the
   loop backend (`STACKWEAVE_IOURING_LOOP`) a fiber may write SQEs only into the
   ring of the hub it runs on NOW, since every park is a possible migration.

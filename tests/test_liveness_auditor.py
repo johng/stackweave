@@ -8,11 +8,14 @@ import os
 import sys
 import time
 
-sys.path.insert(0, "src")
-sys.path.insert(0, "tools/introspect")
+import pytest
 
 import stackweave_c
-import liveness
+
+from adv_util import REPO
+
+sys.path.insert(0, os.path.join(REPO, "tools", "introspect"))
+import liveness  # noqa: E402
 
 
 # ---- pure blame logic: synthetic snapshots (teeth) -------------------------
@@ -144,5 +147,4 @@ def test_no_false_positive_on_healthy_run():
 
 
 if __name__ == "__main__":
-    import pytest
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

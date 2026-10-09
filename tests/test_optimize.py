@@ -4,6 +4,7 @@ contract: valid goals, precedence (memory > throughput on the spawn path),
 shell-env wins, and that the runtime still runs after a call.
 """
 import os
+import sys
 
 import pytest
 
@@ -105,3 +106,7 @@ def test_runs_after_optimize():
 
     stackweave.run(4, main)
     assert sum(done) == 200
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

@@ -11,9 +11,7 @@ overflowing a small fiber stack.  Here we:
     and survive many concurrent offloads;
   * misuse MachineCode (empty code, too many args) and confirm clean errors.
 """
-import os
 import platform
-import subprocess
 import sys
 import time
 
@@ -21,9 +19,8 @@ import pytest
 
 import stackweave
 import stackweave_c as rc
-from adv_util import hang_guard
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from adv_util import hang_guard, run_python
 
 
 def _run_single(fn):
@@ -36,18 +33,13 @@ def _run_single(fn):
 
 
 def _subproc(script, env_extra=None):
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
-    if env_extra:
-        env.update(env_extra)
-    return subprocess.run([sys.executable, "-c", script], cwd=REPO, env=env,
-                          capture_output=True, text=True, timeout=30)
+    return run_python(script, timeout=30, env=env_extra)
 
 
 # --------------------------------------------------------------------------
 # crash handler: a guard-page overflow is a clean classified trap
 # --------------------------------------------------------------------------
 _OVERFLOW_SCRIPT = r'''
-import sys; sys.path.insert(0, "src")
 import stackweave_c as rc
 rc.install_crash_handler("backtrace")
 def f():
@@ -212,4 +204,4 @@ def test_machinecode_empty_rejected():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

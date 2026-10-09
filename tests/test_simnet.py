@@ -18,6 +18,8 @@ import os
 import sys
 import unittest
 
+import pytest
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "tools", "dst"))
 import dst  # noqa: E402  (sets STACKWEAVE_LOGICAL_CLOCK, imports stackweave_c + simnet)
@@ -79,4 +81,4 @@ class TestSimNetModel(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

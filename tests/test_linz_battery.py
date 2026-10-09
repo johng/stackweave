@@ -7,7 +7,7 @@ Three layers:
      reader/writer overlap, early wait).  No build needed; proves the oracle has
      teeth so a green battery means something.
   2. TestLiveBattery   -- record real concurrent histories on the M:N scheduler
-     (a few seeds x every primitive) and assert each linearizes.  Free-threaded.
+     (a few seeds x every primitive) and assert each linearizes.
   3. TestDifferentialGo -- record a channel history and check it with BOTH the
      Python checker and the independent Go Porcupine binary; assert they AGREE on
      a clean history and on a corrupted one.  Two unrelated checkers agreeing is
@@ -22,18 +22,12 @@ import sys
 
 import pytest
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from adv_util import REPO, child_env
+
 LINZ = os.path.join(REPO, "tools", "lincheck", "linz")
 sys.path.insert(0, LINZ)
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # tests/ (adv_util)
-
 import checker   # noqa: E402
 import specs     # noqa: E402
-
-from adv_util import needs_free_threading  # noqa: E402
-
-FT = pytest.mark.skipif(not needs_free_threading(),
-                        reason="the M:N scheduler is only real on free-threaded builds")
 
 
 def op(proc, inp, out, call, ret):
@@ -126,7 +120,6 @@ class TestCheckerTeeth:
 
 # ----------------------------------------------------------- 2. live battery
 
-@FT
 class TestLiveBattery:
     """A bounded seed sweep of the real recorder -- every history must linearize.
     (The full generative sweep is tools/lincheck/linz/battery.py + its forever
@@ -165,7 +158,6 @@ class TestLiveBattery:
 
 # ----------------------------------------------------- 3. differential vs Go
 
-@FT
 class TestDifferentialGo:
     """Record one channel history and check it with BOTH the Python WGL checker
     and the independent Go Porcupine binary; they must agree -- on the clean
@@ -174,11 +166,9 @@ class TestDifferentialGo:
     def record_chan(self, tmp_path):
         rec = os.path.join(REPO, "tools", "lincheck", "record_history.py")
         out = str(tmp_path / "hist.json")
-        env = dict(os.environ, PYTHON_GIL="0",
-                   PYTHONPATH=os.path.join(REPO, "src"))
         # record_history.py <out> <nhubs> <nprod> <nper> <cap>
         subprocess.check_call([sys.executable, rec, out, "3", "3", "6", "2"],
-                              env=env, cwd=REPO)
+                              env=child_env(), cwd=REPO)
         with open(out) as fh:
             return json.load(fh), out
 
@@ -212,3 +202,7 @@ class TestDifferentialGo:
             json.dump(hist, fh)
         assert self.py_verdict(hist) is False
         assert self.go_verdict(bad) is False
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

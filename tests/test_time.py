@@ -1,6 +1,9 @@
 """Tests for stackweave.time (After, Timer, Ticker)."""
+import sys
 import time as _time
 import unittest
+
+import pytest
 
 import stackweave_c
 import stackweave.time as ptime
@@ -97,4 +100,4 @@ class TestSleep(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

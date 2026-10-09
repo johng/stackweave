@@ -13,14 +13,15 @@ as_completed() resolve in-domain.  These tests pin down result delivery,
 exception propagation, map ordering, wait()/as_completed() semantics, cancel,
 and that a blocked result() yields to siblings.
 """
-import time
+import concurrent.futures as cf
+import sys
 import unittest
+
+import pytest
 
 import stackweave
 import stackweave.monkey
 import stackweave_c
-
-import concurrent.futures as cf
 
 
 def _drive(fn):
@@ -205,4 +206,4 @@ class TestFutureCancel(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

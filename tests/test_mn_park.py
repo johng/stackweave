@@ -9,8 +9,11 @@ shared run-alive anchor so a foreign-OS-thread waker cannot race a single-thread
 run()'s exit.  These cover all four (hub x waker-kind) combinations + the
 wake-before-park race + a multi-parker stress.
 """
+import sys
 import threading   # REAL OS thread (no monkey.patch here)
 import time
+
+import pytest
 
 import stackweave
 import stackweave_c
@@ -195,3 +198,7 @@ def test_many_parkers_all_woken():
         main.total = sum(woke)
     stackweave.run(8, main)
     assert main.total == 200
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

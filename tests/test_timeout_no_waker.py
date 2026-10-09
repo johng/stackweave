@@ -114,3 +114,7 @@ def test_timed_waits_spawn_no_waker_fibers():
         assert peak - base < n * 1.5, (base, peak, n)
         return True
     assert _drive(body)
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

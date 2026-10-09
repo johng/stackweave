@@ -103,7 +103,6 @@ jobs:
       - name: Loop
         env:
           PYTHON_GIL: "0"
-          STACKWEAVE_GIL: "0"
           STACKWEAVE_TEST_JOBS: "4"
           STACKWEAVE_TIMEOUT_MULT: "2"
           STACKWEAVE_TEST_NORETRY: "1"

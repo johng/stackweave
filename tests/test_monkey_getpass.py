@@ -5,8 +5,11 @@ The real getpass reads /dev/tty, which we can't drive in a test, so we stand a
 fake in as the wrapped original and assert *where* it runs (a worker thread vs
 the calling thread) and that the prompt/return value pass through.
 """
-import threading
 import getpass as _getpass_mod
+import sys
+import threading
+
+import pytest
 
 import stackweave            # noqa: F401  (runtime)
 import stackweave_c
@@ -72,3 +75,7 @@ def test_registered_in_default_patch_set():
     import stackweave.monkey as monkey
     assert "getpass" in monkey._DEFAULTS
     assert "getpass" in monkey._PATCHERS
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

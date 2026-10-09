@@ -22,23 +22,18 @@ the genuine OS primitives.
 """
 import sys
 import threading
-import time
 
 import pytest
 
-sys.path.insert(0, "src")
-
 import stackweave
 import stackweave_c as rc
-from adv_util import hang_guard, needs_free_threading
+
+from adv_util import hang_guard
 
 
 # --------------------------------------------------------------------------
 # Gap 1 -- _quiescent() NEGATIVE: busy ping-pong is never "settled"
 # --------------------------------------------------------------------------
-@pytest.mark.skipif(not needs_free_threading(),
-                    reason="observer-thread sampling of _quiescent() needs the "
-                           "GIL disabled to run in parallel with the scheduler")
 def test_quiescent_false_during_unbuffered_ping_pong():
     from stackweave.sync import WaitGroup
 
@@ -100,9 +95,6 @@ def test_quiescent_false_during_unbuffered_ping_pong():
 # --------------------------------------------------------------------------
 # Gap 2 -- _quiescent() SETTLED: N sleepers all park -> quiescent, live==parked==N
 # --------------------------------------------------------------------------
-@pytest.mark.skipif(not needs_free_threading(),
-                    reason="observer-thread sampling of _quiescent() needs the "
-                           "GIL disabled to run in parallel with the scheduler")
 def test_quiescent_settled_when_all_fibers_sleep():
     N = 20
     NAP = 0.30                          # wide window for the observer to land in
@@ -158,4 +150,4 @@ def test_quiescent_settled_when_all_fibers_sleep():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

@@ -31,6 +31,7 @@ import pytest
 
 import stackweave.aio as aio
 import stackweave_c as rc
+
 from adv_util import hang_guard
 
 
@@ -317,4 +318,4 @@ def test_unix_server_echo_and_no_accept_fiber_leak():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

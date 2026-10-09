@@ -14,14 +14,17 @@ negative cases run in RAISE mode too, so a false positive becomes a test
 failure rather than a silent misclassification.
 """
 import os
+import sys
+
+import pytest
+
+import stackweave
+import stackweave_c
+
 # Short quiescent budget so the positive cases resolve in tens of ms rather than
 # the 200 ms default.  Read once by the C census on the first mn_run, so it must
 # be set before any run().
 os.environ.setdefault("STACKWEAVE_DEADLOCK_MS", "40")
-
-import pytest
-import stackweave
-import stackweave_c
 
 
 def _with_mode(mode, fn):
@@ -165,3 +168,7 @@ def test_ping_pong_churn_no_false_fire():
         stackweave.run(2, main)                  # must NOT raise across the churn
         assert result == ["ping-done"]
     _with_mode(2, body)
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

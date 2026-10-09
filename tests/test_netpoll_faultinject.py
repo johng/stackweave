@@ -31,6 +31,8 @@ import pytest
 
 import stackweave_c
 
+from adv_util import child_env
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 WORKLOAD = os.path.join(HERE, "netpoll_fault_workload.py")
 
@@ -77,10 +79,7 @@ STRACE = shutil.which("strace")
 def _run_under_strace(inject, mode, extra=(), env_extra=None, timeout=30):
     """Run the workload under strace with one inject spec.  Returns
     (returncode, stdout_text, stderr_text)."""
-    env = dict(os.environ)
-    env["PYTHON_GIL"] = "0"
-    if env_extra:
-        env.update(env_extra)
+    env = child_env(**(env_extra or {}))
     cmd = [STRACE, "-f", "-e", "signal=none",
            "-e", "inject=" + inject, *extra,
            sys.executable, WORKLOAD, mode]
@@ -152,3 +151,7 @@ def test_epoll_ctl_einval_surfaces_as_oserror():
     assert rc == 42, "expected clean OSERROR exit(42): rc=%d\n%s\n%s" % (
         rc, out, err)
     assert "OSERROR errno=22" in out, "EINVAL not surfaced cleanly:\n%s" % out
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

@@ -14,37 +14,24 @@ never flushes), have no fault-injection site -- see the `unreachable` report.
 
 The subprocess EXITS CLEANLY (rc==0 + a stdout marker) so gcov counters flush.
 """
-import os
-import subprocess
 import sys
 
 import pytest
 
-import stackweave_c as rc  # noqa: F401  (import side effects + the FT gate below)
-from adv_util import needs_free_threading
-
-FT = needs_free_threading()
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY = sys.executable
-
-pytestmark = pytest.mark.skipif(not FT, reason="M:N work-stealing needs the GIL-disabled build")
+from adv_util import run_python
 
 
 def _run(body, env_extra, timeout=90):
     """Run `body` as a fresh child Python process under the given env; return it.
 
-    The child imports the same in-tree stackweave_c (PYTHONPATH=src, cwd=REPO) and
+    The child imports the same in-tree stackweave_c (src/ on PYTHONPATH) and
     must finish cleanly for gcov counters to flush -- we assert rc==0 + marker.
     """
-    src = ("import sys\n"
-           "sys.path.insert(0, 'src')\n"
-           "import stackweave\n"
+    src = ("import stackweave\n"
            "import stackweave_c as rc\n"
            "import time\n"
            "from stackweave.sync import WaitGroup\n") + body
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src", **env_extra)
-    return subprocess.run([PY, "-c", src], cwd=REPO, env=env,
-                          capture_output=True, text=True, timeout=timeout)
+    return run_python(src, timeout=timeout, env=env_extra)
 
 
 # --------------------------------------------------------------------------- #
@@ -97,4 +84,4 @@ print("WORKSTEAL_OK done=%d" % R["done"])
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

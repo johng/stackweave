@@ -13,15 +13,16 @@ by another fiber lands on the WAKER's own deque (Go-style local wake), so a
 channel hand-off between fibers stays on one hub -- so these tests FORCE a
 migration.  A plain OS thread sends on the channel: a foreign waker has no
 deque, so the fiber goes through the global run-queue and whichever hub is
-idle pulls it.  The thread id is checked before and after each park, and a
-scenario that never sees a migration skips loudly rather than passing.
+idle pulls it; where no foreign wake moves it, a pin to another hub does.
+The thread id is checked before and after each park, and a scenario that
+never sees a migration fails rather than passing or skipping.
 
 Each scenario runs in a fresh subprocess so a lost fiber or a wedged hub is a
 clean timeout rather than a hung pytest, and so one scenario's leak cannot
 leak into the next.
 
 Fifteen gaps are closed (their docstrings start "Was a gap").  The five
-that remain are strict xfails under TODO_MIGRATION_FAIL: four OS-thread-identity
+that remain are strict xfails (tests/known_gaps.py): four OS-thread-identity
 checks that live in C or in importlib and need a pin or a monkey patch (one,
 the same-hub importer, needs no migration at all: every fiber on a hub shares
 its thread id), and a timer wake that ignores G.pin.  A strict xfail still
@@ -63,20 +64,20 @@ import sys
 
 import pytest
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from adv_util import run_python
+from known_gaps import KNOWN_GAP, MIGRATION_GAP
 
 # Shared prelude for every subprocess: a watchdog so a wedge is a clean exit,
-# and force_migrate(), which parks the caller on a channel until a helper
-# fiber wakes it and reports whether the OS thread changed.  Prints NOMIG if
-# no migration was observed after `rounds` parks; the test then skips loudly.
+# and force_migrate(), which moves the caller to another hub (foreign-thread
+# wakes, then a pinned one if none of those moved it).  require_migration()
+# prints NOMIG and exits 4 if a scenario saw no migration, which fails it.
 PRELUDE = r'''
 import os, sys, threading, time
-sys.path.insert(0, %r)
 import stackweave, stackweave_c
 
 def _watchdog(secs):
     def fire():
-        print("WATCHDOG TIMEOUT after %%ss" %% secs, flush=True)
+        print("WATCHDOG TIMEOUT after %ss" % secs, flush=True)
         import faulthandler; faulthandler.dump_traceback(all_threads=True)
         os._exit(3)
     t = threading.Timer(secs, fire); t.daemon = True; t.start()
@@ -93,58 +94,65 @@ def foreign_send(ch, value):
         except RuntimeError:
             time.sleep(0.0005)
 
-def force_migrate(rounds=40):
-    """Park on a channel until a FOREIGN OS thread wakes us (a hub-thread waker
-    would push us onto its own deque -- local wake -- and we would usually
-    resume right there).  Returns True as soon as one wake resumes on a
-    different OS thread."""
+def _foreign_wake(ch, i):
+    t = threading.Thread(target=lambda: (time.sleep(0.001), foreign_send(ch, i)),
+                         daemon=True)
+    t.start()
+    ch.recv()
+    t.join()
+
+def force_migrate(rounds=40, pin_fallback=True):
+    """Move the calling fiber to another hub's OS thread; True once it has.
+
+    First it parks on a channel until a FOREIGN OS thread wakes it, up to
+    `rounds` times: a hub-thread waker would push it onto its own deque
+    (local wake) and it would usually resume right there, while a foreign
+    wake goes through the global run-queue to whichever hub pulls it.  On an
+    idle box the hub it parked on often pulls it every time, so then it pins
+    the next resume to another hub, which routes one more foreign wake there,
+    and unpins.  pin_fallback=False measures natural migration alone."""
     ch = stackweave.Chan(0)
-    moved = False
     for i in range(rounds):
         before = threading.get_ident()
-        def poke(i=i):
-            time.sleep(0.001)
-            foreign_send(ch, i)
-        t = threading.Thread(target=poke, daemon=True)
-        t.start()
-        ch.recv()
-        t.join()
+        _foreign_wake(ch, i)
         if threading.get_ident() != before:
-            moved = True
-            break
-    return moved
+            return True
+    if not pin_fallback:
+        return False
+    g = stackweave_c.current_g()
+    before = threading.get_ident()
+    g.pin((stackweave_c.mn_current_hub() + 1) % stackweave_c.mn_hub_count())
+    try:
+        _foreign_wake(ch, rounds)
+    finally:
+        g.pin(None)
+    return threading.get_ident() != before
 
 def park_n_times(n):
     """Foreign-thread wakes only; returns the set of OS thread ids we ran on."""
     ch = stackweave.Chan(0)
     tids = {threading.get_ident()}
     for i in range(n):
-        def poke(i=i):
-            time.sleep(0.001)
-            foreign_send(ch, i)
-        t = threading.Thread(target=poke, daemon=True)
-        t.start()
-        ch.recv()
-        t.join()
+        _foreign_wake(ch, i)
         tids.add(threading.get_ident())
     return tids
 
 def require_migration(moved):
+    """Migration is always on, so a scenario that never saw one is a failure
+    (NOMIG), never a pass or a skip: its invariant went unchecked."""
     if not moved:
-        print("NOMIG", flush=True)
-        os._exit(0)
-''' % os.path.join(REPO, "src")
+        print("NOMIG: the scenario saw no cross-hub migration", flush=True)
+        os._exit(4)
+'''
 
 
 def run_scenario(code, timeout=60, env=None):
-    env = dict(os.environ, **(env or {}))
-    env["PYTHON_GIL"] = "0"
-    env["STACKWEAVE_GIL"] = "0"
+    """(rc, stdout, stderr) of PRELUDE + code in a fresh interpreter.  A
+    timeout is rc 124 with what the scenario printed, so assert_pass can
+    report it like any other failure, with its transcript."""
     try:
-        p = subprocess.run(
-            [sys.executable, "-c", PRELUDE + code],
-            cwd=REPO, env=env, timeout=timeout,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        p = run_python(PRELUDE + code, timeout=timeout, env=env,
+                       raise_timeout=True)
     except subprocess.TimeoutExpired as e:
         out = e.stdout if isinstance(e.stdout, str) else (e.stdout or b"").decode()
         err = e.stderr if isinstance(e.stderr, str) else (e.stderr or b"").decode()
@@ -164,9 +172,6 @@ def _key_line(out, err):
 
 def assert_pass(code, timeout=60, env=None):
     rc, out, err = run_scenario(code, timeout=timeout, env=env)
-    if "NOMIG" in out:
-        pytest.skip("no cross-hub migration observed on this machine; "
-                    "the scenario needs >=2 hubs that actually trade fibers")
     if rc == 0 and "PASS" in out:
         return
     # The full transcript goes to stdout, which pytest shows under "Captured
@@ -179,26 +184,19 @@ def assert_pass(code, timeout=60, env=None):
 
 
 
-def TODO_MIGRATION_FAIL(reason, raises=None):
-    """A known gap of migration mode that stays open on purpose: the test is a
-    strict xfail, so it still runs in CI, shows as xfailed, and the moment the
-    gap is closed it turns into a hard XPASS failure that forces this marker
-    off.  Grep TODO_MIGRATION_FAIL for the open list.  With
-    raises=AssertionError only the behaviour check counts as the gap, and a
-    scenario that calls pytest.fail (it never reached its trigger) fails."""
-    return pytest.mark.xfail(strict=True, raises=raises,
-                             reason="TODO_MIGRATION_FAIL: " + reason)
-
 # ---------------------------------------------------------------------------
 # Harness sanity: migration is observable, and the thing we verified WORKS.
 # ---------------------------------------------------------------------------
 
 def test_harness_foreign_thread_wake_migrates_the_fiber():
-    """The premise of this file: a channel wake at H=4 lands on another hub."""
+    """The premise of this file: a foreign-thread channel wake at H=4 lands
+    on another hub, unpinned.  From most hubs the first wake does it; from
+    one (likely hub 0) it took up to 232 wakes in 30 idle-box trials, so this
+    allows 400 before calling it a failure."""
     assert_pass(r'''
-_watchdog(30)
+_watchdog(60)
 def main():
-    require_migration(force_migrate())
+    require_migration(force_migrate(rounds=400, pin_fallback=False))
     print("PASS", flush=True)
 stackweave.run(4, main)
 ''')
@@ -240,25 +238,29 @@ stackweave.run(4, main)
 
 def test_identity_pinned_fiber_stays_on_one_os_thread():
     """G.pin(N) is the escape hatch for code keyed on the OS thread.  A fiber
-    pinned to the hub it is on must resume there after every wake, so a stock
-    RLock and a default sqlite3 connection keep working across parks.  The
-    unpinned control in the same run must see at least one other thread, or
-    the pin proved nothing."""
+    pinned to hub N must resume there after every wake, so a stock RLock and a
+    default sqlite3 connection keep working across parks.  The pin names a
+    hub other than the one the fiber is on, so the first wake must move it
+    there: that proves the pin routes the wake, which an unpinned fiber that
+    happened never to move could not."""
     assert_pass(r'''
 import sqlite3
 _watchdog(40)
 def main():
-    control = park_n_times(12)
-    require_migration(len(control) > 1)
     g = stackweave_c.current_g()
-    g.pin(stackweave_c.mn_current_hub())
+    start = threading.get_ident()
+    target = (stackweave_c.mn_current_hub() + 1) % stackweave_c.mn_hub_count()
+    g.pin(target)
+    park_n_times(1)
+    require_migration(threading.get_ident() != start)
+    assert stackweave_c.mn_current_hub() == target, (stackweave_c.mn_current_hub(), target)
     lk = threading.RLock()
     con = sqlite3.connect(":memory:")
     lk.acquire()
     pinned = park_n_times(12)
     lk.release()
     assert con.execute("select 1").fetchone() == (1,)
-    print("unpinned threads=%d pinned threads=%d" % (len(control), len(pinned)), flush=True)
+    print("pinned threads=%d" % len(pinned), flush=True)
     assert len(pinned) == 1, "a pinned fiber resumed on %d different OS threads" % len(pinned)
     g.pin(None)
     print("PASS", flush=True)
@@ -524,7 +526,7 @@ os._exit(0)
 # get_ident), not a patch; the tests track the gap.  (PR #23 review, 7.3)
 # ---------------------------------------------------------------------------
 
-@TODO_MIGRATION_FAIL(
+@MIGRATION_GAP(
     'stock _thread.RLock compares the OS thread id in C at release; nothing in the runtime can satisfy it once the fiber moved -- use G.pin or monkey.patch() (CoRLock)')
 def test_identity_stock_rlock_releases_after_a_migration():
     """Known gap: stock _thread.RLock keys ownership on the OS thread; after a
@@ -545,7 +547,7 @@ stackweave.run(4, main)
 ''')
 
 
-@TODO_MIGRATION_FAIL(
+@MIGRATION_GAP(
     'sqlite3 check_same_thread compares the OS thread id in C; use check_same_thread=False or G.pin, as for OS threads')
 def test_identity_sqlite_connection_works_after_a_migration():
     """Known gap: sqlite3's default check_same_thread=True compares the OS
@@ -971,7 +973,7 @@ print("PASS", flush=True)
 ''', timeout=90)
 
 
-@TODO_MIGRATION_FAIL(
+@MIGRATION_GAP(
     'importlib._ModuleLock keys on _thread.get_ident() at Python level; fix is a fiber-aware get_ident behind monkey.patch() (gevent-style)')
 def test_identity_module_import_lock_releases_after_a_migration():
     """Known gap: importlib's _ModuleLock keys its owner on
@@ -1007,7 +1009,7 @@ stackweave.run(4, main)
 ''')
 
 
-@TODO_MIGRATION_FAIL(
+@KNOWN_GAP(
     "importlib._ModuleLock is re-entrant per OS thread, so every fiber on the importer's hub re-enters it and gets the half-built module; same fix as the migrating importer above",
     raises=AssertionError)
 def test_identity_same_hub_importer_waits_for_a_parked_import():
@@ -1073,13 +1075,11 @@ stackweave.run(4, main)
         "the second importer on the same hub got the half-built module", got)
 
 
-@TODO_MIGRATION_FAIL(
-    "a timer wake re-queues the sleeper on the hub whose heap held it, ignoring pin_hub1; a channel or park wake routes through the pin",
-    raises=AssertionError)
 def test_sched_pinned_fiber_resumes_on_its_hub_after_a_sleep():
-    """Known gap: G.pin(N) confines a fiber's next resume to hub N, and a
-    channel wake honours that, but a sleep -- timed, or sleep(0) -- resumes the
-    fiber on the hub it slept on.  The channel wake runs first, as the control
+    """G.pin(N) confines a fiber's next resume to hub N, after a sleep --
+    timed, or sleep(0) -- as after a channel wake.  The sleep's timer fires on
+    the hub that held it, which wakes the fiber through the global run-queue
+    when it is pinned elsewhere.  The channel wake runs first, as the control
     that the pin itself took.
     """
     rc, out, err = run_scenario(r'''
@@ -1113,6 +1113,81 @@ stackweave.run(4, main)
     got = ast.literal_eval(landed[0][len("LANDED "):])
     assert all(want == hub for want, hub in got.values()), (
         "(pinned hub, hub it resumed on) after each sleep: %r" % (got,))
+
+
+# Eight CPU-bound fibers all start on hub 0 (a pinned spawn each undoes at
+# once) and pause after every 1 ms slice; the other three hubs have nothing
+# of their own.  Each fiber records the OS threads it ran on.
+_HUB0_CROWD = r'''
+_watchdog(60)
+def busy(sec):
+    end = time.perf_counter() + sec
+    while time.perf_counter() < end:
+        pass
+idents = set()
+def worker():
+    stackweave_c.current_g().pin(None)
+    for _ in range(100):
+        busy(0.001)
+        PAUSE()
+        idents.add(threading.get_ident())
+def main():
+    for _ in range(8):
+        stackweave_c.mn_fiber(worker, hub=0)
+steals = stackweave_c.stats()["mn_yield_steals"]
+stackweave.run(4, main)
+steals = stackweave_c.stats()["mn_yield_steals"] - steals
+print("threads", len(idents), "steals", steals, flush=True)
+assert steals > 0, "no hub took a g from another hub's yield queue"
+assert len(idents) > 1, "every fiber stayed on the hub it started on"
+print("PASS", flush=True)
+'''
+
+
+@pytest.mark.parametrize("pause", ["stackweave.yield_now()",
+                                   "stackweave.sleep(0.0005)"])
+def test_sched_an_idle_hub_takes_a_fiber_that_yielded_or_slept(pause):
+    """A fiber that yields, or whose sleep has ended, waits on its hub's
+    yield queue, which an idle hub steals from.  It used to wait on the
+    hub's ready ring, which no other hub reads: all eight fibers ran on
+    hub 0 to the end while the other three idled (1.7 s here, against
+    0.46 s with the yield queue).  stats()["mn_yield_steals"] counts the
+    takes."""
+    assert_pass(_HUB0_CROWD.replace("PAUSE()", pause))
+
+
+def test_identity_a_preempted_fiber_keeps_its_os_thread():
+    """A time slice ends wherever the fiber happens to be -- inside `with
+    rlock:` or an import, whose locks key on the OS thread -- so a preempted
+    fiber goes back on its hub's ready ring, which nothing steals from, and
+    resumes on the same hub.  A CPU-bound fiber that never yields runs for
+    0.4 s while a second fiber waits on its hub and three hubs idle; its OS
+    thread must not change.  The second fiber getting a turn while the hog
+    runs is the check that the hog was preempted."""
+    assert_pass(r'''
+_watchdog(60)
+state = {"hog_started": False, "hog_done": False, "turn_during_hog": False}
+hog_idents = set()
+def step(end):
+    return time.perf_counter() < end
+def hog():
+    stackweave_c.current_g().pin(None)
+    state["hog_started"] = True
+    end = time.perf_counter() + 0.4
+    while step(end):
+        hog_idents.add(threading.get_ident())
+    state["hog_done"] = True
+def other():
+    state["turn_during_hog"] = state["hog_started"] and not state["hog_done"]
+def main():
+    stackweave_c.mn_fiber(hog, hub=0)
+    stackweave_c.mn_fiber(other, hub=0)
+stackweave.run(4, main)
+print("hog threads", len(hog_idents), state, flush=True)
+assert state["turn_during_hog"], "the hog was never preempted"
+assert len(hog_idents) == 1, "a preempted fiber changed OS thread"
+print("PASS", flush=True)
+''')
 
 
 def test_identity_current_frames_lists_the_running_fiber_under_get_ident():
@@ -1457,8 +1532,6 @@ def test_sched_foreign_thread_wake_reaches_a_shallow_idle_hub_promptly():
     noise lands there (252 us after the fix on a 3-core runner).
     """
     rc, out, err = run_scenario(WAKE_LATENCY, timeout=90)
-    if "NOMIG" in out:
-        pytest.skip("no cross-hub migration observed on this machine")
     m = re.search(r"P50=([0-9.]+) P99=([0-9.]+)", out)
     if rc != 0 or m is None:
         print("--- scenario stdout ---\n%s\n--- scenario stderr ---\n%s" % (out, err))
@@ -1730,4 +1803,4 @@ except RuntimeError as e:
 
 
 if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

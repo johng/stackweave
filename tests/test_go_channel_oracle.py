@@ -22,8 +22,8 @@ import tempfile
 
 import pytest
 
-PY = sys.executable
-ENV = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
+from adv_util import run_python
+
 GO = shutil.which("go")
 
 pytestmark = pytest.mark.skipif(GO is None, reason="Go toolchain not installed")
@@ -188,8 +188,7 @@ def go_outcome(src, tmp):
 
 def runloom_outcome(body):
     script = "import stackweave_c as rc, stackweave\n" + body
-    p = subprocess.run([PY, "-c", script], env=ENV, capture_output=True,
-                       text=True, timeout=45)
+    p = run_python(script, timeout=45)
     return extract(p.stdout), p
 
 

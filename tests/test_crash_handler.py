@@ -6,9 +6,7 @@ process and asserts on its exit signal and captured stderr.  The classification
 sigaltstack (so the handler survives the overflow it is reporting) are the
 behaviours under test.
 """
-import os
 import signal
-import subprocess
 import sys
 import textwrap
 
@@ -16,6 +14,8 @@ import pytest
 
 import stackweave            # noqa: F401  (import side effects: registers fork handler)
 import stackweave_c
+
+from adv_util import run_python
 
 BACKEND = stackweave_c.backend()
 # The address->fiber guard-page mapping exists on both stack backends.
@@ -36,14 +36,10 @@ FAULT_RCS = {-signal.SIGSEGV} | ({-signal.SIGBUS} if hasattr(signal, "SIGBUS") e
 def run_child(body, timeout=60):
     """Run `body` as a fresh child Python process; return (returncode, output).
 
-    The child inherits this run's interpreter + PYTHONPATH (so it imports the
-    same source tree).
+    The child runs this interpreter on the in-tree source (run_python).
     """
     src = "import stackweave, stackweave_c, ctypes, sys\n" + textwrap.dedent(body)
-    p = subprocess.run(
-        [sys.executable, "-c", src],
-        capture_output=True, text=True, timeout=timeout,
-    )
+    p = run_python(src, timeout=timeout)
     return p.returncode, p.stdout + p.stderr
 
 
@@ -225,8 +221,6 @@ def test_start_watchdog_rejects_nonpositive_secs():
             stackweave.inspect.start_watchdog(bad)
 
 
-@pytest.mark.skipif(not (hasattr(sys, "_is_gil_enabled") and not sys._is_gil_enabled()),
-                    reason="the wedge is an M:N run, which needs the GIL off")
 def test_watchdog_reports_a_wedge(tmp_path):
     report = tmp_path / "hang.txt"
     rc, out = run_child("""
@@ -253,3 +247,7 @@ def test_watchdog_reports_a_wedge(tmp_path):
     text = report.read_text()
     assert "stackweave HANG (watchdog)" in text, text    # reached the crash file
     assert "fiber dump" in text, text                    # with the fiber dump
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

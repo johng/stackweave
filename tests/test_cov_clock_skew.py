@@ -17,13 +17,14 @@ import tempfile
 import textwrap
 import unittest
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+import pytest
+
+from adv_util import REPO, run_python
+
 SHIM_SRC = os.path.join(REPO, "tools", "soak", "clock_skew_shim.c")
-PY = sys.executable
 
 WORKLOAD = textwrap.dedent("""\
     import os, sys
-    sys.path.insert(0, {src!r})
     import stackweave, stackweave_c
     N = 400
     fired = bytearray(N)
@@ -55,13 +56,9 @@ class TestClockSkew(unittest.TestCase):
     def _run(self, ff_ns, jit_ns):
         if self.shim is None:
             self.skipTest("could not build clock_skew_shim (cc/-ldl?)")
-        env = dict(os.environ, PYTHON_GIL="0", PYTHON_TLBC="0",
-                   PYTHONPATH=os.path.join(REPO, "src"),
-                   LD_PRELOAD=self.shim,
+        env = dict(PYTHON_TLBC="0", LD_PRELOAD=self.shim,
                    CLOCK_SKEW_FF=str(ff_ns), CLOCK_SKEW_JIT=str(jit_ns))
-        prog = WORKLOAD.format(src=os.path.join(REPO, "src"))
-        r = subprocess.run([PY, "-c", prog], capture_output=True, text=True,
-                           timeout=90, env=env)
+        r = run_python(WORKLOAD, timeout=90, env=env)
         self.assertIn("FIRED", r.stdout,
                       "workload produced no result under skew (hang?): rc={0} "
                       "err={1!r}".format(r.returncode, r.stderr[-300:]))
@@ -90,4 +87,4 @@ class TestClockSkew(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

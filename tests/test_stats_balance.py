@@ -19,17 +19,15 @@ Gauge semantics (see stats.py / the C accessors):
   * ODOMETERS (mn_completed_total, stale_arm_heals) only rise -- excluded.
 """
 import gc
-import os
 import sys
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import pytest
 
 import stackweave
 import stackweave.monkey
-stackweave.monkey.patch()
 import stackweave_c
+
+stackweave.monkey.patch()
 
 
 # Cumulative odometers + context values that legitimately move; excluded from
@@ -180,3 +178,7 @@ def test_stats_has_r0_gauges():
                 "py_aio_tasks_live", "py_dns_cache_entries", "py_sock_timeouts"):
         assert key in s, "missing R0 gauge %r" % key
         assert isinstance(s[key], int), "%r not int: %r" % (key, s[key])
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

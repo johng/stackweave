@@ -7,6 +7,8 @@ cooperative path.  CPython's core ProcessTestCase exercises Popen lifecycle,
 ``wait`` / ``communicate``, pipe stdin/stdout/stderr, timeouts and the
 write-pipe backpressure path -- exactly the new cooperative subprocess surface.
 """
+import sys
+
 import pytest
 
 from _monkey_stdlib import HAVE_CPYTHON_TESTS, hosted, patch_module, unpatch_module
@@ -37,3 +39,7 @@ if HAVE_CPYTHON_TESTS:
                 "warning IS emitted (correct); assertWarns can't capture it across "
                 "the monkey-open detached-fiber window under cooperative scheduling",
         })
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

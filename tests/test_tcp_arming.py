@@ -15,6 +15,7 @@ a clean peer close, and ECONNREFUSED to a dead port.
 import errno
 import os
 import socket
+import sys
 
 import pytest
 
@@ -147,3 +148,7 @@ def test_recv_into_round_trip():
 
     _drive(server, client)
     assert out[0] == (6, b"abcdef"), out[0]
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

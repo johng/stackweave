@@ -6,7 +6,7 @@ This file goes DEEPER than tests/test_adv_netpoll.py + tests/test_cov_netpoll.py
 cancel_fd/cancel_wait_fd, fd-reuse after-unregister, the DBG tripwire, the
 register MOD-widen, the EPOLLHUP/ERR fold, a 300/400 wake-storm, a 40-deadline
 heap, and the io_uring-eventfd drain).  Here the focus is the conditions that
-actually break a lock-free netpoll under free-threaded 3.13t:
+actually break a lock-free netpoll with the GIL off:
 
   - the process-global arm-cache + fd-number-reuse poison, exercised through BOTH
     a raw close-without-unregister AND a GC'd-socket close, with the
@@ -44,7 +44,6 @@ encoded as a dedicated subprocess test, not leaked into the rest of the file).
 import os
 import socket
 import struct
-import subprocess
 import sys
 import time
 
@@ -52,13 +51,11 @@ import pytest
 
 import stackweave
 import stackweave_c as rc
-from adv_util import (hang_guard, assert_faster_than, raw_thread,
-                      needs_free_threading)
+
+from adv_util import hang_guard, assert_faster_than, raw_thread, run_python
 
 READ, WRITE = 1, 2
 CANCELLED = rc.WAIT_FD_CANCELLED
-FT = needs_free_threading()
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 pytestmark = pytest.mark.skipif(rc.netpoll_backend() != "epoll",
                                 reason="epoll-backend (Linux default) coverage")
@@ -100,12 +97,9 @@ def _run_single(fn):
 
 
 def _subproc(script, env_extra=None, timeout=40):
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src",
-               STACKWEAVE_GOROUTINE_PANIC="silent")
-    if env_extra:
-        env.update(env_extra)
-    return subprocess.run([sys.executable, "-c", script], cwd=REPO, env=env,
-                          capture_output=True, text=True, timeout=timeout)
+    return run_python(script, timeout=timeout,
+                      env=dict(STACKWEAVE_GOROUTINE_PANIC="silent",
+                               **(env_extra or {})))
 
 
 def _assert_no_signal_crash(p, label):
@@ -122,7 +116,7 @@ def _assert_no_signal_crash(p, label):
 #    zero-fill hang is CONTAINED as a signal/timeout, not a wedged suite.
 # ==========================================================================
 _FD_VALIDATION_SCRIPT = r'''
-import sys, os; sys.path.insert(0, "src")
+import sys
 import stackweave_c as rc
 RLIMIT = __import__("resource").getrlimit(__import__("resource").RLIMIT_NOFILE)
 hard = RLIMIT[1]
@@ -353,7 +347,6 @@ def test_wake_storm_set_equality_single_thread():
         assert g == struct.pack(">I", i), "reader %d cross-wired: saw %r" % (i, g)
 
 
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_wake_storm_set_equality_across_mn_hubs():
     N = 450
 
@@ -431,7 +424,7 @@ def test_deadline_heap_fires_in_order():
 #    DBG tripwire variant asserts the self-heal.
 # ==========================================================================
 _RAW_POISON_SCRIPT = r'''
-import sys, os; sys.path.insert(0, "src")
+import sys, os
 import stackweave_c as rc
 READ = 1
 out = {}
@@ -502,7 +495,7 @@ def test_stale_arm_probe_heals_under_perhub_epoll_subprocess():
 
 
 _MN_POISON_SCRIPT = r'''
-import sys, os; sys.path.insert(0, "src")
+import sys, os
 import stackweave_c as rc
 READ = 1
 out = {}
@@ -570,7 +563,7 @@ def test_dbg_netpoll_tripwire_heals_gc_poison_subprocess():
     # sees ENOENT, warns, and re-ADDs.  Drive a GC-closed socket (bypasses the
     # monkey close hook) so the arm goes stale, then prove the wait HEALS.
     script = r'''
-import sys, socket, gc; sys.path.insert(0, "src")
+import sys, socket, gc
 import stackweave.monkey as monkey
 monkey.patch()
 import stackweave_c as rc
@@ -623,7 +616,7 @@ def test_dbg_tripwire_dead_fd_at_register_raises_not_hangs_subprocess():
     # reuse it with a REGULAR FILE (validate: MOD->ENOENT, heal-ADD->EPERM ->
     # dead), park untimed under STACKWEAVE_DBG_NETPOLL=1.
     script = r'''
-import sys, os; sys.path.insert(0, "src")
+import sys, os
 import stackweave_c as rc
 READ = 1
 out = {}
@@ -666,7 +659,7 @@ def test_fault_fd_read_eagain_parks_and_recovers():
     # makes it ready -> recover and read the data.  Exercises the wait_fd park
     # path under fault injection rather than a trivially-ready read.
     script = r'''
-import sys, os; sys.path.insert(0, "src")
+import sys, os
 import stackweave_c as rc
 out = {}
 def main():
@@ -696,7 +689,7 @@ def test_fault_fd_write_eagain_parks_and_recovers():
     # completes.  Exercises the wait_fd(WRITE) park path under fault injection
     # (a trivially-ready write would skip the park).  No crash, all bytes written.
     script = r'''
-import sys, os; sys.path.insert(0, "src")
+import sys, os
 import stackweave_c as rc
 out = {}
 def main():
@@ -723,7 +716,7 @@ sys.stdout.write("OK %d\n" % out.get("n", -1))
 def test_fault_fd_read_hard_errno_raises_clean():
     # A hard errno (EIO) is not EAGAIN/EINTR -> must surface as OSError, no crash.
     script = r'''
-import sys, os; sys.path.insert(0, "src")
+import sys, os
 import stackweave_c as rc
 out = {}
 def main():
@@ -755,7 +748,7 @@ def test_fault_tcp_sites_no_crash(site, errno_code):
     # The result is allowed to be a clean OSError OR a recovered round-trip; the
     # ONLY hard requirement is no segfault/abort.
     script = r'''
-import sys, os, socket; sys.path.insert(0, "src")
+import sys, os, socket
 import stackweave_c as rc
 out = {"err": None, "echo": None}
 def main():
@@ -800,7 +793,7 @@ def test_signal_interrupts_parked_wait_fd():
     # through the parked fiber's own stack (CLAUDE.md "signals deliver INTO the
     # parked fiber").  Subprocess: setitimer is process-global.
     script = r'''
-import sys, os, signal; sys.path.insert(0, "src")
+import sys, os, signal
 import stackweave_c as rc
 out = {}
 class Boom(Exception): pass
@@ -831,7 +824,7 @@ def test_signal_interrupts_parked_tcp_recv():
     # Same, through tcp_recv's wait_fd: a SIGALRM during a never-arriving recv
     # raises out of the call, not swallowed, not carried out of run().
     script = r'''
-import sys, os, socket, signal; sys.path.insert(0, "src")
+import sys, socket, signal
 import stackweave_c as rc
 out = {}
 class Boom(Exception): pass
@@ -968,8 +961,8 @@ def test_iouring_concurrent_file_io_drains_eventfd():
     assert sum(ok) == N, "%d/%d file round-trips ok (eventfd drain lost a CQE?)" % (sum(ok), N)
 
 
-@pytest.mark.skipif(not (FT and rc.iouring_available()),
-                    reason="io_uring loop mode needs M:N + io_uring")
+@pytest.mark.skipif(not rc.iouring_available(),
+                    reason="io_uring not available")
 def test_iouring_loop_mode_file_io_subprocess():
     # STACKWEAVE_IOURING_LOOP=1: file_read parks on the global ring whose eventfd is
     # EPOLLEXCLUSIVE in the shared epoll (the documented hang hazard -- the loop
@@ -981,7 +974,7 @@ def test_iouring_loop_mode_file_io_subprocess():
     # though every file round-trip succeeded).  One slot per fiber, single
     # writer each, summed at the end (the race-free counter rule, CLAUDE.md).
     script = r'''
-import sys, os, tempfile; sys.path.insert(0, "src")
+import sys, os, tempfile
 import stackweave
 import stackweave_c as rc
 N = 12
@@ -1093,14 +1086,12 @@ def test_tcpconn_large_framed_transfer():
     assert res.get("recv_ok") is True, "4MB transfer corrupted"
 
 
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_tcpconn_many_concurrent_connections_mn():
     # serve() with a PYTHON echo handler + many concurrent TCPConn clients under
     # M:N: each client sends a distinct frame and must read it back verbatim
     # (set equality of the echoed payloads -- a cross-wire / dropped wake shows
-    # as a missing or wrong echo).  The Python-handler path is the robust one;
-    # the all-C echo path (handler=None) hangs intermittently and is encoded as
-    # a finding below (test_serve_all_c_echo_concurrent_hangs_subprocess).
+    # as a missing or wrong echo).  The all-C echo path (handler=None) under the
+    # same load is test_serve_all_c_echo_concurrent_completes_subprocess.
     N = 80
     got = [None] * N
 
@@ -1140,20 +1131,13 @@ def test_tcpconn_many_concurrent_connections_mn():
         assert g == struct.pack(">Q", i), "client %d got wrong echo %r" % (i, g)
 
 
-# FINDING: serve(handler=None) -- the tstate-free all-C echo path (mn_fiber_c C
-# accept loop + per-conn runloom_io_c_echo fibers, with the io_uring multishot
-# recv) -- DEADLOCKS/lost-wakes intermittently under concurrent M:N connections,
-# while the Python-handler serve path with the IDENTICAL client load never does.
-# Reproduces standalone roughly 4-of-6 runs at N=20 acceptors=2 hubs=4 (and at
-# N=80 acceptors=3): wg.wait() never reaches N because some connections' echo
-# never returns, so stackweave.run()/mn_run() hangs forever (the main thread sits in
-# mn_run; every hub thread is parked with no Python frame).  Run in a SUBPROCESS
-# with a hard timeout so the hang is CONTAINED + OBSERVED as a non-zero
-# returncode, never a wedged suite.  The xfail asserts the CORRECT behavior (all
-# clients echoed within the timeout); it currently fails (the subprocess times
-# out / under-counts), recording the finding without touching the C source.
+# serve(handler=None) -- the tstate-free all-C echo path (mn_fiber_c C accept
+# loop + per-conn runloom_io_c_echo fibers) -- under N concurrent M:N clients:
+# every client must read its frame back, so wg.wait() reaches N and run()
+# returns.  Run in a SUBPROCESS so a hang fails the test with the child's
+# output instead of wedging the suite.
 _ALL_C_ECHO_SCRIPT = r'''
-import sys, struct; sys.path.insert(0, "src")
+import sys, struct
 import stackweave
 import stackweave_c as rc
 from stackweave.sync import WaitGroup
@@ -1180,7 +1164,6 @@ sys.stdout.write("ALL_C_ECHO_OK %d\n" % sum(1 for g in got if g is not None))
 '''
 
 
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 # REGRESSION (was finding #6): serve(handler=None) all-C echo no longer deadlocks
 # under concurrent M:N connections.  Root cause was NOT io_uring multishot (that
 # path is off by default) but the fd-reuse stale-arm hazard in the readiness
@@ -1190,22 +1173,17 @@ sys.stdout.write("ALL_C_ECHO_OK %d\n" % sum(1 for g in got if g is not None))
 # (not "intermittent") above ~32 connections, and vanished when clients did not
 # close (no fd reuse).  runloom_io_c_close now release_if_idle's the arm first.
 def test_serve_all_c_echo_concurrent_completes_subprocess():
-    # Try a few times: the hang is intermittent, so a single lucky pass would
-    # mask it.  If ANY attempt hangs (times out) or under-counts, the finding is
-    # confirmed and we fail (-> xfail).  All attempts must complete fully for the
-    # path to be considered fixed.
+    # Four attempts, so one lucky fd-number pattern cannot mask a lost wake.
+    # A hang fails the test at once with the child's output; every attempt
+    # must echo all 40.
     failures = []
     for attempt in range(4):
-        try:
-            p = _subproc(_ALL_C_ECHO_SCRIPT, timeout=15)
-        except subprocess.TimeoutExpired:
-            failures.append(("hang", attempt))
-            continue
+        p = _subproc(_ALL_C_ECHO_SCRIPT, timeout=15)
         _assert_no_signal_crash(p, "all-C echo concurrent")
         if "ALL_C_ECHO_OK 40" not in p.stdout:
             failures.append(("incomplete", attempt, p.stdout.strip()))
     assert not failures, (
-        "serve(handler=None) all-C echo hung/under-counted on %d/4 attempts: %r"
+        "serve(handler=None) all-C echo under-counted on %d/4 attempts: %r"
         % (len(failures), failures))
 
 
@@ -1246,7 +1224,6 @@ def test_serve_rejects_non_callable_handler():
         "non-callable handler not rejected: %r" % res.get("res"))
 
 
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_serve_python_handler_echo_mn():
     box = {}
 
@@ -1462,7 +1439,7 @@ def test_netpoll_unregister_from_foreign_thread_safe():
 #     mode's detector paths must run a netpoll-heavy workload without crash.
 # ==========================================================================
 _NETPOLL_WORKLOAD = r'''
-import sys, os, socket; sys.path.insert(0, "src")
+import sys, socket
 import stackweave
 import stackweave_c as rc
 from stackweave.sync import WaitGroup
@@ -1500,10 +1477,8 @@ stackweave.run(4, main)
 '''
 
 
-@pytest.mark.skipif(not FT, reason="M:N env modes need GIL-disabled build")
 @pytest.mark.parametrize("mode_env", [
     {"STACKWEAVE_SYSMON": "1", "STACKWEAVE_SYSMON_QUIET": "1", "STACKWEAVE_SYSMON_MS": "8"},
-    {"STACKWEAVE_HANDOFF": "1", "STACKWEAVE_HANDOFF_POOL": "2"},
     {"STACKWEAVE_STACK_PARK_SWEEP_MS": "1"},
     {"STACKWEAVE_DEADLOCK_MS": "50"},
     {"STACKWEAVE_READY_STARVE_BOUND": "2"},
@@ -1516,7 +1491,6 @@ def test_netpoll_workload_under_env_mode_subprocess(mode_env):
         % (sorted(mode_env), p.stdout, p.stderr[-1000:]))
 
 
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_netpoll_workload_default_mode_subprocess():
     # The same workload with no mode env: the plain M:N scheduler (cross-hub
     # migration on) must deliver every netpoll wake without crash.
@@ -2047,7 +2021,7 @@ def test_wait_fd_at_rlimit_minus_one_high_fd_no_crash_subprocess():
     # closed fd" case at the top of the range.  Subprocess so any abort/hang is
     # contained.
     script = r'''
-import sys, os; sys.path.insert(0, "src")
+import sys
 import stackweave_c as rc
 import resource
 soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
@@ -2114,4 +2088,4 @@ def test_tcpconn_accept_loop_recv_send_roundtrip_single_thread():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

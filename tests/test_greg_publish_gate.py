@@ -27,14 +27,14 @@ import os
 import sys
 import unittest
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(REPO, "src"))
-os.environ["PYTHON_GIL"] = "0"
+import pytest
+
+# Set before stackweave_c is imported.
 os.environ.setdefault("STACKWEAVE_DELAY", "0x5EED")      # arm seeded delay injection
 os.environ.setdefault("STACKWEAVE_DELAY_MAX_NS", "40000")  # up to 40us window widening
 import stackweave_c            # noqa: E402
 
-from adv_util import raw_thread, needs_free_threading   # noqa: E402
+from adv_util import raw_thread  # noqa: E402
 
 # Only states >= RUNNABLE are published; the gate must never leak these three.
 PREPUBLISH = {"init", "spawning", "freed"}
@@ -42,8 +42,6 @@ PUBLISHED = {"runnable", "submitted", "running", "io-wait", "chan-wait",
              "sleep", "park", "waking", "done"}
 
 
-@unittest.skipUnless(needs_free_threading(),
-                     "registry publish race is only meaningful GIL-disabled")
 class TestGregPublishGate(unittest.TestCase):
     def test_reader_never_sees_prepublish_fiber(self):
         """While a driver fiber spawns thousands of children (each traversing the
@@ -93,4 +91,4 @@ class TestGregPublishGate(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

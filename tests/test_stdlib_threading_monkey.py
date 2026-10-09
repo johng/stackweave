@@ -11,10 +11,13 @@ itself documents as "best-effort coordination with real OS threads."
 patch() is applied at import time, BEFORE the cooperative types are captured
 into the hosted classes' ``locktype``/``eventtype``/... attributes.
 """
+import sys
+
 import pytest
 
-from _monkey_stdlib import (HAVE_CPYTHON_TESTS, REALTHREAD, REALTHREAD_REASON, hosted)
 import stackweave.monkey
+
+from _monkey_stdlib import (HAVE_CPYTHON_TESTS, REALTHREAD, REALTHREAD_REASON, hosted)
 
 pytestmark = [
     pytest.mark.skipif(
@@ -42,3 +45,7 @@ if HAVE_CPYTHON_TESTS:
                                attrs={"semtype": staticmethod(threading.Semaphore)})
     TestRunloomBoundedSemaphore = hosted(_L.BoundedSemaphoreTests, "TestRunloomBoundedSemaphore",
                                       attrs={"semtype": staticmethod(threading.BoundedSemaphore)})
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

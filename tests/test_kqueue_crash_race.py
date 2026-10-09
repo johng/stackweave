@@ -1,4 +1,4 @@
-"""kqueue backend -- CRASH / RACE stress under free-threaded M:N.
+"""kqueue backend -- CRASH / RACE stress under M:N.
 
 These tests deliberately drive the dangerous concurrent paths of the macOS
 (BSD) kqueue netpoll backend and assert the runtime SURVIVES them: no crash,
@@ -44,14 +44,12 @@ import time
 
 import pytest
 
+import stackweave        # high-level M:N driver (go / run / sleep)
+import stackweave_c      # raw scheduler + netpoll primitives
+
 pytestmark = pytest.mark.skipif(
     not sys.platform.startswith(("darwin", "freebsd", "openbsd", "netbsd")),
     reason="kqueue backend only")
-
-sys.path.insert(0, "src")
-
-import stackweave        # noqa: E402  high-level M:N driver (go / run / sleep)
-import stackweave_c      # noqa: E402  raw scheduler + netpoll primitives
 
 READ = 1
 WRITE = 2
@@ -664,5 +662,4 @@ def test_dup_fd_both_directions_peer_close(hubs):
 
 
 if __name__ == "__main__":
-    print("netpoll backend under test:", stackweave_c.netpoll_backend())
-    raise SystemExit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

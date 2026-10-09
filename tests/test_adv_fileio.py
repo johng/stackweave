@@ -5,11 +5,10 @@
   * fd_read / fd_write -- POSIX read/write with cooperative netpoll parking on a
     NON-BLOCKING fd.
 
-Round-A finding (encoded xfail): fd_read/fd_write rely on EAGAIN to park, but do
-NOT set O_NONBLOCK themselves.  On a BLOCKING fd, read() blocks the whole
-scheduler OS thread instead of cooperatively parking -- a silent wedge, not an
-error.  monkey's os.read patch sets non-blocking first; a raw fd_read caller who
-forgets gets a hung scheduler.
+fd_read/fd_write park on EAGAIN, so they set O_NONBLOCK themselves: on a
+BLOCKING fd they still park cooperatively instead of blocking the scheduler's OS
+thread (test_fd_read_on_blocking_fd_cooperates; it used to wedge).  A cancel
+of a parked fd_read/fd_write surfaces as OSError(ECANCELED), never a re-park.
 """
 import os
 import sys
@@ -18,6 +17,7 @@ import tempfile
 import pytest
 
 import stackweave_c as rc
+
 from adv_util import hang_guard
 
 
@@ -120,7 +120,7 @@ def test_fd_read_write_nonblocking_pipe_cooperative():
 
 
 # --------------------------------------------------------------------------
-# Regression (was a finding): fd_read/fd_write on a BLOCKING fd used to wedge the
+# Regression: fd_read/fd_write on a BLOCKING fd used to wedge the
 # whole scheduler -- they park on EAGAIN but never set O_NONBLOCK, so read()/
 # write() blocked the OS thread.  They now set the fd non-blocking themselves.
 # --------------------------------------------------------------------------
@@ -221,4 +221,4 @@ def test_fd_write_cancel_unblocks_not_hang():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

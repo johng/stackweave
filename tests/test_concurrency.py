@@ -14,7 +14,10 @@ could otherwise silently break in a refactor:
 Designed to fail loudly if any future change breaks the invariant.
 """
 import asyncio
+import sys
 import unittest
+
+import pytest
 
 import stackweave_c
 import stackweave.aio as paio
@@ -392,4 +395,4 @@ class TestFastPath(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

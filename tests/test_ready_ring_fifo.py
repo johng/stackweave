@@ -13,14 +13,12 @@ pass.  These assert the ordering directly.
 
 Runs on the single-thread scheduler (stackweave_c.run); no special env needed.
 """
-import os
 import sys
 import unittest
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(REPO, "src"))
-os.environ["PYTHON_GIL"] = "0"
-import stackweave_c            # noqa: E402
+import pytest
+
+import stackweave_c
 
 
 class TestReadyRingFifo(unittest.TestCase):
@@ -66,4 +64,4 @@ class TestReadyRingFifo(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

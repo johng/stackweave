@@ -81,7 +81,7 @@ jobs:
           WORK="${RL_CI_WORK}"
           PYBIN="$(cat "$WORK/pybin-${{ inputs.version }}-$(rl_platform).txt")"
           [ -x "$PYBIN" ] || { echo "::error::no interpreter for ${{ inputs.version }}"; exit 1; }
-          export PYTHON_GIL=0 STACKWEAVE_GIL=0
+          export PYTHON_GIL=0
           # 0 means "off"; the C side already ignores <2, but do not export a
           # value that reads as armed when the user asked for off.
           [ "${STACKWEAVE_FAULT_SPURIOUS_PARK}" = "0" ] && unset STACKWEAVE_FAULT_SPURIOUS_PARK

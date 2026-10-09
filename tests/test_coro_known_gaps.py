@@ -24,26 +24,17 @@ failure.  Each case runs in a subprocess, since most of these crash.
   * Parking the run(1) fiber from inside a Coro body (a sleep, a channel
     recv) crashes; it must either work or raise.
 """
-import os
-import pathlib
 import signal
-import subprocess
 import sys
 
 import pytest
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
-
-
-def KNOWN_GAP(reason):
-    return pytest.mark.xfail(strict=True, raises=AssertionError,
-                             reason="KNOWN BROKEN: " + reason)
+from adv_util import run_python
+from known_gaps import KNOWN_GAP
 
 
 def _run(code, timeout=60):
-    p = subprocess.run([sys.executable, "-c", code], cwd=ROOT,
-                       env=dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src"),
-                       capture_output=True, text=True, timeout=timeout)
+    p = run_python(code, timeout=timeout)
     return p.returncode, p.stdout, p.stderr
 
 
@@ -148,7 +139,8 @@ def test_a_coro_resumed_from_one_live_frame_walks_its_chain(mode):
 
 @KNOWN_GAP("a Coro's first frame keeps `previous` at the frame that first "
            "resumed it; once that frame returns, walking the chain from "
-           "another resumer follows a dangling pointer")
+           "another resumer follows a dangling pointer",
+           raises=AssertionError)
 @pytest.mark.parametrize("mode", FIRST_FRAME_MODES)
 def test_a_coro_resumed_after_its_first_resumer_returned_walks_its_chain(mode):
     rc, out, err = _run(FIRST_FRAME % (mode, False))
@@ -196,7 +188,8 @@ print("RESULT", c.result, flush=True)
 
 @KNOWN_GAP("a parked Coro's frames are on no frame chain and the frames anchor "
            "does not visit them, so a gc.collect() frees what only their "
-           "deferred stackrefs keep alive")
+           "deferred stackrefs keep alive",
+           raises=AssertionError)
 def test_a_parked_coros_frames_keep_their_code_alive_across_a_collection():
     rc, out, err = _run(PARKED_GC)
     if "PARKED" not in out or not _lines(out, "ALIVE"):
@@ -246,7 +239,8 @@ print("LIVE", before, live(), flush=True)
 
 
 @KNOWN_GAP("a plain OS thread that ran Coros exits still holding its cached "
-           "Coro stacks (2 per thread, each a 512 KB mapping)")
+           "Coro stacks (2 per thread, each a 512 KB mapping)",
+           raises=AssertionError)
 def test_plain_threads_that_ran_coros_release_their_stacks_at_exit():
     n = 200
     rc, out, err = _run(THREADS % n, timeout=120)
@@ -298,7 +292,8 @@ print("DONE", *out, flush=True)
 
 
 @KNOWN_GAP("parking the run(1) fiber from inside a Coro body swaps the fiber "
-           "out from under the Coro's stack and crashes")
+           "out from under the Coro's stack and crashes",
+           raises=AssertionError)
 @pytest.mark.parametrize("mode", ["sleep", "chan_recv"])
 def test_parking_the_run1_fiber_inside_a_coro_body_works_or_raises(mode):
     rc, out, err = _run(RUN1_PARK % mode, timeout=30)
@@ -308,3 +303,7 @@ def test_parking_the_run1_fiber_inside_a_coro_body_works_or_raises(mode):
     # Either outcome is acceptable: the park works, or it raises in the body.
     assert rc == 0 and _lines(out, "DONE"), (
         "parking inside a Coro body crashed", rc, out, err[-500:])
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

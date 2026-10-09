@@ -25,6 +25,8 @@ import sys
 import tempfile
 import unittest
 
+import pytest
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "tools", "soak"))
 import oracle  # noqa: E402
@@ -114,4 +116,4 @@ class TestRatchetForgiveness(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

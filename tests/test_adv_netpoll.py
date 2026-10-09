@@ -13,8 +13,9 @@ whole process: any later fiber that is handed the same fd number and parks on
 it skips the EPOLL_CTL_ADD (register-once) and hangs.  The monkey/aio close
 hooks call unregister for you; direct `wait_fd` callers must too.  Every fd
 here is closed through `_drop()` (unregister-then-close) for exactly that
-reason -- without it these tests are order-dependent and flaky, which is
-itself the finding (see test_fd_reuse_without_unregister_should_still_wake).
+reason, so these tests do not depend on their order.  The stale-arm probe heals
+a poisoned fd number; test_fd_reuse_without_unregister_should_still_wake and the
+two tests after it check that.
 """
 import os
 import socket
@@ -25,11 +26,12 @@ import pytest
 
 import stackweave
 import stackweave_c as rc
-from adv_util import hang_guard, assert_faster_than, needs_free_threading, pollable_pipe, ensure_fd_budget
+
+from adv_util import (hang_guard, assert_faster_than, pollable_pipe,
+                      ensure_fd_budget, run_python)
 
 READ, WRITE = 1, 2
 CANCELLED = rc.WAIT_FD_CANCELLED
-FT = needs_free_threading()
 
 
 def _drop(fd):
@@ -212,7 +214,7 @@ def test_release_if_idle_enables_clean_reuse():
 
 
 def test_fd_reuse_without_unregister_should_still_wake():
-    """Formerly an xfail SHARP EDGE, now a hard regression guard.
+    """An fd number closed WITHOUT unregister still wakes its next parker.
 
     The per-fd netpoll arm cache is PROCESS-GLOBAL and only
     netpoll_unregister clears it, so an fd closed WITHOUT unregister (a
@@ -282,9 +284,6 @@ def test_fd_reuse_without_unregister_untimed_park_heals():
         "untimed park on poisoned fd not healed: parked %.3fs (data ready)" % el)
 
 
-# TODO(stackweave): fd-closed-after-skip untimed park is not always error-woken --
-# flaky under load (recovers on isolated retry, but not reliably).  Skipped to
-# keep the required CI gate green; make the wake deterministic and remove this skip.
 def test_untimed_park_on_fd_closed_after_skip_gets_error_woken():
     """DEAD-arm branch of the probe: a predicted-skip park whose fd is then
     closed (raw os.close, no unregister) can never receive a kernel event
@@ -377,7 +376,6 @@ def test_wake_storm_single_thread():
     assert total == N, "edge-drop: only %d/%d readers woke" % (total, N)
 
 
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_wake_storm_across_mn_hubs():
     N = 400
     ensure_fd_budget(2 * N + 128, "wake storm M:N")
@@ -427,7 +425,7 @@ def test_two_waiters_same_fd_distinct_directions():
 # flag is read once at process start)
 # --------------------------------------------------------------------------
 _TRIPWIRE_SCRIPT = r'''
-import sys, socket, gc; sys.path.insert(0, "src")
+import sys, socket, gc
 import stackweave.monkey as monkey
 monkey.patch()
 import stackweave_c as rc
@@ -458,12 +456,9 @@ sys.stdout.write("SKIP\n" if out.get("skip") else ("HEALED\n" if out.get("rv") e
 
 @pytest.mark.skipif(rc.netpoll_backend() != "epoll", reason="tripwire is epoll-only")
 def test_dbg_netpoll_tripwire_detects_and_heals_stale_arm():
-    import subprocess
-    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    env = dict(os.environ, STACKWEAVE_DBG_NETPOLL="1", PYTHON_GIL="0", PYTHONPATH="src")
     for _ in range(5):     # retry until the fd number actually reuses
-        p = subprocess.run([sys.executable, "-c", _TRIPWIRE_SCRIPT],
-                           cwd=repo, env=env, capture_output=True, text=True, timeout=30)
+        p = run_python(_TRIPWIRE_SCRIPT, timeout=30,
+                       env={"STACKWEAVE_DBG_NETPOLL": "1"})
         if "SKIP" in p.stdout:
             continue
         assert "STALE ARM healed on fd" in p.stderr, (
@@ -476,4 +471,4 @@ def test_dbg_netpoll_tripwire_detects_and_heals_stale_arm():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

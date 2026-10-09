@@ -71,18 +71,14 @@ report's `exclusions[]` for the precise category of each):
     only on an allocator/registration failure at import, with no fault hook.
     OOM/DEFENSIVE (the module already imported successfully to run this test).
 """
-import os
 import signal
-import subprocess
 import sys
 
 import pytest
 
 import stackweave_c as rc
-from adv_util import hang_guard
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY = sys.executable
+from adv_util import hang_guard, run_python
 
 
 # ==========================================================================
@@ -230,7 +226,6 @@ def test_g_richcompare_notimplemented_and_false_arms():
 # ==========================================================================
 _SCRUB_CHILD = r"""
 import sys
-sys.path.insert(0, 'src')
 import stackweave_c as rc
 got = rc.get_stack_scrub()
 assert got is False, "get_stack_scrub() at import = %r, want False" % (got,)
@@ -244,18 +239,13 @@ sys.stdout.write("SCRUB_OK\n")
 
 
 def _run_child(src, env_extra, timeout=200):
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src", **env_extra)
-    return subprocess.run([PY, "-c", src], cwd=REPO, env=env,
-                          capture_output=True, text=True, timeout=timeout)
+    return run_python(src, timeout=timeout, env=env_extra)
 
 
 def test_stack_scrub_default_off_and_live_toggle():
     """A fresh import starts with the recycled-stack scrub OFF, and
     set_stack_scrub() flips it both ways."""
-    try:
-        p = _run_child(_SCRUB_CHILD, {})
-    except subprocess.TimeoutExpired:
-        pytest.skip("stack-scrub subprocess timed out (shared-box contention)")
+    p = _run_child(_SCRUB_CHILD, {})
     assert p.returncode == 0, "scrub-off child failed rc=%d\n%s" % (p.returncode, p.stderr[-1500:])
     assert "SCRUB_OK" in p.stdout, (p.stdout, p.stderr[-800:])
 
@@ -278,16 +268,12 @@ def test_import_leaves_sigquit_default():
     stackweave DID install one (the bug this guards).  Deterministic in any launch env."""
     src = (
         "import os, sys, signal\n"
-        "sys.path.insert(0, 'src')\n"
         "signal.signal(signal.SIGQUIT, signal.SIG_DFL)\n"  # baseline, pre-import (see docstring)
         "import stackweave_c as rc\n"
         "os.kill(os.getpid(), signal.SIGQUIT)\n"
         "sys.stdout.write('SURVIVED\\n')\n"   # must NOT print
     )
-    try:
-        p = _run_child(src, {})
-    except subprocess.TimeoutExpired:
-        pytest.skip("SIGQUIT negative-control subprocess timed out (contention)")
+    p = _run_child(src, {})
     # Killed by SIGQUIT -> negative return code -signal.SIGQUIT (subprocess
     # reports a signal death as the negated signal number).
     assert p.returncode == -signal.SIGQUIT, (
@@ -298,4 +284,4 @@ def test_import_leaves_sigquit_default():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

@@ -26,6 +26,7 @@ import sys
 import pytest
 
 import stackweave.aio as aio
+
 from adv_util import hang_guard
 
 
@@ -258,4 +259,4 @@ def test_write_buffer_limits_query_and_validation():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

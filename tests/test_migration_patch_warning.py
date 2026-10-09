@@ -10,26 +10,17 @@ from the interpreter's (a stale build from the other interpreter, or -D flags
 forced on a stock one).  A patched build on its own interpreter (what CI
 runs) says nothing.
 """
-import os
-import pathlib
-import subprocess
 import sys
 
 import pytest
 
-from adv_util import needs_free_threading
+from adv_util import run_python
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
 WARNING = "built against a CPython without the migration patches"
-
-pytestmark = pytest.mark.skipif(not needs_free_threading(),
-                                reason="M:N needs free-threaded CPython")
 
 
 def _stderr(code):
-    p = subprocess.run([sys.executable, "-c", code], cwd=ROOT,
-                       env=dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src"),
-                       capture_output=True, text=True, timeout=120)
+    p = run_python(code, timeout=120)
     assert p.returncode == 0, p.stderr[-2000:]
     return p.stderr
 
@@ -77,3 +68,7 @@ def test_the_interpreter_check_reads_pyconfig_and_configure_cppflags(monkeypatch
     from stackweave import runtime
     monkeypatch.setattr(sysconfig, "get_config_var", config.get)
     assert runtime._interpreter_migration_patched() is patched
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

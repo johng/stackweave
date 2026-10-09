@@ -8,9 +8,10 @@ clean error, never a SIGSEGV), that an await does not peg a hub, AND -- the fail
 mode that matters for a park/wake primitive -- a lost wakeup under repeated high
 fan-in across M:N hubs (a hang, caught by the timeout).
 """
-import time
 import resource
+import sys
 import threading
+import time
 
 import pytest
 
@@ -311,3 +312,7 @@ def test_future_await_does_not_peg_a_hub():
     got = utime() - a
 
     assert got - base < 0.15, (base, got)        # busy-loop would be ~+0.28
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

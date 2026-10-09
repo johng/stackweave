@@ -40,7 +40,8 @@ import time
 # Match run_tests.py / test_mn.py: test the in-tree .so, not whatever else
 # might be on the path.  Harmless if stackweave_c is already imported (Python
 # caches the module, so the fixture inspects the same runtime the tests use).
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_TESTS = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(_TESTS)
 _SRC = os.path.join(REPO, "src")
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
@@ -106,6 +107,9 @@ def pytest_configure(config):
         "markers",
         "runloom_allow_unraisable: test intentionally raises on a dealloc / "
         "finalizer / hub-thread path; skip the swallowed-error gate for it.")
+    config.addinivalue_line(
+        "markers",
+        "known_gap: an xfail from tests/known_gaps.py (added at collection).")
     if not _DISABLED:
         global _pg_saved_unraisablehook, _pg_saved_threadexcepthook
         _pg_saved_unraisablehook = sys.unraisablehook
@@ -115,143 +119,86 @@ def pytest_configure(config):
 
 
 # ---------------------------------------------------------------------------
-# Known gaps of migration mode (always on).
+# Migration is always on, so the suite only runs where migration is sound.
 #
-# A parked fiber's frames live on its OWN tstate rather than the hub's, and a
-# woken fiber arrives through the global run-queue rather than a hub-local ring
-# pop.  The tests below encode the old per-hub-tstate semantics for exactly
-# those things, so they fail by construction, not by regression.  Remove an
-# entry when the gap it names is closed; a new failure elsewhere is a
-# regression.  (The entries that needed preemption or the sysmon's ATTACHED
-# classification came off this list when fork #26 made both work under
-# migration by reading the running fiber's tstate.)
-_PER_G_KNOWN_GAPS = {
-    "test_cov100_hubinfo_waitfd.py::test_hubinfo_blocked_at_for_detached_wedge":
-        "hubinfo blocked_at walks the hub tstate; a per-g fiber's frames are on its own tstate",
-    "test_hub_introspect.py::HubIntrospectTest::test_wedge_and_blocked_at":
-        "hubinfo blocked_at walks the hub tstate; a per-g fiber's frames are on its own tstate",
-    "test_cov95_diag.py::test_ring_dump_covers_every_reachable_op_name_arm":
-        "G_POP is a hub-local ring-pop label; per-g woken gs arrive via the global run-queue",
-    "test_cov95_datastack.py::test_datastack_sweep_debug_decompose":
-        "the datastack dwell sweep accounts the hub tstate's chunks; per-g fibers use their own "
-        "(the chunks/resident assertions run on Linux only, so macOS passes this by skipping them)",
-    "test_stack_pool_balance.py::test_stack_pool_plateaus_under_fanout":
-        "per-g tstates add a datastack mapping per fiber slot: the pool plateaus ~40x higher "
-        "(bounded: flat over 320 rounds on Linux) and sometimes after the test's midpoint window",
-}
+# Every M:N run migrates fibers between hubs, and that is only sound on a
+# free-threaded interpreter with the GIL off, built with BOTH src/patches/
+# halves, running an extension built with them too (CLAUDE.md, "Build &
+# test").  Anywhere else the M:N tests crash under churn, or quietly test
+# something other than what ships, so the session stops before collecting
+# anything instead.  The interpreter check is the rule of
+# stackweave.runtime._interpreter_migration_patched, repeated here so that
+# this file does not import the stackweave package before the tests do.
+_MIGRATION_FEATURES = ("Py_TSTATE_ALLOC_HOME", "Py_TSTATE_EXEC_HOME")
 
 
-# Known gaps that do not fail on every run or platform, so an XPASS there is
-# not a closed gap: the stack pool sometimes plateaus inside the midpoint
-# window, and the datastack sweep's chunk/resident assertions run on Linux only.
-_PER_G_KNOWN_GAPS_NONSTRICT = {
-    "test_stack_pool_balance.py::test_stack_pool_plateaus_under_fanout",
-}
-if not sys.platform.startswith("linux"):
-    _PER_G_KNOWN_GAPS_NONSTRICT.add(
-        "test_cov95_datastack.py::test_datastack_sweep_debug_decompose")
+def _interpreter_migration_patched():
+    import sysconfig
+    cppflags = (sysconfig.get_config_var("CONFIGURE_CPPFLAGS") or "").split()
+    defined = {f[2:].split("=", 1)[0] for f in cppflags if f.startswith("-D")}
+    return all(sysconfig.get_config_var(f) or f in defined
+               for f in _MIGRATION_FEATURES)
 
 
-# Open INTERMITTENT failures under migration -- not semantic gaps, not yet
-# root-caused, listed apart so they are never mistaken for the set above.
-# Measured on Linux 3.14.4t: 0/20 without migration, 1/15 with it.
-_PER_G_OPEN_INTERMITTENT = {
-    "test_signal_recipient.py::test_selector_outranks_a_dense_unrelated_sleeper":
-        "rare lost signal delivery (who=nobody after 10 s) under per-g mode; open",
-}
+def _migration_problems(runtime_gil=True):
+    """What keeps migration from being sound here, as a list of reasons.
+    runtime_gil=False skips the check of THIS process's GIL, for a launcher
+    (tests/run_isolated.py) whose children set PYTHON_GIL=0 themselves."""
+    import sysconfig
+    problems = []
+    if not sysconfig.get_config_var("Py_GIL_DISABLED"):
+        problems.append("%s is not a free-threaded build" % sys.executable)
+    elif runtime_gil and sys._is_gil_enabled():
+        problems.append("the GIL is enabled (run with PYTHON_GIL=0, and "
+                        "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 if a plugin turned "
+                        "it back on)")
+    if not _interpreter_migration_patched():
+        problems.append("%s was built without both migration patches "
+                        "(src/patches/)" % sys.executable)
+    if stackweave_c is not None and not getattr(
+            stackweave_c, "migration_patched", 0):
+        problems.append("stackweave_c was built without -DPy_TSTATE_ALLOC_HOME "
+                        "-DPy_TSTATE_EXEC_HOME (rebuild it with this "
+                        "interpreter)")
+    return problems
 
 
-# Seeded M:N scheduler (STACKWEAVE_MN_SEED / STACKWEAVE_SIM_MN) -- disabled in
-# migration mode until it is re-implemented: woken fibers run from the global
-# run-queue, which the seeded baton does not order, so mn_init refuses a seeded
-# run (see TODO(migration) in src/runloom_c/mn_sched_hub_resume_preempt.c.inc).
-# Every test below drives that scheduler.  Remove this set when it comes back.
-_SEEDED_MN_TODO = (
-    "test_cov100_resume_preempt.py::test_baton_barrier_off_immediate_handoff",
-    "test_cov100_resume_preempt.py::test_grant_trace_only_at_fini_not_per_grant",
-    "test_cov100_resume_preempt.py::test_grant_trace_ring_dump",
-    "test_cov100_resume_preempt.py::test_pct_depth_one_no_change_points",
-    "test_cov100_resume_preempt.py::test_pct_steps_override",
-    "test_cov100_resume_preempt.py::test_pct_steps_override_deterministic",
-    "test_cov100_resume_preempt.py::test_seeded_uniform_baton_is_deterministic",
-    "test_cov100_resume_preempt.py::test_seeded_uniform_baton_no_pct",
-    "test_chess_greybox_aliaspair.py::TestOnRealWorkload::test_chess_chan_yields_cross_hub_alias_pairs",
-    "test_cov95_diag.py::test_mn_events_trace_env_emits_baton_protocol",
-    "test_mn_sim_bytes.py::TestCrossPlane::test_h1_sim_beside_live_armed_pool",
-    "test_mn_sim_bytes.py::TestMnSimBytes::test_byte_plane_digest_deterministic",
-    "test_mn_sim_bytes.py::TestMnSimBytes::test_delayed_delivery_clock_compression",
-    "test_mn_sim_bytes.py::TestMnSimBytes::test_finite_timeout_works_since_i4",
-    "test_mn_sim_bytes.py::TestMnSimBytes::test_p4_scenario_fixed",
-    "test_mn_sim_bytes.py::TestMnSimBytes::test_self_wake_corner_h1",
-    "test_mn_sim_bytes.py::TestMnSimBytes::test_stw_churn_under_gated_pump",
-    "test_mn_sim_bytes.py::TestMnSimBytes::test_unregistered_fd_raises",
-    "test_mn_sim_bytes.py::TestReviewRegressions::test_barrier_zero_fenced",
-    "test_mn_sim_bytes.py::TestReviewRegressions::test_late_parker_gets_stashed_wake",
-    "test_mn_sim_bytes.py::TestTimedParksI4::test_park_timeout_on_logical_plane",
-    "test_mn_sim_bytes.py::TestTimedParksI4::test_park_woken_before_logical_timeout",
-    "test_mn_sim_bytes.py::TestTimedParksI4::test_timeout_vs_post_advance_delivery",
-    "test_mn_sim_bytes.py::TestTimedParksI4::test_true_tie_ready_beats_timeout",
-    "test_mn_sim_bytes.py::TestTimedParksI4::test_wait_fd_timeout_fires_at_logical_deadline",
-    "test_mn_sim_clock.py::TestMnNsClock::test_back_to_back_runs_bit_identical",
-    "test_mn_sim_clock.py::TestMnNsClock::test_census_clock_exact_ns",
-    "test_mn_sim_clock.py::TestMnNsClock::test_clock_monotone_across_wakes",
-    "test_mn_sim_clock.py::TestMnNsClock::test_fractional_deadline_fires",
-    "test_mn_sim_clock.py::TestMnNsClock::test_gap_sleeper_run_again",
-    "test_mn_sim_clock.py::TestMnNsClock::test_no_global_clock_leak_into_h1",
-    "test_mn_sim_determinism.py::TestBatonDeterminism::test_chan_h2",
-    "test_mn_sim_determinism.py::TestBatonDeterminism::test_cpu_yield_h2",
-    "test_mn_sim_determinism.py::TestBatonDeterminism::test_cpu_yield_h4",
-    "test_mn_sim_determinism.py::TestBatonDeterminism::test_timers_h2",
-    "test_mn_sim_determinism.py::TestBatonDeterminism::test_timers_h4",
-    "test_mn_sim_determinism.py::TestSimMnFence::test_sim_mn_optin_opens_path",
-    "test_mn_sim_fences.py::TestFencesRaise::test_blocking_runs_inline",
-    "test_mn_sim_fences.py::TestFencesRaise::test_park_foreign_wakeable_raises",
-    "test_mn_sim_fences.py::TestFencesRaise::test_per_g_tstate_mode_raises",
-    "test_mn_sim_fences.py::TestFencesRaise::test_preempt_init_noop",
-    "test_mn_sim_fences.py::TestFencesRaise::test_sched_sleep_real_raises",
-    "test_mn_sim_fences.py::TestFencesRaise::test_slicer_running_before_mn_init_raises",
-    "test_mn_sim_fences.py::TestFencesRaise::test_slicer_started_pre_env_is_fenced",
-    "test_mn_sim_fences.py::TestFinalizerTorture::test_finalizer_chan_ops_complete",
-    "test_mn_sim_fences.py::TestForeignWakeTripwire::test_clean_run_counts_zero",
-    "test_mn_sim_fences.py::TestForeignWakeTripwire::test_foreign_gwake_nonstrict_counts",
-    "test_mn_sim_fences.py::TestForeignWakeTripwire::test_foreign_gwake_strict_aborts",
-    "test_mn_sim_fences.py::TestIoUringGate::test_rings_off_and_digest_stable_under_loop_env",
-    "test_mn_sim_reap.py::TestSettleReap::test_chan_deadlock_still_raises",
-    "test_mn_sim_reap.py::TestSettleReap::test_no_premature_reap_while_event_pending",
-    "test_mn_sim_reap.py::TestSettleReap::test_reap_errno_is_ecanceled",
-    "test_mn_sim_reap.py::TestSettleReap::test_repark_loop_hits_loud_deadlock_not_livelock",
-    "test_mn_sim_reap.py::TestSettleReap::test_stranded_parkers_reaped_and_run_terminates",
-    "test_simfd_mn_smoke.py::TestSimFdMnSmoke::test_dgram_seeds",
-    "test_simfd_mn_smoke.py::TestSimFdMnSmoke::test_stream_seeds",
-    "test_swarm_mn_sched.py::test_controlled_barrier_same_seed_identical_outcome_across_runs",
-    "test_swarm_time_context_runtime.py::test_mn_barrier_deterministic_replay_timer_ctx",
-)
+def pytest_sessionstart(session):
+    problems = _migration_problems()
+    if problems:
+        pytest.exit("this suite needs cross-hub migration to be sound, and it "
+                    "is not here: " + "; ".join(problems),
+                    returncode=pytest.ExitCode.USAGE_ERROR)
+
+
+# ---------------------------------------------------------------------------
+# Known gaps.
+#
+# Every known gap is marked at its test with a helper from known_gaps.py.  The
+# hook below tags each one `known_gap` (so `pytest -m known_gap` lists them)
+# and fails collection on an xfail that does not use a helper, so the gaps all
+# read the same way and none is a quiet one-off.  The vendored suites in
+# subdirectories (tests/aio/, tests/net/) keep their own conventions.
+from known_gaps import PREFIXES as _GAP_PREFIXES
 
 
 def pytest_collection_modifyitems(config, items):
-    # xfail, never skip: every entry still runs, so a gap that closes shows up
-    # as an XPASS (strict entries fail the run until the entry is removed).
+    stray = []
     for item in items:
-        base = item.nodeid.split("[", 1)[0]
-        if base.endswith(_SEEDED_MN_TODO):
-            item.add_marker(pytest.mark.xfail(
-                strict=True,
-                reason="TODO(migration): seeded M:N scheduler disabled; "
-                       "mn_init refuses a seeded run"))
+        marks = list(item.iter_markers("xfail"))
+        if not marks:
             continue
-        for tail, why in _PER_G_KNOWN_GAPS.items():
-            if item.nodeid.endswith(tail):
-                strict = tail not in _PER_G_KNOWN_GAPS_NONSTRICT
-                item.add_marker(pytest.mark.xfail(
-                    strict=strict, reason="known migration-mode gap: " + why))
-                break
-        else:
-            for tail, why in _PER_G_OPEN_INTERMITTENT.items():
-                if item.nodeid.endswith(tail):
-                    item.add_marker(pytest.mark.xfail(
-                        strict=False,
-                        reason="OPEN migration-mode intermittent: " + why))
-                    break
+        item.add_marker(pytest.mark.known_gap)
+        if os.path.dirname(str(item.path)) != _TESTS:
+            continue
+        for m in marks:
+            if not str(m.kwargs.get("reason", "")).startswith(_GAP_PREFIXES):
+                stray.append(item.nodeid)
+    if stray:
+        raise pytest.UsageError(
+            "xfail without a tests/known_gaps.py helper (its reason must start "
+            "with one of %s): %s" % (", ".join(p.strip() for p in _GAP_PREFIXES),
+                                     ", ".join(stray)))
 
 
 def pytest_unconfigure(config):

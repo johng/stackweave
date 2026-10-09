@@ -19,28 +19,18 @@ StreamHandler when imported.  _in_fiber() now asks the runtime
 Each scenario runs in a subprocess: the failure is a hang at interpreter
 exit, which only a fresh process can show.
 """
-import os
-import subprocess
 import sys
 
 import pytest
 
 import stackweave_c
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from adv_util import run_python
 
 
 def _run(code, timeout=60):
-    env = dict(os.environ, PYTHON_GIL="0", STACKWEAVE_GIL="0",
-               PYTHONPATH=os.path.join(REPO, "src"))
-    try:
-        p = subprocess.run([sys.executable, "-c", code], cwd=REPO, env=env,
-                           timeout=timeout, capture_output=True, text=True)
-    except subprocess.TimeoutExpired as e:
-        out = e.stdout if isinstance(e.stdout, str) else (e.stdout or b"").decode()
-        pytest.fail("the process did not exit within %ss (hung at exit?); "
-                    "stdout: %s" % (timeout, out[-500:]), pytrace=False)
-    return p
+    # A child that hangs at exit fails the test with its output.
+    return run_python(code, timeout=timeout)
 
 
 _AFTER_AIO_RUN = r'''
@@ -101,3 +91,7 @@ print("PASS", flush=True)
 
 def test_in_fiber_is_exported():
     assert stackweave_c.in_fiber() is False
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

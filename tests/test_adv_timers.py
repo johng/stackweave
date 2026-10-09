@@ -15,6 +15,7 @@ import pytest
 import stackweave_c as rc
 import stackweave.time as rt
 import stackweave.context as rctx
+
 from adv_util import hang_guard
 
 
@@ -216,4 +217,4 @@ def test_context_multiple_waiters_all_woken():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

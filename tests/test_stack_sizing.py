@@ -9,18 +9,20 @@ These tests run in a single process so the calibration state from earlier
 tests will be present.  Each test that asserts on calibration state forces
 a known starting point via set_stack_size().
 """
+import os
+import sys
 import unittest
+
+import pytest
 
 import stackweave_c
 
-import os as _hwm_os
-import pytest as _hwm_pytest
 # Stack high-water-mark is precise only with 4 KB pages: macOS 16 KB pages make
 # the mincore-based HWM over-report (it reports the whole stack resident), so
 # these HWM/advice/sizing tests can't measure precisely there -- skip them (the
 # diagnostic itself just over-reserves, which is safe).
-_RELIABLE_HWM = _hwm_os.sysconf("SC_PAGESIZE") == 4096
-pytestmark = _hwm_pytest.mark.skipif(
+_RELIABLE_HWM = os.sysconf("SC_PAGESIZE") == 4096
+pytestmark = pytest.mark.skipif(
     not _RELIABLE_HWM,
     reason="stack HWM is reliable only with 4 KB pages")
 
@@ -38,8 +40,8 @@ class TestStackSizeOverride(unittest.TestCase):
             # (RUNLOOM_FT314_MIN_STACK_SIZE = 256 KiB, a deliberate p226 fix in
             # commit 289ecb99) and above the 512 KiB default, so this checks
             # "set changes the default" without depending on a sub-floor value
-            # the runtime intentionally clamps up.  1 MiB is honored exactly on
-            # both 3.13 (16 KiB floor) and 3.14t (256 KiB floor).
+            # the runtime intentionally clamps up.  1 MiB is above the floor, so
+            # it is honored exactly.
             stackweave_c.set_stack_size(1024 * 1024)
             self.assertEqual(stackweave_c.get_stack_size(), 1024 * 1024)
         finally:
@@ -168,4 +170,4 @@ class TestSpawnWithSize(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

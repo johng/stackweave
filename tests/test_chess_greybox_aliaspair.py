@@ -13,7 +13,11 @@ import os
 import sys
 import unittest
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+import pytest
+
+from adv_util import REPO
+from known_gaps import SEEDED_MN_TODO
+
 sys.path.insert(0, os.path.join(REPO, "tools", "mn_controlled"))
 import chess_greybox as gb  # noqa: E402
 import chess_explore as ce  # noqa: E402
@@ -61,6 +65,7 @@ class TestAliasPairs(unittest.TestCase):
         self.assertEqual(edges & pairs, set())
 
 
+@SEEDED_MN_TODO
 class TestOnRealWorkload(unittest.TestCase):
     def test_chess_chan_yields_cross_hub_alias_pairs(self):
         # A two-independent-channel workload must produce cross-hub alias-pairs
@@ -92,4 +97,4 @@ class TestOnRealWorkload(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

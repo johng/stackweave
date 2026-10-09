@@ -76,20 +76,14 @@ Excluded (see the structured report):
 """
 import os
 import socket
-import subprocess
 import sys
 import tempfile
 
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from adv_util import hang_guard, needs_free_threading  # noqa: E402
+import stackweave_c as rc
 
-import stackweave_c as rc  # noqa: E402
-
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY = sys.executable
-FT = needs_free_threading()
+from adv_util import hang_guard, run_python
 
 
 def _run_single(fn, label, secs=15):
@@ -268,13 +262,8 @@ def _run_subproc(script, timeout=200):
     and for the spawn-fail scripts it latches runloom_spawn_fault_armed() True so
     they can switch to a firing spec from inside the run (after the must-succeed
     early spawns)."""
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src",
-               STACKWEAVE_FAULT_SPAWN_G="always:0")
-    try:
-        return subprocess.run([PY, "-c", script], cwd=REPO, env=env,
-                              capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        pytest.skip("serve workload timed out (box under heavy load)")
+    return run_python(script, timeout=timeout,
+                      env={"STACKWEAVE_FAULT_SPAWN_G": "always:0"})
 
 
 # Each serve() M:N session is driven in its OWN clean-exit SUBPROCESS rather than
@@ -283,11 +272,9 @@ def _run_subproc(script, timeout=200):
 # an unrelated later session (the known multi-session mn_fini teardown flake) --
 # brutal to attribute.  A subprocess per session also EXITS CLEANLY, which is
 # what flushes the gcov counters for these paths.  The subprocess prints a
-# sentinel on success; the test asserts rc==0 + sentinel, and skips on a
-# TimeoutExpired (shared-box contention, not a bug).
+# sentinel on success; the test asserts rc==0 + sentinel.
 _SERVE_IPV6_ROUNDTRIP = r'''
 import sys
-sys.path.insert(0, "src")
 import stackweave_c as rc, stackweave
 result = {}
 def main():
@@ -308,7 +295,6 @@ print("UNEXPECTED %r" % (result,)); sys.exit(3)
 
 _ECHO_WRITE_PARK = r'''
 import socket, time, threading, sys
-sys.path.insert(0, "src")
 import stackweave_c as rc, stackweave
 RealThread = threading.Thread
 TOTAL = 1024 * 1024
@@ -367,7 +353,6 @@ print("UNEXPECTED %r" % (result,)); sys.exit(3)
 
 _ECHO_RST_STORM = r'''
 import socket, struct, time, threading, sys
-sys.path.insert(0, "src")
 import stackweave_c as rc, stackweave
 RealThread = threading.Thread
 result = {"rst": 0}
@@ -403,7 +388,6 @@ print("UNEXPECTED %r" % (result,)); sys.exit(3)
 '''
 
 
-@pytest.mark.skipif(not FT, reason="serve() needs the M:N runtime (GIL-off build)")
 @pytest.mark.skipif(not _ipv6_loopback_ok(), reason="no IPv6 loopback on this box")
 def test_serve_ipv6_bound_port_roundtrip():
     """io L115-116: serve("::1", 0, ...) binds an AF_INET6 listener; the bound-
@@ -415,7 +399,6 @@ def test_serve_ipv6_bound_port_roundtrip():
     assert "IPV6_ROUNDTRIP_OK" in p.stdout, p.stdout[-400:]
 
 
-@pytest.mark.skipif(not FT, reason="serve() needs the M:N runtime (GIL-off build)")
 def test_all_c_echo_send_write_park():
     """io L200-201 (covered) + L202-203 (RACE, best-effort): in the all-C
     (handler=None) echo, a client whose receive window is clamped backs up the
@@ -432,7 +415,6 @@ def test_all_c_echo_send_write_park():
     assert "ECHO_WRITE_PARK_OK" in p.stdout, p.stdout[-400:]
 
 
-@pytest.mark.skipif(not FT, reason="serve() needs the M:N runtime (GIL-off build)")
 def test_all_c_echo_rst_storm_survives():
     """io L205 (best-effort) + io L179: an RST storm against the all-C echo --
     each connection sends a payload then closes with SO_LINGER 0 (RST). The echo
@@ -453,7 +435,6 @@ def test_all_c_echo_rst_storm_survives():
 # ===========================================================================
 _SERVE_ACCEPTOR_SPAWNFAIL = r'''
 import os, sys
-sys.path.insert(0, "src")
 import stackweave_c as rc, stackweave
 res = {}
 def main():
@@ -477,7 +458,6 @@ print("UNEXPECTED %r" % (res.get("r"),)); sys.exit(3)
 
 _SERVE_ECHO_SPAWNFAIL = r'''
 import os, socket, time, threading, sys
-sys.path.insert(0, "src")
 import stackweave_c as rc, stackweave
 RealThread = threading.Thread
 res = {}
@@ -517,7 +497,6 @@ print("UNEXPECTED %r" % (res,)); sys.exit(3)
 '''
 
 
-@pytest.mark.skipif(not FT, reason="serve()/M:N needs the GIL-off build")
 def test_all_c_serve_acceptor_spawn_fail():
     """io L324-326: when the all-C acceptor's mn_fiber_c fails, serve() drops the
     listener list and raises RuntimeError('serve(): mn_fiber_c failed')."""
@@ -527,7 +506,6 @@ def test_all_c_serve_acceptor_spawn_fail():
     assert "ACCEPTOR_SPAWNFAIL_OK" in p.stdout, p.stdout[-400:]
 
 
-@pytest.mark.skipif(not FT, reason="serve()/M:N needs the GIL-off build")
 def test_all_c_acceptor_echo_spawn_fail():
     """io L241: when the all-C acceptor cannot spawn a per-connection echo fiber
     (mn_fiber_c < 0), it close()s the accepted fd and keeps looping; the server
@@ -539,4 +517,4 @@ def test_all_c_acceptor_echo_spawn_fail():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

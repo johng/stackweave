@@ -13,7 +13,10 @@ import sys
 import tempfile
 import unittest
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+import pytest
+
+from adv_util import REPO
+
 sys.path.insert(0, os.path.join(REPO, "tools", "soak"))
 import cross_iter_ratchet as cir  # noqa: E402
 import oracle  # noqa: E402
@@ -117,4 +120,4 @@ class TestRecordAndCheck(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

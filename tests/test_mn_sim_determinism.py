@@ -25,16 +25,11 @@ import sys
 
 import pytest
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from adv_util import REPO
+from known_gaps import SEEDED_MN_TODO
 sys.path.insert(0, os.path.join(REPO, "tools", "dst"))
-
 import mn_digest  # noqa: E402
 
-from adv_util import needs_free_threading  # noqa: E402
-
-pytestmark = pytest.mark.skipif(
-    not needs_free_threading(),
-    reason="the M:N scheduler is only real on free-threaded builds")
 
 SEED_A, SEED_B = 12345, 999
 REPEATS = 3
@@ -82,6 +77,7 @@ def assert_deterministic(workload, hubs):
         "seed-driven".format(workload, hubs, SEED_A, SEED_B)
 
 
+@SEEDED_MN_TODO
 class TestBatonDeterminism:
     def test_cpu_yield_h2(self):
         assert_deterministic("cpu_yield", 2)
@@ -125,6 +121,7 @@ class TestSimMnFence:
             {"STACKWEAVE_SIM": "1"})
         assert "FENCE_RAISED" in p.stdout, (p.stdout, p.stderr[-800:])
 
+    @SEEDED_MN_TODO
     def test_sim_mn_optin_opens_path(self):
         """STACKWEAVE_SIM_MN=1 + STACKWEAVE_MN_SEED opens the native path (since I2
         the opt-in also requires the seed -- the census dispatches the ledger,
@@ -170,4 +167,4 @@ class TestSimMnFence:
 
 
 if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

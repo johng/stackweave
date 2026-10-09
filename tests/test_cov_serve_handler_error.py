@@ -1,28 +1,16 @@
 """serve(): a Python handler that RAISES before conn.close().
 
-Audit gap (docs/dev/API_COVERAGE_GAPS.md #1, "serve() handler raises"): when a
-Python handler passed to stackweave_c.serve() raises an exception *before* it calls
-conn.close(), m_serve_acceptor / runloom_g_entry catch the escaping exception and
-report it via the unraisable hook ("Exception ignored ..."), and the acceptor
-keeps serving other connections.  The audit flags what happens to the OFFENDING
-connection: the acceptor already dropped its own conn reference
-(module_io.c.inc L62), so the accepted TCPConn is kept alive only by the handler
-fiber's `partial(handler, conn)` (g->callable) plus the captured traceback
-(runloom_sched_core.c.inc L485-489: `g->error = value` with PyException_SetTraceback
--> the handler frame -> the `conn` local).  serve() never calls conn.close() on
-the error path, so the fd is closed only when the accepted TCPConn is finally
-released -- and that happens only when the handler goroutine struct is reaped
-(Py_XDECREF(g->callable)+Py_XDECREF(g->error) at L952-954).
+When a Python handler passed to stackweave_c.serve() raises before it calls
+conn.close(), the acceptor reports the exception via the unraisable hook and
+keeps serving.  The offending connection must still be closed promptly.
 
-VERIFIED BEHAVIOUR (this test): a completed detached handler goroutine is NOT
-reaped at its own completion -- it is reaped as a side effect of the hub later
-running the NEXT goroutine on that runq (mn_sched_hub_main.c.inc L1303-1306), or
-at session teardown.  So the LAST offending connection in a quiet burst has
-nothing to trigger its reap: its conn is never released, its fd is never closed,
-and its peer is STRANDED on a live connection for the whole lifetime of the
-server -- while the acceptor keeps serving every other connection normally.  A
-forced gc.collect() does NOT free it (confirmed: not GC-frame-pinning; it is the
-un-reaped goroutine holding g->callable/g->error, hence conn).
+Regression for the audit's serve()-handler-raises gap (fixed in 4ccfcdee):
+serve() used to issue no close on the error path, so the accepted TCPConn lived
+until its completed, detached handler goroutine was reaped -- which happens only
+when the hub next runs another goroutine, or at teardown.  The tail offending peer of
+a quiet burst was stranded on a live connection for the server's lifetime.
+m_serve_acceptor now spawns partial(_serve_handler_wrap, handler, conn), which
+closes conn in a finally (module_io.c.inc).
 
 We assert BOTH halves of correct behaviour:
 
@@ -35,10 +23,8 @@ To measure (b) HONESTLY we take the offending client's bounded EOF-wait entirely
 WHILE THE SERVER IS STILL ALIVE and otherwise quiet: the main fiber never tears
 down the session during the measurement, so any EOF the peer sees must come from
 serve() closing the conn on handler error -- not from session teardown
-accidentally reaping the goroutine.  Under those conditions the tail offending
-peer is deterministically stranded (its socket.settimeout expires with no EOF),
-so (b) fails: that failure is the audited serve()-handler-raises bug.  Do not
-weaken the assertion to make it green.
+accidentally reaping the goroutine.  Do not weaken the assertion to make it
+green.
 
 Bounded time is enforced three ways so a real strand surfaces as a failed
 assertion, never a wedged process: each client socket carries settimeout(), the
@@ -48,33 +34,18 @@ session (it needs >=2 hubs), so -- as in test_cov95_module_io.py -- each session
 is driven in its own clean-exit subprocess: isolates scheduler/teardown state and
 dodges the known multi-session mn_fini teardown flake.
 """
-import os
 import sys
 
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from adv_util import needs_free_threading  # noqa: E402
-
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY = sys.executable
-FT = needs_free_threading()
+from adv_util import run_python
 
 
 def _run_subproc(script, timeout=120):
     """Run a serve() script in a clean subprocess (isolated M:N session, clean
-    exit).  Skip -- not fail -- on a wall-clock timeout: that means the whole
-    box is wedged (shared-box contention), not that this specific gap misbehaved
-    (the in-script socket timeouts already turn a stranded-peer hang into a
-    structured False result long before this outer timeout could fire)."""
-    import subprocess
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
-    try:
-        return subprocess.run([PY, "-c", script], cwd=REPO, env=env,
-                              capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired as e:
-        pytest.skip("serve() workload timed out at the process level "
-                    "(shared box under load): %s" % (e,))
+    exit).  The in-script socket timeouts turn a stranded peer into a
+    structured result long before this outer timeout could fire."""
+    return run_python(script, timeout=timeout)
 
 
 # The handler recv()s one request, then -- for the poison request (first byte
@@ -88,11 +59,12 @@ def _run_subproc(script, timeout=120):
 #   Phase 1 (strand check):  NBAD offending clients connect + poison + wait for
 #     EOF with settimeout(SOCK_TIMEOUT).  The main fiber keeps the server ALIVE
 #     and otherwise QUIET (only sched_sleep, no listener close, no other conns)
-#     until all NBAD have recorded a result.  A completed handler goroutine is
-#     reaped only when the hub next runs another goroutine on that runq, so the
-#     tail of a quiet burst has nothing to trigger its reap -> its conn is never
-#     released -> its peer never gets EOF -> the socket times out.  Correct
-#     behaviour is EVERY offending peer seeing EOF (stranded == 0).
+#     until all NBAD have recorded a result.  Without serve()'s close on handler
+#     error, a completed handler goroutine is reaped only when the hub next runs
+#     another goroutine on that runq, so the tail of a quiet burst has nothing to
+#     trigger its reap -> its conn is never released -> its peer never gets EOF
+#     -> the socket times out.  Correct behaviour is EVERY offending peer seeing
+#     EOF (stranded == 0).
 #
 #   Phase 2 (still-serving check):  only after phase 1 has fully recorded do the
 #     NGOOD well-behaved clients run, proving the acceptor keeps serving.
@@ -103,7 +75,6 @@ def _run_subproc(script, timeout=120):
 # returns in bounded time instead of hanging forever.
 _SERVE_HANDLER_RAISES = r'''
 import socket, sys, threading, time
-sys.path.insert(0, "src")
 sys.path.insert(0, "tests")
 import stackweave_c as rc, stackweave
 from adv_util import hang_guard
@@ -230,7 +201,6 @@ print("UNEXPECTED"); sys.exit(3)
 '''
 
 
-@pytest.mark.skipif(not FT, reason="serve() needs the M:N runtime (GIL-off build)")
 def test_serve_handler_raise_keeps_serving_and_closes_offending_peer():
     """serve() Python handlers that raise before conn.close() on the offending
     connections.  Correct behaviour, both asserted:
@@ -242,14 +212,8 @@ def test_serve_handler_raise_keeps_serving_and_closes_offending_peer():
           closes the fd; no offending peer is stranded on a live connection nobody
           will ever answer or close (stranded == 0).
 
-    (a) holds in every run.  (b) is the audited bug: serve() never closes the
-    conn on handler error and relies on the handler goroutine being reaped to
-    release it (g->callable/g->error -> conn), but a completed detached goroutine
-    is reaped only when the hub next runs another goroutine on its runq -- so the
-    tail offending connection in a quiet burst is never reaped, its fd is never
-    closed, and its peer is stranded for the server's lifetime.  The subprocess
-    then exits 7 and the assertion below fails: that failure IS the repro; do not
-    weaken it.
+    A regression of (b) -- the tail offending peer of a quiet burst stranded
+    until its handler goroutine is reaped -- makes the subprocess exit 7.
     """
     p = _run_subproc(_SERVE_HANDLER_RAISES, timeout=150)
     ctx = "rc=%d\nstdout=%s\nstderr=%s" % (
@@ -260,15 +224,19 @@ def test_serve_handler_raise_keeps_serving_and_closes_offending_peer():
     assert "good_ok=True" in p.stdout, "server stopped serving other conns\n" + ctx
 
     # (b) Every offending client saw EOF/close within the bounded socket timeout.
-    # A stranded peer prints stranded=N/NBAD (N>=1) -> exit 7.  This is the bug.
+    # A stranded peer prints stranded=N/NBAD (N>=1) -> exit 7.
     assert p.returncode != 7, (
         "BUG (serve-handler-error): a serve() handler raised before conn.close() "
         "and the offending connection was NEVER closed -- its peer got no EOF "
         "within the socket timeout while the server was still alive and serving "
-        "other conns (stranded forever on a live fd). serve() takes no conn.close() "
-        "on the handler-error path; the conn stays pinned by the un-reaped handler "
-        "goroutine (g->callable/g->error -> conn), and a completed detached "
-        "goroutine is only reaped when the hub next runs another goroutine on its "
-        "runq -- so the tail of a quiet burst is stranded for the server's "
-        "lifetime.\n" + ctx)
+        "other conns (stranded forever on a live fd). If serve() takes no "
+        "conn.close() on the handler-error path, the conn stays pinned by the "
+        "un-reaped handler goroutine (g->callable/g->error -> conn), and a "
+        "completed detached goroutine is only reaped when the hub next runs "
+        "another goroutine on its runq -- so the tail of a quiet burst is "
+        "stranded for the server's lifetime.\n" + ctx)
     assert p.returncode == 0 and "SERVE_HANDLER_ERROR_OK" in p.stdout, ctx
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

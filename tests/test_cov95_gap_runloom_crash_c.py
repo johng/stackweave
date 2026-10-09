@@ -43,17 +43,14 @@ Both are bounded clean-exit subprocesses (the only way gcov flushes), wrapped
 in an outer pytest timeout-by-subprocess-timeout guard.  No io_uring / socket
 path is touched, so neither can hit the recv-backpressure deadlock.
 """
-import os
 import shutil
 import subprocess
 import sys
 
 import pytest
 
-import stackweave_c as rc
+from adv_util import REPO, child_env, run_python
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY = sys.executable
 
 def _strace_supports_inject():
     """True iff a strace that understands `-e inject=` is on PATH (>= 4.15)."""
@@ -77,10 +74,8 @@ requires_strace = pytest.mark.skipif(
 
 
 def _clean_env():
-    """A child env with the GIL off and no inherited STACKWEAVE_CRASH_WAIT_SECS skew."""
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
-    env.pop("STACKWEAVE_CRASH_WAIT_SECS", None)
-    return env
+    """A child env with no inherited STACKWEAVE_CRASH_WAIT_SECS skew."""
+    return child_env(STACKWEAVE_CRASH_WAIT_SECS=None)
 
 
 # --------------------------------------------------------------------------
@@ -106,18 +101,16 @@ def test_arm_sigaltstack_failure_munmaps_and_returns():
     )
     cmd = [STRACE, "-f", "-e", "signal=none",
            "-e", "inject=sigaltstack:error=EINVAL:when=1+",
-           PY, "-c", body]
-    try:
-        p = subprocess.run(cmd, cwd=REPO, env=_clean_env(),
-                           capture_output=True, text=True, timeout=60)
-    except subprocess.TimeoutExpired:
-        pytest.skip("arm-fail subprocess timed out (shared-box contention)")
+           sys.executable, "-c", body]
+    p = subprocess.run(cmd, cwd=REPO, env=_clean_env(),
+                       capture_output=True, text=True, timeout=60)
     # The injected sigaltstack failure must be a clean-exit path: the process
     # keeps running unarmed and exits 0 (gcov flushes the L180-181 counters).
-    # ROBUST: strace -f + the M:N runtime can flake under heavy box load
-    # (fork-follow noise / a mistargeted injection), so treat any non-clean
-    # outcome as a SKIP -- a missed coverage opportunity, NOT a failure. The
-    # disarm test below independently keeps runloom_crash.c >= 95%.
+    # strace -f + the M:N runtime can flake under heavy box load (fork-follow
+    # noise / a mistargeted injection; rc=1 in a full Linux run), so an
+    # injection that did not land is a missed coverage opportunity, not a
+    # failure.  The disarm test below independently keeps runloom_crash.c
+    # >= 95%.
     if p.returncode != 0 or "ARM_FAIL_CLEAN_OK" not in p.stdout:
         pytest.skip(
             "strace sigaltstack-inject did not land cleanly under load "
@@ -134,9 +127,6 @@ def test_arm_sigaltstack_failure_munmaps_and_returns():
 # --------------------------------------------------------------------------
 def test_single_hub_disarm_runs_body_deterministically():
     body = (
-        "import sys\n"
-        "if not (hasattr(sys, '_is_gil_enabled') and not sys._is_gil_enabled()):\n"
-        "    print('SKIP_NO_FT'); raise SystemExit(0)\n"
         "import stackweave, stackweave_c as rc\n"
         # Install BEFORE the hub thread starts so it arms its sigaltstack at
         # runloom_coro_thread_init (arm is a no-op unless the handler is on).
@@ -161,16 +151,14 @@ def test_single_hub_disarm_runs_body_deterministically():
         "stackweave.inspect.uninstall_crash_handler()\n"
         "print('SINGLE_HUB_DISARM_OK', ran)\n"
     )
-    try:
-        p = subprocess.run([PY, "-c", body], cwd=REPO, env=_clean_env(),
-                           capture_output=True, text=True, timeout=120)
-    except subprocess.TimeoutExpired:
-        pytest.skip("single-hub disarm subprocess timed out (shared-box contention)")
-    if "SKIP_NO_FT" in p.stdout:
-        pytest.skip("single-hub disarm needs a GIL-disabled (free-threaded) build")
+    p = run_python(body, timeout=120, env={"STACKWEAVE_CRASH_WAIT_SECS": None})
     assert p.returncode == 0, "child failed rc=%d\n%s" % (
         p.returncode, p.stderr[-1500:])
     assert "SINGLE_HUB_DISARM_OK 8" in p.stdout, (p.stdout, p.stderr[-800:])
     # A botched disarm (munmap of a still-active altstack, or a double-free)
     # would corrupt teardown -> a traceback / abort; there must be none.
     assert "Traceback" not in p.stderr, p.stderr[-800:]
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

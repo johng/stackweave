@@ -16,8 +16,6 @@ import pytest
 import stackweave
 import stackweave_c as rc
 
-from adv_util import needs_free_threading
-
 HUBS = 4
 
 
@@ -50,13 +48,11 @@ def spawn_on_0_resume_on(hub):
     return before, after
 
 
-@pytest.mark.skipif(not needs_free_threading(), reason="needs a free-threaded build")
 @pytest.mark.parametrize("hub", range(HUBS))   # 0 stays put; 1-3 must move
 def test_fiber_resumes_on_the_hub_it_pinned_itself_to(hub):
     assert spawn_on_0_resume_on(hub) == (0, hub)
 
 
-@pytest.mark.skipif(not needs_free_threading(), reason="needs a free-threaded build")
 def test_pin_on_a_handle_from_a_torn_down_session_is_refused():
     """A G handle can outlive its M:N session, and g->park_hub then points into
     the hub array mn_fini freed.  pin() must refuse on a generation mismatch, as
@@ -98,7 +94,6 @@ def test_pin_on_a_handle_from_a_torn_down_session_is_refused():
         del junk
 
 
-@pytest.mark.skipif(not needs_free_threading(), reason="needs a free-threaded build")
 def test_pinned_runq_entry_does_not_spin_the_other_hubs():
     """A pinned global-runq entry is work for its target hub only; the idle scan
     must not keep the other hubs awake for it.  process_time() is per-process,
@@ -143,7 +138,6 @@ def test_pinned_runq_entry_does_not_spin_the_other_hubs():
         % (cpu, wall, cpu / wall))
 
 
-@pytest.mark.skipif(not needs_free_threading(), reason="needs a free-threaded build")
 def test_repinning_a_queued_fiber_keeps_the_runq_counters_consistent():
     """pin() must not change pin_hub1 behind the runq lock's back: the fiber is
     woken while its target hub is busy (so the entry sits queued), then

@@ -9,8 +9,6 @@ errno module so it is correct on every platform.  Asserts:
   EAGAIN       -> parks on the fd, then retries; round-trips.
   EIO / EBADF  on read  -> a clean OSError, never a crash or hang.
   EPIPE/EIO/EBADF on write -> a clean OSError.
-
-no-gil only.
 """
 import errno as E
 import os
@@ -20,17 +18,14 @@ import sys
 
 import pytest
 
+from adv_util import REPO, child_env
+
 HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.dirname(HERE)
 WORKLOAD = os.path.join(HERE, "fd_io_fault_workload.py")
 
 
 def _run(site, spec, mode, timeout=30):
-    env = dict(os.environ)
-    env["PYTHONPATH"] = os.path.join(REPO, "src")
-    env["PYTHON_GIL"] = "0"                       # focus: free-threaded only
-    env["FAULT_SITE"] = site
-    env["STACKWEAVE_FAULT_" + site] = spec
+    env = child_env(FAULT_SITE=site, **{"STACKWEAVE_FAULT_" + site: spec})
     return subprocess.run(
         [sys.executable, WORKLOAD, mode], cwd=REPO, env=env, timeout=timeout,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -74,4 +69,4 @@ def test_write_hard_error_surfaces_oserror(err):
 
 
 if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

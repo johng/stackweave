@@ -2,43 +2,26 @@
 with stackweave fibers layered in.
 
 CPython's free-threading tests hammer shared list/dict/GC from many OS threads
-with the GIL off and assert no loss / no corruption / no crash.  stackweave's whole
-correctness story is 3.13t, and its fibers run *on* those GIL-free hub
+with the GIL off and assert no loss / no corruption / no crash.  stackweave runs
+only on free-threaded CPython, and its fibers run *on* those GIL-free hub
 threads -- so the meaningful version of those tests has fibers doing the
 hammering: shared-container mutation across hubs, a read-modify-write guarded by
 a channel-mutex, and -- most pointed for stackweave -- gc.collect() stop-the-world
 firing while fibers are live on every hub (the exact shape behind the
-io_uring STW deadlock and the Group-B handoff work).
+io_uring STW deadlock).
 
 Each workload runs in a fresh subprocess with PYTHON_GIL=0 so the hubs really
-run in parallel.  Running python -c with only runloom_c/gc/threading imported
-also dodges this venv's GIL-re-enabling C extensions (a stray _brotli import
-flips the GIL back on), which a subprocess cleanly avoids.
+run in parallel.
 """
-import os
-import subprocess
 import sys
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+import pytest
+
+from adv_util import run_python
 
 
 def run_mn(code, timeout=60):
-    preamble = (
-        "import sys; sys.path.insert(0, %r)\n"
-        "import stackweave_c\n" % os.path.join(REPO, "src")
-    )
-    env = dict(os.environ)
-    env["PYTHON_GIL"] = "0"
-    env["STACKWEAVE_GIL"] = "0"
-    try:
-        p = subprocess.run(
-            [sys.executable, "-c", preamble + code],
-            cwd=REPO, env=env, timeout=timeout,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    except subprocess.TimeoutExpired as e:
-        out = e.stdout.decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
-        err = e.stderr.decode() if isinstance(e.stderr, bytes) else (e.stderr or "")
-        return 124, out, err + "\n[timed out after {0}s]".format(timeout)
+    p = run_python("import stackweave_c\n" + code, timeout=timeout)
     return p.returncode, p.stdout, p.stderr
 
 
@@ -56,9 +39,9 @@ def assert_pass(code, timeout=60):
 # ---------------------------------------------------------------------------
 def test_concurrent_list_append_no_loss():
     """N fibers each append K distinct ints to ONE shared list, in
-    parallel across 4 hubs (GIL off).  list.append is atomic on 3.13t, so the
-    final list must contain every item exactly once -- no torn writes, no lost
-    appends, no crash."""
+    parallel across 4 hubs (GIL off).  list.append is atomic on free-threaded
+    CPython, so the final list must contain every item exactly once -- no torn
+    writes, no lost appends, no crash."""
     assert_pass(r"""
 NHUB, NG, K = 4, 64, 500
 shared = []
@@ -165,13 +148,13 @@ print("PASS", box[0])
 # ---------------------------------------------------------------------------
 # THE runloom-pointed one: gc.collect() stop-the-world while fibers are live
 # on every hub, all churning cyclic garbage.  This is the STW-vs-running-hubs
-# shape behind the io_uring STW deadlock and the Group-B handoff; it must run
-# to completion with no crash, no hang, and a clean self-check.
+# shape behind the io_uring STW deadlock; it must run to completion with no
+# crash, no hang, and a clean self-check.
 # ---------------------------------------------------------------------------
 def test_gc_stw_under_fiber_churn():
     """Workers churn reference cycles while a dedicated fiber repeatedly
     forces a full gc.collect() (stop-the-world).  A STW that can't complete
-    because a hub is wedged in a syscall, or a handoff that races re-attach,
+    because a hub is wedged in a syscall, or a migrating fiber that races re-attach,
     would hang (timeout) or crash; correct behavior finishes clean."""
     assert_pass(r"""
 import gc
@@ -274,5 +257,4 @@ print("PASS")
 
 
 if __name__ == "__main__":
-    import pytest
-    raise SystemExit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

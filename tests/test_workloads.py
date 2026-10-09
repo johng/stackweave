@@ -9,7 +9,10 @@ cancellation cascading through a server).
 import asyncio
 import os
 import socket
+import sys
 import unittest
+
+import pytest
 
 import stackweave_c
 import stackweave.aio as paio
@@ -321,4 +324,4 @@ class TestResourceCleanup(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

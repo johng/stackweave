@@ -53,33 +53,20 @@ DECREF needs PyTuple_New(2) at L98 to fail (OOM) after a recv fired -- no fault
 hook exists for that allocation.
 """
 import errno as _errno
-import os
 import shutil
-import socket
 import subprocess
 import sys
 
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from adv_util import hang_guard  # noqa: E402
+import stackweave
+import stackweave_c as rc
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY = sys.executable
-
-import stackweave  # noqa: E402
-import stackweave_c as rc  # noqa: E402
+from adv_util import REPO, child_env, hang_guard, run_python
 
 
 def _run_child(script, timeout=200, env_extra=None):
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
-    if env_extra:
-        env.update(env_extra)
-    try:
-        return subprocess.run([PY, "-c", script], cwd=REPO, env=env,
-                              capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        pytest.skip("child workload timed out (box under heavy load / CI contention)")
+    return run_python(script, timeout=timeout, env=env_extra)
 
 
 # ===========================================================================
@@ -205,7 +192,6 @@ def test_select_case_parse_error_arms():
 
 _SEND_ONCE_PARK = r'''
 import sys, os, socket
-sys.path.insert(0, "src")
 import stackweave_c as rc
 res = {}
 def main():
@@ -290,7 +276,6 @@ def test_send_once_real_eagain_park_then_complete():
 
 _SIG_TEMPLATE = r'''
 import sys, os, socket, signal
-sys.path.insert(0, "src")
 import stackweave_c as rc
 out = {}
 class Boom(Exception): pass
@@ -376,7 +361,6 @@ needs_strace = pytest.mark.skipif(
 # 42 + an "ERRNO ..." line on a clean OSError; exit 0 if no error surfaced.
 _HARD_TEMPLATE = r'''
 import sys, os, socket
-sys.path.insert(0, "src")
 import stackweave_c as rc
 MODE = "__MODE__"
 out = {}
@@ -406,14 +390,10 @@ sys.stdout.write("RES=%r\n" % out.get("res")); sys.exit(0)
 
 def _run_strace(mode, inject, timeout=90):
     strace = shutil.which("strace")
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
     cmd = [strace, "-f", "-e", "signal=none", "-e", "inject=" + inject,
-           PY, "-c", _HARD_TEMPLATE.replace("__MODE__", mode)]
-    try:
-        return subprocess.run(cmd, cwd=REPO, env=env,
-                              capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        pytest.skip("strace workload timed out (box under heavy load / CI contention)")
+           sys.executable, "-c", _HARD_TEMPLATE.replace("__MODE__", mode)]
+    return subprocess.run(cmd, cwd=REPO, env=child_env(),
+                          capture_output=True, text=True, timeout=timeout)
 
 
 @needs_strace
@@ -447,7 +427,6 @@ def test_send_synchronous_epipe(mode):
 
 _DIAG_FLAGS_CHILD = r'''
 import sys
-sys.path.insert(0, "src")
 import stackweave_c as rc
 # RUNLOOM_DBG_PARKER (1<<0) | RUNLOOM_DBG_GSTATE (1<<1) == 3
 sys.stdout.write("DIAG_FLAGS=%d\n" % rc._diag_flags())
@@ -472,4 +451,4 @@ def test_diag_flags_reflects_runloom_debug_mask():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

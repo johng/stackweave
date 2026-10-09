@@ -28,13 +28,11 @@ import sys
 
 import pytest
 
+import stackweave_c
+
 pytestmark = pytest.mark.skipif(
     not sys.platform.startswith(("darwin", "freebsd", "openbsd", "netbsd")),
     reason="kqueue backend only")
-
-sys.path.insert(0, "src")
-
-import stackweave_c  # noqa: E402
 
 READ = 1
 WRITE = 2
@@ -215,4 +213,4 @@ def test_drain_many_ready_in_one_pump(n):
 
 
 if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

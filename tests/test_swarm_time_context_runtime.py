@@ -32,15 +32,11 @@ DEEPER and hunts NEW conditions:
     so a SIGSEGV is contained + observed as a signal returncode.  Fault
     injection (SPAWN_G / FD_*) is woven into timer/context spawns.
 
-FINDINGS (encoded as xfail / FINDING-commented subprocess assertions):
-  * test_timer_stop_after_fire_should_return_false_FINDING -- Timer.Stop()
-    returns True after the timer has already fired, but Go's time.Timer.Stop()
-    (and this Timer's own docstring: "False if it had already fired") specify
-    False.  The implementation tracks only _stopped, never "did it fire", so a
-    caller using the Go-idiomatic `if !t.Stop() { <-t.C }` drain pattern would
-    deadlock-drain a channel that has no pending value.
+Tests marked REGRESSION (was finding #N) pin bugs this file first found, all
+fixed since: Timer.Stop() after a fire, a cancelled context's lingering
+deadline fiber, a non-numeric timer duration, run(n>1) nested in a hub fiber,
+and blocking() outside a fiber after an M:N run.
 """
-import os
 import subprocess
 import sys
 import time
@@ -53,15 +49,14 @@ import stackweave.time as rt
 import stackweave.context as rctx
 
 from adv_util import (
+    REPO,
+    child_env,
     hang_guard,
     assert_faster_than,
     OverlapTracker,
     raw_thread,
-    needs_free_threading,
 )
-
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PYEXE = sys.executable
+from known_gaps import SEEDED_MN_TODO
 
 
 # ==========================================================================
@@ -91,15 +86,10 @@ def _run_mn(main, n=2, guard=15.0, label="mn"):
 def _subproc(script, timeout=40, extra_env=None):
     """Run a self-contained script in a child process so a SIGSEGV/abort is
     CONTAINED and observed as a negative returncode."""
-    env = dict(os.environ)
-    env["PYTHON_GIL"] = "0"
-    env["PYTHONPATH"] = "src"
-    if extra_env:
-        env.update(extra_env)
     return subprocess.run(
-        [PYEXE, "-c", script],
+        [sys.executable, "-c", script],
         cwd=REPO,
-        env=env,
+        env=child_env(**(extra_env or {})),
         timeout=timeout,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -253,7 +243,7 @@ def test_timer_fires_exactly_once_not_repeatedly():
 # has already fired, matching Go's time.Timer.Stop() and the docstring -- the
 # Timer tracks a _fired flag set when fire() sends, so the Go-idiomatic
 # `if not t.Stop(): <-t.c` drain pattern is safe.
-def test_timer_stop_after_fire_should_return_false_FINDING():
+def test_timer_stop_after_fire_returns_false():
     def f():
         t = rt.Timer(0.02)
         v, ok = t.c.recv()             # let it FIRE
@@ -391,7 +381,7 @@ def test_tick_channel_fires_repeatedly():
     # the scheduler alive; run it in a subprocess so a never-draining loop is a
     # bounded TIMEOUT, not a wedged in-process test.
     script = r"""
-import sys; sys.path.insert(0, "src")
+import sys
 import stackweave, stackweave_c as rc
 import stackweave.time as rt
 out = {}
@@ -480,12 +470,12 @@ def test_context_manual_cancel_before_deadline_is_cancelled():
     # and ctx.done.recv() returns PROMPTLY (the close happened synchronously in
     # cancel()).  We measure the recv latency *inside* the fiber: the context
     # itself is correct and fast.  NB: run() will still linger until the orphan
-    # deadline fiber's sleep elapses -- that lingering is a separate FINDING
-    # (test_context_cancel_leaves_deadline_fiber_lingering_FINDING); here we
+    # deadline fiber's sleep elapses -- that lingering is checked separately
+    # (test_context_cancel_stops_deadline_fiber_promptly); here we
     # prove the cancellation path is prompt, so we exit the process once we have
     # the measurement rather than waiting for run() to drain the orphan.
     script = r"""
-import sys, os, time; sys.path.insert(0, "src")
+import sys, os, time
 import stackweave, stackweave_c as rc
 import stackweave.context as rctx
 def main():
@@ -513,7 +503,7 @@ def test_context_far_future_deadline_immediate_cancel():
     # at once with CANCELED, never wait for the deadline -- a slow-return guard.
     # Same orphan-fiber caveat as above, so measure recv inside the fiber + exit.
     script = r"""
-import sys, os, time; sys.path.insert(0, "src")
+import sys, os, time
 import stackweave, stackweave_c as rc
 import stackweave.context as rctx
 def main():
@@ -540,18 +530,16 @@ rc.fiber(main); rc.run()
 # (not a bare sched_sleep), and _cancel() wakes it via cancel_wait_fd, so a
 # cancelled context's run() returns at once instead of lingering to the
 # original deadline.
-def test_context_cancel_leaves_deadline_fiber_lingering_FINDING():
-    # The CORRECT behavior: after cancel(), run() should return promptly because
-    # the deadline fiber was stopped.  It currently lingers for the full timeout,
-    # so this slow-return assertion fails (xfail).  A short 1.0s timeout keeps
-    # the demonstration bounded even when it lingers.
+def test_context_cancel_stops_deadline_fiber_promptly():
+    # After cancel(), run() returns promptly because the deadline fiber was
+    # stopped.  A short 1.0s timeout keeps the test bounded if it lingers.
     def f():
         ctx, cancel = rctx.WithTimeout(rctx.Background(), 1.0)
         cancel()                       # logically done immediately
         ctx.done.recv()
         return ctx.err()
     t0 = time.monotonic()
-    err = _run_single(f, guard=10, label="leak-finding")
+    err = _run_single(f, guard=10, label="cancel-stops-deadline")
     el = time.monotonic() - t0
     assert err == rctx.CANCELED
     assert el < 0.5, (
@@ -665,7 +653,7 @@ def test_run1_fiber_exception_surfaces_on_handle():
     # A raised error inside a fiber must surface on .exception (and be
     # silenced from the unraisable hook via STACKWEAVE_GOROUTINE_PANIC=silent).
     script = r"""
-import sys, os; sys.path.insert(0, "src")
+import os
 os.environ["STACKWEAVE_GOROUTINE_PANIC"] = "silent"
 import stackweave, stackweave_c as rc
 out = {}
@@ -837,7 +825,6 @@ def test_run_n_gt_1_on_gil_build_raises():
     # run(n>1) needs the GIL off.  On a GIL build it must RAISE (never silently
     # serialize).  Force the GIL on in a subprocess and assert the RuntimeError.
     script = r"""
-import sys; sys.path.insert(0, "src")
 import stackweave
 try:
     stackweave.run(4, lambda: None)
@@ -845,7 +832,7 @@ try:
 except RuntimeError as e:
     print("RAISED" if "GIL" in str(e) or "free-threaded" in str(e) else "WRONG")
 """
-    # PYTHON_GIL=1 forces the GIL on even on the 3.13t build.
+    # PYTHON_GIL=1 forces the GIL on even on the free-threaded build.
     proc = _subproc(script, timeout=30, extra_env={"PYTHON_GIL": "1"})
     _assert_no_signal(proc, "run-gil-build")
     assert b"RAISED" in proc.stdout, \
@@ -875,8 +862,6 @@ def test_grow_down_toggle_roundtrips():
 # The time/context _spawn() routes through mn_fiber when mn_hub_count()>0, so
 # these exercise the cross-hub timer-fiber path the single-thread tests can't.
 # ==========================================================================
-@pytest.mark.skipif(not needs_free_threading(),
-                    reason="M:N needs GIL-disabled build")
 def test_timer_fires_under_mn():
     box = {}
 
@@ -889,8 +874,6 @@ def test_timer_fires_under_mn():
     assert box.get("ok") is True, "Timer did not fire under M:N"
 
 
-@pytest.mark.skipif(not needs_free_threading(),
-                    reason="M:N needs GIL-disabled build")
 def test_timer_reset_no_stale_fire_under_mn():
     # The stale-fire defense must hold under M:N too, where the old + new fire
     # fibers can run on DIFFERENT hubs concurrently.
@@ -907,8 +890,6 @@ def test_timer_reset_no_stale_fire_under_mn():
         "old deadline fired after Reset under M:N (cross-hub stale fire)"
 
 
-@pytest.mark.skipif(not needs_free_threading(),
-                    reason="M:N needs GIL-disabled build")
 def test_context_timeout_under_mn_deadline_exceeded():
     box = {}
 
@@ -923,8 +904,6 @@ def test_context_timeout_under_mn_deadline_exceeded():
         "WithTimeout did not auto-fire under M:N (err=%r)" % box.get("err")
 
 
-@pytest.mark.skipif(not needs_free_threading(),
-                    reason="M:N needs GIL-disabled build")
 def test_context_cascade_broadcast_under_mn():
     # Cancel cascade + N-waiter broadcast across hubs.  All grandchild waiters
     # must wake on the root cancel, regardless of which hub they parked on.
@@ -950,8 +929,6 @@ def test_context_cascade_broadcast_under_mn():
         "M:N cascade woke only %d/%d grandchild waiters" % (len(woke), N)
 
 
-@pytest.mark.skipif(not needs_free_threading(),
-                    reason="M:N needs GIL-disabled build")
 def test_blocking_under_mn_overlaps():
     # blocking() offloads to the pool so the fiber's hub keeps serving others.
     # Two fibers each doing a 50ms blocking() call finish in ~50ms, not ~100ms.
@@ -973,8 +950,6 @@ def test_blocking_under_mn_overlaps():
     ov.assert_peak_at_least(2, "two overlapping blocking() offloads")
 
 
-@pytest.mark.skipif(not needs_free_threading(),
-                    reason="M:N needs GIL-disabled build")
 def test_fiber_returns_none_under_mn():
     box = {}
 
@@ -987,8 +962,6 @@ def test_fiber_returns_none_under_mn():
     assert box.get("cur") is True, "current() must be non-None inside an M:N fiber"
 
 
-@pytest.mark.skipif(not needs_free_threading(),
-                    reason="M:N needs GIL-disabled build")
 def test_ticker_drop_under_mn():
     # Buffer-1 drop semantics hold under M:N with a slow consumer.
     box = {}
@@ -1019,7 +992,7 @@ def test_spawn_g_fault_during_timer_does_not_crash():
     # context all spawn a backing fiber; the failure must surface as a clean
     # Python error, never a segfault.
     script = r"""
-import sys, os; sys.path.insert(0, "src")
+import os
 os.environ["STACKWEAVE_GOROUTINE_PANIC"] = "silent"
 import stackweave, stackweave_c as rc
 import stackweave.time as rt
@@ -1052,7 +1025,7 @@ def test_spawn_stack_fault_during_context_does_not_crash():
     # STACKWEAVE_FAULT_SPAWN_STACK: fail the stack reservation of the next spawn.
     # The WithTimeout deadline fiber spawn must degrade cleanly, not corrupt.
     script = r"""
-import sys, os; sys.path.insert(0, "src")
+import os
 os.environ["STACKWEAVE_GOROUTINE_PANIC"] = "silent"
 import stackweave, stackweave_c as rc
 import stackweave.context as rctx
@@ -1082,7 +1055,7 @@ print("DONE")
 
 def test_spawn_tstate_fault_does_not_crash():
     script = r"""
-import sys, os; sys.path.insert(0, "src")
+import os
 os.environ["STACKWEAVE_GOROUTINE_PANIC"] = "silent"
 import stackweave, stackweave_c as rc
 import stackweave.time as rt
@@ -1198,15 +1171,15 @@ def test_current_and_sleep_from_foreign_thread():
 # AUGMENTATION (adversarial critic pass) -- conditions the first pass missed.
 #
 # Gaps found:
-#   * Argument-validation ASYMMETRY: Ticker validates its interval eagerly in
-#     __init__/Reset, but Timer/After/Sleep validate NOTHING -- a garbage
-#     duration (None/str/list) is accepted by the constructor and the TypeError
-#     is deferred to the DETACHED backing fiber, surfacing only via
-#     unraisablehook while the timer silently never fires.  FINDING.
+#   * Argument-validation ASYMMETRY: Ticker validated its interval eagerly in
+#     __init__/Reset, but Timer/After/Sleep validated NOTHING -- a garbage
+#     duration (None/str/list) was accepted by the constructor and the TypeError
+#     deferred to the DETACHED backing fiber, surfacing only via
+#     unraisablehook while the timer silently never fired.  Fixed (finding #12).
 #   * RE-ENTRANCY: run(1,...) nested inside a single-thread fiber WORKS (drives
-#     the same scheduler), but run(n>1,...) nested inside an M:N hub fiber HANGS
-#     -- the public run() API does not reject re-entrant mn_init and deadlocks
-#     instead of raising.  FINDING (bounded subprocess).
+#     the same scheduler), but run(n>1,...) nested inside an M:N hub fiber HUNG
+#     -- the public run() API did not reject re-entrant mn_init and deadlocked
+#     instead of raising.  Fixed (finding #3; bounded subprocess).
 #   * INTEGRITY (not just counts): set-equality on WHICH timers fired / WHICH
 #     contexts woke, and the actual fired VALUE, across mixed Stop/fire
 #     interleavings -- the first pass mostly counted.
@@ -1215,7 +1188,7 @@ def test_current_and_sleep_from_foreign_thread():
 #     does not tighten the parent.
 #   * Concurrent cancel RACE under M:N (many fibers cancel one ctx -> no
 #     close-on-closed crash), signal interruption of a parked recv (no crash /
-#     no hang), env-gated SYSMON/PREEMPT/HANDOFF + MN_BARRIER replay driving a
+#     no hang), env-gated SYSMON/PREEMPT + MN_BARRIER replay driving a
 #     timer+context+CPU workload (the first pass exercised NONE of these),
 #     fault injection on the SCALE + cascade paths, Goroutine handle read
 #     PRE-completion, run() called twice sequentially, blocking()/yield_now()/
@@ -1230,11 +1203,10 @@ def test_current_and_sleep_from_foreign_thread():
 # TypeError at the call site instead of vanishing into the backing fiber and
 # leaving the timer silently never firing.  (0/negative remain valid, as in Go;
 # this is a type check, not Ticker's positivity check.)
-def test_timer_nonnumeric_duration_should_raise_at_call_site_FINDING():
-    # CORRECT behavior: rt.Timer(None) raises a TypeError at construction.
-    # Currently it does not (the error escapes into the backing fiber), so this
-    # xfails.  Run under a captured unraisablehook so the deferred fiber error
-    # doesn't pollute output, and bound the never-firing timer.
+def test_timer_nonnumeric_duration_raises_at_call_site():
+    # rt.Timer(None) raises a TypeError at construction.  Run under a captured
+    # unraisablehook so a regression's deferred fiber error doesn't pollute
+    # output, and bound the never-firing timer.
     def f():
         captured = []
         prev = sys.unraisablehook
@@ -1256,7 +1228,7 @@ def test_timer_nonnumeric_duration_should_raise_at_call_site_FINDING():
         "call site (error was deferred into the backing fiber)")
 
 
-def test_timer_bad_duration_does_not_crash_only_silently_fails():
+def test_timer_after_sleep_reject_bad_duration_at_call_site():
     # REGRESSION (was finding #12, the str-duration variant): a non-numeric
     # duration is rejected eagerly at the call site with TypeError -- across
     # Timer, After AND Sleep -- instead of being accepted and TypeError-ing
@@ -1297,15 +1269,13 @@ def test_nested_run1_inside_fiber_drives_correctly():
         % order
 
 
-@pytest.mark.skipif(not needs_free_threading(),
-                    reason="M:N needs GIL-disabled build")
 # REGRESSION (was finding #3): stackweave.run(n>1) called re-entrantly from inside
 # an M:N hub fiber now raises RuntimeError promptly instead of deadlocking on a
 # nested mn_init.  run() guards on mn_hub_count() > 0.  (run(1) re-entrancy stays
 # supported.)
-def test_nested_run_n_inside_mn_hub_hangs_FINDING():
+def test_nested_run_n_inside_mn_hub_raises():
     script = r"""
-import sys, os; sys.path.insert(0, "src")
+import sys
 import stackweave
 def main():
     try:
@@ -1487,11 +1457,10 @@ def test_blocking_outside_fiber_runs_inline():
     # state), so the same call is safe in either context.  Run in a FRESH
     # subprocess: an in-process call here would (after this file's M:N tests have
     # already run + torn down a hub pool) abort the whole interpreter -- that
-    # teardown-order abort is captured separately as
-    # test_blocking_outside_fiber_after_mn_run_aborts_FINDING.  Here we verify
+    # teardown-order abort is checked separately by
+    # test_blocking_outside_fiber_after_mn_run_runs_inline.  Here we verify
     # the documented inline-fallback contract on a clean process.
     script = r"""
-import sys; sys.path.insert(0, "src")
 import stackweave
 assert stackweave.current() is None
 r = stackweave.blocking(lambda a, b: a * b, 6, 7)
@@ -1511,11 +1480,8 @@ print("RESULT", r)
 # TSS was desynced by the M:N teardown).  py_blocking_worker now calls directly
 # when a tstate is already attached (the inline case), so it runs fn inline and
 # returns 42 as on a fresh process.
-def test_blocking_outside_fiber_after_mn_run_aborts_FINDING():
-    if not needs_free_threading():
-        pytest.skip("M:N needs GIL-disabled build")
+def test_blocking_outside_fiber_after_mn_run_runs_inline():
     script = r"""
-import sys; sys.path.insert(0, "src")
 import stackweave
 stackweave.run(2, lambda: None)        # exercise + tear down an M:N scheduler
 assert stackweave.mn_hub_count() == 0
@@ -1580,8 +1546,6 @@ def test_ticker_rapid_reset_storm_no_stale_pileup():
 
 
 # ----- concurrent cancel RACE under M:N: no close-on-closed crash ------------
-@pytest.mark.skipif(not needs_free_threading(),
-                    reason="M:N needs GIL-disabled build")
 def test_concurrent_cancel_same_ctx_under_mn_no_crash():
     # _cancel() guards on self._err but close() on an already-closed channel
     # raises -- under M:N, many fibers across hubs calling the SAME cancel()
@@ -1619,7 +1583,7 @@ def test_signal_during_parked_timer_recv_no_crash_no_hang():
     # a subprocess so a crash is a contained signal returncode and a hang is a
     # bounded TimeoutExpired.
     script = r"""
-import sys, os, signal; sys.path.insert(0, "src")
+import signal
 import stackweave, stackweave_c as rc
 import stackweave.time as rt
 def main():
@@ -1651,16 +1615,15 @@ print("DONE")
             out, proc.stderr.decode()[-500:])
 
 
-# ----- env-gated modes: SYSMON / PREEMPT / HANDOFF over timer+ctx+CPU --------
-@pytest.mark.skipif(not needs_free_threading(),
-                    reason="M:N needs GIL-disabled build")
-def test_env_modes_sysmon_preempt_handoff_over_timer_ctx_workload():
+# ----- env-gated modes: SYSMON / PREEMPT over timer+ctx+CPU ------------------
+def test_env_modes_sysmon_preempt_over_timer_ctx_workload():
     # Drive a workload that has BOTH a CPU-bound fiber (trips preempt/sysmon) and
-    # cooperative timer/context fibers, under SYSMON + PREEMPT + HANDOFF all on.
+    # cooperative timer/context fibers, with sysmon's wedge budget cut to 8 ms,
+    # which is also the preemption slice.
     # The detectors must not crash the timer/context machinery; everything still
     # completes correctly.  Subprocess so a detector-induced crash is contained.
     script = r"""
-import sys, os, time; sys.path.insert(0, "src")
+import time
 import stackweave, stackweave_c as rc
 import stackweave.time as rt
 import stackweave.context as rctx
@@ -1685,7 +1648,6 @@ print("MODES_OK" if ok else ("MODES_BAD %r" % box))
 """
     proc = _subproc(script, timeout=40, extra_env={
         "STACKWEAVE_SYSMON": "1", "STACKWEAVE_SYSMON_QUIET": "1", "STACKWEAVE_SYSMON_MS": "8",
-        "STACKWEAVE_HANDOFF": "1", "STACKWEAVE_HANDOFF_POOL": "2",
     })
     _assert_no_signal(proc, "env-modes")
     assert b"MODES_OK" in proc.stdout, (
@@ -1693,15 +1655,13 @@ print("MODES_OK" if ok else ("MODES_BAD %r" % box))
             proc.stdout, proc.stderr.decode()[-800:]))
 
 
-@pytest.mark.skipif(not needs_free_threading(),
-                    reason="M:N needs GIL-disabled build")
+@SEEDED_MN_TODO
 def test_mn_barrier_deterministic_replay_timer_ctx():
     # The deterministic controlled-replay barrier (STACKWEAVE_MN_BARRIER + seed)
     # must still deliver correct timer/context results -- the barrier reorders
     # scheduling decisions but must not break a timer fire or a deadline.  Two
     # runs with the SAME seed must both succeed (stability of the replay).
     script = r"""
-import sys, os; sys.path.insert(0, "src")
 import stackweave, stackweave_c as rc
 import stackweave.time as rt
 import stackweave.context as rctx
@@ -1731,7 +1691,7 @@ def test_spawn_g_fault_during_context_cascade_does_not_crash():
     # cascade must degrade to a clean Python error, never a segfault, and a
     # cancel() of whatever WAS built must not crash.
     script = r"""
-import sys, os; sys.path.insert(0, "src")
+import os
 os.environ["STACKWEAVE_GOROUTINE_PANIC"] = "silent"
 import stackweave, stackweave_c as rc
 import stackweave.context as rctx
@@ -1767,7 +1727,7 @@ def test_spawn_stack_fault_at_timer_scale_does_not_crash():
     # reservation fails; that must surface cleanly and the surviving timers must
     # still be drivable without a crash.
     script = r"""
-import sys, os; sys.path.insert(0, "src")
+import os
 os.environ["STACKWEAVE_GOROUTINE_PANIC"] = "silent"
 import stackweave, stackweave_c as rc
 import stackweave.time as rt
@@ -1839,4 +1799,4 @@ def test_sleep_zero_and_negative_inside_fiber_return_promptly():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v", "-p", "no:cacheprovider", "-n0"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

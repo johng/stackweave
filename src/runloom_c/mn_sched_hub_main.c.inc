@@ -200,8 +200,13 @@ static int runloom_mn_any_stealable_work(const runloom_hub_t *self)
      * through.  The producer side kicks after every local push, so the Dekker
      * pair stays exact; >0 can only cost an extra scan, never lose a wake. */
     over = runloom_use_global_runq() ? 0 : 1;
-    for (i = 0; i < runloom_hub_count; i++)
+    for (i = 0; i < runloom_hub_count; i++) {
         if (runloom_cldeque_size(&runloom_hubs[i].deque) > over) return 1;
+        /* A yield queue is pushed only by its owner at its own pick step, so
+         * one g there is the one it is about to run: >1, as the push side's
+         * wakep (runloom_mn_requeue_local). */
+        if (runloom_cldeque_size(&runloom_hubs[i].yieldq) > 1) return 1;
+    }
     return 0;
 }
 
@@ -289,6 +294,71 @@ static void runloom_mn_park_exit(runloom_hub_t *h)
     if (__atomic_compare_exchange_n(&h->idle_parked, &expect, 0, 0,
                                     __ATOMIC_ACQ_REL, __ATOMIC_RELAXED))
         __atomic_sub_fetch(&runloom_mn_nidle, 1, __ATOMIC_ACQ_REL);
+}
+
+/* ---- Yield queue (h->yieldq) -----------------------------------------------
+ * A g a hub switches out still runnable -- a yield, a sleep its timer ended,
+ * a fresh g its full deque refused -- used to wait on the hub's ready ring,
+ * which only that hub pops: the g ran there again however long the hub stayed
+ * busy, while other hubs idled.  Unpinned, it now waits on the yield queue, a
+ * Chase-Lev deque only this hub pushes and every consumer takes from the TOP:
+ * this hub too (runloom_mn_yieldq_pop), so its own order stays the ring's
+ * FIFO, and an idle hub steals there (runloom_mn_yieldq_steal).
+ *
+ * Push only from the hub's own loop, once the g has switched out and its
+ * tstate is detached, never from inside the fiber: a thief may resume it the
+ * moment it is on the queue.  It is then exactly a parked g that a wake made
+ * runnable, so any hub may attach its tstate.  Every g here is RUNNING (a
+ * yield leaves RUNNING, a timer claim goes PARKED->RUNNING, a fresh g spawns
+ * RUNNING) and holds no queue ref, so whoever takes it runs no claim.
+ *
+ * The ready ring keeps what must not move: gs pinned to this hub, and a
+ * preempted g (runloom_preempt_eval_frame), whose fiber stopped wherever its
+ * time slice ran out -- perhaps holding a lock that keys on the OS thread
+ * (threading.RLock, an import's _ModuleLock), which a move would orphan. */
+static unsigned long long runloom_mn_yieldq_steals_total = 0;
+
+static void runloom_mn_requeue_local(runloom_hub_t *h, runloom_g_t *g)
+{
+    /* A pinned g stays on the ring.  Controlled replay never steals. */
+    if (__atomic_load_n(&g->pin_hub1, __ATOMIC_ACQUIRE) == 0 &&
+        !runloom_mn_ctrl_no_steal() &&
+        runloom_cldeque_push(&h->yieldq, g) == 0) {
+        /* Surplus for a deep-parked hub: one g for us, one to steal -- the
+         * threshold the park-side re-scan (runloom_mn_any_stealable_work)
+         * uses, which keeps the Dekker pair exact. */
+        if (runloom_cldeque_size(&h->yieldq) > 1) runloom_mn_wakep_one();
+        return;
+    }
+    runloom_sched_ready_push(&h->sched, g);
+}
+
+/* The owner's take: the TOP, as a thief takes it.  A steal that loses its CAS
+ * to a thief returns NULL with gs still queued, so retry while any remain
+ * (bottom is ours, and top only grows, so this ends). */
+static runloom_g_t *runloom_mn_yieldq_pop(runloom_hub_t *h)
+{
+    while (runloom_cldeque_size(&h->yieldq) > 0) {
+        runloom_g_t *g = (runloom_g_t *)runloom_cldeque_steal(&h->yieldq);
+        if (g != NULL) return g;
+    }
+    return NULL;
+}
+
+/* A thief's take from hub v's yield queue.  Leave v the g it is about to run:
+ * steal from a queue of two or more, or of one only while v is mid-resume,
+ * where that g waits behind a running fiber for up to a time slice. */
+static runloom_g_t *runloom_mn_yieldq_steal(runloom_hub_t *v)
+{
+    long n = runloom_cldeque_size(&v->yieldq);
+    runloom_g_t *g;
+    if (n <= 0) return NULL;
+    if (n == 1 && __atomic_load_n(&v->resume_start_ns, __ATOMIC_RELAXED) == 0)
+        return NULL;
+    g = (runloom_g_t *)runloom_cldeque_steal(&v->yieldq);
+    if (g != NULL)
+        __atomic_add_fetch(&runloom_mn_yieldq_steals_total, 1, __ATOMIC_RELAXED);
+    return g;
 }
 
 static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
@@ -392,8 +462,9 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
     (void)runloom_netpoll_hub_epoll_fd();
 
     /* sched_yield fairness (see the pick block below).  ready_streak counts
-     * consecutive ready-ring services; after starve_bound of them we force one
-     * deque turn so a busy sched_yield loop can't starve never-run fibers.
+     * consecutive ready-ring / yield-queue services; after starve_bound of
+     * them we force one deque turn so a busy sched_yield loop can't starve
+     * never-run fibers.
      * Hub-local (this thread only).  starve_bound resolved once from env;
      * default 64, 0 disables (legacy ready-before-deque).  First touch across
      * hubs is a relaxed-atomic lazy-static loaded into the loop-invariant local
@@ -419,6 +490,7 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
      * non-blocking self-pump below (see the loop top). */
     unsigned int self_pump_ctr = 0;
     unsigned int forced_turns = 0;     /* alternates the forced turn's source (per-g mode) */
+    unsigned int local_turns = 0;      /* alternates ready ring / yield queue */
     (void)self_pump_ctr;
     /* Consecutive idle-pump iterations with no resumed g; drives the adaptive
      * idle-pump backoff (reset to 0 at the resume site below).  Thread-local to
@@ -596,13 +668,13 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                     RUNLOOM_COVER_HIT(RUNLOOM_COV_DEQUE_FULL_FALLBACK);
                     /* Deque full (>RUNLOOM_CLDEQUE_CAP=4096 fresh gs on this
                      * hub -- e.g. a big spawn burst at low hub count, the
-                     * H=2/N>=8K case).  Fall back to the local ready FIFO,
-                     * which grows on demand.  These gs run hub-pinned
-                     * rather than stealable, but are NEVER dropped: the
-                     * previous code ignored the push return and silently
-                     * dropped the g, orphaning one whose pending-inc was
-                     * already counted -> mn_run hung forever. */
-                    runloom_sched_ready_push(&h->sched, sub);
+                     * H=2/N>=8K case).  Fall back to the yield queue, still
+                     * stealable, and past that to the local ready FIFO,
+                     * which grows on demand -- NEVER dropped: the previous
+                     * code ignored the push return and silently dropped the
+                     * g, orphaning one whose pending-inc was already
+                     * counted -> mn_run hung forever. */
+                    runloom_mn_requeue_local(h, sub);
                 }
 #ifdef RUNLOOM_DBG_BADCORO
                 prev = sub;
@@ -677,23 +749,36 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                 /* The timer is a wake, and the sleep release left this g in
                  * wake_state PARKED.  Claim it back to RUNNING through the
                  * state machine (it has no other waker, so the CAS normally
-                 * wins) and resume it hub-pinned on the local FIFO.  If the
-                 * CAS loses, a concurrent waker (a g sleeping AND wakeable,
-                 * e.g. a select-with-timeout) already drove PARKED->QUEUED and
-                 * enqueued it on the global runq -- do NOT also push it here,
+                 * wins) and queue it locally (runloom_mn_requeue_local: the
+                 * stealable yield queue, or the ring if pinned here).  A g
+                 * pinned to ANOTHER hub (G.pin while it slept) is woken as a
+                 * channel wake would wake it instead -- PARKED->QUEUED with a
+                 * queue ref, onto the global run-queue, whose pull honours
+                 * the pin.  If the CAS loses, a concurrent waker (a g sleeping
+                 * AND wakeable, e.g. a select-with-timeout) already drove
+                 * PARKED->QUEUED and enqueued it -- do NOT also push it here,
                  * or it would be scheduled twice. */
                 {
                     int pexp = RUNLOOM_WS_PARKED;
+                    int pin1 = __atomic_load_n(&woke->pin_hub1, __ATOMIC_ACQUIRE);
+                    int elsewhere = pin1 != 0 && pin1 != h->id + 1;
                     for (;;) {
                         if (pexp == RUNLOOM_WS_PARKED) {
                             if (__atomic_compare_exchange_n(&woke->wake_state, &pexp,
-                                                            RUNLOOM_WS_RUNNING, 0,
-                                                            __ATOMIC_ACQ_REL,
+                                                            elsewhere ? RUNLOOM_WS_QUEUED
+                                                                      : RUNLOOM_WS_RUNNING,
+                                                            0, __ATOMIC_ACQ_REL,
                                                             __ATOMIC_ACQUIRE)) {
+                                if (elsewhere) {
+                                    RUNLOOM_WS_NOTE(RUNLOOM_WS_PARKED, RUNLOOM_WS_QUEUED);
+                                    runloom_g_incref(woke);   /* queue ref */
+                                    runloom_mn_woken_enqueue(woke);
+                                    break;
+                                }
                                 /* TIMER_CLAIM won: PARKED -> RUNNING (the sole edge
                                  * into RUNNING that does not pass through QUEUED). */
                                 RUNLOOM_WS_NOTE(RUNLOOM_WS_PARKED, RUNLOOM_WS_RUNNING);
-                                runloom_sched_ready_push(&h->sched, woke);
+                                runloom_mn_requeue_local(h, woke);
                                 break;
                             }
                         } else if (pexp == RUNLOOM_WS_SWEEPING) {
@@ -726,14 +811,14 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
             runloom_sched_drain_timers(&h->sched, tnow);
         }
 
-        /* Pick the next g.  Normal order: ready ring (yielded/woken -- "hot")
-         * before the deque (fresh, never-run gs), which keeps woken I/O
-         * fibers low-latency.  BUT a fiber busy-looping on sched_yield
-         * re-enters the ready ring every time, so pure ready-before-deque lets
+        /* Pick the next g.  Normal order: ready ring and yield queue
+         * (yielded/timer-woken -- "hot") before the deque (fresh, never-run
+         * gs, and locally-woken ones).  BUT a fiber busy-looping on sched_yield
+         * re-enters the yield queue every time, so pure ready-before-deque lets
          * it starve every fresh g forever (they never get a first run -- the
          * sched_yield-fairness bug).  Bound it: after starve_bound consecutive
-         * ready-ring services, force ONE deque turn.  ready_streak resets the
-         * moment the ready ring drains naturally, so workloads that aren't
+         * services from those two, force ONE deque turn.  ready_streak resets
+         * the moment both drain naturally, so workloads that aren't
          * monopolizing never trip it; a sustained yielder pays only a 1-in-
          * starve_bound interleave.  All hub-local + single-consumer; the deque
          * is touched via its normal owner-pop, never re-ordered internally. */
@@ -776,11 +861,21 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
             }
         }
         if (g == NULL) {
-            g = runloom_sched_ready_pop(&h->sched);     /* local yielded/woken */
+            /* The two local FIFOs -- the ready ring (pinned and preempted gs)
+             * and the yield queue (the rest) -- take turns while both hold
+             * gs, so a preempted CPU-bound g and a yielder alternate, as
+             * they did when both lived on the ring. */
+            if ((local_turns++ & 1u) == 0) {
+                g = runloom_sched_ready_pop(&h->sched);
+                if (g == NULL) g = runloom_mn_yieldq_pop(h);
+            } else {
+                g = runloom_mn_yieldq_pop(h);
+                if (g == NULL) g = runloom_sched_ready_pop(&h->sched);
+            }
             if (g != NULL) {
                 ready_streak++;
 #ifdef RUNLOOM_DBG_BADCORO
-                gsrc = 2;      /* local ready FIFO */
+                gsrc = 2;      /* ready ring or own yield queue */
 #endif
             } else {
                 g = (runloom_g_t *)runloom_cldeque_pop(&h->deque);  /* own fresh (or locally-woken) */
@@ -830,7 +925,7 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
              * each hub starts at its own id and steps by a coprime stride, so K
              * idle hubs don't all hammer hub 0's steal CAS in lockstep. */
             int n = runloom_hub_count;
-            int stride, pos, k;
+            int stride, pos, start, k;
             if (runloom_sched_random_on()) {
                 /* Random start + random coprime stride: still visits every
                  * victim exactly once (coprime stride), but in a schedule that
@@ -843,6 +938,7 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                 stride = runloom_steal_stride(n, h->id);
                 pos = h->id;
             }
+            start = pos;
             for (k = 0; k < n; k++, pos += stride) {
                 int i = pos % n;
                 if (i == h->id) continue;
@@ -865,6 +961,19 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                      * that might inspect this hub's queue. */
                     runloom_mn_pending_steal(&runloom_hubs[i], h);
                     break;
+                }
+            }
+            /* No deque had a g: take one another hub switched out runnable
+             * (its yield queue), in the same victim order. */
+            for (k = 0, pos = start; g == NULL && k < n; k++, pos += stride) {
+                int i = pos % n;
+                if (i == h->id) continue;
+                g = runloom_mn_yieldq_steal(&runloom_hubs[i]);
+                if (g != NULL) {
+#ifdef RUNLOOM_DBG_BADCORO
+                    gsrc = 6; gvic = i;   /* stole from hub i's yield queue */
+#endif
+                    runloom_mn_pending_steal(&runloom_hubs[i], h);
                 }
             }
           }
@@ -1532,18 +1641,19 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                     if (from_runq) runloom_g_decref(g);   /* old queue ref */
                 }
             } else {
-                /* Cooperative yield_current (already on the local FIFO) or a
-                 * raw runloom_coro_yield: the g stays runnable and hub-pinned,
-                 * still owned by this hub, so it ends at RUNNING.  A store is
-                 * safe -- a yielding g holds no live parker, so no wake_g can
-                 * fire to race it.  yield_current already pushed itself to
-                 * the FIFO; a raw yield (self_queued==0) did not, so push it
-                 * here. */
+                /* A yield (yield_current, or a raw runloom_coro_yield) or a
+                 * preemption: the g stays runnable, still owned by this hub,
+                 * so it ends at RUNNING.  A store is safe -- a yielding g
+                 * holds no live parker, so no wake_g can fire to race it.  A
+                 * preempted g already pushed itself onto the ready ring
+                 * (self_queued); a yield did not, so queue it now, with its
+                 * tstate detached above: the yield queue, where another hub
+                 * may take it, unless it is pinned. */
                 RUNLOOM_WS_NOTE(RUNLOOM_WS_RUNNING, RUNLOOM_WS_RUNNING);
                 __atomic_store_n(&g->wake_state, RUNLOOM_WS_RUNNING,
                                  __ATOMIC_RELEASE);
                 if (from_runq) runloom_g_decref(g);       /* old queue ref */
-                if (!self_queued) runloom_sched_ready_push(&h->sched, g);
+                if (!self_queued) runloom_mn_requeue_local(h, g);
             }
         }
     }

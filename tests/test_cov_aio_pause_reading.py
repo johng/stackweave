@@ -16,6 +16,7 @@ import time
 import pytest
 
 import stackweave.aio as aio
+
 from adv_util import hang_guard
 
 
@@ -225,4 +226,4 @@ def test_pause_reading_withholds_large_payload():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

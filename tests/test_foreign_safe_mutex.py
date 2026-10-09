@@ -8,31 +8,27 @@ dead loop -> stranded fiber, foreign thread spins forever.  Empirically this hit
 Once ~1/240, WaitGroup 58/600, CoLock 31/400 before the fix.
 
 These tests drive the affected primitives from REAL OS threads concurrently with
-fibers.  A strand manifests as a hang (subprocess.TimeoutExpired); a broken mutex
-manifests as lost counter updates.  Both are asserted against.
+fibers.  A strand manifests as a hang (the child outlives its timeout); a
+broken mutex manifests as lost counter updates.  Both are asserted against.
 """
-import os
-import subprocess
 import sys
 import textwrap
 
 import pytest
 
-_PY = sys.executable
-_ENV = dict(os.environ, PYTHON_GIL="0")
+from adv_util import run_python
 
 
 def _run(body, timeout=40):
     script = "import stackweave_c as rc, threading, time, sys\n" + textwrap.dedent(body)
-    return subprocess.run([_PY, "-c", script], env=_ENV,
-                          capture_output=True, timeout=timeout)
+    return run_python(script, timeout=timeout)
 
 
 def test_cofmutex_mutual_exclusion_fibers_and_foreign_threads():
     # A non-atomic counter bumped under one CoLock (CoFMutex-backed) by N fibers
     # AND M real OS threads.  With genuine mutual exclusion the final value is
-    # exact; a lost update (no exclusion) shows a short count.  A strand shows a
-    # TimeoutExpired.
+    # exact; a lost update (no exclusion) shows a short count.  A strand shows as
+    # the child outliving its timeout.
     p = _run("""
         from stackweave.monkey.locks import CoLock
         lk = CoLock(); counter = [0]; K = 2000; NFIB = 4; NFOR = 4
@@ -54,7 +50,7 @@ def test_cofmutex_mutual_exclusion_fibers_and_foreign_threads():
         exp = (NFIB + NFOR) * K
         print("MX_OK" if counter[0] == exp else "MX_FAIL got=%d exp=%d" % (counter[0], exp))
     """)
-    assert b"MX_OK" in p.stdout, (p.stdout, p.stderr)
+    assert "MX_OK" in p.stdout, (p.stdout, p.stderr)
 
 
 def test_cofmutex_foreign_holder_does_not_strand_fiber():
@@ -84,7 +80,7 @@ def test_cofmutex_foreign_holder_does_not_strand_fiber():
                 print("STRAND round=%d out=%r" % (_round, out)); sys.exit(1)
         print("NO_STRAND")
     """)
-    assert b"NO_STRAND" in p.stdout, (p.stdout, p.stderr)
+    assert "NO_STRAND" in p.stdout, (p.stdout, p.stderr)
 
 
 def test_waitgroup_foreign_waiter_not_stranded():
@@ -108,4 +104,8 @@ def test_waitgroup_foreign_waiter_not_stranded():
                 print("STRAND round=%d out=%r" % (_round, out)); sys.exit(1)
         print("NO_STRAND")
     """)
-    assert b"NO_STRAND" in p.stdout, (p.stdout, p.stderr)
+    assert "NO_STRAND" in p.stdout, (p.stdout, p.stderr)
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

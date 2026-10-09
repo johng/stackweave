@@ -18,20 +18,13 @@ it (runloom_mn_nested_here), which takes the single-thread paths.
 Each case runs in its own process under run(2), with busy sibling fibers so
 the hubs have other work and nothing takes a fast path.
 """
-import os
-import pathlib
-import subprocess
 import sys
 import textwrap
 
 import pytest
 
-from adv_util import needs_free_threading
+from adv_util import run_python
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
-
-pytestmark = pytest.mark.skipif(not needs_free_threading(),
-                                reason="M:N needs free-threaded CPython")
 
 PRELUDE = textwrap.dedent("""
     import faulthandler, os, socket, sys, time
@@ -53,9 +46,7 @@ PRELUDE = textwrap.dedent("""
 
 
 def _run(body, timeout=120):
-    p = subprocess.run([sys.executable, "-c", PRELUDE + textwrap.dedent(body)],
-                       cwd=ROOT, env=dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src"),
-                       capture_output=True, text=True, timeout=timeout)
+    p = run_python(PRELUDE + textwrap.dedent(body), timeout=timeout)
     assert p.returncode == 0, (p.returncode, p.stdout[-2000:] + p.stderr[-3000:])
     return p.stdout + p.stderr
 
@@ -485,3 +476,7 @@ def test_a_nest_moves_with_its_fiber_to_another_hub():
               res.get("exc"), res.get("ready"), res.get("data"))
     """)
     assert "RES 2 True 2 ValueError('from-A') 1 b'ping'" in out, out
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

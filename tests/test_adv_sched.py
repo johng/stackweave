@@ -6,13 +6,10 @@ fiber exception handling.  Several of these are *negative-space* checks:
 a lost wake or a teardown deadlock shows up as a `hang_guard` _exit with a
 pinpointed traceback, not a silently-green run.
 
-Includes one xfail-documented FINDING: an unhandled exception inside a bare
-`stackweave_c.fiber` fiber is silently swallowed -- not raised out of run(),
-not retrievable via `G.result`, and not even written to stderr / the
-unraisable hook.  In a Go-parity runtime a fiber panic should at minimum
-be observable; today it vanishes.
+An unhandled exception inside a bare `stackweave_c.fiber` fiber is reported
+through the unraisable hook and kept on `G.exception`, not raised out of run()
+(it used to vanish silently).
 """
-import io
 import os
 import sys
 
@@ -20,9 +17,8 @@ import pytest
 
 import stackweave
 import stackweave_c as rc
-from adv_util import hang_guard, assert_faster_than, needs_free_threading
 
-FT = needs_free_threading()
+from adv_util import hang_guard, run_python
 
 
 def _run_single(fn):
@@ -85,11 +81,11 @@ def test_current_g_none_outside_fiber():
 
 
 # --------------------------------------------------------------------------
-# FINDING: unhandled fiber exceptions vanish silently
+# unhandled fiber exceptions are reported and retrievable
 # --------------------------------------------------------------------------
 def test_fiber_exception_is_reported_and_retrievable():
-    # Regression for the swallowed-exception FINDING (now fixed): an unhandled
-    # fiber exception is reported via sys.unraisablehook (default
+    # Regression: an unhandled fiber exception used to vanish silently.  It is
+    # now reported via sys.unraisablehook (default
     # STACKWEAVE_GOROUTINE_PANIC=print) AND retrievable on G.exception.  run() still
     # does NOT raise it (report, not propagate) and G.result stays None.
     # NB: PyErr_WriteUnraisable calls sys.unraisablehook, so we capture there --
@@ -116,7 +112,7 @@ def test_fiber_exception_is_reported_and_retrievable():
 
 
 _SILENT_SCRIPT = r'''
-import sys, os; sys.path.insert(0, "src")
+import sys, os
 import stackweave_c as rc
 def boom():
     raise ValueError("SILENT_MARKER_X")
@@ -133,12 +129,8 @@ sys.stdout.write("RETRIEVABLE\n" if isinstance(g.exception, ValueError) else "LO
 def test_fiber_exception_silent_mode_opt_out():
     # STACKWEAVE_GOROUTINE_PANIC=silent restores no-report (still retrievable).
     # Subprocess: the mode is cached process-wide.
-    import subprocess
-    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    env = dict(os.environ, STACKWEAVE_GOROUTINE_PANIC="silent",
-               PYTHON_GIL="0", PYTHONPATH="src")
-    p = subprocess.run([sys.executable, "-c", _SILENT_SCRIPT], cwd=repo, env=env,
-                       capture_output=True, text=True, timeout=30)
+    p = run_python(_SILENT_SCRIPT, timeout=30,
+                   env={"STACKWEAVE_GOROUTINE_PANIC": "silent"})
     assert "QUIET" in p.stdout, "silent mode still printed:\n%s%s" % (p.stdout, p.stderr)
     assert "RETRIEVABLE" in p.stdout, "G.exception lost in silent mode"
 
@@ -268,7 +260,6 @@ def test_mn_fini_without_init_is_safe():
     assert rc.mn_hub_count() == 0
 
 
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_mn_init_fini_cycles_no_hang():
     # Rapid lifecycle churn is the classic mn_fini lost-wakeup-join hang surface.
     with hang_guard(60, "mn init/fini churn"):
@@ -282,7 +273,6 @@ def test_mn_init_fini_cycles_no_hang():
             assert rc.mn_hub_count() == 0
 
 
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_mn_spawn_storm_completion_count():
     N = 5000
     counter = bytearray(1)         # single-writer slot avoids the GIL-off RMW race
@@ -302,7 +292,6 @@ def test_mn_spawn_storm_completion_count():
         stackweave.run(4, main)
 
 
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_mn_init_spawn_fini_without_run_drains():
     # Spawn onto live hubs then tear down WITHOUT mn_run: hubs run pending gs
     # immediately, and fini must join cleanly (no orphaned hub thread / hang).
@@ -317,9 +306,8 @@ def test_mn_init_spawn_fini_without_run_drains():
 
 # --------------------------------------------------------------------------
 # CPU-bound fiber must not permanently starve a sibling (sysmon/preempt).
-# A genuine starvation hang trips the guard -> a finding.
+# A genuine starvation hang trips the guard and fails the test.
 # --------------------------------------------------------------------------
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_cpu_bound_fiber_does_not_starve_sibling():
     progress = []
     def cpu_hog():
@@ -379,4 +367,4 @@ def test_hang_guard_surfaces_an_unraisable_immediately(tmp_path):
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

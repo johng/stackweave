@@ -19,6 +19,10 @@ Fix: a second memset clears `[offsetof(arena), offsetof(id))` after the atomic
 state store, restoring the documented "everything before the introspection block
 is cleared" contract (and defending any future field added in that gap).
 """
+import sys
+
+import pytest
+
 import stackweave
 import stackweave_c
 
@@ -69,3 +73,7 @@ def test_pass_index_not_leaked_across_recycle():
             nhubs = 2                     # fiber_n needs the M:N runtime (n > 1)
         leaked = _round(nhubs, 256)
         assert leaked == [], (i, nhubs, leaked[:8])
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

@@ -7,7 +7,10 @@ the same values -- distinct cells, SHARED code (the code was never the problem).
 A module-level def captures nothing and already scales, so @hot is a no-op there.
 Runnable standalone or under pytest.
 """
+import sys
 import threading
+
+import pytest
 
 import stackweave
 
@@ -82,8 +85,4 @@ def test_hot_under_mn_scheduler():
 
 
 if __name__ == "__main__":
-    for _name, _fn in sorted(globals().items()):
-        if _name.startswith("test_") and callable(_fn):
-            _fn()
-            print("PASS", _name)
-    print("all hot tests passed")
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

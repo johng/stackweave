@@ -20,42 +20,27 @@ two reasons: mn_init/mn_fini install process-global hub threads (a clean process
 per test avoids cross-test contamination), and a scheduler regression can SIGSEGV
 or hang -- a subprocess turns that into a clean test failure, not a dead pytest
 run.  Subprocesses run free-threaded (PYTHON_GIL=0) so run(n>1) genuinely spreads
-across hubs, and PYTHON_TLBC=0 (set at launch) both disables the CPython 3.14t
-TLBC crash and makes stackweave.run()'s re-exec-with-TLBC-off a no-op -- so the
-high-level stackweave.run() we exercise here runs in-process, not via a re-exec.
+across hubs, and PYTHON_TLBC=0 (set at launch) makes stackweave.run()'s
+re-exec-with-TLBC-off a no-op -- so the high-level stackweave.run() we exercise
+here runs in-process, not via a re-exec.
 """
-import os
-import subprocess
 import sys
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+import pytest
+
+from adv_util import run_python
 
 
 def run_snippet(code, timeout=60):
     """Run a stackweave snippet in a fresh free-threaded subprocess.
     Returns (returncode, stdout, stderr).  The snippet prints 'PASS' on
     success."""
-    preamble = (
-        "import sys; sys.path.insert(0, %r)\n"
-        "import stackweave, stackweave_c, threading\n" % os.path.join(REPO, "src")
-    )
-    env = dict(os.environ)
-    env["PYTHON_GIL"] = "0"            # force GIL off: real parallel hubs
-    env["STACKWEAVE_GIL"] = "0"
-    env["PYTHON_TLBC"] = "0"           # 3.14t TLBC off + run() re-exec becomes a no-op
-    env["STACKWEAVE_TLBC_REEXEC"] = "1"   # belt-and-suspenders: never re-exec pytest
-    env["STACKWEAVE_GOROUTINE_PANIC"] = "silent"  # a deliberately-raising fiber shouldn't spam stderr
-    try:
-        p = subprocess.run(
-            [sys.executable, "-c", preamble + code],
-            cwd=REPO, env=env, timeout=timeout,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    except subprocess.TimeoutExpired as e:
-        # A wedge / lost-wake hang: surface as rc=124 (like coreutils timeout)
-        # rather than letting TimeoutExpired escape as a test error.
-        out = e.stdout.decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
-        err = e.stderr.decode() if isinstance(e.stderr, bytes) else (e.stderr or "")
-        return 124, out, err + "\n[run_snippet: timed out after {0}s]".format(timeout)
+    preamble = "import stackweave, stackweave_c, threading\n"
+    p = run_python(preamble + code, timeout=timeout, env={
+        "PYTHON_TLBC": "0",            # 3.14t TLBC off + run() re-exec becomes a no-op
+        "STACKWEAVE_TLBC_REEXEC": "1",   # belt-and-suspenders: never re-exec pytest
+        "STACKWEAVE_GOROUTINE_PANIC": "silent",  # a deliberately-raising fiber shouldn't spam stderr
+    })
     return p.returncode, p.stdout, p.stderr
 
 
@@ -178,8 +163,4 @@ print('PASS distinct_hubs=%d completed=%d' % (distinct, completed))
 
 
 if __name__ == "__main__":
-    test_run1_returns_working_goroutine()
-    test_run1_c_entry_symbol_identity()
-    test_run1_nested_spawn_and_exception_capture()
-    test_mn_fire_and_forget_all_run()
-    print("all ok")
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

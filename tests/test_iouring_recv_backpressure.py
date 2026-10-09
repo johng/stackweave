@@ -19,28 +19,19 @@ NB: io_uring multishot recv across MANY concurrent connections under M:N is a
 separate known issue (data loss, not a hang) and is intentionally not covered
 here.
 """
-import os
-import subprocess
 import sys
 
 import pytest
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY = sys.executable
+from adv_util import run_python
 
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="io_uring is Linux-only")
 
 
 def _iouring_available():
-    try:
-        out = subprocess.run(
-            [PY, "-c", "import sys;sys.path.insert(0,'src');import stackweave_c;"
-                       "print(stackweave_c.iouring_available())"],
-            cwd=REPO, env=dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src"),
-            capture_output=True, text=True, timeout=30)
-        return "True" in out.stdout
-    except Exception:
-        return False
+    out = run_python("import stackweave_c; "
+                     "print(stackweave_c.iouring_available())", timeout=30)
+    return "True" in out.stdout
 
 
 requires_iouring = pytest.mark.skipif(
@@ -48,8 +39,7 @@ requires_iouring = pytest.mark.skipif(
 
 
 _TRANSFER = r"""
-import socket, sys, zlib, faulthandler
-sys.path.insert(0, "src")
+import socket, zlib, faulthandler
 import stackweave_c
 faulthandler.dump_traceback_later({wd}, exit=True)   # re-hang -> die, never wedge
 SIZE = 4 * 1024 * 1024
@@ -82,14 +72,8 @@ _DRIVE_MN = ("stackweave_c.mn_init(2); stackweave_c.mn_fiber(server); stackweave
 
 def _run(drive, wd=20):
     body = _TRANSFER.format(wd=wd, drive=drive)
-    try:
-        p = subprocess.run(
-            [PY, "-c", body], cwd=REPO,
-            env=dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src",
-                     STACKWEAVE_TCPCONN_IOURING="1"),
-            capture_output=True, text=True, timeout=wd + 25)
-    except subprocess.TimeoutExpired:
-        pytest.fail("io_uring backpressure transfer HUNG (deadlock regression)")
+    p = run_python(body, timeout=wd + 25,
+                   env={"STACKWEAVE_TCPCONN_IOURING": "1"})
     assert p.returncode == 0, (
         "io_uring backpressure transfer failed rc=%d (negative => watchdog "
         "killed a hang)\nstdout=%s\nstderr=%s"
@@ -113,8 +97,7 @@ def test_mn_io_uring_backpressure_transfer_completes():
 # drain appended stream buffers out of order -> right length, wrong bytes (only
 # the io_uring drain is now single-drainer so appends stay in CQ order).
 _CONCURRENT = r"""
-import socket, sys
-sys.path.insert(0, "src")
+import socket
 import stackweave_c
 SIZE = 8 * 1024 * 1024; NCONN = 8
 # distinct per-connection payload (position-and-conn dependent)
@@ -150,15 +133,13 @@ print("CONCURRENT_OK")
 
 @requires_iouring
 def test_mn_concurrent_connections_io_uring_recv_integrity():
-    try:
-        p = subprocess.run(
-            [PY, "-c", _CONCURRENT], cwd=REPO,
-            env=dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src",
-                     STACKWEAVE_TCPCONN_IOURING="1"),
-            capture_output=True, text=True, timeout=60)
-    except subprocess.TimeoutExpired:
-        pytest.fail("concurrent io_uring recv HUNG")
+    p = run_python(_CONCURRENT, timeout=60,
+                   env={"STACKWEAVE_TCPCONN_IOURING": "1"})
     assert p.returncode == 0, (
         "concurrent io_uring recv failed rc=%d\nstdout=%s\nstderr=%s"
         % (p.returncode, p.stdout[-800:], p.stderr[-1500:]))
     assert "CONCURRENT_OK" in p.stdout, (p.stdout, p.stderr[-800:])
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

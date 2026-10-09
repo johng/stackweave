@@ -29,8 +29,8 @@ The adversarial mandate (CRASH / HANG / UAF / REORDER / WRONG-DATA / SLOW-RETURN
   * Coro resume-after-done idempotency, exception-on-resume, nested Coros,
     yield_ outside a coro, a Coro that never finishes (leaked, GC'd mid-flight).
 
-Findings are encoded as xfail(strict=False) with a "FINDING:" reason, or a
-subprocess test with a leading "# FINDING:" comment; nothing here edits the C.
+The defects this file found are fixed; their tests stay as regression guards
+(the comments marked "REGRESSION").
 
 Most precise stack introspection (HWM, guard-page classification) needs a POSIX
 guard-page backend with 4 KB pages; we gate those probes accordingly and keep
@@ -38,7 +38,6 @@ the rest backend-agnostic.
 """
 import os
 import platform
-import subprocess
 import sys
 import time
 
@@ -46,11 +45,9 @@ import pytest
 
 import stackweave
 import stackweave_c as rc
-from adv_util import (hang_guard, assert_faster_than, raw_thread,
-                      needs_free_threading)
 
-FT = needs_free_threading()
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from adv_util import hang_guard, assert_faster_than, run_python
+
 BACKEND = rc.backend()
 _PAGE = os.sysconf("SC_PAGESIZE")
 # Guard-page address->fiber classification + a precise HWM scan need the
@@ -67,13 +64,13 @@ _DEVNULL = os.open(os.devnull, os.O_WRONLY)
 # subprocess helper -- a crash must be CONTAINED + OBSERVED, never wedge us.
 # ==========================================================================
 def _subproc(script, env_extra=None, timeout=40):
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
+    env = {}
     # keep deliberate fiber panics from spamming the captured stderr
-    env.setdefault("STACKWEAVE_GOROUTINE_PANIC", "silent")
+    if "STACKWEAVE_GOROUTINE_PANIC" not in os.environ:
+        env["STACKWEAVE_GOROUTINE_PANIC"] = "silent"
     if env_extra:
         env.update(env_extra)
-    return subprocess.run([sys.executable, "-c", script], cwd=REPO, env=env,
-                          capture_output=True, text=True, timeout=timeout)
+    return run_python(script, timeout=timeout, env=env)
 
 
 def _run_single(fn):
@@ -287,12 +284,10 @@ def test_fiber_huge_stack_clamps_and_runs():
     assert box.get("r") == 2
 
 
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_mn_fiber_stack_arg_edges():
     # mn_fiber honours stack_size>0 and ignores non-positive (uses default) -- all
     # must run under mn_run() without crashing or hanging.  (The HUGE-size case
-    # is split out below -- it does NOT clamp like the single-thread path: see
-    # the xfail finding.)
+    # is split out below.)
     done = bytearray(3)
 
     def main():
@@ -306,15 +301,15 @@ def test_mn_fiber_stack_arg_edges():
     assert sum(done) == 3, "only %d/3 mn_fiber stack-edge fibers ran" % sum(done)
 
 
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
-# REGRESSION (was finding #15): mn_fiber(fn, huge) now clamps an explicit
+# REGRESSION: mn_fiber(fn, huge) now clamps an explicit
 # stack_size to [MIN, MAX] (8 MiB) in runloom_mn_fiber_core, exactly like the
 # single-thread fiber() path (runloom_sched_spawn_sized) -- so a wild size
 # clamps-and-runs instead of failing runloom_coro_new's mmap with MemoryError.
-def test_mn_fiber_huge_stack_should_clamp_like_single_thread():
+def test_mn_fiber_huge_stack_clamps_like_single_thread():
     box = {}
-    # Capture the fiber's unraisable MemoryError so it doesn't leak into the
-    # test's warning surface; the xfail observes that the fiber never ran.
+    # Capture a MemoryError from a failed spawn so it doesn't leak into the
+    # test's warning surface; the assert below then reports that the fiber
+    # never ran.
     caught = []
     old_hook = sys.unraisablehook
     sys.unraisablehook = lambda a: caught.append(a.exc_type)
@@ -332,7 +327,7 @@ def test_mn_fiber_huge_stack_should_clamp_like_single_thread():
             stackweave.run(2, main)
     finally:
         sys.unraisablehook = old_hook
-    # CORRECT behaviour (currently failing): the huge size is clamped and runs.
+    # The huge size is clamped and runs.
     assert box.get("r") == 1, "mn_fiber(huge) did not clamp-and-run (raised instead)"
 
 
@@ -340,7 +335,6 @@ def test_mn_fiber_huge_stack_should_clamp_like_single_thread():
 # 3. Guard-page OVERFLOW -- subprocess, assert CLEAN classified trap
 # ==========================================================================
 _OVERFLOW_ST = r'''
-import sys; sys.path.insert(0, "src")
 import stackweave_c as rc
 rc.install_crash_handler("backtrace")
 def f():
@@ -351,7 +345,6 @@ print("UNREACHABLE")
 '''
 
 _OVERFLOW_MN = r'''
-import sys; sys.path.insert(0, "src")
 import stackweave_c as rc
 rc.install_crash_handler("backtrace")
 def f():
@@ -383,12 +376,11 @@ def test_overflow_single_thread_is_clean_classified_trap():
     _assert_classified_overflow(_subproc(_OVERFLOW_ST))
 
 
-@pytest.mark.skipif(not (HAS_GUARD and FT),
-                    reason="needs POSIX guard-page backend + M:N")
+@pytest.mark.skipif(not HAS_GUARD, reason="needs POSIX guard-page backend")
 def test_overflow_on_mn_hub_is_clean_classified_trap():
     # The SAME overflow on an M:N hub must also classify (the address->fiber map
     # has to cover the hub-spawned g, and the crash owner must freeze the sysmon
-    # watchdogs before the handoff pool can adopt+steal the faulting fiber).
+    # watchdogs).
     _assert_classified_overflow(_subproc(_OVERFLOW_MN))
 
 
@@ -678,7 +670,6 @@ def test_prewarm_then_spawn_storm_correct():
     assert rc._self_check(0) == 0
 
 
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_prewarm_keep_daemon_under_concurrent_mn_spawn_storm():
     # The continuous prewarm daemon (a background OS thread topping the GLOBAL
     # depot) running CONCURRENTLY with a multi-hub spawn storm: both hammer the
@@ -739,8 +730,6 @@ def test_prewarm_from_foreign_thread_is_safe():
     # deterministic against a FRESH depot.  A fresh interpreter preserves the
     # full contract instead of weakening the assertion in-process.
     script = r'''
-import sys
-sys.path.insert(0, "src")
 import stackweave_c as rc
 import _thread, time
 res = {}
@@ -865,7 +854,7 @@ def test_machinecode_runs_inside_single_fiber():
     assert box.get("r") == 121
 
 
-@pytest.mark.skipif(not (IS_X86_64 and FT), reason="x86-64 + M:N")
+@pytest.mark.skipif(not IS_X86_64, reason="x86-64 blob")
 def test_machinecode_runs_across_mn_fibers():
     # Each fiber JITs + calls its own blob on its own swapped C stack in genuine
     # parallel under M:N -- results funneled back over a Chan.
@@ -892,12 +881,11 @@ def test_machinecode_runs_across_mn_fibers():
 
 
 def test_machinecode_close_in_subprocess_then_use_after_free_is_guarded():
-    # FINDING-PROBE: a call after close must raise ValueError (the page pointer is
-    # nulled), never jump to a freed/unmapped page.  We verify in-process above;
+    # A call after close must raise ValueError (the page pointer is nulled),
+    # never jump to a freed/unmapped page.  We verify in-process above;
     # here we additionally confirm a deliberate use-after-free attempt cannot
     # SEGV the interpreter -- the guard returns to Python cleanly.
     script = r'''
-import sys; sys.path.insert(0, "src")
 import stackweave_c as rc
 mc = rc.MachineCode(b"\xc3")
 mc.close()
@@ -1004,7 +992,7 @@ def test_cooperative_overlap_survives_stack_machinery_churn():
 
 # --- 12a. Coro re-entrancy / abuse ----------------------------------------
 def test_coro_reentrant_self_resume_does_not_silently_corrupt():
-    # REGRESSION (was finding #16, a wild-jump SIGSEGV): Coro.resume() now has a
+    # REGRESSION (a wild-jump SIGSEGV): Coro.resume() now has a
     # "currently executing" guard.  Resuming a Coro from inside its own body
     # (re-entrant self-resume) used to swap the asm context into a frame already
     # live on the CPU -> SIGSEGV at a wild address inside runloom_asm_entry.  It
@@ -1107,8 +1095,8 @@ def test_coro_exception_object_is_the_one_raised_then_consumed():
     ("prewarm",      lambda: rc.prewarm(4, -1, False)),
     ("prewarm_keep", lambda: rc.prewarm_keep(4, -1)),
 ])
-def test_prewarm_family_negative_stack_size_crashes(label, call):
-    # REGRESSION (was finding #17, a SIGSEGV): warmup(n, -1) / prewarm(n, -1) /
+def test_prewarm_family_negative_stack_size_raises_valueerror(label, call):
+    # REGRESSION (a SIGSEGV): warmup(n, -1) / prewarm(n, -1) /
     # prewarm_keep(n, -1) used to SEGV.  Coro(), set_stack_size() and fiber() all
     # validate a non-positive stack_size, but the prewarm/warmup family parsed
     # stack_size as a Py_ssize_t and cast straight to (size_t) with NO check --
@@ -1136,7 +1124,6 @@ def test_prewarm_zero_stack_size_floors_and_succeeds():
 
 # --- 12c. fault injection on the stack-spawn path -------------------------
 _FAULT_SPAWN = r'''
-import sys; sys.path.insert(0, "src")
 import stackweave_c as rc
 done = bytearray(40)
 def main():
@@ -1213,7 +1200,7 @@ def test_machinecode_exit_does_not_suppress_exception():
         mc()
 
 
-@pytest.mark.skipif(not (IS_X86_64 and FT), reason="x86-64 + M:N")
+@pytest.mark.skipif(not IS_X86_64, reason="x86-64 blob")
 def test_machinecode_create_close_churn_across_mn_hubs():
     # Each fiber on its own hub creates, calls, and closes its own blob in a
     # tight loop -- genuine parallel W^X map/unmap churn across hubs.  No crash,
@@ -1268,8 +1255,8 @@ def test_set_stack_size_huge_clamps_to_max_and_default_fiber_runs():
 
 
 # --- 12f. M:N introspection: current_g_hwm inside a hub fiber --------------
-@pytest.mark.skipif(not (RELIABLE_HWM and FT),
-                    reason="needs precise HWM + M:N")
+@pytest.mark.skipif(not RELIABLE_HWM,
+                    reason="needs precise HWM (4 KiB guard backend)")
 def test_current_g_hwm_inside_mn_hub_fiber():
     # current_g_hwm must be safe to read from a HUB-spawned fiber and must NEVER
     # over-report (report more than the stack the fiber ran on).  The single-
@@ -1297,7 +1284,6 @@ def test_current_g_hwm_inside_mn_hub_fiber():
 
 
 # --- 12g. advice/autosize under M:N + reset-during-record -----------------
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_stack_advice_records_and_resets_cleanly_under_mn():
     # The advisory profiler must record per-kind samples for hub-spawned fibers
     # (the HWM scan runs on the hub's resume path too), and a reset afterwards
@@ -1394,7 +1380,6 @@ def test_prewarm_background_then_immediate_stop_no_hang():
 
 
 # --- 12i. fiber_stack against an M:N hub fiber + integrity ----------------
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_fiber_stack_on_live_mn_parked_fiber():
     # fiber_stack must walk a HUB-spawned parked fiber's frames without an OOB
     # read or a crash, and return the (callable_repr, frames) 2-tuple shape.
@@ -1455,4 +1440,4 @@ def test_scrub_recycle_does_not_corrupt_neighbour_results():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

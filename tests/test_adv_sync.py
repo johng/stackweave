@@ -18,9 +18,8 @@ import pytest
 import stackweave
 import stackweave_c as rc
 from stackweave.sync import WaitGroup, Future, gather, Semaphore, RWMutex, Once
-from adv_util import hang_guard, raw_thread, needs_free_threading
 
-FT = needs_free_threading()
+from adv_util import hang_guard, raw_thread
 
 
 def _run_single(fn):
@@ -204,7 +203,6 @@ def test_semaphore_acquire_from_foreign_thread_rejected():
     assert _foreign_call(lambda: s.acquire(1)) == "RuntimeError"
 
 
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_semaphore_bounds_concurrency_under_mn():
     LIMIT, N = 4, 200
     sem = Semaphore(LIMIT)
@@ -318,4 +316,4 @@ def test_once_first_caller_sees_exception_later_callers_do_not():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

@@ -746,7 +746,6 @@ def knobs_for_seed(seed):
 def worker_env(seed, mn_seed, knobs=True, extra=None):
     env = dict(os.environ)
     env["PYTHON_GIL"] = "0"
-    env["STACKWEAVE_GIL"] = "0"
     env["PYTHONPATH"] = os.path.join(ROOT, "src") + os.pathsep + env.get("PYTHONPATH", "")
     env["STACKWEAVE_DEBUG"] = "ring,gstate"        # flight recorder for crash dumps
     env["RUNLOOM_DBG_GSTATE"] = "1"             # freed-state timer oracle

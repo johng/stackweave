@@ -13,8 +13,11 @@ select() picks among channels fed by blocking I/O -- with no starvation, no
 lost items, and genuine overlap rather than serialization.
 """
 import socket
+import sys
 import time
 import unittest
+
+import pytest
 
 import stackweave
 import stackweave.monkey
@@ -310,4 +313,4 @@ class TestConcurrentTimers(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

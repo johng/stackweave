@@ -35,14 +35,12 @@ import sys
 
 import pytest
 
+import stackweave          # high-level M:N entry (run / go / sleep)
+import stackweave_c
+
 pytestmark = pytest.mark.skipif(
     not sys.platform.startswith(("darwin", "freebsd", "openbsd", "netbsd")),
     reason="kqueue backend only")
-
-sys.path.insert(0, "src")
-
-import stackweave          # noqa: E402  high-level M:N entry (run / go / sleep)
-import stackweave_c        # noqa: E402
 
 READ = 1
 WRITE = 2
@@ -525,5 +523,4 @@ def test_wake_all_losers_recheck_and_repark(n):
 
 
 if __name__ == "__main__":
-    print("netpoll backend under test:", stackweave_c.netpoll_backend())
-    raise SystemExit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

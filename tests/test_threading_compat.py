@@ -13,9 +13,12 @@ cooperative model is the design target (e.g. a fiber that takes a lock
 never preempts mid-critical-section), which is exactly the property the
 mutual-exclusion tests assert.
 """
+import sys
 import threading
 import time
 import unittest
+
+import pytest
 
 import stackweave
 import stackweave.monkey
@@ -543,4 +546,4 @@ class TestBarrier(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

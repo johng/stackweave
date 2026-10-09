@@ -5,8 +5,11 @@ sockets, GIL-releasing C extensions) must not wedge the OS thread it
 shares with other fibers.  blocking() offloads the call to a thread
 pool and parks the fiber, so the others keep running.
 """
+import sys
 import time
 import unittest
+
+import pytest
 
 import stackweave
 import stackweave_c
@@ -91,4 +94,4 @@ class TestBlocking(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

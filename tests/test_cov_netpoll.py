@@ -16,11 +16,9 @@ import pytest
 
 import stackweave
 import stackweave_c as rc
-from adv_util import hang_guard, needs_free_threading
+from adv_util import hang_guard, run_python
 
 READ, WRITE = 1, 2
-FT = needs_free_threading()
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _DEVNULL = os.open(os.devnull, os.O_WRONLY)
 
 pytestmark = pytest.mark.skipif(rc.netpoll_backend() != "epoll",
@@ -213,24 +211,20 @@ def test_epoll_diag_dump_while_parked():
 def test_epoll_netpoll_maxfd_env_subprocess():
     # STACKWEAVE_NETPOLL_MAXFD caps the diag fd scan (netpoll_diag_fd.c.inc).
     script = (
-        "import sys,os; sys.path.insert(0,'src');"
+        "import sys,os;"
         "import stackweave_c as rc;"
         "rc.fiber(lambda: rc.stats());"
         "rc.run();"
         "rc.dump_fibers(os.open(os.devnull,os.O_WRONLY));"
         "rc._dump_parkers();"
         "sys.stdout.write('MAXFD_OK\\n')")
-    import subprocess
-    env = dict(os.environ, STACKWEAVE_NETPOLL_MAXFD="64", PYTHON_GIL="0", PYTHONPATH="src")
-    p = subprocess.run([sys.executable, "-c", script], cwd=REPO, env=env,
-                       capture_output=True, text=True, timeout=30)
+    p = run_python(script, timeout=30, env={"STACKWEAVE_NETPOLL_MAXFD": "64"})
     assert "MAXFD_OK" in p.stdout, (p.stdout, p.stderr[-500:])
 
 
 # --------------------------------------------------------------------------
 # cross-hub pump wake (wake_pump eventfd) under M:N
 # --------------------------------------------------------------------------
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_epoll_cross_hub_pump_wake():
     from stackweave.sync import WaitGroup
     N = 60
@@ -262,4 +256,4 @@ def test_epoll_cross_hub_pump_wake():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

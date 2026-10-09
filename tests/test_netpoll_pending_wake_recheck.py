@@ -15,7 +15,10 @@ to exactly 0 after.  Driven under M:N run(8) on purpose -- the bug needs the
 cross-hub pump timing that the single-thread drain loop does not exercise.
 """
 import os
+import sys
 import time
+
+import pytest
 
 import stackweave
 import stackweave_c
@@ -99,3 +102,7 @@ def test_high_fanin_event_no_spurious_false():
     assert box["trials"] == 5, box
     assert box["total"] == 5 * 500, box
     assert box["false"] == 0, box
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

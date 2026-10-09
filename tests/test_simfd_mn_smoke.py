@@ -11,16 +11,13 @@ import sys
 
 import pytest
 
+from known_gaps import SEEDED_MN_TODO
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "tools", "dst"))
-
 import mn_digest  # noqa: E402
 
-from adv_util import needs_free_threading  # noqa: E402
-
-pytestmark = pytest.mark.skipif(
-    not needs_free_threading(),
-    reason="the M:N scheduler is only real on free-threaded builds")
+pytestmark = SEEDED_MN_TODO
 
 
 def run_seed(program, seed):
@@ -52,4 +49,4 @@ class TestSimFdMnSmoke:
 
 
 if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

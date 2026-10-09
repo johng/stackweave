@@ -28,25 +28,15 @@ its worker-stop path, the cond_init/thread_create OOM-cleanup branches that
 have no STACKWEAVE_FAULT_ hook, the unused public runloom_g_state_cas/_get, and
 the abort() crash guard).
 """
-import os
-import subprocess
 import sys
 import time
 
 import pytest
 
-from adv_util import (needs_free_threading, hang_guard, assert_faster_than,
-                      OverlapTracker)
-
-sys.path.insert(0, os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
-
 import stackweave
 import stackweave_c as rc
 
-FT = needs_free_threading()
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY = sys.executable
+from adv_util import hang_guard, OverlapTracker, run_python
 
 # The single-thread offload only OFFLOADS (vs. running inline) on a backend
 # with a pump-wake primitive; epoll/kqueue have one.  Correctness holds on
@@ -158,7 +148,6 @@ def test_blocking_spurious_wake_does_not_uaf_single_thread():
     assert result.get("v") == 4242
 
 
-@pytest.mark.skipif(not FT, reason="M:N hub path needs the GIL off")
 def test_blocking_spurious_wake_does_not_uaf_mn_hub():
     """Same UAF-prevention guarantee on the M:N HUB branch (blockpool.c
     L315-318: park_current + coro_yield re-park).  A hub fiber parks in
@@ -202,7 +191,6 @@ def test_blocking_spurious_wake_does_not_uaf_mn_hub():
     assert result.get("v") == 9999
 
 
-@pytest.mark.skipif(not FT, reason="M:N hub path needs the GIL off")
 def test_blocking_concurrent_offloads_overlap_on_one_hub():
     """N hub fibers each offload a blocking sleep.  The pool must run them
     CONCURRENTLY (the whole point of the offload).  Drives blockpool.c
@@ -243,7 +231,6 @@ def test_blocking_concurrent_offloads_overlap_on_one_hub():
     assert sum(done) == N
 
 
-@pytest.mark.skipif(not FT, reason="hub fiber count is only meaningful under M:N")
 def test_blocking_storm_reuses_pool_no_leak():
     """A storm of offloads across repeated run()s reuses the one lazily-init'd
     pool (blockpool.c L169 fast-path 'already up') and every inflight counter
@@ -289,7 +276,7 @@ def test_blocking_storm_reuses_pool_no_leak():
 # clean exit proves the abort() in runloom_g_assert_failure_ never fired on a
 # legitimate transition -- i.e. the guard is a real invariant, not dead code.
 _GSTATE_DBG = r'''
-import sys; sys.path.insert(0, "src")
+import sys
 import stackweave, stackweave_c as rc
 from stackweave.sync import WaitGroup
 N = 96
@@ -311,20 +298,14 @@ sys.stdout.write("GSTATE_OK %d\n" % sum(done))
 '''
 
 
-@pytest.mark.skipif(not FT, reason="g-state transitions exercised under M:N")
 def test_gstate_assert_guard_holds_under_debug_mode():
     """Run an M:N park/wake/done workload under STACKWEAVE_DEBUG=gstate in a
     subprocess.  This arms the RUNLOOM_G_ASSERT_NOT macro (gstate.c is the
     runloom_g_state_in predicate + runloom_g_assert_failure_ abort).  A clean
     exit (returncode 0, no 'ASSERT FAILED', all N fibers done) proves no
     legitimate transition tripped the abort guard."""
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src",
-               STACKWEAVE_DEBUG="gstate")
-    try:
-        p = subprocess.run([PY, "-c", _GSTATE_DBG], cwd=REPO, env=env,
-                           capture_output=True, text=True, timeout=240)
-    except subprocess.TimeoutExpired:
-        pytest.skip("gstate-debug workload timed out (box under heavy load)")
+    p = run_python(_GSTATE_DBG, timeout=240,
+                   env={"STACKWEAVE_DEBUG": "gstate"})
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1500:])
     # The abort() guard must NOT have fired on any legitimate transition.
     assert "ASSERT FAILED" not in p.stderr, p.stderr[-1500:]
@@ -357,4 +338,4 @@ def test_gstate_set_in_get_exercised_by_normal_workload():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

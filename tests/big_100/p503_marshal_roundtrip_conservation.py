@@ -34,10 +34,17 @@ marshal's w_ref() emit FLAG_REF back-references at version >= 3.  The oracle is 
 strict single-owner CONSERVATION law:
 
   (1) DETERMINISM across the hazard boundary: dumps(graph) called BEFORE a yield
-      and AGAIN AFTER the yield must produce BYTE-IDENTICAL output (marshal is
-      deterministic for a fixed object graph; the ref indices are assigned in a
-      fixed traversal order).  A difference means the WFILE ref-table scratch was
-      disturbed by a sibling while this fiber was parked -- the torn-scratch bug.
+      and AGAIN AFTER the yield must produce the same graph: byte-identical
+      output (marshal is deterministic for a fixed object graph; the ref indices
+      are assigned in a fixed traversal order), or bytes that differ only in
+      FLAG_REF marks and decode to the graph.  marshal sets FLAG_REF unless an
+      object is uniquely referenced, and on a free-threaded build that test
+      (_PyObject_IsUniquelyReferenced) also requires the object to be OWNED by
+      the marshalling thread -- which changes when the fiber moves hubs across
+      the yield, or when the GC re-homes an object to the thread whose memory it
+      came from (see p565).  A second dump that does not decode to the graph
+      means the WFILE ref-table scratch was disturbed by a sibling while this
+      fiber was parked -- the torn-scratch bug.
 
   (2) VALUE round-trip: loads(dumps(graph)) == graph, value-for-value (dicts and
       frozensets compare order-independently, so this is a true structural law).
@@ -171,15 +178,18 @@ def rt_check(H, wid, idx, state):
     if idx & 1:
         stackweave.sleep(0.0002)
 
-    # dumps() AFTER the yield -- must be byte-identical (marshal is deterministic
-    # for a fixed graph; ref indices are assigned in a fixed traversal order).
+    # dumps() AFTER the yield -- byte-identical (marshal is deterministic for a
+    # fixed graph; ref indices are assigned in a fixed traversal order), or with
+    # other FLAG_REF marks when object ownership moved (oracle (1)), in which
+    # case it must still decode to the graph.
     data_after = marshal.dumps(graph, version)
-    if data_after != data_before:
+    if data_after != data_before and marshal.loads(data_after) != graph:
         H.fail("marshal.dumps NON-DETERMINISTIC across a yield: version {0} "
                "produced {1} bytes before the yield and {2} bytes after for the "
-               "SAME fiber-local graph (wid {3}) -- the WFILE ref-table scratch "
-               "was disturbed by a sibling marshal call while this fiber was "
-               "parked (torn per-call scratch)".format(
+               "SAME fiber-local graph (wid {3}), and the second no longer "
+               "decodes to it -- the WFILE ref-table scratch was disturbed by a "
+               "sibling marshal call while this fiber was parked (torn per-call "
+               "scratch)".format(
                    version, len(data_before), len(data_after), wid))
         return
 

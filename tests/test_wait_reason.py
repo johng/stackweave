@@ -6,19 +6,16 @@ sync primitives, so an operator can see WHY each fiber is blocked.
 Driven through a subprocess because the dump is written straight to fd 2 by the
 deadlock census; raise mode makes the run return promptly after the dump.
 """
-import os
-import subprocess
 import sys
 import textwrap
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-SRC = os.path.join(os.path.dirname(HERE), "src")
+import pytest
+
+from adv_util import run_python
 
 
 def _dump_for(body):
     code = textwrap.dedent("""
-        import sys
-        sys.path.insert(0, {src!r})
         import stackweave, stackweave_c
         from stackweave.sync import WaitGroup
         stackweave_c.set_deadlock_mode(2)   # raise: dump then return
@@ -28,11 +25,10 @@ def _dump_for(body):
             stackweave.run(2, main)
         except RuntimeError:
             pass
-    """).format(src=SRC, body=body)
-    env = dict(os.environ, PYTHON_GIL="0", STACKWEAVE_DEADLOCK_MS="40",
-               PYTHONUNBUFFERED="1", PYTEST_DISABLE_PLUGIN_AUTOLOAD="1")
-    p = subprocess.run([sys.executable, "-c", code], capture_output=True,
-                       text=True, timeout=40, env=env)
+    """).format(body=body)
+    p = run_python(code, timeout=40,
+                   env={"STACKWEAVE_DEADLOCK_MS": "40", "PYTHONUNBUFFERED": "1",
+                        "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"})
     return p.stdout + p.stderr
 
 
@@ -49,3 +45,7 @@ def test_waitgroup_primitive_tags_its_park():
 def test_unset_reason_defaults_to_sync():
     out = _dump_for("stackweave_c.park()")
     assert "park:sync" in out, out
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

@@ -14,18 +14,13 @@ the waker's hub unless an idle hub stole it first, and both are correct.
 
 Run directly:  PYTHON_GIL=0 PYTHONPATH=src python tests/test_local_wake.py
 """
+import sys
 import threading
 
 import pytest
 
 import stackweave
 import stackweave_c as rc
-
-from adv_util import needs_free_threading
-
-needs_migration = pytest.mark.skipif(
-    not needs_free_threading(),
-    reason="needs a free-threaded build (migration is the only M:N mode)")
 
 HUBS = 4
 
@@ -49,7 +44,6 @@ def _run(*fibers, hubs=HUBS):
     return stats
 
 
-@needs_migration
 def test_cross_hub_ping_pong_completes_and_takes_the_local_path():
     """Two fibers volley over a pair of channels.  Every recv parks and every
     send is a wake performed on a hub thread -> the local-wake path.  Both must
@@ -84,7 +78,6 @@ def test_cross_hub_ping_pong_completes_and_takes_the_local_path():
         assert hits > 0, "hub-thread wakes still went through the global run-queue"
 
 
-@needs_migration
 def test_wake_burst_from_one_hub_resumes_each_fiber_exactly_once():
     """N fibers park; one waker on a hub thread wakes them all back-to-back.
     Local wake puts them all on the waker's deque -- more than the waker can
@@ -118,7 +111,6 @@ def test_wake_burst_from_one_hub_resumes_each_fiber_exactly_once():
     assert stats["mn_pending_total"] == 0
 
 
-@needs_migration
 def test_foreign_thread_wake_still_falls_back_to_the_global_queue():
     """A waker that is not a hub thread has no deque of its own: the wake must
     take the global run-queue path and still be delivered."""
@@ -145,7 +137,6 @@ def test_foreign_thread_wake_still_falls_back_to_the_global_queue():
         assert pulls >= 1, "foreign-thread wake bypassed the global run-queue"
 
 
-@needs_migration
 def test_pinned_fiber_is_not_placed_on_the_waker_deque():
     """A pinned fiber may only run on its pinned hub; a deque is stealable by
     any hub, so the wake must go global and honour the pin.  Mirrors
@@ -175,5 +166,4 @@ def test_pinned_fiber_is_not_placed_on_the_waker_deque():
 
 
 if __name__ == "__main__":
-    import sys
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

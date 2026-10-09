@@ -14,9 +14,8 @@ import pytest
 
 import stackweave
 import stackweave_c as rc
-from adv_util import hang_guard, needs_free_threading
 
-FT = needs_free_threading()
+from adv_util import REPO, child_env, hang_guard
 
 
 def _listener_port(lst):
@@ -185,7 +184,6 @@ def test_tcpconn_many_concurrent_connections():
     assert sum(ok) == N, "%d/%d concurrent TCPConn echoes ok" % (sum(ok), N)
 
 
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_tcpconn_echo_under_mn():
     N = 60
     ok = bytearray(N)
@@ -236,7 +234,6 @@ def test_tcpconn_echo_under_mn():
 # --------------------------------------------------------------------------
 _IOU_CLOSE_CANCEL = r'''
 import sys, os, socket
-sys.path.insert(0, "src")
 import stackweave_c as rc
 FLAGS = socket.MSG_WAITALL          # non-zero flags -> single-shot IORING_OP_RECV
 out = {}
@@ -268,18 +265,16 @@ sys.stdout.write("HUNG\n"); sys.stdout.flush(); os._exit(2)
 @pytest.mark.skipif(not rc.iouring_available(), reason="io_uring unavailable")
 def test_tcpconn_iouring_close_cancels_parked_single_shot_recv():
     import subprocess
-    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    env = dict(os.environ, STACKWEAVE_TCPCONN_IOURING="1",
-               PYTHON_GIL="0", PYTHONPATH="src")
+    env = child_env(STACKWEAVE_TCPCONN_IOURING="1")
     # -s KILL bounds a regression (a stuck op) so the suite never hangs; on a
     # working build the child exits in well under a second.
     p = subprocess.run(["timeout", "-s", "KILL", "15", sys.executable,
                         "-c", _IOU_CLOSE_CANCEL],
-                       cwd=repo, env=env, capture_output=True, text=True)
+                       cwd=REPO, env=env, capture_output=True, text=True)
     assert "WOKE" in p.stdout, (
         "parked io_uring single-shot recv did not wake on close (got %r / rc=%d)"
         % (p.stdout, p.returncode))
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

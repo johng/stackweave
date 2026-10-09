@@ -12,8 +12,8 @@ through that same per-hub doorbell.
 
 These run in-process under stackweave.run(hubs, main) -- the same in-process M:N
 harness test_mn_park.py uses -- because they exercise the live per-hub hub
-threads, which a subprocess would only duplicate. They will run ONLY on a kqueue
-host (skip below); a human runs + fixes them on the mac.
+threads, which a subprocess would only duplicate. They run only on a kqueue
+host (skip below).
 
 Conventions (per the repo's proven M:N tests):
   - race-free per-fiber flags: one bytearray slot per fiber, single writer each,
@@ -27,15 +27,12 @@ import threading
 
 import pytest
 
+import stackweave        # high-level go/sleep/run (monkey-free)
+import stackweave_c      # raw scheduler: current_g / wait_fd / cancel
+
 pytestmark = pytest.mark.skipif(
     not sys.platform.startswith(("darwin", "freebsd", "openbsd", "netbsd")),
     reason="kqueue backend only")
-
-# Run from the repo root; the in-tree build lives under src/.
-sys.path.insert(0, "src")
-
-import stackweave        # noqa: E402  high-level go/sleep/run (monkey-free)
-import stackweave_c      # noqa: E402  raw scheduler: current_g / wait_fd / cancel
 
 READ, WRITE = 1, 2
 WAIT_FD_CANCELLED = stackweave_c.WAIT_FD_CANCELLED   # 0x40000000
@@ -433,4 +430,4 @@ def test_cancel_all_parked_drains_every_hub(hubs):
 
 
 if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

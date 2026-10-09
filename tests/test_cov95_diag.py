@@ -57,19 +57,16 @@ them would violate "real assertions only"; see the structured report's
     unconditionally at module import (PyInit), before any Python executes, so
     runloom_ring_list_lock_inited is ALWAYS true at every reachable dump.
     DEFENSIVE.
-  * L181 / L197 / L198 / L199 (op_name PARKER_WAKE / SNAP_SAVE / SNAP_LOAD /
-    default) -- NO RUNLOOM_EVT() call site in the whole source emits a
-    RUNLOOM_EVT_PARKER_WAKE, _SNAP_SAVE or _SNAP_LOAD event (grep confirms: the
-    enum exists but is never logged), so those op codes can never appear in a
-    ring; the default arm is therefore unreachable too (every stored op is a
-    valid enum). DEAD.
-  * L183 / L195 (op_name PARKER_GHOST / HANDOFF_ADOPT) -- both ARE emitted, but
-    only on a rare scheduler race: PARKER_GHOST on a defensive stale-bucket clear
-    inside parker link, HANDOFF_ADOPT only if the sysmon-flagged DETACHED-tstate
-    rescue thread wins the adoption race before the wedged g finishes -- and even
-    when it fires the 1024-entry ring evicts it before a post-run dump under any
-    workload heavy enough to wedge a hub.  Not deterministically observable in a
-    clean-exit subprocess. RACE.
+  * L181 / L195 / L197 / L198 / L199 (op_name PARKER_WAKE / HANDOFF_ADOPT /
+    SNAP_SAVE / SNAP_LOAD / default) -- NO RUNLOOM_EVT() call site in the whole
+    source emits a RUNLOOM_EVT_PARKER_WAKE, _HANDOFF_ADOPT (its emitter went
+    with the handoff-rescue thread), _SNAP_SAVE or _SNAP_LOAD event (grep
+    confirms: the enum exists but is never logged), so those op codes can never
+    appear in a ring; the default arm is therefore unreachable too (every
+    stored op is a valid enum). DEAD.
+  * L183 (op_name PARKER_GHOST) -- emitted, but only on a rare scheduler race:
+    a defensive stale-bucket clear inside parker link.  Not deterministically
+    observable in a clean-exit subprocess. RACE.
   * L267-292 (runloom_evt_crash_dump) -- called ONLY from the fatal-signal crash
     handler (which re-raises the signal -> the process dies before gcov flushes)
     and from runloom_invariant_fail (which abort()s). CRASHONLY.
@@ -89,40 +86,31 @@ them would violate "real assertions only"; see the structured report's
     CRASHONLY.
 """
 import os
-import re
-import subprocess
 import sys
 import tempfile
 
 import pytest
 
 import stackweave_c as rc
-from adv_util import hang_guard
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY = sys.executable
+from adv_util import hang_guard, run_python
+from known_gaps import KNOWN_GAP, SEEDED_MN_TODO
+
 _TIMEOUT = 220
 
 
 def _child_env(**extra):
-    """Base subprocess env: GIL off, in-tree src on the path, plus `extra`.
-    Strips the diag knobs we don't want leaking in from a parent run."""
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
-    for k in ("STACKWEAVE_DEBUG_DIAG", "STACKWEAVE_DEBUG", "STACKWEAVE_DELAY",
-              "STACKWEAVE_DELAY_MAX_NS", "STACKWEAVE_GILSTATE_TRACE",
-              "STACKWEAVE_MN_EVENTS"):
-        env.pop(k, None)
+    """The env overrides for a diag child: `extra`, with the diag knobs we don't
+    want leaking in from a parent run unset."""
+    env = dict.fromkeys(("STACKWEAVE_DEBUG_DIAG", "STACKWEAVE_DEBUG",
+                         "STACKWEAVE_DELAY", "STACKWEAVE_DELAY_MAX_NS",
+                         "STACKWEAVE_GILSTATE_TRACE", "STACKWEAVE_MN_EVENTS"))
     env.update(extra)
     return env
 
 
 def _run_child(code, env, timeout=_TIMEOUT):
-    try:
-        return subprocess.run([PY, "-c", code], cwd=REPO, env=env,
-                              capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        pytest.skip("diag subprocess timed out (shared-box CI contention, "
-                    "not a stackweave bug)")
+    return run_python(code, timeout=timeout, env=env)
 
 
 # --------------------------------------------------------------------------
@@ -136,7 +124,6 @@ def _run_child(code, env, timeout=_TIMEOUT):
 # --------------------------------------------------------------------------
 _FLAG_CHILD = r"""
 import os, sys, tempfile
-sys.path.insert(0, 'src')
 import stackweave_c as rc
 
 # "ring" arm (L39) + an unknown token that must fall through to return 0 (L43).
@@ -183,7 +170,6 @@ def test_debug_diag_ring_flag_and_unknown_token():
 # --------------------------------------------------------------------------
 _RING_OPS_CHILD = r"""
 import os, re, socket, sys, tempfile
-sys.path.insert(0, 'src')
 import stackweave_c as rc
 READ, WRITE = 1, 2
 
@@ -249,6 +235,9 @@ sys.stdout.write("RING_OPS_OK\n")
 """
 
 
+@KNOWN_GAP("nothing emits RUNLOOM_EVT_G_POP: the hub resume path's emit went "
+           "away with the per-hub-tstate scheduler in #23 (4ab7cc3b), so the "
+           "dump never carries G_POP")
 def test_ring_dump_covers_every_reachable_op_name_arm():
     env = _child_env(STACKWEAVE_DEBUG_DIAG="ring")
     p = _run_child(_RING_OPS_CHILD, env)
@@ -267,7 +256,6 @@ def test_ring_dump_covers_every_reachable_op_name_arm():
 # --------------------------------------------------------------------------
 _CAL_FREEZE_CHILD = r"""
 import os, sys, tempfile
-sys.path.insert(0, 'src')
 import stackweave_c as rc
 
 def w():
@@ -304,7 +292,6 @@ def test_ring_dump_covers_cal_freeze_arm():
 # --------------------------------------------------------------------------
 _PARKER_FORCE_CHILD = r"""
 import os, sys, socket, tempfile
-sys.path.insert(0, 'src')
 import stackweave_c as rc
 READ = 1
 
@@ -337,11 +324,6 @@ sys.stdout.write("PARK_FORCE_OK\n")
 def test_ring_dump_covers_parker_force_arm():
     env = _child_env(STACKWEAVE_DEBUG_DIAG="ring", STACKWEAVE_IOURING_LOOP="1")
     p = _run_child(_PARKER_FORCE_CHILD, env)
-    if p.returncode != 0:
-        # iouring loop backend can be unavailable on some kernels/configs.
-        if "PARK_FORCE_OK" not in p.stdout:
-            pytest.skip("iouring force-unlink path unavailable here: rc=%d %s"
-                        % (p.returncode, p.stderr[-400:]))
     assert "PARK_FORCE_OK" in p.stdout, (p.stdout, p.stderr[-1000:])
 
 
@@ -355,7 +337,6 @@ def test_ring_dump_covers_parker_force_arm():
 # --------------------------------------------------------------------------
 _GILTRACE_CHILD = r"""
 import os, sys
-sys.path.insert(0, 'src')
 import stackweave_c as rc
 
 path = os.environ["STACKWEAVE_GILSTATE_TRACE"]
@@ -407,7 +388,6 @@ def test_gilstate_trace_env_emits_ndjson():
 # --------------------------------------------------------------------------
 _MNEVENTS_CHILD = r"""
 import os, sys, json
-sys.path.insert(0, 'src')
 import stackweave_c as rc
 
 path = os.environ["STACKWEAVE_MN_EVENTS"]
@@ -431,6 +411,7 @@ sys.stdout.write("MNEVENTS_OK\n")
 """
 
 
+@SEEDED_MN_TODO
 def test_mn_events_trace_env_emits_baton_protocol():
     tf = tempfile.NamedTemporaryFile(prefix="runloom_mnevents_", delete=False)
     tf.close()
@@ -461,7 +442,6 @@ def test_mn_events_trace_env_emits_baton_protocol():
 # --------------------------------------------------------------------------
 _DELAY_CHILD = r"""
 import os, sys, time
-sys.path.insert(0, 'src')
 import stackweave_c as rc
 
 def w():
@@ -497,7 +477,6 @@ def test_delay_injection_env_runs_injector_body():
 # --------------------------------------------------------------------------
 _DELAY_ZERO_CHILD = r"""
 import os, sys
-sys.path.insert(0, 'src')
 import stackweave_c as rc
 
 def w():
@@ -542,4 +521,4 @@ def test_diag_dump_to_stderr_does_not_crash_when_ring_off():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

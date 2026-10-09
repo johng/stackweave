@@ -19,11 +19,11 @@ Good TSan target: the offload result crosses the foreign-waker boundary
 """
 import hashlib
 import sys
-import threading
 import unittest
 import zlib
 
-sys.path.insert(0, __file__.rsplit("/tests/", 1)[0] + "/src")
+import pytest
+
 import stackweave
 
 try:
@@ -92,4 +92,4 @@ class ExtOffloadConformance(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

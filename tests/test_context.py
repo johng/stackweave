@@ -1,6 +1,9 @@
 """Tests for stackweave.context (Go-style cancellation)."""
+import sys
 import time as _time
 import unittest
+
+import pytest
 
 import stackweave_c
 import stackweave.context as ctxmod
@@ -124,4 +127,4 @@ class TestWithTimeout(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

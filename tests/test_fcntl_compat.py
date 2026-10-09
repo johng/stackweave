@@ -17,17 +17,19 @@ There is no readiness fd for a file lock, so the cooperative form is a
 non-blocking-acquire + backoff park (not a netpoll wait); these tests pin that
 behaviour down.
 """
+import fcntl
 import os
 import platform
+import sys
 import tempfile
 import time
 import unittest
 
+import pytest
+
 import stackweave
 import stackweave.monkey
 import stackweave_c
-
-import fcntl
 
 _IS_DARWIN = platform.system() == "Darwin"
 
@@ -241,4 +243,4 @@ class TestLockf(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

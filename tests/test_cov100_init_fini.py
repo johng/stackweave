@@ -39,27 +39,22 @@ Regions driven (uncovered line -> how):
 
 The two GON_BULK regions are unreachable under migration (always on): the bulk
 builder allocates no per-g tstate, so runloom_fibern_bulk_enabled ignores
-STACKWEAVE_GON_BULK and fiber_n always loops.  Their tests are strict xfails
-(TODO_MIGRATION_FAIL) that assert the bulk path was entered; the gap itself is
-stated in tests/test_spawn_bulk_lifecycle.py.
+STACKWEAVE_GON_BULK and fiber_n always loops.  Their tests are GON_BULK_GAP
+xfails (tests/known_gaps.py) that assert the bulk path was entered; the gap
+itself is stated in tests/test_spawn_bulk_lifecycle.py.
 
 See the module docstring's `unreachable` notes in the structured report for the
 OOM-only / lost-wakeup lines that have no SAFE trigger.
 """
 import os
-import subprocess
 import sys
 import textwrap
 
 import pytest
 
-from adv_util import needs_free_threading, needs_rlimit_nproc_thread_cap
+from adv_util import needs_rlimit_nproc_thread_cap, run_python
+from known_gaps import GON_BULK_GAP
 
-FT = needs_free_threading()
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY = sys.executable
-
-pytestmark = pytest.mark.skipif(not FT, reason="M:N scheduler needs GIL-disabled build")
 
 # The thread-spawn-failure and coro-alloc-failure coverage drivers below inject
 # their adverse condition via Linux-only mechanisms: RLIMIT_NPROC (which caps
@@ -79,26 +74,13 @@ _NPROC_CAPS_THREADS = needs_rlimit_nproc_thread_cap()
 def _run_worker(body, env_extra=None, timeout=60):
     """Run a worker snippet in a fresh subprocess; return CompletedProcess.
 
-    `body` is dedented and prefixed with the standard src-on-path + import so
-    each test only writes the adversarial part.
+    `body` is dedented and prefixed with the standard import so each test only
+    writes the adversarial part.
     """
-    src = "import sys\nsys.path.insert(0, 'src')\nimport stackweave_c as rc\n" + textwrap.dedent(body)
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
-    if env_extra:
-        env.update(env_extra)
-    return subprocess.run([PY, "-c", src], cwd=REPO, env=env,
-                          capture_output=True, text=True, timeout=timeout)
+    src = "import sys\nimport stackweave_c as rc\n" + textwrap.dedent(body)
+    return run_python(src, timeout=timeout, env=env_extra)
 
 
-def TODO_MIGRATION_FAIL(reason):
-    """Strict xfail for a known migration-mode gap (the convention of
-    tests/test_cross_hub_migration.py)."""
-    return pytest.mark.xfail(strict=True, reason="TODO_MIGRATION_FAIL: " + reason)
-
-
-_BULK_GAP = TODO_MIGRATION_FAIL(
-    "STACKWEAVE_GON_BULK is ignored under migration: the bulk fiber_n builder "
-    "allocates no per-g tstate (tests/test_spawn_bulk_lifecycle.py)")
 _BULK_IGNORED = "STACKWEAVE_GON_BULK ignored"
 
 
@@ -337,7 +319,7 @@ def test_fiber_n_loop_spawn_failure_returns_error():
 # --------------------------------------------------------------------------
 # L694-698 : fiber_n bulk-arena path falls back to the per-g loop on arena failure
 # --------------------------------------------------------------------------
-@_BULK_GAP
+@GON_BULK_GAP
 def test_fiber_n_bulk_arena_failure_falls_back_to_per_g_loop():
     """STACKWEAVE_GON_BULK=1 takes the bulk-arena spawn path; STACKWEAVE_STACK_ARENA_N=1
     makes the stack arena hold a single slot, so runloom_arena_alloc(n>1) fails
@@ -371,7 +353,7 @@ def test_fiber_n_bulk_arena_failure_falls_back_to_per_g_loop():
 # --------------------------------------------------------------------------
 # L742-744 : fiber_n bulk splice signals an IDLE hub's condvar
 # --------------------------------------------------------------------------
-@_BULK_GAP
+@GON_BULK_GAP
 def test_fiber_n_bulk_wakes_idle_hubs():
     """STACKWEAVE_GON_BULK=1 with a real (large) arena -> the bulk path SUCCEEDS and
     splices each hub's whole batch under one lock.  We first let the hubs settle
@@ -442,4 +424,4 @@ def test_fiber_n_wakes_idle_hubs():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

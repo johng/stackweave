@@ -27,9 +27,9 @@ Usage:
 Exit status is non-zero if any file failed, timed out, or crashed.
 """
 import os
+import re
 import signal
 import subprocess
-import sysconfig
 import sys
 import time
 
@@ -131,7 +131,6 @@ def run_file(name, pytest_args):
     timeout = (SLOW_FILES.get(name, DEFAULT_TIMEOUT)) * TIMEOUT_MULT
     env = dict(os.environ)
     env["PYTHON_GIL"] = "0"
-    env["STACKWEAVE_GIL"] = "0"
     # TLBC now stays ON by default: stackweave_c's GC frames anchor
     # (module_gcframes.c.inc) makes parked-fiber frames visible to the free-
     # threaded collector, so the specializing interpreter is safe -- the p565/p524
@@ -279,52 +278,51 @@ def classify(rc):
     return "FAIL"
 
 
+# pytest's closing line: "3 passed, 2 skipped, 1 warning in 0.15s" (or "no
+# tests ran").  Matching words alone picked test names that contain "error",
+# and missed a file whose tests all skipped.
+_SUMMARY_RE = re.compile(
+    r"\b\d+ (passed|failed|skipped|xfailed|xpassed|errors?|deselected)\b"
+    r".* in [0-9.]+s\b|no tests ran")
+
+
 def _summary_line(out):
     for line in reversed(out.splitlines()):
         ls = line.strip()
-        if ls and ("passed" in ls or "failed" in ls or "error" in ls
-                   or "no tests ran" in ls or "TIMED OUT" in ls):
+        if ls and (_SUMMARY_RE.search(ls) or "TIMED OUT" in ls):
             return ls.strip("= ")
     return ""
 
 
-def _warn_if_not_free_threaded():
-    """Say so, LOUDLY, when this interpreter cannot run most of the suite.
+def _refuse_unless_migration_is_sound():
+    """Stop before running anything where cross-hub migration is not sound.
 
-    A huge share of the suite is pytestmark-skipped behind
-    adv_util.needs_free_threading() -- "the M:N scheduler is only real on
-    free-threaded builds".  On a stock CPython those files do not fail, they
-    SKIP, and pytest exits 0.  A run that executed 12% of the tests is then
-    indistinguishable from a clean one unless you happen to read the skip
-    count with -rs.
+    Migration is always on, and it needs a free-threaded interpreter built
+    with both migration patches, running an extension built with them
+    (CLAUDE.md, "Build & test").  conftest.py refuses each file's session on
+    anything else; this says it once, up front, instead of failing every file.
 
-    That is not hypothetical: extensive macOS testing on an unpatched
-    interpreter reported green while two real kqueue bugs sat in the skipped
-    set, and they surfaced only once CI ran them on the patched build.
-    Measured on three files alone: 96 passed free-threaded vs 12 passed /
-    84 SKIPPED with the GIL on.
+    It used to be a warning, because the suite then SKIPPED its M:N tests on a
+    GIL build and pytest still exited 0.  That was not hypothetical: extensive
+    macOS testing on an unpatched interpreter reported green while two real
+    kqueue bugs sat in the skipped set, and they surfaced only once CI ran them
+    on the patched build.
 
-    Py_GIL_DISABLED is the BUILD-level signal (1 vs None).  sys._is_gil_enabled
-    is the wrong test here: it reports the runtime state of THIS process, while
-    each test runs in a child with PYTHON_GIL=0 -- which does nothing unless the
-    build supports it."""
-    if sysconfig.get_config_var("Py_GIL_DISABLED"):
-        return
-    bar = "!! " + "=" * 72
-    sys.stderr.write(
-        "\n%s\n"
-        "!! NOT A FREE-THREADED BUILD: %s\n"
-        "!! Most of this suite is gated on needs_free_threading() and will\n"
-        "!! SKIP -- silently, and pytest will still exit 0.  This run does NOT\n"
-        "!! represent CI, which uses the patched free-threaded interpreter.\n"
-        "!! Build one with tools/ci/build_patched_cpython.sh, or point PYTHON\n"
-        "!! at a free-threaded python3.14t.\n"
-        "%s\n\n" % (bar, sys.executable, bar))
-    sys.stderr.flush()
+    The GIL check is the BUILD-level one (Py_GIL_DISABLED): each test runs in
+    a child with PYTHON_GIL=0, whatever this process runs with."""
+    from conftest import _migration_problems
+    problems = _migration_problems(runtime_gil=False)
+    if problems:
+        sys.stderr.write(
+            "run_isolated: refusing to run -- cross-hub migration is not sound "
+            "here:\n  %s\nBuild the patched interpreter with "
+            "tools/ci/build_patched_cpython.sh and the extension with it.\n"
+            % "\n  ".join(problems))
+        sys.exit(2)
 
 
 def main(argv):
-    _warn_if_not_free_threaded()
+    _refuse_unless_migration_is_sound()
     import threading
     from concurrent.futures import ThreadPoolExecutor, as_completed
 

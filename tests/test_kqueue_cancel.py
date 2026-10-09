@@ -28,9 +28,8 @@ parked socket op unwinds instead of re-parking forever.  Code under test:
     deterministically on the single-thread scheduler (the parker yields before
     the canceller runs); the ARMED race is exercised under M:N.
 
-Run from the repo root (sys.path.insert "src" below).  kqueue-only: the cancel
-paths above are identical on epoll, but this module asserts them on the
-kqueue backend specifically (the wake_all=1 per-fd fan-out + the one-shot re-arm
+kqueue-only: the cancel paths above are identical on epoll, but this module
+asserts them on the kqueue backend specifically (the wake_all=1 per-fd fan-out + the one-shot re-arm
 model are kqueue-specific, finding B2), so it skips elsewhere.
 """
 import errno
@@ -40,14 +39,12 @@ import time
 
 import pytest
 
-sys.path.insert(0, "src")
+import stackweave            # high-level go/sleep/run for the M:N driver
+import stackweave_c
 
 pytestmark = pytest.mark.skipif(
     not sys.platform.startswith(("darwin", "freebsd", "openbsd", "netbsd")),
     reason="kqueue backend only")
-
-import stackweave_c          # noqa: E402
-import stackweave            # noqa: E402  (high-level go/sleep/run for the M:N driver)
 
 READ = 1
 WRITE = 2
@@ -590,4 +587,4 @@ def test_tcpconn_recv_cancel_mn_raises_ecanceled(hubs):
 
 
 if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

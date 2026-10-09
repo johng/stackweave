@@ -22,11 +22,11 @@ harness + stackweave.run(hubs, ...)) and tests/test_adv_sched.py (hang_guard /
 raw_thread from adv_util so a lost wake fails as a timeout, not a wedge).
 """
 import re
+import sys
 
 import pytest
 
 import stackweave
-import stackweave_c
 from stackweave import sync
 
 from adv_util import hang_guard, raw_thread
@@ -195,3 +195,7 @@ def test_future_many_timeouts_then_survivor():
     # moment" branch) -- what must never happen is a crash or a lost waiter.
     assert out["timed_out"] + out["not_timed_out"] == 4, out
     assert out["timed_out"] >= 1, out
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

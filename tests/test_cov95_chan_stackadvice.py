@@ -35,19 +35,14 @@ it is genuinely adversarial -- it asserts NO value is lost or duplicated across
 the cross-hub select handoff under heavy contention -- even though it only
 *opportunistically* lights the race lines.
 """
-import os
-import subprocess
 import sys
 
 import pytest
 
 import stackweave
 import stackweave_c as rc
-from adv_util import hang_guard, needs_free_threading
 
-FT = needs_free_threading()
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY = sys.executable
+from adv_util import hang_guard, run_python
 
 
 # ==========================================================================
@@ -55,16 +50,8 @@ PY = sys.executable
 # ==========================================================================
 def _run_subproc(script, env_extra=None, timeout=240):
     """Run a script in a fresh child so an env-resolved-once mode is exercised
-    and gcov flushes on clean exit.  Skip (not fail) on timeout: this box is
-    shared with a CI runner, so a timeout is contention, not a bug."""
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
-    if env_extra:
-        env.update(env_extra)
-    try:
-        return subprocess.run([PY, "-c", script], cwd=REPO, env=env,
-                              capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        pytest.skip("cov workload timed out (box under heavy load)")
+    and gcov flushes on clean exit."""
+    return run_python(script, timeout=timeout, env=env_extra)
 
 
 # ==========================================================================
@@ -245,7 +232,6 @@ def test_select_multicase_nonfiring_send_value_dropped():
     assert all(r() is None for r in refs), "non-firing SEND value leaked"
 
 
-@pytest.mark.skipif(not FT, reason="the M:N hub park branch needs a real hub")
 def test_select_recv_parks_in_mn_hub_then_woken():
     """Under stackweave.run(N) a select parked inside an M:N HUB takes the
     runloom_mn_current_hub_opaque() != NULL park branch (distinct from the
@@ -283,7 +269,6 @@ def test_select_recv_parks_in_mn_hub_then_woken():
     assert res["r"] == (0, "mn-payload", True), res
 
 
-@pytest.mark.skipif(not FT, reason="M:N cross-hub select handoff needs GIL off")
 def test_select_mn_recv_integrity_stress():
     """Adversarial: many RECV-select consumers over a few shared cap-0 channels,
     fed by many plain producers, under run(4).  Asserts NO value is lost or
@@ -343,7 +328,6 @@ def test_select_mn_recv_integrity_stress():
     assert set(collected) == expected, "value set mismatch (lost or duplicated)"
 
 
-@pytest.mark.skipif(not FT, reason="M:N send-select handoff needs GIL off")
 def test_select_mn_send_integrity_stress():
     """Adversarial mirror: many SEND-select producers (multi-case SEND over
     shared cap-0 channels) feeding many plain receivers.  Asserts every value
@@ -416,7 +400,7 @@ def test_select_mn_send_integrity_stress():
 # --- learned path: a SECOND spawn of a sampled kind sizes to the learned peak,
 #     SHRINKING from the large autosize start once a sample exists. ---
 _ADVICE_LEARNED = r'''
-import sys, os; sys.path.insert(0, "src")
+import sys, os
 # Start above the FT-3.14 256 KiB spawn floor (p226, 289ecb99): at the default
 # 256 KiB start the floor equals the start there, so nothing could shrink.
 os.environ["STACKWEAVE_STACK_AUTOSIZE_START"] = str(1024 * 1024)
@@ -468,7 +452,7 @@ def test_stackadvice_learned_size_shrinks_from_start():
 #     (Decimal) is given a roomy cold start (>= the prescan floor), and the
 #     floor is remembered so learn-down can't shrink it under that. ---
 _ADVICE_PRESCAN = r'''
-import sys; sys.path.insert(0, "src")
+import sys
 import stackweave, stackweave_c as rc
 from decimal import Decimal
 rc.enable_stack_autosize(True, True)    # prescan ON
@@ -509,7 +493,7 @@ def test_stackadvice_prescan_cold_start_raises_floor():
 
 # --- the STACKWEAVE_STACK_AUTOSIZE_START env override (atol parse). ---
 _ADVICE_ENV_START = r'''
-import sys; sys.path.insert(0, "src")
+import sys
 import stackweave, stackweave_c as rc
 rc.enable_stack_autosize(True, False)   # parses STACKWEAVE_STACK_AUTOSIZE_START
 
@@ -547,7 +531,7 @@ def test_stackadvice_env_start_override():
 #     target, so the prescan scans the target's bytecode (Decimal), not the
 #     wrapper's. ---
 _ADVICE_WRAPPED = r'''
-import sys, functools; sys.path.insert(0, "src")
+import sys, functools
 import stackweave, stackweave_c as rc
 from decimal import Decimal
 rc.enable_stack_autosize(True, True)
@@ -593,7 +577,7 @@ def test_stackadvice_unwrap_follows_wrapped():
 # --- name_of with a callable that has NO __code__ (an instance) -> the
 #     no-filename else branch of the name builder. ---
 _ADVICE_NOCODE = r'''
-import sys; sys.path.insert(0, "src")
+import sys
 import stackweave, stackweave_c as rc
 rc.enable_stack_autosize(True, True)
 
@@ -629,7 +613,7 @@ def test_stackadvice_name_of_callable_without_code():
 # --- cold_start with a callable whose __code__.co_names is NOT a tuple -> the
 #     !PyTuple_Check guard returns the generic size. ---
 _ADVICE_BADNAMES = r'''
-import sys; sys.path.insert(0, "src")
+import sys
 import stackweave, stackweave_c as rc
 rc.enable_stack_autosize(True, True)
 
@@ -676,7 +660,7 @@ def test_stackadvice_cold_start_non_tuple_co_names():
 # --- direct (non-autosize) measurement: enable_stack_advice records HWM
 #     samples on completion; report + reset + disable. ---
 _ADVICE_RECORD = r'''
-import sys; sys.path.insert(0, "src")
+import sys
 import stackweave, stackweave_c as rc
 rc.enable_stack_advice(True)            # measurement only (no autosize)
 assert rc.stack_advice_enabled() is True
@@ -714,7 +698,7 @@ def test_stackadvice_record_report_reset_disable():
 #     inserted) whose table is RESET mid-flight, so on completion record_g
 #     calls find() and probes the now-empty slot. ---
 _ADVICE_FINDMISS = r'''
-import sys; sys.path.insert(0, "src")
+import sys
 import stackweave, stackweave_c as rc
 rc.enable_stack_advice(True)
 
@@ -746,7 +730,7 @@ def test_stackadvice_find_miss_on_reset_in_flight():
 # --- table-full insert: spawn > RUNLOOM_ADVICE_CAP (2048) distinct kinds so
 #     insert() returns NULL once the table fills (note_spawn yields key 0). ---
 _ADVICE_TABLEFULL = r'''
-import sys; sys.path.insert(0, "src")
+import sys
 import stackweave, stackweave_c as rc
 rc.enable_stack_advice(True)
 
@@ -780,7 +764,7 @@ def test_stackadvice_insert_table_full():
 # --- autosize_enabled() + reset_after_fork() (the at-fork child hook re-inits
 #     the advice lock; we then prove advice still works). ---
 _ADVICE_MISC = r'''
-import sys; sys.path.insert(0, "src")
+import sys
 import stackweave, stackweave_c as rc
 assert rc.stack_autosize_enabled() is False
 rc.enable_stack_autosize(True, False)
@@ -816,4 +800,4 @@ def test_stackadvice_autosize_enabled_and_reset_after_fork():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

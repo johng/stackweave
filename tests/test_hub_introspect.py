@@ -16,11 +16,13 @@ import os
 import sys
 import unittest
 
-sys.path.insert(0, "src")
+import pytest
 
 import stackweave
 import stackweave_c
 from stackweave import inspect as gi
+
+from known_gaps import MIGRATION_GAP
 
 HUB_KEYS = {"id", "state", "running_g", "dwell_ms", "pending", "blocked_at"}
 
@@ -55,6 +57,8 @@ class HubIntrospectTest(unittest.TestCase):
                           ("detached", "attached", "suspended", "unknown"))
             self.assertEqual(h["stack_cmd"], "py-spy dump --pid " + pid)
 
+    @MIGRATION_GAP("hubinfo blocked_at walks the hub's thread state, and a "
+                   "fiber's frames are on its own")
     def test_wedge_and_blocked_at(self):
         out = {}
 
@@ -118,4 +122,4 @@ class HubIntrospectTest(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

@@ -1,9 +1,10 @@
 """Cooperative select.select, and a guard on stdlib C-frame footprint.
 
-Background: a fiber runs on a small fixed C stack (default 32 KB, with a
-PROT_NONE guard page).  CPython's `select_select_impl` declares three
-`pylist[FD_SETSIZE + 1]` arrays -- ~51 KB in a single C frame, the only stdlib
-leaf that overflows 32 KB -- so calling it inline in a fiber SEGV'd.  The
+Background: a fiber runs on a fixed C stack with a PROT_NONE guard page, which
+was 32 KB by default when this was written.  CPython's `select_select_impl`
+declares three `pylist[FD_SETSIZE + 1]` arrays -- ~51 KB in a single C frame,
+the only stdlib leaf that overflowed 32 KB -- so calling it inline in a fiber
+SEGV'd.  The
 fix is NOT a bigger stack: `select.select` is reimplemented cooperatively on a
 transient epoll (register the fds, park on the epoll's own fd via netpoll, map
 results back), so the fat frame is never allocated on the fiber stack and
@@ -25,20 +26,21 @@ rc -11 (SIGSEGV) = the regression is back.
 """
 import os
 import re as _re
-import subprocess
 import sys
 import unittest
 
+import pytest
+
 import stackweave_c
 
-import os as _hwm_os
-import pytest as _hwm_pytest
+from adv_util import run_python
+
 # Stack high-water-mark is precise only with 4 KB pages: macOS 16 KB pages make
 # the mincore-based HWM over-report (it reports the whole stack resident), so
 # these HWM/advice/sizing tests can't measure precisely there -- skip them (the
 # diagnostic itself just over-reserves, which is safe).
-_RELIABLE_HWM = _hwm_os.sysconf("SC_PAGESIZE") == 4096
-pytestmark = _hwm_pytest.mark.skipif(
+_RELIABLE_HWM = os.sysconf("SC_PAGESIZE") == 4096
+pytestmark = pytest.mark.skipif(
     not _RELIABLE_HWM,
     reason="stack HWM is reliable only with 4 KB pages")
 
@@ -67,20 +69,16 @@ def _hwm_probe_untrustworthy():
     if _HWM_SENTINEL is None:
         stack = 2 * 1024 * 1024
         code = (
-            "import sys; sys.path.insert(0, %r)\n"
             "import stackweave_c\n"
             "def worker():\n"
             "    pass\n"
             "stackweave_c.fiber(worker, stack_size=%d)\n"
             "stackweave_c.run()\n"
             "print('HWM', stackweave_c.stats().get('stack_hwm', 0))\n"
-            % (os.path.join(REPO, "src"), stack)
+            % stack
         )
-        env = dict(os.environ, PYTHON_GIL="0", STACKWEAVE_GIL="0")
         try:
-            p = subprocess.run([sys.executable, "-c", code], cwd=REPO, env=env,
-                               timeout=60, stdout=subprocess.PIPE,
-                               stderr=subprocess.PIPE, text=True)
+            p = run_python(code, raise_timeout=True)
             m = _re.search(r"HWM (\d+)", p.stdout or "")
             # Half the allocation is a deliberately loose bar: a do-nothing
             # fiber uses a few KB, so anything near the allocation means
@@ -91,25 +89,13 @@ def _hwm_probe_untrustworthy():
             _HWM_SENTINEL = False   # cannot tell -> assume usable, let it fail loudly
     return _HWM_SENTINEL
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
 
 def run_child(code, timeout=60):
     preamble = (
-        "import sys; sys.path.insert(0, %r)\n"
         "import stackweave, stackweave_c\n"
-        "stackweave.monkey.patch()\n" % os.path.join(REPO, "src")
+        "stackweave.monkey.patch()\n"
     )
-    env = dict(os.environ)
-    env["PYTHON_GIL"] = "0"
-    env["STACKWEAVE_GIL"] = "0"
-    try:
-        p = subprocess.run(
-            [sys.executable, "-c", preamble + code],
-            cwd=REPO, env=env, timeout=timeout,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    except subprocess.TimeoutExpired:
-        return 124, "", "[timed out]"
+    p = run_python(preamble + code, timeout=timeout)
     return p.returncode, p.stdout, p.stderr
 
 
@@ -221,7 +207,7 @@ class TestStdlibFrameFootprint(unittest.TestCase):
     and assert they fit the default fiber stack.  Catches a NEW fat-framed
     C function before it can re-arm the guard-page SEGV."""
 
-    # Raw (unpatched) C-stack high-water marks, free-threaded 3.13t:
+    # Raw (unpatched) C-stack high-water marks, measured on free-threaded 3.13t:
     #   select.select        50.9 KB  -- the FD_SETSIZE arrays (handled: cooperative)
     #   first ssl use        ~40   KB  -- OpenSSL one-time init (handled: main-thread warm)
     #   json (nested)         6.3 KB
@@ -248,19 +234,15 @@ class TestStdlibFrameFootprint(unittest.TestCase):
         # whether it needs a cooperative path.  A roomy 2 MB stack so the fat
         # frame can't crash the measurement.
         code = (
-            "import sys; sys.path.insert(0, %r)\n"
             "import stackweave_c\n"
             "def worker():\n"
             "    %s\n"
             "stackweave_c.fiber(worker, stack_size=%d)\n"
             "stackweave_c.run()\n"
             "print('HWM', stackweave_c.stats().get('stack_hwm', 0))\n"
-            % (os.path.join(REPO, "src"), op_src, _PROBE_STACK)
+            % (op_src, _PROBE_STACK)
         )
-        env = dict(os.environ, PYTHON_GIL="0", STACKWEAVE_GIL="0")
-        p = subprocess.run([sys.executable, "-c", code], cwd=REPO, env=env,
-                           timeout=60, stdout=subprocess.PIPE,
-                           stderr=subprocess.PIPE, text=True)
+        p = run_python(code)
         self.assertEqual(p.returncode, 0, p.stderr)
         m = _re.search(r"HWM (\d+)", p.stdout)
         self.assertIsNotNone(m, p.stdout)
@@ -350,8 +332,8 @@ class TestDeepRecursionSafety(unittest.TestCase):
 
     Two mechanisms keep it safe:
       * json/pickle/marshal/copy.deepcopy (~60-80 B of C stack per level)
-        degrade to a clean RecursionError -- CPython's recursion counter fires
-        (~150 levels ~ 12 KB) well within the 32 KB default stack.
+        degrade to a clean RecursionError -- CPython's recursion check fires
+        well within the default fiber stack.
       * ast/compile (~1.5 KB per level, which WOULD SEGV past ~18 deep before
         the counter fires) are auto-offloaded to the backend pool's full-size
         thread stack when called inside a fiber (the `compile` patch).
@@ -425,4 +407,4 @@ print("PASS")
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

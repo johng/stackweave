@@ -37,24 +37,16 @@ import sys
 
 import pytest
 
-REPO_SRC = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
-if REPO_SRC not in sys.path:
-    sys.path.insert(0, REPO_SRC)
+import stackweave
+import stackweave_c as rc
 
-import stackweave            # noqa: E402
-import stackweave_c as rc    # noqa: E402
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from adv_util import hang_guard, needs_free_threading   # noqa: E402
+from adv_util import child_env, hang_guard
 
 try:
     import greenlet
     HAVE_GREENLET = True
 except ImportError:                                       # pragma: no cover
     HAVE_GREENLET = False
-
-FT = needs_free_threading()
 
 pytestmark = pytest.mark.skipif(
     not HAVE_GREENLET, reason="greenlet not installed on this interpreter")
@@ -361,10 +353,7 @@ SCENARIOS = {
 def run_mn_scenario(name, timeout=90):
     """Launch a scenario in a PYTHON_TLBC=0 subprocess (this file as entry point).
     Returns (returncode, stdout+stderr)."""
-    env = dict(os.environ)
-    env["PYTHON_GIL"] = "0"
-    env["PYTHON_TLBC"] = "0"          # preset -> no stackweave self-re-exec
-    env["PYTHONPATH"] = REPO_SRC + os.pathsep + env.get("PYTHONPATH", "")
+    env = child_env(PYTHON_TLBC="0")  # preset -> no stackweave self-re-exec
     proc = subprocess.run(
         [sys.executable, os.path.abspath(__file__), name],
         env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -382,29 +371,25 @@ def assert_scenario(name):
         "M:N greenlet scenario %s did not report ok=True:\n%s" % (name, out))
 
 
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_mn_independent_greenlet_trees():
     """Many goroutines each running independent greenlet trees, atomically."""
     assert_scenario("mn_atomic_trees")
 
 
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_mn_greenlet_trees_interleaved_with_chan():
     """greenlet switches interleaved with channel send/recv across hubs."""
     assert_scenario("mn_chan_interleave")
 
 
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_mn_greenlet_raise_across_switch():
     """A greenlet raising across a switch inside each of many parallel goroutines."""
     assert_scenario("mn_raise")
 
 
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_mn_yield_from_inside_greenlet():
-    """FINDINGS BUG #8 case: cooperatively yielding to the stackweave scheduler from
-    inside a switched-in greenlet, interleaved with greenlet switches, across many
-    hubs.  Historically crashed; asserted here to now complete cleanly
+    """Cooperatively yielding to the stackweave scheduler from inside a
+    switched-in greenlet, interleaved with greenlet switches, across many hubs,
+    completes cleanly.  Regression for FINDINGS BUG #8, which crashed here
     (subprocess-isolated so any regression is a captured child crash)."""
     assert_scenario("mn_yield_inside")
 

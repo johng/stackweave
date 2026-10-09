@@ -142,11 +142,14 @@ by four different hub threads simultaneously (subject to scheduling).
 - **Spawn**: `mn_fiber` is ~250 ns on 3.13t -- submission to the per-hub
   MPSC queue + work-steal-eligible push.  Comparable to single-thread
   `fiber`.
-- **Yield**: per-hub yield is the same ~80 ns swap.  No cross-thread
-  synchronisation on yield: a yielded fiber goes back on its current
-  hub's local FIFO.
+- **Yield**: per-hub yield is the same ~80 ns swap.  A yielded fiber,
+  or one whose `sleep()` has ended, goes on its hub's yield queue: the
+  hub takes it back in FIFO order, and an idle hub can steal it, so a
+  busy hub's yielders spread to idle ones.  A preempted fiber stays on
+  its hub (see [Preemption](preemption.md)).
 - **Steal**: ~1 µs to steal from another hub's deque (atomic CAS on
-  the deque bottom).  Happens only when the local deque is empty.
+  the deque top).  An idle hub tries the other hubs' deques, then their
+  yield queues.
 - **Wake**: ~3 µs to wake a hub blocked on its CV.
 
 For workloads with strong locality (a fiber that does

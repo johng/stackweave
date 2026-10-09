@@ -11,7 +11,10 @@ assembled for the System V (Linux / macOS) argument registers: rdi, rsi, ....
 The blobs are trusted/self-generated -- never do this with untrusted bytes.
 """
 import platform
+import sys
 import unittest
+
+import pytest
 
 import stackweave
 import stackweave_c
@@ -119,4 +122,4 @@ class TestMachineCodeExec(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

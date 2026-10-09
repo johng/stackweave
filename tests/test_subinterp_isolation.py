@@ -1,6 +1,6 @@
 """Sub-interpreter (PEP 684) isolation contract for stackweave_c.
 
-CONTRACT (verified 2026-06-27 on free-threaded 3.13t):
+CONTRACT (first verified 2026-06-27 on free-threaded 3.13t; holds on 3.14t):
 stackweave_c is a SINGLE-PHASE C extension with PROCESS-GLOBAL state (the M:N
 scheduler, the shared netpoll, hub OS threads, init-once globals in mn_sched.c).
 It must NOT be loaded into more than one interpreter -- two interpreters driving
@@ -26,16 +26,19 @@ no guard code is needed -- CPython already protects us. This test uses the
 reliable file channel.
 """
 import os
+import sys
 import tempfile
 import unittest
+
+import pytest
+
+from adv_util import SRC
 
 try:
     import _interpreters
     _HAVE = True
 except ImportError:
     _HAVE = False
-
-SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
 
 
 def _import_runloom_in_subinterp(config):
@@ -98,4 +101,4 @@ class SubinterpIsolation(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

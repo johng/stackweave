@@ -10,25 +10,18 @@ those allocations to "fail"; each scenario runs in its own interpreter
 (the env is read once and cached).  Run under ASan to turn a leak/corruption
 in the error path into a hard error.
 """
-import os
-import subprocess
 import sys
 import unittest
 
-sys.path.insert(0, "src")
+import pytest
+
+from adv_util import run_python
 
 
 def _run(code, env_extra):
-    env = dict(os.environ)
-    env["PYTHON_GIL"] = "0"
-    env["STACKWEAVE_SYSMON"] = "0"
-    env["PYTHONPATH"] = "src" + os.pathsep + env.get("PYTHONPATH", "")
-    env.update(env_extra)
     code = "import stackweave_c as _c0; _c0.set_deadlock_mode(0)\n" + code
-    p = subprocess.run([sys.executable, "-c", code], env=env,
-                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                       timeout=60)
-    return p.returncode, p.stdout.decode("utf-8", "replace")
+    p = run_python(code, env=dict(STACKWEAVE_SYSMON="0", **env_extra))
+    return p.returncode, p.stdout + p.stderr
 
 # Inject once, confirm MemoryError, then confirm the scheduler recovers
 # (the next spawn succeeds and runs) and leaks nothing.
@@ -81,4 +74,4 @@ class TestSpawnOOM(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

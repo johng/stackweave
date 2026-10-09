@@ -33,8 +33,7 @@ import sys
 
 import pytest
 
-sys.path.insert(0, "src")
-import stackweave_c as rc  # noqa: E402
+import stackweave_c as rc
 
 
 # ---------------------------------------------------------------------------
@@ -295,3 +294,7 @@ def test_each_fiber_keeps_its_own_tracer_across_a_switch():
     assert seen["b"] is TB, (
         "fiber B resumed with the wrong tracer (%r)"
         % (getattr(seen["b"], "__name__", seen["b"]),))
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

@@ -23,9 +23,9 @@ import os
 import sys
 import unittest
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(REPO, "src"))
-os.environ["PYTHON_GIL"] = "0"
+import pytest
+
+# Set before stackweave_c first reads it (see the docstring).
 os.environ.setdefault("STACKWEAVE_LOGICAL_CLOCK", "1")
 import stackweave_c            # noqa: E402
 
@@ -80,4 +80,4 @@ class TestSleepSeqFifo(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

@@ -10,7 +10,7 @@ probe while fiber B blocked on the real lock on the same scheduler thread
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+import pytest
 
 import stackweave.monkey
 import stackweave_c
@@ -45,3 +45,7 @@ def test_concurrent_offload_mn():
     stackweave_c.mn_run()
     stackweave_c.mn_fini()
     assert stackweave_c._self_check(0) == 0
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

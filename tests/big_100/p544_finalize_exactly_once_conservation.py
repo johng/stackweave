@@ -37,7 +37,11 @@ WHICH ORACLE IS LOAD-BEARING, AND WHY (single-owner, exactly-once):
     - drops the object's ONLY strong ref (``obj = None``).  A fiber-local instance
       with no other references deallocs immediately on the dropping hub, so the
       weakref callback fires SYNCHRONOUSLY, deterministically, exactly once -- no
-      dependency on gc timing (see the WHY-NOT-GC note below),
+      dependency on gc timing (see the WHY-NOT-GC note below).  Unless the yield
+      moved the fiber to another hub: a drop on a thread that does not own the
+      object only queues its last decref to the owner (free-threaded biased
+      refcounting), and the callback fires when that hub merges its queue, so
+      then the fiber waits for it (bounded) before checking,
     - asserts fired[wid] moved by EXACTLY ONE (0->1 for this registration; not 0 =
       a DROPPED fire / lost registry insertion, not 2 = a DOUBLED fire) and that
       last_payload[wid] equals THIS iteration's payload with the correct embedded wid
@@ -97,6 +101,8 @@ and ``next(_index_iter)`` are textbook shared-container RMWs; a data-race report
 the registry dict entry -- or a single dropped/doubled fire under replay -- localizes
 the exactly-once break before the conservation sum even closes.
 """
+import threading
+import time
 import weakref
 
 import harness
@@ -142,13 +148,22 @@ def one_iteration(H, wid, gen, state):
     before = fired[wid]
     payload = ((wid & PMASK) << PSHIFT) | (gen & PMASK)
 
+    tid = threading.get_ident()
     obj = Cell()
     weakref.finalize(obj, on_finalize, fired, last_payload, wid, payload)
     registered[wid] += 1
     stackweave.yield_now()                # siblings race the shared registry here
+    moved = threading.get_ident() != tid
     obj = None                         # drop the only strong ref -> fires now
 
     got = fired[wid]
+    if got == before and moved:
+        # Dropped off the owning thread: the owner hub runs the dealloc (and the
+        # callback) when it merges its biased-refcount queue, within ms.
+        deadline = time.monotonic() + 5.0
+        while fired[wid] == before and time.monotonic() < deadline:
+            stackweave.sleep(0.001)
+        got = fired[wid]
     if got == before:
         H.fail("weakref.finalize DROPPED: registration #{0} for wid {1} never "
                "fired (fired[wid] stayed {2}) after its referent's only ref was "

@@ -20,9 +20,12 @@ import errno
 import io
 import os
 import socket
+import sys
 import tempfile
 import time
 import unittest
+
+import pytest
 
 import stackweave
 import stackweave.monkey
@@ -621,4 +624,4 @@ def _linger_struct():
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

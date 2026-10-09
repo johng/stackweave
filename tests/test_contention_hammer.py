@@ -24,22 +24,19 @@ Two distinct cells, because the primitives have different contracts:
 Each scenario runs in its own subprocess so one strand can't wedge the file.
 House style: %/.format, prints kept.
 """
-import os
 import subprocess
 import sys
 import textwrap
 
 import pytest
 
-PY = sys.executable
-ENV = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
+from adv_util import run_python
 
 
 def run_body(body, timeout=45):
     script = ("import stackweave_c as rc, stackweave, threading, time, sys\n"
               + textwrap.dedent(body))
-    return subprocess.run([PY, "-c", script], env=ENV, capture_output=True,
-                          timeout=timeout)
+    return run_python(script, timeout=timeout, raise_timeout=True)
 
 
 def expect(body, sentinel="OK", timeout=45):
@@ -61,7 +58,7 @@ def expect(body, sentinel="OK", timeout=45):
             "  `done[0] += 1` across hubs loses updates and the spin never ends.\n"
             "--- stdout ---\n{1}\n--- stderr ---\n{2}".format(
                 timeout, _t(exc.stdout), _t(exc.stderr)))
-    assert sentinel.encode() in p.stdout, (p.stdout[-800:], p.stderr[-800:])
+    assert sentinel in p.stdout, (p.stdout[-800:], p.stderr[-800:])
 
 
 # -------- foreign-safe primitives: fibers + real OS threads together ---------
@@ -92,11 +89,8 @@ def test_colock_exclusion_fibers_and_foreign_threads():
     """)
 
 
-# TODO(stackweave): FOREIGN-THREAD LOST WAKEUP -- a genuine stackweave bug, NOT a
-# 3.13t/CPython issue.  With fibers AND foreign threads racing Once.do(init), one
-# foreign caller intermittently STRANDS inside once.do() (CI saw seen=11 of 12 --
-# init ran exactly once, but a waiter never woke).  Reproduces on BOTH 3.13t AND
-# 3.14t; the same foreign-thread/executor pattern under stock asyncio is clean, so
+# CI once saw seen=11 of 12 here and read it as a caller stranded in once.do();
+# it was this test's own unlocked `seen` latch losing an increment (49f21834).
 def test_once_exactly_once_fibers_and_threads():
     # Many fibers AND threads race Once.do(init); init must run EXACTLY once and
     # every caller observe completion (ft-check-then-act class).
@@ -216,4 +210,4 @@ def test_rc_chan_exactly_once_cross_hub():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

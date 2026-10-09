@@ -14,16 +14,15 @@ The test runs the SAME workload as a subprocess under BOTH netpoll backends
   * neither hangs -- a dropped edge-triggered readiness on a 1-byte slice would
     strand the client recv, which the subprocess timeout turns into a failure.
 """
-import os
-import subprocess
 import sys
 import unittest
 import zlib
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
+import pytest
+
 import stackweave_c
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from adv_util import run_python
 
 # Self-contained; reads DRIBBLE_NBYTES / DRIBBLE_SLICE from the env, prints
 # "OK <crc> <n>" on success or "ERR <repr>" + exit 2 on a fiber exception.
@@ -104,13 +103,10 @@ print("OK", out.get("crc"), out.get("n"))
 
 
 def _run_backend(iouring, nbytes, slice_):
-    env = dict(os.environ,
-               PYTHON_GIL="0", PYTHON_TLBC="0",
-               PYTHONPATH=os.path.join(REPO, "src"),
+    env = dict(PYTHON_TLBC="0",
                STACKWEAVE_TCPCONN_IOURING=("1" if iouring else "0"),
                DRIBBLE_NBYTES=str(nbytes), DRIBBLE_SLICE=str(slice_))
-    return subprocess.run([sys.executable, "-c", WORKLOAD], env=env,
-                          capture_output=True, text=True, timeout=90)
+    return run_python(WORKLOAD, env=env, timeout=90)
 
 
 class TestNetpollDribble(unittest.TestCase):
@@ -150,4 +146,4 @@ class TestNetpollDribble(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

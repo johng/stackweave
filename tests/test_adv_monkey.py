@@ -17,29 +17,29 @@ tests/run_isolated.py.
 NOTE: monkey.patch() is process-global and irreversible-ish, so this whole file
 runs under the patch (like the existing monkey suites).
 """
-import sys
-import time
-
-import stackweave.monkey as monkey
-monkey.patch()
-
-import threading          # patched
-import queue              # patched
-import socket             # patched
-
-import pytest
-
-import stackweave
-import stackweave_c as rc
-from adv_util import hang_guard, needs_free_threading
-
 # A genuinely-foreign OS thread: the monkey shims ask the runtime
 # (stackweave_c.in_fiber()) whether the caller is a fiber, so a thread we
 # start that NEVER runs a fiber stays foreign.  threading.Thread is patched, but it still spawns a real OS
 # thread (monkey runs "threads" as OS threads, not fibers, unless they run
 # fiber work) -- which is exactly the foreign caller we want.
 import _thread as _real_thread_mod
-FT = needs_free_threading()
+import sys
+import time
+
+import stackweave.monkey as monkey
+# Patch before the imports below, so the whole file runs under the patch.
+monkey.patch()
+
+import queue              # patched
+import socket             # patched
+import threading          # patched
+
+import pytest
+
+import stackweave
+import stackweave_c as rc
+
+from adv_util import hang_guard
 
 
 def _run_single(fn):
@@ -85,7 +85,6 @@ def test_patched_lock_mutual_exclusion_fibers_single_thread():
     assert counter[0] == N * ITERS, "lost increments: %d != %d" % (counter[0], N * ITERS)
 
 
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_patched_lock_mutual_exclusion_fibers_mn():
     lk = threading.Lock()
     counter = [0]
@@ -115,7 +114,6 @@ def test_patched_lock_mutual_exclusion_fibers_mn():
 # Exercises the foreign-thread acquire (spin) + the foreign-thread RELEASE that
 # can wake a parked fiber cross-thread -- the documented SIGSEGV surface.
 # --------------------------------------------------------------------------
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_patched_lock_foreign_thread_plus_fibers():
     lk = threading.Lock()
     counter = [0]
@@ -290,4 +288,4 @@ def test_getaddrinfo_ip_literal_no_network():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

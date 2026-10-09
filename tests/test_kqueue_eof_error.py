@@ -25,7 +25,7 @@ connect) + stackweave_c.wait_fd -- never a backend internal -- and compare to a
 plain blocking socket where it clarifies intent.  Single-thread (stackweave_c.fiber/
 run) AND a couple under M:N (stackweave.run(4, ...), per-hub kqueue delivers EOF).
 
-kqueue only; run from the repo root.
+kqueue only.
 """
 import errno as _errno
 import socket
@@ -33,14 +33,12 @@ import sys
 
 import pytest
 
+import stackweave
+import stackweave_c
+
 pytestmark = pytest.mark.skipif(
     not sys.platform.startswith(("darwin", "freebsd", "openbsd", "netbsd")),
     reason="kqueue backend only")
-
-sys.path.insert(0, "src")
-
-import stackweave_c                       # noqa: E402
-import stackweave                         # noqa: E402
 
 READ = 1
 WRITE = 2
@@ -461,4 +459,4 @@ def test_mn_write_only_close_fold(hubs):
 
 
 if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

@@ -1,7 +1,7 @@
 """M:N-scheduler correctness for the cooperative-compat fixes.
 
 Covers the API changes that made the monkey layer + feature modules work under
-the M:N scheduler (mn_init/mn_fiber/mn_run, free-threaded 3.13t, GIL off):
+the M:N scheduler (mn_init/mn_fiber/mn_run):
 
   * stackweave_c.Mutex                 -- new C-level M:N-safe mutex
   * current_g() under M:N           -- returns the hub's running fiber
@@ -22,12 +22,13 @@ every fiber finishes, so a dropped/stranded fiber shows up as a hang
 """
 import socket
 import ssl
-import struct
 import subprocess
 import sys
 import threading
 import time
 import unittest
+
+import pytest
 
 import stackweave
 import stackweave.monkey
@@ -420,4 +421,4 @@ class TestSelectPollMN(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))
