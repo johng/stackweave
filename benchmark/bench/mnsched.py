@@ -1,10 +1,10 @@
 """M:N scheduler benchmarks under cross-hub migration (the only M:N mode).
 
-bench.micro times the single-thread scheduler and bench.mn times CPU-bound
-core scaling; neither parks a fiber on an M:N hub, so neither sees the paths
-that migration-only (#23), Go-style local wake (#24) and the gap fixes (#26)
-changed.  This suite times exactly those, on a persistent hub pool created
-untimed in each bench's setup:
+It times the paths that migration-only (#23), Go-style local wake (#24) and
+the gap fixes (#26) changed -- fibers parking and waking on M:N hubs -- on a
+persistent hub pool created untimed in each bench's setup.  bench.baselines
+and gobench/ run the same entries on other runtimes; bench.compare puts them
+all in one table:
 
   park/wake routing   one ping-pong pair, four ways: unpinned (a hub-thread
                       wake lands on the waker's own deque -- local wake),
@@ -49,7 +49,7 @@ Run:
 
 Tunables: STACKWEAVE_BENCH_HUBS (default 4).  Feature switches
 (STACKWEAVE_STACK_ARENA, ...) are read by the runtime from the environment and
-recorded in the result's env block; bench.features runs the A/B matrix.
+recorded in the result's env block; bench.compare runs the A/B matrix.
 """
 import argparse
 import json
@@ -67,7 +67,7 @@ from bench.gil import ensure_nogil
 from bench.harness import Suite, default_pin_set
 
 HUBS = int(os.environ.get("STACKWEAVE_BENCH_HUBS", "4"))
-SCALE_HUBS = [1, 2, 4, 8]
+SCALE_HUBS = [1, 2, 4, 8, 16]
 
 
 class Pool:

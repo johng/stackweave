@@ -77,5 +77,5 @@ across cores under free-threading; `@hot` gives each core its own cells holding
 the same values. It is **not** the code object: a single shared *code* object
 scales fine. The 7-variant ablation that proves it's the cells
 (`SCHEDULER_SCALING_FINDINGS.md`) was not carried into this tree;
-`benchmark/suite/speed/hot_validate.py` checks `@hot` against a plain shared
+`tools/hot_validate.py` checks `@hot` against a plain shared
 handler, and `src/stackweave/_hot.py` is the implementation.

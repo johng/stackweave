@@ -16,13 +16,13 @@ cannot be compared, and a regression is invisible.  This module fixes that:
     * writes machine-readable JSON so runs are diffable and a regression
       gate can compare against a committed baseline.
 
-Primary target runtime is free-threaded CPython 3.13t: stackweave's M:N hub pool
+Primary target runtime is free-threaded CPython 3.14t: stackweave's M:N hub pool
 only gets real core-level parallelism with the GIL off.  Everything here is
-stdlib-only so it runs under 3.13t with no extra wheels to build.
+stdlib-only so the other-runtime baselines can use it on a stock interpreter.
 
 Run a suite with, e.g.::
 
-    PYTHONPATH=src ~/.pyenv/versions/3.14.4t/bin/python -m bench.micro
+    PYTHONPATH=src:benchmark PYTHON_GIL=0 python -m bench.mnsched
 """
 import json
 import os
@@ -345,6 +345,11 @@ class Suite:
         finally:
             if teardown is not None:
                 teardown()
+        return self.record(name, times, inner=inner, note=note)
+
+    def record(self, name, times, *, inner=1, note=""):
+        """Record per-sample wall seconds timed by the caller (a runtime that
+        must own the loop around its samples, e.g. one trio.run)."""
         stats = summarize(times, inner)
         stats["name"] = name
         stats["note"] = note

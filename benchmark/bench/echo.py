@@ -18,8 +18,8 @@ clients doing `ROUNDS` 64-byte request/response round-trips each per sample:
 Clients are TCPConn, so STACKWEAVE_TCPCONN_IOURING=1 applies to them.
 
 Feature switches are read from the environment when the hubs start, so this
-suite measures whatever it is started under; bench.features runs it once per
-feature config.  Every sample checks the echoed bytes and the round-trip count.
+suite measures whatever it is started under; bench.compare runs it once per
+feature config, next to the same echo on the other runtimes.  Every sample checks the echoed bytes and the round-trip count.
 
 Run:
     PYTHONPATH=src:benchmark PYTHON_GIL=0 python -m bench.echo
@@ -144,8 +144,8 @@ def run_hub_count(s, hubs, conns_n, rounds, servers):
 def main(argv=None):
     ensure_nogil()
     ap = argparse.ArgumentParser(description="in-process TCP echo round-trips")
-    ap.add_argument("--hubs", default="2,4,8",
-                    help="comma-separated hub counts (default 2,4,8)")
+    ap.add_argument("--hubs", default="2,4,8,16",
+                    help="comma-separated hub counts; any above the CPU count is skipped (default 2,4,8,16)")
     ap.add_argument("--conns", type=int, default=64)
     ap.add_argument("--rounds", type=int, default=500,
                     help="round-trips per connection per sample")
