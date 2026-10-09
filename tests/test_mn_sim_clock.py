@@ -16,16 +16,10 @@ import sys
 
 import pytest
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from adv_util import REPO
+from known_gaps import SEEDED_MN_TODO
 sys.path.insert(0, os.path.join(REPO, "tools", "dst"))
-
 import mn_digest  # noqa: E402
-
-from adv_util import needs_free_threading  # noqa: E402
-
-pytestmark = pytest.mark.skipif(
-    not needs_free_threading(),
-    reason="the M:N scheduler is only real on free-threaded builds")
 
 
 def run_snippet(code, seed=12345):
@@ -37,6 +31,7 @@ def run_snippet(code, seed=12345):
 
 
 class TestMnNsClock:
+    @SEEDED_MN_TODO
     def test_census_clock_exact_ns(self):
         """Two sleepers (3ms, 5ms): after mn_run the clock sits at EXACTLY the
         last advance -- 5_000_000 ns, no double round-trip error -- and the
@@ -56,6 +51,7 @@ class TestMnNsClock:
             "rc.mn_fini()\n")
         assert "NS 5000000 ORDER [1, 2]" in p.stdout, (p.stdout, p.stderr[-800:])
 
+    @SEEDED_MN_TODO
     def test_clock_monotone_across_wakes(self):
         """Each sleeper reads the clock as it wakes: the readings are the exact
         per-deadline advances, in order -- the census clock tracks sched_sleep
@@ -76,6 +72,7 @@ class TestMnNsClock:
         assert "SEEN [2000000, 4000000, 7000000]" in p.stdout, \
             (p.stdout, p.stderr[-800:])
 
+    @SEEDED_MN_TODO
     def test_back_to_back_runs_bit_identical(self):
         """sim_reset + re-arm between two mn_runs in ONE process: both runs
         report the same final clock and the same completion order (per-run
@@ -102,6 +99,7 @@ class TestMnNsClock:
         assert lines[0][2:] == lines[1][2:], \
             "back-to-back runs diverged: {0}".format(lines)
 
+    @SEEDED_MN_TODO
     def test_fractional_deadline_fires(self):
         """I1-review regression 1 (census livelock): a deadline whose ns
         fraction rounds the double mirror BELOW the exact wake_at --
@@ -117,6 +115,7 @@ class TestMnNsClock:
             "rc.mn_fini()\n")
         assert "FRAC_OK 333333333" in p.stdout, (p.stdout, p.stderr[-800:])
 
+    @SEEDED_MN_TODO
     def test_gap_sleeper_run_again(self):
         """I1-review regression 2 (arm wipe): spawn-again/run-again on a live
         pool with a gap fiber that sleeps -- an unconditional deadline wipe at
@@ -135,6 +134,7 @@ class TestMnNsClock:
             "print('GAP_OK 40')\n", seed=1)
         assert "GAP_OK 40" in p.stdout, (p.stdout, p.stderr[-800:])
 
+    @SEEDED_MN_TODO
     def test_no_global_clock_leak_into_h1(self):
         """I1-review regression 3 (plane leak): an H=1 logical-clock run AFTER
         mn_fini must start at 0 (ctrl_fini resets the global mirror); the
@@ -172,4 +172,4 @@ class TestMnNsClock:
 
 
 if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

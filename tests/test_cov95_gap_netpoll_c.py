@@ -44,7 +44,6 @@ NOT covered here (reported as BLOCKED, no bounded clean-exit driver):
   SAME hub eventfd is registered twice, which never happens in normal
   operation and has no Python-reachable entry point.
 """
-import errno
 import os
 import shutil
 import subprocess
@@ -56,11 +55,9 @@ import pytest
 
 import stackweave
 import stackweave_c as rc
-from adv_util import hang_guard, needs_free_threading
 
-FT = needs_free_threading()
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY = sys.executable
+from adv_util import REPO, child_env, hang_guard, run_python
+
 FAULTINJ_SO = os.path.join(REPO, "tools", "faultinj", "faultinj.so")
 STRACE = shutil.which("strace")
 CC = os.environ.get("CC") or shutil.which("cc") or shutil.which("gcc")
@@ -75,14 +72,12 @@ def _run_py(src, env_extra=None, timeout=60, preload=None):
     The snippet must print its own success marker and exit 0 -- a crash/_exit
     does NOT flush gcov, so we always assert returncode==0 + the marker.
     """
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
+    env = {}
     if preload:
         env["LD_PRELOAD"] = preload
     if env_extra:
         env.update(env_extra)
-    return subprocess.run([PY, "-c", textwrap.dedent(src)],
-                          cwd=REPO, env=env, capture_output=True, text=True,
-                          timeout=timeout)
+    return run_python(textwrap.dedent(src), timeout=timeout, env=env)
 
 
 def _strace_supports_inject():
@@ -125,7 +120,6 @@ strace_only = pytest.mark.skipif(
 # Under run(2) the parker's p->hub != NULL, so the wake takes the mn_wake_g
 # branch (L283).
 # ---------------------------------------------------------------------------
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_cancel_all_parked_wakes_idle_fd_parker():
     import socket
     res = {}
@@ -203,7 +197,6 @@ def test_cancel_all_parked_single_thread_sched_wake():
     assert res.get("r") == rc.WAIT_FD_CANCELLED, res
 
 
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_cancel_all_parked_empty_is_clean_noop():
     # The common clean-drain case: nothing parked -> walk finds no bucket
     # entries, returns 0.  Exercises the lock_inited gate + empty by_fd walk +
@@ -316,7 +309,6 @@ _MN_RING = r"""
 
 
 @faultinj_only
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 @pytest.mark.skipif(not rc.iouring_available(), reason="needs io_uring")
 def test_add_iouring_ring_epollexclusive_einval_retry():
     # netpoll_wake_iouring.c.inc L491-493: the EPOLLEXCLUSIVE ADD of a hub
@@ -331,7 +323,6 @@ def test_add_iouring_ring_epollexclusive_einval_retry():
 
 
 @faultinj_only
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 @pytest.mark.skipif(not rc.iouring_available(), reason="needs io_uring")
 def test_add_iouring_ring_undo_table_insert_returns_minus1():
     # netpoll_wake_iouring.c.inc L495-509: BOTH the EPOLLEXCLUSIVE ADD and the
@@ -387,7 +378,6 @@ def test_wake_pump_arm_epoll_ctl_fail_degrades_cleanly():
 # handler runs reset_after_fork in the child, taking both memsets.  The child
 # re-parks to prove the reset left a working runtime; child exit 0 == both ran.
 # ---------------------------------------------------------------------------
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_reset_after_fork_memsets():
     p = _run_py(r"""
         import glob, os, socket, sys
@@ -447,12 +437,11 @@ def test_reset_after_fork_memsets():
 @strace_only
 def test_epoll_wait_64_consecutive_eintr_backoff():
     workload = os.path.join(REPO, "tests", "netpoll_fault_workload.py")
-    env = dict(os.environ, PYTHON_GIL="0")
     cmd = [STRACE, "-f", "-e", "signal=none",
            "-e", "inject=epoll_wait,epoll_pwait,epoll_pwait2:error=EINTR:when=1+",
-           PY, workload, "timeout"]
-    p = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True,
-                       timeout=40)
+           sys.executable, workload, "timeout"]
+    p = subprocess.run(cmd, cwd=REPO, env=child_env(), capture_output=True,
+                       text=True, timeout=40)
     assert p.returncode == 0, (p.stdout, p.stderr[-1500:])
     # The timeout workload reaches its clean deadline through the backoff.
     assert "DONE" in p.stdout, (p.stdout, p.stderr[-1200:])
@@ -519,4 +508,4 @@ def test_fd_cap_target_rlim_cur_fallback(tmp_path):
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

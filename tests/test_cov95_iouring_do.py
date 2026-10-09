@@ -19,9 +19,8 @@ runloom_iouring_drain(), dispatching each multishot CQE to ms_on_cqe.
 
 The backend choice (STACKWEAVE_TCPCONN_IOURING) is resolved ONCE in the C extension
 (getenv, latched), so every test runs its workload in a SUBPROCESS with that env
-set, and each child EXITS CLEANLY so gcov counters flush.  Generous timeouts +
-pytest.skip on TimeoutExpired: this box shares io_uring + CPU with a CI runner,
-so a timeout is contention, not a bug.
+set, and each child EXITS CLEANLY so gcov counters flush.  Timeouts are
+generous; a child that still times out fails the test with its output.
 
 Oracles are real (exact-once echo, byte-exact partial-buffer carry, exact EOF,
 two-buffer coalescing, single-thread vs M:N wake), not line-touch filler.
@@ -33,20 +32,11 @@ return), or are caller-gated "can't happen" guards (ms_recv h==NULL / n==0; the
 do() !available ENOSYS fold) are classified in the report's exclusions, not
 contorted into fake tests.
 """
-import os
-import subprocess
 import sys
 
 import pytest
 
-from adv_util import needs_free_threading
-
-FT = needs_free_threading()
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY = sys.executable
-
-pytestmark = pytest.mark.skipif(
-    not FT, reason="global-ring multishot recv is an M:N / free-threaded path")
+from adv_util import run_python
 
 
 def _iou_available():
@@ -65,15 +55,10 @@ def _run(script, timeout=240, env_extra=None):
     # STACKWEAVE_TCPCONN_IOURING=1 routes TCPConn.recv through the global-ring
     # multishot path (ms_open/ms_recv).  No STACKWEAVE_IOURING_LOOP: we want the
     # GLOBAL ring's ms_* family, not the per-hub loop's loop_ms_* family.
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src",
-               STACKWEAVE_TCPCONN_IOURING="1")
+    env = {"STACKWEAVE_TCPCONN_IOURING": "1"}
     if env_extra:
         env.update(env_extra)
-    try:
-        return subprocess.run([PY, "-c", script], cwd=REPO, env=env,
-                              capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        pytest.skip("multishot recv workload timed out (box under heavy load)")
+    return run_python(script, timeout=timeout, env=env)
 
 
 # --------------------------------------------------------------------------
@@ -89,7 +74,7 @@ def _run(script, timeout=240, env_extra=None):
 #    Oracle: exact-once 8-byte echo for every one of N connections.
 # --------------------------------------------------------------------------
 _ECHO = r'''
-import sys, struct; sys.path.insert(0, "src")
+import sys, struct
 import stackweave, stackweave_c as rc
 from stackweave.sync import WaitGroup
 N = 48
@@ -143,7 +128,7 @@ def test_ms_echo_exact_once():
 #    of one buffer + a clean orderly EOF).
 # --------------------------------------------------------------------------
 _PARTIAL = r'''
-import sys; sys.path.insert(0, "src")
+import sys
 import stackweave, stackweave_c as rc
 from stackweave.sync import WaitGroup
 res = {}
@@ -195,7 +180,7 @@ def test_ms_partial_buffer_carry_and_eof():
 #    Oracle: a single recv(16) returns the concatenation b"AAAAAAAABBBBBBBB".
 # --------------------------------------------------------------------------
 _TWOBUF = r'''
-import sys; sys.path.insert(0, "src")
+import sys
 import stackweave, stackweave_c as rc
 from stackweave.sync import WaitGroup
 res = {}
@@ -250,7 +235,7 @@ def test_ms_two_buffers_queued_then_drained_in_one_recv():
 #    Oracle: exact-once 8-byte echo for every connection on the single hub.
 # --------------------------------------------------------------------------
 _SINGLE = r'''
-import sys, socket, struct; sys.path.insert(0, "src")
+import sys, socket, struct
 import stackweave, stackweave_c as rc
 N = 12
 got = [None] * N
@@ -308,7 +293,7 @@ def test_ms_single_thread_wake_paths():
 #    Oracle: recv_into(4) reads b"WXYZ", a second recv_into(4) reads b"0123".
 # --------------------------------------------------------------------------
 _RECV_INTO = r'''
-import sys; sys.path.insert(0, "src")
+import sys
 import stackweave, stackweave_c as rc
 from stackweave.sync import WaitGroup
 res = {}
@@ -361,7 +346,7 @@ def test_ms_recv_into_partial():
 #    would drop bytes or crash the child).
 # --------------------------------------------------------------------------
 _TEARDOWN = r'''
-import sys, struct; sys.path.insert(0, "src")
+import sys, struct
 import stackweave, stackweave_c as rc
 from stackweave.sync import WaitGroup
 def one_round(base):
@@ -414,7 +399,7 @@ def test_ms_close_teardown_storm():
 #    pressure regardless of whether re-arm triggered.
 # --------------------------------------------------------------------------
 _POOL = r'''
-import sys; sys.path.insert(0, "src")
+import sys
 import stackweave, stackweave_c as rc
 from stackweave.sync import WaitGroup
 N = 64
@@ -465,4 +450,4 @@ def test_ms_buffer_pool_pressure_stays_correct():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

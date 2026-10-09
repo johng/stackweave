@@ -26,6 +26,8 @@ import pytest
 
 import stackweave_c
 
+from adv_util import child_env
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 WORKLOAD = os.path.join(HERE, "iouring_fault_workload.py")
 
@@ -56,12 +58,10 @@ STRACE = shutil.which("strace")
 
 
 def _run_under_strace(inject, mode, timeout=30):
-    env = dict(os.environ)
-    env["PYTHON_GIL"] = "0"
     cmd = [STRACE, "-f", "-e", "signal=none", "-e", "inject=" + inject,
            sys.executable, WORKLOAD, mode]
     p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                       env=env, timeout=timeout)
+                       env=child_env(), timeout=timeout)
     return p.returncode, p.stdout.decode(errors="replace"), \
         p.stderr.decode(errors="replace")
 
@@ -99,3 +99,7 @@ def test_enter_eagain_on_submit_surfaces_cleanly():
     assert rc == 42, "EAGAIN should surface as a clean OSError: rc=%d\n%s\n%s" % (
         rc, out, err)
     assert "OSERROR errno=11" in out, "EAGAIN not surfaced cleanly:\n%s" % out
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

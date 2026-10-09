@@ -17,16 +17,11 @@ import sys
 
 import pytest
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from adv_util import REPO
+from known_gaps import SEEDED_MN_TODO
 sys.path.insert(0, os.path.join(REPO, "tools", "dst"))
-
 import mn_digest  # noqa: E402
 
-from adv_util import needs_free_threading  # noqa: E402
-
-pytestmark = pytest.mark.skipif(
-    not needs_free_threading(),
-    reason="the M:N scheduler is only real on free-threaded builds")
 
 SIM_ENV = {"STACKWEAVE_SIM": "1", "STACKWEAVE_SIM_MN": "1"}
 
@@ -101,6 +96,7 @@ rc.mn_fini()
 """
 
 
+@SEEDED_MN_TODO
 class TestMnSimBytes:
     def test_p4_scenario_fixed(self):
         """The probe-P4 corruption, healed: a receiver parked on wait_fd at
@@ -267,6 +263,7 @@ class TestMnSimBytes:
         assert "STW_OK [b'after-churn']" in p.stdout, (p.stdout, p.stderr[-800:])
 
 
+@SEEDED_MN_TODO
 class TestTimedParksI4:
     def test_wait_fd_timeout_fires_at_logical_deadline(self):
         """I4 plane (a): a 5000ms wait_fd timeout with NO delivery returns
@@ -399,11 +396,12 @@ class TestTimedParksI4:
         assert p.returncode == 0, (p.stdout, p.stderr[-800:])
 
 
+@SEEDED_MN_TODO
 class TestReviewRegressions:
-    # TODO(stackweave): the late-parker stashed wake is never delivered.  Pre-existing
-    # stackweave bug -- reproduces identically on STOCK CPython, so it is not a
-    # patched-interpreter regression.  Skipped to keep the required CI
-    # gate green; fix and remove this skip.
+    # TODO(stackweave): the late-parker stashed wake was never delivered when
+    # this last ran (identically on STOCK CPython, so not a patched-interpreter
+    # regression); 40c61955 dropped its CI-only skip.  Recheck it when the
+    # seeded scheduler returns.
     def test_late_parker_gets_stashed_wake(self):
         """I2-review lost-wake regression: a delivery dispatched while its
         receiver is NOT yet parked (receiver sleeps first) must be stashed as
@@ -445,6 +443,7 @@ class TestReviewRegressions:
         assert "BARRIER_FENCED" in p.stdout, (p.stdout, p.stderr[-800:])
 
 
+@SEEDED_MN_TODO
 class TestCrossPlane:
     def test_h1_sim_beside_live_armed_pool(self):
         """The pump/wait_fd gates are keyed on HUB CONTEXT, not global armed
@@ -501,4 +500,4 @@ class TestSimMnFenceExtension:
 
 
 if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

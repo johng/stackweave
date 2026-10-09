@@ -7,6 +7,7 @@ that matters for a park/wake primitive -- a lost wakeup / wrong-mutual-exclusion
 under M:N -- which would hang (caught by the timeout) or miscount (caught by an
 assert).
 """
+import sys
 import time
 
 import pytest
@@ -467,3 +468,7 @@ def test_joinset_context_manager_propagates_task_error():
                 n.spawn(boom)
         return True
     assert _drive(body)
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

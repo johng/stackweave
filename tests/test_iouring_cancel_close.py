@@ -25,28 +25,19 @@ awkward to drive end-to-end here -- a parked reader monopolises the lone
 scheduler's io_uring wait, so a sibling closer fiber's timer can't fire to call
 close() -- so it is intentionally not exercised in this file.
 """
-import os
-import subprocess
 import sys
 
 import pytest
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY = sys.executable
+from adv_util import run_python
 
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="io_uring is Linux-only")
 
 
 def _iouring_available():
-    try:
-        out = subprocess.run(
-            [PY, "-c", "import sys;sys.path.insert(0,'src');import stackweave_c;"
-                       "print(stackweave_c.iouring_available())"],
-            cwd=REPO, env=dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src"),
-            capture_output=True, text=True, timeout=30)
-        return "True" in out.stdout
-    except Exception:
-        return False
+    out = run_python("import stackweave_c; "
+                     "print(stackweave_c.iouring_available())", timeout=30)
+    return "True" in out.stdout
 
 
 requires_iouring = pytest.mark.skipif(
@@ -60,7 +51,6 @@ requires_iouring = pytest.mark.skipif(
 # the WD watchdog must never be the thing that ends the run.
 _BODY = r"""
 import socket, sys, errno, faulthandler
-sys.path.insert(0, "src")
 import stackweave_c
 
 WD = {wd}
@@ -132,15 +122,8 @@ _RECV_INTO = '_b = bytearray(65536); nread = c.recv_into(_b, 0, MSG_WAITALL)'
 
 def _run(drive, recv_call, wd=12):
     body = _BODY.format(wd=wd, drive=drive, recv_call=recv_call)
-    try:
-        p = subprocess.run(
-            [PY, "-c", body], cwd=REPO,
-            env=dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src",
-                     STACKWEAVE_TCPCONN_IOURING="1"),
-            capture_output=True, text=True, timeout=wd + 25)
-    except subprocess.TimeoutExpired:
-        pytest.fail("close() did NOT cancel the parked io_uring recv (deadlock "
-                    "regression -- reader hung on a dead fd)")
+    p = run_python(body, timeout=wd + 25,
+                   env={"STACKWEAVE_TCPCONN_IOURING": "1"})
     assert p.returncode == 0, (
         "cancel-on-close failed rc=%d (negative => watchdog killed a hang)\n"
         "stdout=%s\nstderr=%s" % (p.returncode, p.stdout[-800:], p.stderr[-1500:]))
@@ -159,3 +142,7 @@ def test_mn_hub_ring_single_shot_recv_into_cancelled_by_close():
     """Same for recv_into()'s single-shot fallback -- it must hold the conn
     critical section across submit+park and be cancellable identically to recv()."""
     _run(_DRIVE_MN, _RECV_INTO)
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

@@ -1,8 +1,10 @@
 """Tests for the io_uring file-I/O backend."""
 import os
+import sys
 import tempfile
-import time
 import unittest
+
+import pytest
 
 import stackweave_c
 
@@ -116,4 +118,4 @@ class TestFallback(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

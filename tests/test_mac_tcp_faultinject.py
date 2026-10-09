@@ -20,7 +20,7 @@ socket(2)/connect(2)/accept(2)/recv(2)/send(2) man pages permit:
   send    EINTR                 -> retried; the echo round-trips.
 
 The injection points are inert unless armed, and skip cleanly off the kqueue
-backend.  no-gil only (PYTHON_GIL=0).
+backend.
 """
 import os
 import re
@@ -31,6 +31,8 @@ import pytest
 
 import stackweave_c
 
+from adv_util import REPO, child_env
+
 pytestmark = [
     pytest.mark.skipif(
         not sys.platform.startswith(("darwin", "freebsd", "openbsd", "netbsd")),
@@ -40,7 +42,6 @@ pytestmark = [
 ]
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.dirname(HERE)
 WORKLOAD = os.path.join(HERE, "tcp_fault_workload.py")
 
 # Darwin/BSD errno values (identical across macOS + the BSDs for these).
@@ -53,11 +54,7 @@ ENOTCONN, ETIMEDOUT, ECONNREFUSED = 57, 60, 61
 
 
 def _run(site, spec, mode, timeout=30):
-    env = dict(os.environ)
-    env["PYTHONPATH"] = os.path.join(REPO, "src")
-    env["PYTHON_GIL"] = "0"                       # focus: free-threaded only
-    env["FAULT_SITE"] = site
-    env["STACKWEAVE_FAULT_" + site] = spec
+    env = child_env(FAULT_SITE=site, **{"STACKWEAVE_FAULT_" + site: spec})
     return subprocess.run(
         [sys.executable, WORKLOAD, mode], cwd=REPO, env=env, timeout=timeout,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -165,4 +162,4 @@ def test_accept_hard_error_surfaces_oserror(errno_):
 
 
 if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

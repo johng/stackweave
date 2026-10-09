@@ -24,19 +24,16 @@ interposer, or a non-epoll backend).
 
 Every test below runs against the EPOLL backend (the box default).
 """
-import os
 import socket
-import subprocess
 import sys
 
 import pytest
 
 import stackweave_c as rc
-from adv_util import hang_guard
+
+from adv_util import hang_guard, run_python
 
 READ, WRITE = 1, 2
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY = sys.executable
 
 pytestmark = pytest.mark.skipif(rc.netpoll_backend() != "epoll",
                                 reason="netpoll_diag_fd coverage assumes the epoll backend")
@@ -209,7 +206,7 @@ def test_dump_parkers_safe_with_no_parkers():
 # --------------------------------------------------------------------------
 def _run_maxfd_subprocess(value):
     script = (
-        "import sys, socket; sys.path.insert(0, 'src');\n"
+        "import sys, socket\n"
         "import stackweave_c as rc\n"
         "def main():\n"
         "    a, b = socket.socketpair(); a.setblocking(False); b.setblocking(False)\n"
@@ -223,10 +220,8 @@ def _run_maxfd_subprocess(value):
         "    assert got[0] & 1, 'reader did not wake on READ (got %r)' % got[0]\n"
         "main()\n"
         "sys.stdout.write('MAXFD_PARSE_OK\\n')\n")
-    env = dict(os.environ, STACKWEAVE_NETPOLL_MAXFD=str(value),
-               PYTHON_GIL="0", PYTHONPATH="src")
-    return subprocess.run([PY, "-c", script], cwd=REPO, env=env,
-                          capture_output=True, text=True, timeout=30)
+    return run_python(script, timeout=30,
+                      env={"STACKWEAVE_NETPOLL_MAXFD": value})
 
 
 def test_netpoll_maxfd_env_parse_sizes_arrays():
@@ -250,4 +245,4 @@ def test_netpoll_maxfd_env_invalid_falls_back():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

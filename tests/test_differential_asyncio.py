@@ -21,8 +21,6 @@ Run standalone or via tests/run_isolated.py.  House style: %/.format, prints kep
 import asyncio
 import sys
 
-sys.path.insert(0, "src")
-
 import stackweave.aio as paio
 
 

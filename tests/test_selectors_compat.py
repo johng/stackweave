@@ -12,13 +12,14 @@ instead of freezing the scheduler.
 Run under the C scheduler (stackweave_c.fiber / stackweave_c.run), which is the path
 the monkey-patches target.
 """
-import errno
-import os
 import select
 import selectors
 import socket
+import sys
 import time
 import unittest
+
+import pytest
 
 import stackweave
 import stackweave.monkey
@@ -445,4 +446,4 @@ class TestSelectorsFaultInjection(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

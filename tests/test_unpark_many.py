@@ -14,6 +14,7 @@ safety fallbacks that these tests pin down:
     falls back to os.write for every waiter.
 """
 import os
+import sys
 import threading as _real_threading_preimport
 import time  # noqa: F401
 
@@ -249,3 +250,7 @@ def test_repeated_fanin_no_lost_or_double_wake():
             total += sum(out)
         return total
     assert _drive(main) == 8 * 200
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

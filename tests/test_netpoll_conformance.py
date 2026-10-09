@@ -22,7 +22,7 @@ import socket
 import sys
 import unittest
 
-sys.path.insert(0, "src")
+import pytest
 
 import stackweave_c
 
@@ -362,5 +362,4 @@ class TestNetpollConformance(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    print("netpoll backend under test:", stackweave_c.netpoll_backend())
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

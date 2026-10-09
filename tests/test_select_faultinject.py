@@ -11,8 +11,6 @@ kqueue pump uses).  Asserts the POSIX select pump:
       missing select-path backoff: runloom_netpoll_wait_failed was gated to
       epoll/kqueue and never compiled on a select build, so a persistent
       select() error (a parked fd closed under us) pegged a CPU.
-
-no-gil only.
 """
 import os
 import re
@@ -22,6 +20,8 @@ import sys
 import tempfile
 
 import pytest
+
+from adv_util import child_env
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -57,10 +57,8 @@ def select_build():
 
 
 def _run(select_build, spec, timeout=40):
-    env = dict(os.environ)
+    env = child_env()
     env["STACKWEAVE_CORE_PATH"] = select_build           # workload imports stackweave_c from here
-    env["PYTHONPATH"] = os.path.join(REPO, "src")
-    env["PYTHON_GIL"] = "0"                         # focus: free-threaded only
     env["FAULT_SITE"] = "SELECT"
     env["FAULT_TIMEOUT_MS"] = str(TIMEOUT_MS)
     if spec:
@@ -104,4 +102,4 @@ def test_select_persistent_error_backs_off(select_build):
 
 
 if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

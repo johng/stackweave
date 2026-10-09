@@ -20,9 +20,7 @@ after-in-child handler, so os.fork() (after prior park activity) drives the
 reset_after_fork memsets in the child.
 """
 import errno
-import os
 import socket
-import subprocess
 import sys
 import textwrap
 import time
@@ -31,11 +29,8 @@ import pytest
 
 import stackweave
 import stackweave_c as rc
-from adv_util import hang_guard, needs_free_threading
 
-FT = needs_free_threading()
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY = sys.executable
+from adv_util import hang_guard, run_python
 
 
 def _run_py(src, env_extra=None, timeout=60):
@@ -45,12 +40,7 @@ def _run_py(src, env_extra=None, timeout=60):
     marker and exit 0 -- a crash/_exit does NOT flush gcov, so we always
     assert returncode==0 + the marker at the call site.
     """
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
-    if env_extra:
-        env.update(env_extra)
-    return subprocess.run([PY, "-c", textwrap.dedent(src)],
-                          cwd=REPO, env=env, capture_output=True, text=True,
-                          timeout=timeout)
+    return run_python(textwrap.dedent(src), timeout=timeout, env=env_extra)
 
 
 # ---------------------------------------------------------------------------
@@ -159,7 +149,6 @@ def test_fault_inject_wellformed_spec_does_inject_contrast():
 def test_lock_init_loser_spin_race():
     p = _run_py(r"""
         import os, socket, sys, threading
-        sys.path.insert(0, "src")
         import stackweave_c as rc
         N = 96
         ready = threading.Barrier(N)
@@ -201,7 +190,6 @@ def test_lock_init_loser_spin_race():
 # Each park is counted, not just asserted in its fiber: an exception in a fiber
 # is printed and dropped, and run() still returns.
 # ---------------------------------------------------------------------------
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_reset_after_fork_memsets():
     p = _run_py(r"""
         import os, socket, sys
@@ -255,7 +243,6 @@ def test_reset_after_fork_memsets():
 # sibling fiber writes; epoll fires; the pump dispatches -> pump_claim CASes the
 # parker PARKED->WOKEN.  wait_fd returns 1 (READ-ready) iff the claim+wake ran.
 # ---------------------------------------------------------------------------
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_pump_claim_via_epoll_data_event():
     res = {}
     def main():
@@ -283,7 +270,6 @@ def test_pump_claim_via_epoll_data_event():
 # pump, still routing through pump_dispatch_event -> pump_claim.  Proves the
 # claim path runs on the error-fold branch too, not just clean readability.
 # ---------------------------------------------------------------------------
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_pump_claim_on_peer_reset():
     res = {}
     def main():
@@ -322,7 +308,6 @@ def test_pump_claim_on_peer_reset():
 # sets ready_out=0 (timeout).  wait_fd returns 0 (timed out) after ~the timeout,
 # which is observable proof the drain_expired claim loop ran.
 # ---------------------------------------------------------------------------
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_drain_expired_timeout_claim():
     res = {}
     def main():
@@ -352,7 +337,6 @@ def test_drain_expired_timeout_claim():
 # the pump when the recv CQE eventfd fires.  io_uring availability is asserted so
 # the test self-skips if a kernel ever lacks it.
 # ---------------------------------------------------------------------------
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 @pytest.mark.skipif(not rc.iouring_available(), reason="needs io_uring")
 def test_pump_iouring_ring_eventfd_match():
     p = _run_py(r"""
@@ -416,7 +400,6 @@ def test_pump_iouring_ring_eventfd_match():
 # is exactly what the detach prevents).  If the race never fires here the lines
 # stay uncovered; see the report's `unreachable` note.
 # ---------------------------------------------------------------------------
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_parker_link_ghost_churn_beststeffort():
     res = {"ok": 0}
     def main():
@@ -453,4 +436,4 @@ def test_parker_link_ghost_churn_beststeffort():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

@@ -21,6 +21,11 @@ this module solves both:
 `raw_thread()` spawns a **real** OS thread captured from the unpatched
 `threading` module, so foreign-OS-thread tests keep a genuine non-fiber
 thread even after `stackweave.monkey.patch()` has replaced `threading`.
+
+`run_python()` runs a snippet in a fresh interpreter under `child_env()`: the
+GIL off and the in-tree src/ first on PYTHONPATH, the same conditions the
+suite itself runs under.  A child that outlives its timeout fails the test
+with whatever it printed, because a hang is a finding, never a skip.
 """
 import faulthandler
 import os
@@ -30,9 +35,11 @@ import time
 import threading
 import contextlib
 import errno
+import subprocess
 
-sys.path.insert(0, os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SRC = os.path.join(REPO, "src")
+sys.path.insert(0, SRC)
 
 # Captured BEFORE any monkey.patch() in any test could run -- a genuine OS
 # thread class + primitives a "foreign thread" test needs to stay foreign.
@@ -267,6 +274,48 @@ class OverlapTracker(object):
             "-- the work serialised (spans={4!r})"
             .format(what, got, want, len(self.spans), self.spans[:8]))
         return got
+
+
+def child_env(**overrides):
+    """The environment for a child interpreter that runs stackweave: this
+    process's, with the GIL off and the in-tree src/ first on PYTHONPATH, and
+    `overrides` on top (a value of None removes that variable)."""
+    env = dict(os.environ)
+    env["PYTHON_GIL"] = "0"
+    env["PYTHONPATH"] = os.pathsep.join(
+        p for p in (SRC, env.get("PYTHONPATH")) if p)
+    for k, v in overrides.items():
+        if v is None:
+            env.pop(k, None)
+        else:
+            env[k] = str(v)
+    return env
+
+
+def run_python(code, *, timeout=60, env=None, args=(), cwd=REPO,
+               raise_timeout=False, **kwargs):
+    """Run `code` with `python -c` in a fresh interpreter under
+    child_env(**env) and return the CompletedProcess (text, both streams
+    captured).  A child still running after `timeout` seconds fails the test
+    with what it printed so far; pass raise_timeout=True to get the
+    subprocess.TimeoutExpired instead, for a test whose finding IS the hang."""
+    try:
+        return subprocess.run([sys.executable, "-c", code, *args], cwd=cwd,
+                              env=child_env(**(env or {})),
+                              capture_output=True, text=True,
+                              timeout=timeout, **kwargs)
+    except subprocess.TimeoutExpired as e:
+        if raise_timeout:
+            raise
+        import pytest
+
+        def text(b):
+            if isinstance(b, bytes):
+                b = b.decode(errors="replace")
+            return (b or "")[-3000:]
+        pytest.fail("child interpreter still running after %ss\n"
+                    "--- stdout ---\n%s\n--- stderr ---\n%s"
+                    % (timeout, text(e.stdout), text(e.stderr)), pytrace=False)
 
 
 def raw_thread(target, *args, **kwargs):

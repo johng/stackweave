@@ -16,16 +16,17 @@ import sys
 import time
 import unittest
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(REPO, "src"))
-sys.path.insert(0, os.path.join(REPO, "tools", "dst"))
-os.environ["PYTHON_GIL"] = "0"
+import pytest
+
 os.environ["STACKWEAVE_SIM"] = "1"
 os.environ.setdefault("STACKWEAVE_LOGICAL_CLOCK", "1")
 # (RUNLOOM_HUBS removed -- confirmed inert: read by no C source.  This file
 #  is the FROZEN H=1 plane: it drives rc.run(); the native mn plane is
 #  tests/test_mn_sim_*.py per docs/dev/soak/MN_SIM_DST_PLAN.md.)
 import stackweave_c            # noqa: E402
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(REPO, "tools", "dst"))
 import simnet_fd            # noqa: E402
 
 
@@ -759,4 +760,4 @@ class TestSimFdProgram(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

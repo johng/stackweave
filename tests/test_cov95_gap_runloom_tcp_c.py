@@ -27,10 +27,9 @@ Mechanisms (per the classifier):
     NO io_uring (epoll path), so none can hit the io_uring recv-backpressure
     deadlock.
 
-Every test is deadline-bounded (hang_guard / subprocess timeout); a TimeoutExpired
-on an io_uring child is treated as box contention -> skip, never a flaky fail.
+Every test is deadline-bounded (hang_guard / subprocess timeout); a child that
+times out fails the test with its output.
 """
-import os
 import shutil
 import socket
 import subprocess
@@ -38,13 +37,9 @@ import sys
 
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from adv_util import hang_guard  # noqa: E402
+import stackweave_c as rc
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY = sys.executable
-
-import stackweave_c as rc  # noqa: E402
+from adv_util import REPO, child_env, hang_guard, run_python
 
 pytestmark = pytest.mark.skipif(
     not sys.platform.startswith("linux"),
@@ -63,15 +58,8 @@ needs_iouring = pytest.mark.skipif(
 
 
 def _run_child(script, env_extra, timeout=60):
-    """Run `script` in a fresh child with env_extra layered on.  A
-    TimeoutExpired is treated as box contention (io_uring + CPU shared with a CI
-    runner) -> skip, not a flaky fail."""
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src", **env_extra)
-    try:
-        return subprocess.run([PY, "-c", script], cwd=REPO, env=env,
-                              capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        pytest.skip("io_uring child timed out (box under heavy load)")
+    """Run `script` in a fresh child with env_extra layered on."""
+    return run_python(script, timeout=timeout, env=env_extra)
 
 
 # ===========================================================================
@@ -83,7 +71,7 @@ def _run_child(script, env_extra, timeout=60):
 #    is clean.
 # ===========================================================================
 _AUTO_EPOLL = r'''
-import sys; sys.path.insert(0, "src")
+import sys
 import stackweave_c as rc
 res = [None]
 def main():
@@ -131,7 +119,7 @@ def test_resolve_mode_auto_below_threshold_picks_epoll():
 #    deadlock.  Oracle: the send returns the byte count, child exits clean.
 # ===========================================================================
 _AUTO_IOURING_SEND = r'''
-import sys, socket; sys.path.insert(0, "src")
+import sys, socket
 import stackweave_c as rc
 res = [None]
 def _port(lst):
@@ -184,7 +172,7 @@ def test_resolve_mode_threshold_one_auto_picks_iouring_send():
 #    data, so a following plain recv() returns the same bytes (oracle).
 # ===========================================================================
 _PEEK_SINGLESHOT = r'''
-import sys, socket; sys.path.insert(0, "src")
+import sys, socket
 import stackweave_c as rc
 res = {}
 def _port(lst):
@@ -462,7 +450,7 @@ def test_send_all_on_closed_conn_raises():
 #    confirmed by `strace -e trace=accept,accept4`.
 # ===========================================================================
 _ACCEPT_FATAL = r'''
-import sys, socket; sys.path.insert(0, "src")
+import sys, socket
 import stackweave_c as rc
 box = {}
 def main():
@@ -508,19 +496,19 @@ def _strace_supports_inject():
                     reason="strace with -e inject= not available")
 def test_accept_fatal_error_surfaces_oserror():
     strace = shutil.which("strace")
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
     # EINVAL is not in {EAGAIN,EWOULDBLOCK,EINTR,ECONNABORTED} -> L110 fatal.
     cmd = [strace, "-f", "-e", "signal=none",
            # the accept path uses accept4(SOCK_NONBLOCK) on Linux; inject on
            # accept too so the fault fires whichever syscall runs.
            "-e", "inject=accept,accept4:error=EINVAL:when=1+",
-           PY, "-c", _ACCEPT_FATAL]
-    try:
-        p = subprocess.run(cmd, cwd=REPO, env=env, capture_output=True,
-                           text=True, timeout=60)
-    except subprocess.TimeoutExpired:
-        pytest.skip("strace accept-fatal child timed out")
+           sys.executable, "-c", _ACCEPT_FATAL]
+    p = subprocess.run(cmd, cwd=REPO, env=child_env(), capture_output=True,
+                       text=True, timeout=60)
     assert p.returncode == 0, (p.stdout[-500:], p.stderr[-2000:])
     # EINVAL == 22: the fatal accept error surfaced cleanly (no crash/hang).
     assert "ACCEPT_OSERROR errno=22" in p.stdout, (p.stdout[-500:],
                                                    p.stderr[-2000:])
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

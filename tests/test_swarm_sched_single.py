@@ -20,17 +20,12 @@ as a signalled returncode + a CLASSIFIED report, never a silent wedge.  Hang-
 prone scenarios are bounded by hang_guard / finite timeouts so a lost wake is a
 bounded failure, not an infinite hang.
 
-FINDINGS encoded here:
-  * test_finding_foreign_thread_unpark_many_hangs -- ``unpark_many`` invoked
-    DIRECTLY from a foreign OS thread on single-thread-parked waiters wedges the
-    process (the runtime's own fan-in primitives use the os.write fallback for
-    foreign setters precisely to avoid this; the raw C API offers no guard and
-    HANGS rather than erroring).  Subprocess-contained; asserts the current bad
-    behavior.
+One known gap: ``unpark_many`` called directly from a foreign OS thread on
+single-thread-parked waiters self-deadlocks under epoll
+(test_foreign_thread_unpark_many_returns).
 """
 import os
 import signal
-import subprocess
 import sys
 import time
 
@@ -38,11 +33,10 @@ import pytest
 
 import stackweave
 import stackweave_c as rc
-from adv_util import (hang_guard, assert_faster_than, raw_thread,
-                      needs_free_threading)
 
-FT = needs_free_threading()
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from adv_util import hang_guard, assert_faster_than, raw_thread, run_python
+from known_gaps import KNOWN_GAP
+
 HAVE_ALARM = hasattr(signal, "alarm")
 
 READ = 1
@@ -63,12 +57,9 @@ def _run_single(fn):
 
 
 def _subproc(script, env_extra=None, timeout=40):
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src",
-               PYTEST_DISABLE_PLUGIN_AUTOLOAD="1")
-    if env_extra:
-        env.update(env_extra)
-    return subprocess.run([sys.executable, "-c", script], cwd=REPO, env=env,
-                          capture_output=True, text=True, timeout=timeout)
+    return run_python(script, timeout=timeout,
+                      env=dict(PYTEST_DISABLE_PLUGIN_AUTOLOAD="1",
+                               **(env_extra or {})))
 
 
 # ==========================================================================
@@ -358,24 +349,25 @@ def test_unpark_many_wakes_wait_fd_parkers_and_reports_running_missed():
     assert rvs == {UNPARKED}
 
 
-# FINDING ------------------------------------------------------------------
-@pytest.mark.skipif(
-    sys.platform == "darwin",
-    reason="the foreign-thread unpark_many WEDGE is a Linux-observed finding "
-           "(cross-thread direct-wake racing an epoll-parked g); on macOS the "
-           "kqueue wake path lets the foreign unpark_many return cleanly, so the "
-           "finding does not reproduce here -- gating keeps the doc-test honest "
-           "rather than asserting a hang that platform doesn't exhibit")
-def test_finding_foreign_thread_unpark_many_hangs():
-    # FINDING: unpark_many() called DIRECTLY from a foreign OS thread on fibers
-    # parked in a single-thread run()'s wait_fd WEDGES the process.  The runtime's
+# Under kqueue the foreign call returns, so the gap is marked only under epoll.
+_FOREIGN_UNPARK_MANY_GAP = KNOWN_GAP(
+    "unpark_many() from a foreign OS thread self-deadlocks under epoll: it "
+    "holds the parker-pool lock while runloom_sched_wake() creates the foreign "
+    "thread's scheduler (runloom_sched_get), and arming that scheduler's wake "
+    "pump takes the same lock"
+) if rc.netpoll_backend() == "epoll" else (lambda f: f)
+
+
+@_FOREIGN_UNPARK_MANY_GAP
+def test_foreign_thread_unpark_many_returns():
+    # unpark_many() called DIRECTLY from a foreign OS thread on fibers parked in
+    # a single-thread run()'s wait_fd must wake them and return.  The runtime's
     # own fan-in primitives (Event.set / notify_all from a foreign setter) route
-    # through an os.write fallback EXACTLY to avoid this cross-thread direct-wake
-    # race; the raw C unpark_many offers no such guard and hangs (the foreign call
-    # never returns) instead of raising or falling back.  Contained in a
-    # subprocess with a hard timeout so the hang is OBSERVED, never propagated.
+    # through an os.write fallback instead, so only the raw C call reaches this
+    # path.  Contained in a subprocess so a wedge fails the test with the
+    # child's output.
     script = r'''
-import sys; sys.path.insert(0, "src")
+import sys
 import stackweave_c as rc, os, threading
 RealThread = threading.Thread
 done = {}
@@ -398,22 +390,11 @@ def main():
 rc.fiber(main); rc.run()
 sys.stdout.write("FOREIGN_RETURNED\n" if done.get("foreign_returned") else "NEVER\n")
 '''
-    # 4s is far longer than the ~0.1s the parkers take to commit; a healthy
-    # foreign unpark_many would return in well under that.  It never does.
-    timed_out = False
-    out = ""
-    try:
-        p = _subproc(script, timeout=4)
-        out = p.stdout
-    except subprocess.TimeoutExpired:
-        timed_out = True
-    # Current (buggy) behavior: the foreign unpark_many never returns -> the
-    # subprocess times out (or, at best, never prints FOREIGN_RETURNED).  If a
-    # future fix makes the foreign call return cleanly, this assertion flips and
-    # the FINDING should be revisited.
-    assert timed_out or "FOREIGN_RETURNED" not in out, (
-        "foreign-thread unpark_many returned cleanly -- FINDING may be fixed; "
-        "output=%r" % (out,))
+    # The run takes ~0.1s once the parkers commit; 10s only bounds a wedge.
+    p = _subproc(script, timeout=10)
+    assert p.returncode == 0 and "FOREIGN_RETURNED" in p.stdout, (
+        "foreign-thread unpark_many did not return: rc=%r stdout=%r stderr=%r"
+        % (p.returncode, p.stdout, p.stderr[-1000:]))
 
 
 # ==========================================================================
@@ -662,7 +643,7 @@ def test_fiber_noyield_with_yielding_body_does_not_crash_subprocess():
     # clean completion or a clean Python error are both acceptable; a crash is
     # the failure we are hunting.
     script = r'''
-import sys; sys.path.insert(0, "src")
+import sys
 import stackweave_c as rc
 done = []
 def body():
@@ -705,7 +686,7 @@ def test_spawn_storm_under_asan_subprocess():
     # (e.g. on a freed+remapped page) is contained as a signalled returncode
     # rather than taking out the test runner.
     script = r'''
-import sys; sys.path.insert(0, "src")
+import sys
 import stackweave_c as rc
 total = 0
 for _ in range(80):
@@ -788,7 +769,7 @@ def test_yield_storm_returns_promptly():
 @pytest.mark.skipif(not HAVE_ALARM, reason="signal.alarm required")
 def test_signal_raises_into_parked_wait_fd_not_out_of_run():
     script = r'''
-import sys; sys.path.insert(0, "src")
+import sys
 import stackweave_c as rc, signal, os, socket
 class Boom(Exception): pass
 def h(s, f): raise Boom
@@ -827,7 +808,7 @@ def test_signal_on_idle_sleep_path_is_not_lost():
     # must still surface (carried out of run()/into the fiber) -- never silently
     # swallowed, never a hang.
     script = r'''
-import sys; sys.path.insert(0, "src")
+import sys
 import stackweave_c as rc, signal
 class Boom(Exception): pass
 def h(s, f): raise Boom
@@ -862,14 +843,13 @@ sys.stdout.write("LOST\n" if not ok else "DELIVERED\n")
 # ==========================================================================
 def test_small_stack_overflow_under_run_is_classified():
     script = r'''
-import sys; sys.path.insert(0, "src")
 import stackweave, stackweave_c
 stackweave.inspect.install_crash_handler("on")
 def body():
     stackweave_c._crash_selftest_overflow()   # unbounded real-C recursion
-# 256 KiB: honored exactly on both 3.13 (16 KiB floor) and FT-3.14 (256 KiB
-# floor, the p226 fix in 289ecb99); a smaller pin would be clamped up there
-# and the classifier would name the clamped size.
+# 256 KiB: honored exactly at the free-threaded 3.14 floor (the p226 fix in
+# 289ecb99); a smaller pin would be clamped up and the classifier would name
+# the clamped size.
 stackweave_c.fiber(body, 256 * 1024)
 stackweave_c.run()
 '''
@@ -890,7 +870,7 @@ def test_spawn_g_fault_injection_clean_error():
     # STACKWEAVE_FAULT_SPAWN_G="once:..." forces one g-struct allocation to fail ->
     # MemoryError on that spawn, the rest proceed, self_check clean.
     script = r'''
-import sys; sys.path.insert(0, "src")
+import sys
 import stackweave_c as rc
 ok = err = 0
 for _ in range(20):
@@ -912,7 +892,7 @@ def test_spawn_stack_fault_injection_clean_error():
     # STACKWEAVE_FAULT_SPAWN_STACK forces coro_new (the C stack mmap) to fail ->
     # MemoryError, the admission slot is released, self_check clean.
     script = r'''
-import sys; sys.path.insert(0, "src")
+import sys
 import stackweave_c as rc
 rc.set_max_fibers(8)
 ok = err = 0
@@ -967,7 +947,6 @@ def test_set_wait_reason_does_not_leak_into_later_park():
     # subprocess: a FUTURE-tagged park, then a default park, must show both
     # park:future and park:sync (not two park:future).
     script = r'''
-import sys; sys.path.insert(0, "src")
 import stackweave_c as rc
 rc.set_deadlock_mode(1)   # warn: dump
 holders = {}
@@ -1309,7 +1288,7 @@ def test_fd_read_fault_injection_clean_oserror_in_fiber():
     # EIO.  It must surface as a clean OSError INSIDE the fiber (caught by its own
     # try/except), self_check clean, no crash, no leaked netpoll arm.
     script = r'''
-import sys; sys.path.insert(0, "src")
+import sys
 import stackweave_c as rc, os
 out = {}
 def main():
@@ -1338,7 +1317,7 @@ sys.stdout.write("err=%r check=%d\n" % (out.get("err"), rc._self_check(0)))
 
 def test_fd_write_fault_injection_clean_oserror_in_fiber():
     script = r'''
-import sys; sys.path.insert(0, "src")
+import sys
 import stackweave_c as rc, os
 out = {}
 def main():
@@ -1455,4 +1434,4 @@ def test_park_foreign_wakeable_self_wake_returns():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

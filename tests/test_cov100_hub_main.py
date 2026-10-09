@@ -42,19 +42,14 @@ self-contained):
 Every test asserts REAL behavior (no g dropped / every unit of work completed /
 the subprocess exited 0 with its marker), not mere line touching.
 """
-import os
-import subprocess
 import sys
 
 import pytest
 
-import stackweave  # noqa: F401  (ensures stackweave_c is importable / on path)
+import stackweave  # noqa: F401  (ensures stackweave_c is importable)
 import stackweave_c as rc
-from adv_util import hang_guard, needs_free_threading
 
-FT = needs_free_threading()
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY = sys.executable
+from adv_util import hang_guard, run_python
 
 # RUNLOOM_CLDEQUE_CAP == 4096 (cldeque.h); the push fails once bottom-top >= cap.
 # We need strictly more than 4096 FRESH gs queued on ONE hub at a SINGLE drain to
@@ -81,7 +76,6 @@ DEQUE_CAP = 4096
 # of the N children ran EXACTLY once; hang_guard proves the run terminated, which
 # is the very invariant L388 exists to preserve.
 # --------------------------------------------------------------------------
-@pytest.mark.skipif(not FT, reason="M:N hub_main only runs with the GIL disabled")
 def test_deque_overflow_fallback_no_drop():
     N = DEQUE_CAP + 1200          # 5296: comfortably past the 4096 cap
     ran = bytearray(N)            # one single-writer slot per child: race-free
@@ -126,7 +120,6 @@ def test_deque_overflow_fallback_no_drop():
 # that only breaks one spawn route still shows here.  Indexed fiber_n(fn,N,0,True)
 # calls fn(index), giving a per-g exactly-once slot for the same no-drop oracle.
 # --------------------------------------------------------------------------
-@pytest.mark.skipif(not FT, reason="M:N hub_main only runs with the GIL disabled")
 def test_deque_overflow_fallback_fiber_n_bulk():
     N = DEQUE_CAP + 800           # 4896 fresh gs via the bulk path
     ran = bytearray(N)
@@ -160,7 +153,6 @@ def test_deque_overflow_fallback_fiber_n_bulk():
 # twice, the sum would exceed the closed-form total.  A strictly stronger oracle
 # than "the slot is set".
 # --------------------------------------------------------------------------
-@pytest.mark.skipif(not FT, reason="M:N hub_main only runs with the GIL disabled")
 def test_deque_overflow_fallback_channel_work():
     N = DEQUE_CAP + 600           # 4696 fresh senders -> overflow the deque
     EXPECT = N * (N - 1) // 2     # sum of indices 0..N-1, closed form
@@ -222,7 +214,6 @@ def test_deque_overflow_fallback_channel_work():
 # --------------------------------------------------------------------------
 _DELETE_ON_MAIN_PROG = r'''
 import sys
-sys.path.insert(0, "src")
 import stackweave, stackweave_c as rc
 from stackweave.sync import WaitGroup
 
@@ -251,12 +242,9 @@ sys.stdout.flush()
 '''
 
 
-@pytest.mark.skipif(not FT, reason="M:N hub_main only runs with the GIL disabled")
 def test_gilstate_delete_on_main_exit_path():
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src",
-               STACKWEAVE_GILSTATE_DELETE_ON_MAIN="1")
-    p = subprocess.run([PY, "-c", _DELETE_ON_MAIN_PROG],
-                       cwd=REPO, env=env, capture_output=True, text=True, timeout=60)
+    p = run_python(_DELETE_ON_MAIN_PROG, timeout=60,
+                   env={"STACKWEAVE_GILSTATE_DELETE_ON_MAIN": "1"})
     # A clean exit is REQUIRED both for the assertion and for gcov to flush the
     # counters L1256 (and the surrounding exit path) bumped on every hub.  A
     # crash/abort here would mean the negative-control tstate-on-main delete is
@@ -270,4 +258,4 @@ def test_gilstate_delete_on_main_exit_path():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

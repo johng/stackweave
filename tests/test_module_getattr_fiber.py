@@ -15,13 +15,16 @@ end, so the replacement is gone and these tests pin that CPython's own lookup
 is fiber-safe -- including at the deepest point a minimum-size fiber reaches.
 """
 import os
-import subprocess
 import sys
 import tempfile
 import types
 import unittest
 
+import pytest
+
 import stackweave_c
+
+from adv_util import run_python
 
 MODNAME = "runloom_modmiss_mod"
 
@@ -180,11 +183,7 @@ class TestModuleMissNearStackLimit(unittest.TestCase):
     instead of killing the runner."""
 
     def _run(self, mode):
-        repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        env = dict(os.environ, PYTHON_GIL="0",
-                   PYTHONPATH=os.path.join(repo, "src"))
-        p = subprocess.run([sys.executable, "-c", _NEAR_LIMIT_CHILD, mode],
-                           env=env, capture_output=True, text=True, timeout=120)
+        p = run_python(_NEAR_LIMIT_CHILD, args=(mode,), timeout=120)
         self.assertEqual(p.returncode, 0,
                          "child died (rc=%d)\n%s" % (p.returncode, p.stderr[-2000:]))
         end, depth, msg = p.stdout.split(None, 3)[1:]
@@ -198,7 +197,6 @@ class TestModuleMissNearStackLimit(unittest.TestCase):
 
     def test_mn(self):
         self._run("mn")
-
 
 
 @unittest.skipUnless(sys.version_info >= (3, 15), "PEP 810 lazy imports are 3.15+")
@@ -285,4 +283,4 @@ class TestModuleGetattrLazyImports(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

@@ -21,9 +21,11 @@ guards two Phase 2 bugs (both fixed):
      every loop's; the old global drain stranded a concurrent loop's recv with
      a spurious -1 -> BlockingIOError out of StreamReader._fill (~3/8 before).
 """
-import asyncio
+import sys
 import threading
 import unittest
+
+import pytest
 
 import stackweave.aio as paio
 
@@ -92,4 +94,4 @@ class TestPhase2MultiLoop(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

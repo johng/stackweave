@@ -1,7 +1,10 @@
 """Tests for stackweave.aio (the async/await bridge)."""
 import asyncio
+import sys
 import time
 import unittest
+
+import pytest
 
 import stackweave.aio as aio
 
@@ -181,4 +184,4 @@ class TestPrimitives(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

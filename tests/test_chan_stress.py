@@ -10,9 +10,9 @@ cross-hub publication and concurrent close.
 Like test_mn.py, each workload runs in a FRESH free-threaded subprocess
 (PYTHON_GIL=0) so the hubs genuinely run in parallel -- the only condition
 under which channel hand-off, close-wake, and select install/abort actually
-race.  A wedge/lost-wake shows up as a subprocess timeout (rc 124), a
-corruption as a non-zero rc; both become a clean test failure, not a dead
-pytest run.
+race.  A wedge/lost-wake shows up as a subprocess that outlives its timeout,
+a corruption as a non-zero rc; both fail the test with the child's output,
+not a dead pytest run.
 
 Go originals (golang/go, src/runtime/chan_test.go):
   TestChan, TestMultiConsumer, TestSelfSelect, TestSelectStress,
@@ -24,34 +24,17 @@ does not (it has no shuffle).  So the select test here asserts LIVENESS
 and CONSERVATION, never Go's uniform distribution, which would be a false
 failure against stackweave's deterministic select.
 """
-import os
-import subprocess
 import sys
 
 import pytest
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from adv_util import run_python
 
 
 def run_mn(code, timeout=60):
     """Run an M:N snippet in a fresh free-threaded subprocess (GIL off).
     Returns (returncode, stdout, stderr); the snippet prints 'PASS' on ok."""
-    preamble = (
-        "import sys; sys.path.insert(0, %r)\n"
-        "import stackweave_c\n" % os.path.join(REPO, "src")
-    )
-    env = dict(os.environ)
-    env["PYTHON_GIL"] = "0"
-    env["STACKWEAVE_GIL"] = "0"
-    try:
-        p = subprocess.run(
-            [sys.executable, "-c", preamble + code],
-            cwd=REPO, env=env, timeout=timeout,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    except subprocess.TimeoutExpired as e:
-        out = e.stdout.decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
-        err = e.stderr.decode() if isinstance(e.stderr, bytes) else (e.stderr or "")
-        return 124, out, err + "\n[run_mn: timed out after {0}s]".format(timeout)
+    p = run_python("import stackweave_c\n" + code, timeout=timeout)
     return p.returncode, p.stdout, p.stderr
 
 
@@ -474,5 +457,4 @@ print("PASS")
 
 
 if __name__ == "__main__":
-    import pytest
-    raise SystemExit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

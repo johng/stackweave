@@ -10,11 +10,11 @@ tests/test_spawn_bulk_lifecycle.py (own subprocesses), and scrub-under-churn
 correctness is covered by the existing swarm/coro/stack tests now running the
 resident-scrub default.
 """
-import os
+import sys
 
-os.environ.setdefault("PYTHON_GIL", "0")
+import pytest
 
-import stackweave_c  # noqa: E402
+import stackweave_c
 
 
 def test_resident_scrub_contract():
@@ -23,3 +23,6 @@ def test_resident_scrub_contract():
     assert callable(stackweave_c.get_stack_scrub)
     assert callable(stackweave_c.set_stack_scrub)
 
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

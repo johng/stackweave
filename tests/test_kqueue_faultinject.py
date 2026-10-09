@@ -23,7 +23,7 @@ kevent(2)/kqueue(2) man pages permit:
 
 The workload (netpoll_inproc_fault_workload.py) parks a fiber on a
 never-readable UDP socket with a deadline, so init + register + wait all run
-on a live path; it prints BACKEND / RESULT / FAULTS / DONE.  no-gil only.
+on a live path; it prints BACKEND / RESULT / FAULTS / DONE.
 """
 import os
 import re
@@ -32,12 +32,13 @@ import sys
 
 import pytest
 
+from adv_util import REPO, child_env
+
 pytestmark = pytest.mark.skipif(
     not sys.platform.startswith(("freebsd", "darwin", "openbsd", "netbsd")),
     reason="kqueue fault injection is for the kqueue backends (BSD/macOS)")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.dirname(HERE)
 WORKLOAD = os.path.join(HERE, "netpoll_inproc_fault_workload.py")
 
 # Darwin/BSD errno values (stable across macOS + the BSDs for these).
@@ -51,12 +52,8 @@ MAX_FAULTS = TIMEOUT_MS * 6
 
 
 def _run(site, spec, timeout=40):
-    env = dict(os.environ)
-    env["PYTHONPATH"] = os.path.join(REPO, "src")
-    env["PYTHON_GIL"] = "0"                       # focus: free-threaded only
-    env["FAULT_SITE"] = site
-    env["FAULT_TIMEOUT_MS"] = str(TIMEOUT_MS)
-    env["STACKWEAVE_FAULT_" + site] = spec
+    env = child_env(FAULT_SITE=site, FAULT_TIMEOUT_MS=TIMEOUT_MS,
+                    **{"STACKWEAVE_FAULT_" + site: spec})
     return subprocess.run(
         [sys.executable, WORKLOAD], cwd=REPO, env=env, timeout=timeout,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -134,4 +131,4 @@ def test_kqueue_create_failure_surfaces_cleanly(errno_):
 
 
 if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

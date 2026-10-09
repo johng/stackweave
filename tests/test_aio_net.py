@@ -1,8 +1,11 @@
 """TCP open_connection / start_server tests for stackweave.aio."""
 import asyncio
 import socket
+import sys
 import threading
 import unittest
+
+import pytest
 
 import stackweave.aio as paio
 
@@ -342,4 +345,4 @@ class TestLeakedParkerCrossThread(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

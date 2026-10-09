@@ -1,6 +1,6 @@
 """M:N teardown must not deadlock against a hub thread's startup stop-the-world.
 
-mn_fini() joins the hub threads.  On free-threaded 3.13t a hub thread's startup
+mn_fini() joins the hub threads.  On free-threaded CPython a hub thread's startup
 PyThreadState_New does a qsbr-slot stop-the-world, which waits for EVERY attached
 thread to reach a safe point.  If mn_fini joins such a thread (or blocks on a lock
 it holds, e.g. runloom_hub_tstate_lock) while the MAIN thread is still ATTACHED,
@@ -13,6 +13,10 @@ The hang has no FV model (it is a CPython-runtime STW/attach interaction, not a
 stackweave lock-free algorithm); the gate is this stress -- a deadlock trips the
 suite timeout, so a green run IS the assertion.
 """
+import sys
+
+import pytest
+
 import stackweave
 import stackweave_c
 
@@ -55,3 +59,7 @@ def test_trivial_mn_teardown_via_run():
 
         stackweave.run((i % 4) + 1, main)
         assert box[0] == 1, i
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

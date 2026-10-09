@@ -17,8 +17,8 @@ import sys
 import time
 import unittest
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
-os.environ["PYTHON_GIL"] = "0"
+import pytest
+
 os.environ["STACKWEAVE_SIM"] = "1"                 # sim on (implies the logical clock)
 os.environ.setdefault("STACKWEAVE_LOGICAL_CLOCK", "1")
 import stackweave_c  # noqa: E402
@@ -290,4 +290,4 @@ class TestSimGate(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

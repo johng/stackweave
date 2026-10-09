@@ -37,15 +37,13 @@ Two details are load-bearing, and both were learned by getting them wrong:
      Subprocess isolation is what makes the result mean something -- the
      same reason test_mn.py runs its workloads out-of-process.
 """
-import os
+import sys
 
 import pytest
 
 import stackweave_c as rc
-from adv_util import needs_free_threading
 from test_mn import run_mn
 
-FT = needs_free_threading()
 
 pytestmark = pytest.mark.skipif(rc.netpoll_backend() != "epoll",
                                 reason="LEVEL-arm behaviour is epoll-specific")
@@ -221,7 +219,6 @@ keep.append(cli2)
 """)
 
 
-@pytest.mark.skipif(not FT, reason="M:N needs a free-threaded build")
 def test_stale_read_arm_does_not_spin_under_mn():
     """The same thing with real hubs, which is how production ran it.
 
@@ -233,3 +230,7 @@ def test_stale_read_arm_does_not_spin_under_mn():
 a, b = armed_pair(READ)
 b.close()
 """, mn=True)
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

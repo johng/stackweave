@@ -1,7 +1,7 @@
 """sysmon-as-oracle: use the runtime's own stall detector to prove the
 cooperative property end-to-end.
 
-The M:N scheduler ships a sysmon watchdog (default-on on free-threaded 3.13t)
+The M:N scheduler ships a sysmon watchdog (always on)
 that logs `[STACKWEAVE_SYSMON] hub N WEDGED ...` when a fiber pins a hub past the
 budget without yielding.  We use that as a test oracle:
 
@@ -18,24 +18,23 @@ budget without yielding.  We use that as a test oracle:
 Each case runs in its own subprocess (needs mn_init + a low STACKWEAVE_SYSMON_MS, and
 the WEDGED line is a C fprintf to stderr).
 """
-import os
 import re
-import subprocess
 import sys
 import textwrap
 import unittest
 
+import pytest
+
+from adv_util import run_python
+
+
 def _run(snippet, sysmon_ms=20, timeout=90):
-    env = dict(os.environ)
-    env["PYTHONPATH"] = "src"
-    env["STACKWEAVE_SYSMON_MS"] = str(sysmon_ms)
     # WEDGED/RECOVERED stderr lines are the oracle here, and since b9221d8e
     # sysmon logs them only on explicit opt-in (quiet when it runs solely to
-    # service preemption) -- so opt in.
-    env["STACKWEAVE_SYSMON"] = "1"
-    env.setdefault("PYTHON_GIL", "0")
-    p = subprocess.run([sys.executable, "-c", snippet],
-                       capture_output=True, text=True, timeout=timeout, env=env)
+    # service preemption) -- so opt in with STACKWEAVE_SYSMON=1.
+    p = run_python(snippet, timeout=timeout,
+                   env={"STACKWEAVE_SYSMON_MS": sysmon_ms,
+                        "STACKWEAVE_SYSMON": "1"})
     out = p.stdout + p.stderr
     # Every oracle here reads the ABSENCE or PRESENCE of a log line, so a
     # subprocess that died before it got going would satisfy the "absence"
@@ -155,4 +154,4 @@ class TestSysmonOracle(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

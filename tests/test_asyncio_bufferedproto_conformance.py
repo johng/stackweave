@@ -15,8 +15,6 @@ import unittest
 
 import pytest
 
-sys.path.insert(0, "src")
-
 import stackweave.aio as paio
 
 try:
@@ -46,4 +44,4 @@ class RunloomBufferedProtocolConformance(_tbp.BaseTestBufferedProtocol,
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

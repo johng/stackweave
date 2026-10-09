@@ -17,7 +17,7 @@ offset 0; test_fd_io_faultinject.py only faults the retry paths) never exercise:
       and asserts total==N and the final call was 0 (the r==0 EOF break in
       m_fd_read, module_fdio.c.inc:67).
 
-no-gil, POSIX (the io_uring / pipe fd model).  A hang fails as a watchdog _exit,
+POSIX only (the io_uring / pipe fd model).  A hang fails as a watchdog _exit,
 never a wedged suite.
 """
 import os
@@ -27,6 +27,7 @@ import tempfile
 import pytest
 
 import stackweave_c as rc
+
 from adv_util import hang_guard
 
 
@@ -165,4 +166,4 @@ def test_fd_read_returns_zero_at_eof():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

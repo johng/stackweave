@@ -25,6 +25,8 @@ import sys
 
 import pytest
 
+from adv_util import child_env
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 WORKLOAD = os.path.join(HERE, "tcp_fault_workload.py")
 
@@ -53,12 +55,10 @@ STRACE = shutil.which("strace")
 
 
 def _run(inject, mode, timeout=30):
-    env = dict(os.environ)
-    env["PYTHON_GIL"] = "0"
     cmd = [STRACE, "-f", "-e", "signal=none", "-e", "inject=" + inject,
            sys.executable, WORKLOAD, mode]
     p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                       env=env, timeout=timeout)
+                       env=child_env(), timeout=timeout)
     return p.returncode, p.stdout.decode(errors="replace"), \
         p.stderr.decode(errors="replace")
 
@@ -95,3 +95,7 @@ def test_recv_econnreset_surfaces_as_oserror():
     assert rc == 42, "ECONNRESET should surface as OSError: rc=%d\n%s\n%s" % (
         rc, out, err)
     assert "errno=104" in out, "ECONNRESET not surfaced cleanly:\n%s" % out
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

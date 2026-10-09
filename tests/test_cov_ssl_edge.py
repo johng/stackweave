@@ -37,11 +37,7 @@ import tempfile
 
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))          # adv_util
-from adv_util import hang_guard                                          # noqa: E402
-
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_SRC = os.path.join(REPO, "src")
+from adv_util import child_env, hang_guard
 
 
 # --------------------------------------------------------------------------
@@ -114,13 +110,8 @@ def _run_child(body, label, timeout, guard):
     fd, path = tempfile.mkstemp(suffix="_ssl_edge.py")
     with os.fdopen(fd, "w") as f:
         f.write(body)
-    env = dict(os.environ)
-    env["PYTHON_GIL"] = "0"
-    env["PYTHONPATH"] = _SRC
-    env["RL_SRC"] = _SRC
-    env["RL_CERT"] = _CERT[0]
-    env["RL_KEY"] = _CERT[1]
-    env["STACKWEAVE_GOROUTINE_PANIC"] = "silent"
+    env = child_env(RL_CERT=_CERT[0], RL_KEY=_CERT[1],
+                    STACKWEAVE_GOROUTINE_PANIC="silent")
     try:
         with hang_guard(guard, label):
             try:
@@ -159,8 +150,7 @@ def _run_child(body, label, timeout, guard):
 # Common preamble every child shares: patch, import the (now cooperative) stdlib,
 # build the two SSLContexts off the parent-minted cert.
 _PREAMBLE = r'''
-import os, sys
-sys.path.insert(0, os.environ["RL_SRC"])
+import os
 import stackweave.monkey as monkey
 monkey.patch()
 import time
@@ -418,3 +408,7 @@ def test_ssl_wrap_socket_cert_required_raises_verification_error_promptly():
     assert res.get("client_err") == "SSLCertVerificationError", (
         "expected SSLCertVerificationError, got {0!r} ({1})\n{2}".format(
             res.get("client_err"), res.get("client_msg"), out))
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

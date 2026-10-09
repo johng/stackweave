@@ -17,7 +17,6 @@ Skipped unless io_uring is actually available (Linux >= 5.1).
 """
 import errno
 import os
-import subprocess
 import sys
 import tempfile
 
@@ -25,11 +24,11 @@ import pytest
 
 import stackweave_c
 
+from adv_util import run_python
+
 pytestmark = pytest.mark.skipif(
     not stackweave_c.iouring_available(),
     reason="io_uring not available (need Linux >= 5.1)")
-
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _read_via_fiber(fd, n, offset=0):
@@ -180,7 +179,7 @@ def _mn_fileread_snippet(hubs, n):
     """A self-contained snippet: spawn `n` fibers across `hubs` M:N hubs,
     each file_read'ing its own file, and PASS iff every byte payload is right."""
     code = r'''
-import sys; sys.path.insert(0, __SRCPATH__)
+import sys
 import os, tempfile
 import stackweave_c
 
@@ -218,16 +217,11 @@ for p in paths: os.unlink(p)
 bad = [i for i in range(N) if results[i] != expected[i]]
 print("PASS" if not bad else ("FAIL cross/missed: %r" % bad[:10]))
 '''
-    return (code.replace("__SRCPATH__", repr(os.path.join(REPO, "src")))
-                .replace("__N__", str(n)).replace("__H__", str(hubs)))
+    return code.replace("__N__", str(n)).replace("__H__", str(hubs))
 
 
 def _run_snippet(code, timeout=60):
-    env = dict(os.environ)
-    env["PYTHON_GIL"] = "0"
-    return subprocess.run([sys.executable, "-c", code], cwd=REPO, env=env,
-                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                          text=True, timeout=timeout)
+    return run_python(code, timeout=timeout)
 
 
 def test_mn_iouring_fileread_single_hub():
@@ -257,7 +251,6 @@ def _mn_concurrent_init_snippet(hubs, n):
     those ops never completed.  (Tests that pre-call iouring_available() on the
     main thread mask this -- so this snippet deliberately does NOT.)"""
     code = r'''
-import sys; sys.path.insert(0, __SRCPATH__)
 import os, tempfile
 import stackweave_c
 # NB: NO stackweave_c.iouring_available() here -- the fibers below are the
@@ -290,8 +283,7 @@ for p in paths: os.unlink(p)
 bad = [i for i in range(N) if results[i] != expected[i]]
 print("PASS" if not bad else ("FAIL cross/missed: %r" % bad[:10]))
 '''
-    return (code.replace("__SRCPATH__", repr(os.path.join(REPO, "src")))
-                .replace("__N__", str(n)).replace("__H__", str(hubs)))
+    return code.replace("__N__", str(n)).replace("__H__", str(hubs))
 
 
 def _mn_fileread_gc_snippet(hubs, n):
@@ -304,7 +296,6 @@ def _mn_fileread_gc_snippet(hubs, n):
     the STW barrier) -- a hard hang.  The park-not-spin rework drops the tstate
     by yielding, so STW proceeds and the read completes."""
     code = r'''
-import sys; sys.path.insert(0, __SRCPATH__)
 import os, threading, time, gc
 import stackweave_c
 N = __N__; H = __H__
@@ -346,8 +337,7 @@ for fd in rfds + wfds:
 bad = [i for i in range(N) if results[i] != PAYLOAD]
 print("PASS" if not bad else ("FAIL missed: %d/%d %r" % (len(bad), N, bad[:8])))
 '''
-    return (code.replace("__SRCPATH__", repr(os.path.join(REPO, "src")))
-                .replace("__N__", str(n)).replace("__H__", str(hubs)))
+    return code.replace("__N__", str(n)).replace("__H__", str(hubs))
 
 
 def test_mn_iouring_fileread_multi_hub():
@@ -388,7 +378,6 @@ def _mn_sockpair_recv_gc_snippet(hubs, n):
     world whose unblocking needs the (frozen) feeder could never complete.
     Fixed by parking instead of spin-draining."""
     code = r'''
-import sys; sys.path.insert(0, __SRCPATH__)
 import os, socket, threading, time, gc
 import stackweave_c
 
@@ -438,8 +427,7 @@ for fd in peer_fds:
 bad = [i for i in range(N) if results[i] != PAYLOAD]
 print("PASS" if not bad else ("FAIL missed: %d/%d %r" % (len(bad), N, bad[:8])))
 '''
-    return (code.replace("__SRCPATH__", repr(os.path.join(REPO, "src")))
-                .replace("__N__", str(n)).replace("__H__", str(hubs)))
+    return code.replace("__N__", str(n)).replace("__H__", str(hubs))
 
 
 def test_mn_iouring_sockpair_recv_under_gc():
@@ -463,3 +451,7 @@ def test_mn_iouring_sockpair_recv_under_gc():
         assert p.returncode == 0 and "PASS" in p.stdout, (
             "rc=%d\n--- stdout ---\n%s\n--- stderr ---\n%s" % (
                 p.returncode, p.stdout, p.stderr))
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

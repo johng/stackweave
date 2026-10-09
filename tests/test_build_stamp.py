@@ -168,3 +168,7 @@ def test_an_asm_fallback_is_not_kept_across_a_toolchain_change(setup_ns, monkeyp
     assert forced and tried == [True], (tried, out)
     assert "the asm failed last time" not in out, out
     assert _stamp(tmp_path)["asm_failed"] is False
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

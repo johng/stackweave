@@ -61,46 +61,30 @@ Lines with NO safe Python trigger are classified in the structured report:
     declared in coro.h but have NO caller anywhere in the extension (dead API;
     the live bulk path is runloom_coro_bulk_init).
 """
-import os
-import subprocess
 import sys
 import textwrap
 
 import pytest
 
 import stackweave_c as rc
-from adv_util import needs_free_threading, needs_rlimit_nproc_thread_cap
 
-FT = needs_free_threading()
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY = sys.executable
+from adv_util import needs_rlimit_nproc_thread_cap, run_python
+from known_gaps import GON_BULK_GAP
 
 # coro.c's POSIX stack pool / arena / madvise / grow all live behind
-# RUNLOOM_HAVE_FCONTEXT|UCONTEXT (the guard-page backends).  The Coro-driven
-# bits work without the GIL off, but the fiber_n/mn_fiber workloads need the M:N
-# scheduler -> skip the whole file on a GIL build (matches the other cov suites).
-pytestmark = pytest.mark.skipif(not FT, reason="coro.c stack paths need the M:N / FT build")
+# RUNLOOM_HAVE_FCONTEXT|UCONTEXT (the guard-page backends).
 
 
 def _run_worker(body, env_extra=None, timeout=240):
     """Run a dedented worker snippet in a fresh subprocess; return CompletedProcess.
 
     Generous default timeout: a churn workload can run slow on a box shared with
-    the local CI runner (competes for CPU + mmap_lock); a timeout there is
-    contention, not a bug -- callers pytest.skip on TimeoutExpired.
+    the local CI runner (competes for CPU + mmap_lock).  A worker still running
+    after it fails the test with its output.
     """
-    src = ("import sys\n"
-           "sys.path.insert(0, 'src')\n"
-           "import stackweave_c as rc\n"
+    src = ("import stackweave_c as rc\n"
            + textwrap.dedent(body))
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
-    if env_extra:
-        env.update(env_extra)
-    try:
-        return subprocess.run([PY, "-c", src], cwd=REPO, env=env,
-                              capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        pytest.skip("coro.c worker timed out (box under heavy load)")
+    return run_python(src, timeout=timeout, env=env_extra)
 
 
 def _assert_clean(p, marker):
@@ -174,9 +158,7 @@ def test_stack_arena_carve_and_release_churn():
 # --------------------------------------------------------------------------
 # L1500-1502 : fiber_n fresh-flag DEFERRED materialize at first resume.
 # --------------------------------------------------------------------------
-@pytest.mark.xfail(strict=True, reason=(
-    "TODO_MIGRATION_FAIL: STACKWEAVE_GON_BULK is ignored under migration: the "
-    "bulk fiber_n builder allocates no per-g tstate (tests/test_spawn_bulk_lifecycle.py)"))
+@GON_BULK_GAP
 def test_fiber_n_fresh_flag_deferred_materialize():
     """STACKWEAVE_GON_BULK=1 takes fiber_n's bulk-arena fast path; STACKWEAVE_GON_FRESH=1
     makes runloom_coro_bulk_init SKIP the per-g asm_make_ctx (the scattered
@@ -333,3 +315,7 @@ def test_default_churn_baseline_in_process():
     with hang_guard(30, "default churn baseline"):
         stackweave.run(2, main)
     assert sum(ran) == 120, sum(ran)
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

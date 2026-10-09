@@ -13,20 +13,15 @@ taking turns shared the rest of the thread state:
 Each Coro now swaps both (and its c_stack_refs list), as the scheduler does for
 a fiber.  Each case runs in a subprocess, since a regression is a crash.
 """
-import os
-import pathlib
-import subprocess
 import sys
 
 import pytest
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
+from adv_util import run_python
 
 
 def _run(code):
-    p = subprocess.run([sys.executable, "-c", code], cwd=ROOT,
-                       env=dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src"),
-                       capture_output=True, text=True, timeout=60)
+    p = run_python(code, timeout=60)
     return p.returncode, p.stdout, p.stderr
 
 
@@ -125,3 +120,7 @@ print("OK", sum(range(1000)))
 """)
     assert rc == 0, (rc, err[-2000:])
     assert "OK 499500" in out, out
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

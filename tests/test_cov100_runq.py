@@ -10,29 +10,25 @@ runloom_use_global_runq(), which says whether that queue is in use:
   * runloom_use_global_runq  (== runloom_get_per_g_tstate_mode(): set by mn_init,
     cleared by mn_fini)
 
-Cross-hub migration is always on, so every M:N run routes woken gs through the
-global run-queue: wake_g pushes (mn_api.c.inc), and idle hubs pull in
+Cross-hub migration is always on, so the queue is live in every M:N run.  A wake
+performed on a hub thread lands on the waker's own deque (Go-style local wake,
+runloom_mn_woken_enqueue); a foreign-thread waker, a pinned fiber or a full
+deque goes through the global run-queue instead, and idle hubs pull it in
 hub_main's empty-local / empty-deque path.
 
 WHAT THIS SUITE ASSERTS
 -----------------------
 A subprocess runs a real cross-hub channel + cross-hub fd-park workload to
 completion under M:N, exits 0, and prints a marker -- so gcov counters flush and
-we assert on stdout + returncode, never on a crash.  Every woken g in it travels
-push -> pull, so a lost, duplicated or stranded runq entry shows up as a missing
-value/byte or a hang.
+we assert on stdout + returncode, never on a crash.  Its woken gs travel the
+global queue or a deque, so a lost, duplicated or stranded entry shows up as a
+missing value/byte or a hang.
 """
-import os
-import subprocess
 import sys
 
 import pytest
 
-from adv_util import hang_guard, needs_free_threading
-
-FT = needs_free_threading()
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY = sys.executable
+from adv_util import hang_guard, run_python
 
 # A self-contained child program. It runs a workload whose wakeups route through
 # the global runq push/pull:
@@ -44,7 +40,6 @@ PY = sys.executable
 # CHILD_OK.
 _CHILD = r'''
 import os, sys, socket
-sys.path.insert(0, "src")
 import stackweave
 import stackweave_c as rc
 from stackweave.sync import WaitGroup
@@ -122,17 +117,13 @@ print("CHILD_OK", sum(recv_ok), sum(fd_got))
 
 
 def _run_child(hubs, timeout=60):
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
-    return subprocess.run(
-        [PY, "-c", _CHILD, str(hubs)],
-        cwd=REPO, env=env, capture_output=True, text=True, timeout=timeout)
+    return run_python(_CHILD, timeout=timeout, args=(str(hubs),))
 
 
 # --------------------------------------------------------------------------
 # Cross-hub channel + fd wakes all delivered through the global run-queue.
 # Multi-hub so cross-hub wake_g is genuinely exercised.
 # --------------------------------------------------------------------------
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_cross_hub_wakes_via_global_runq():
     with hang_guard(70, "global runq cross-hub wakes"):
         p = _run_child(hubs=4)
@@ -146,4 +137,4 @@ def test_cross_hub_wakes_via_global_runq():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

@@ -10,14 +10,18 @@ docs/dev/OFFLOAD_REDESIGN_FINDINGS.md, "LANDED: blockpool scaling"):
      destroyed a tstate every offload -- each create/destroy taking the runtime
      HEAD_LOCK, which serialized all workers (~20k offloads/s ceiling).
 
-Together: ~20k -> ~670k offloads/s on 8 hubs (~33x), free-threaded 3.13t.
+Together: ~20k -> ~670k offloads/s on 8 hubs (~33x), measured on free-threaded
+3.13t when the rewrite landed.
 
 These tests pin the CORRECTNESS the rewrite must keep: every offload runs and
 returns the right value across many hubs, results survive back-to-back run()
 cycles (so a worker's cached tstate is reused soundly), and exceptions still
 propagate.  Throughput is exercised but not asserted (machine-dependent).
 """
+import sys
 import unittest
+
+import pytest
 
 import stackweave
 
@@ -79,4 +83,4 @@ class TestOffloadScaling(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

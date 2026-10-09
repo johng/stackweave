@@ -1,5 +1,8 @@
 """Smoke test for stackweave_c.stats() -- production introspection."""
+import sys
 import unittest
+
+import pytest
 
 import stackweave
 import stackweave_c
@@ -34,4 +37,4 @@ class TestStats(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

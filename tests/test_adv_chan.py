@@ -22,7 +22,8 @@ import pytest
 
 import stackweave
 import stackweave_c as rc
-from adv_util import hang_guard, assert_faster_than, needs_free_threading
+
+from adv_util import hang_guard
 
 
 # --------------------------------------------------------------------------
@@ -269,7 +270,6 @@ def test_close_with_buffered_objects_frees_them():
 # --------------------------------------------------------------------------
 # M:N cross-hub wake path -- the lost/duplicated value class
 # --------------------------------------------------------------------------
-@pytest.mark.skipif(not needs_free_threading(), reason="M:N needs GIL-disabled build")
 def test_mn_fan_in_fan_out_no_dup_no_loss():
     # Each producer emits a UNIQUE tagged value; consumers collect into
     # per-consumer slots.  Set-equality proves NO value was lost and NONE
@@ -310,7 +310,6 @@ def test_mn_fan_in_fan_out_no_dup_no_loss():
     assert set(got) == expected, "value set mismatch (lost or duplicated)"
 
 
-@pytest.mark.skipif(not needs_free_threading(), reason="M:N needs GIL-disabled build")
 def test_mn_select_across_channels_integrity():
     from stackweave.sync import WaitGroup
     K, PER = 6, 400
@@ -350,4 +349,4 @@ def test_mn_select_across_channels_integrity():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

@@ -11,6 +11,7 @@ import time
 import zlib
 
 import stackweave.monkey as monkey
+# Patch before the imports below, so the whole file runs under the patch.
 monkey.patch()
 
 import selectors
@@ -20,7 +21,8 @@ import subprocess
 import pytest
 
 import stackweave_c as rc
-from adv_util import hang_guard, assert_faster_than
+
+from adv_util import hang_guard
 
 
 # --------------------------------------------------------------------------
@@ -144,4 +146,4 @@ def test_selectors_default_selector_cooperative():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

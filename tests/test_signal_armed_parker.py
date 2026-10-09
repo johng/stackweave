@@ -35,14 +35,11 @@ abort its park early and is how the CoPoll selector path gets served.  That
 attribution is unproven (see the note in the C file), but claiming AND
 delivering satisfies it either way, and that is what these tests pin.
 """
-import os
-import subprocess
 import sys
 
 import pytest
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY = sys.executable
+from adv_util import run_python
 
 needs_sigalrm = pytest.mark.skipif(
     not hasattr(__import__("signal"), "SIGALRM"),
@@ -54,7 +51,6 @@ needs_sigalrm = pytest.mark.skipif(
 # process -- so N=1 names that parker exactly.
 _ARMED = r'''
 import signal, sys, faulthandler
-sys.path.insert(0, "src")
 import stackweave_c as rc
 
 box = {}
@@ -83,11 +79,7 @@ sys.stdout.write("ARMED %r\n" % (sorted(box.items()),))
 
 
 def _run(script, env_extra=None, timeout=90):
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
-    if env_extra:
-        env.update(env_extra)
-    return subprocess.run([PY, "-c", script], cwd=REPO, env=env,
-                          capture_output=True, text=True, timeout=timeout)
+    return run_python(script, timeout=timeout, env=env_extra)
 
 
 @needs_sigalrm
@@ -126,3 +118,7 @@ def test_armed_fault_site_is_inert_when_unset():
     assert "ARMED" not in p.stdout, (
         "the fiber returned from a connect() that can never complete\n%s"
         % p.stdout)
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

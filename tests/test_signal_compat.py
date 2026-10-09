@@ -15,8 +15,10 @@ These run under the single-threaded scheduler (stackweave_c.fiber/run on the mai
 thread), which is where signal masks are stable and set_wakeup_fd is usable.
 """
 import os
-import time
+import sys
 import unittest
+
+import pytest
 
 import stackweave
 import stackweave.monkey
@@ -244,4 +246,4 @@ class TestPause(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

@@ -39,17 +39,17 @@ import pytest
 import stackweave
 import stackweave_c as rc
 from stackweave.sync import WaitGroup
-from adv_util import hang_guard, needs_free_threading
+
+from adv_util import hang_guard
 
 READ = 1
 UNPARKED = 0x10000000        # RUNLOOM_NETPOLL_UNPARKED sentinel
 CANCELLED = rc.WAIT_FD_CANCELLED
-FT = needs_free_threading()
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 pytestmark = pytest.mark.skipif(
-    not FT or rc.netpoll_backend() != "epoll",
-    reason="M:N multi-pool + epoll-iouring coverage needs GIL-disabled epoll build")
+    rc.netpoll_backend() != "epoll",
+    reason="covers the epoll backend's per-hub netpoll pools and io_uring "
+           "ring glue")
 
 
 def _drop(fd):
@@ -377,4 +377,4 @@ def test_mn_many_parkers_one_fd_across_hubs_none_lost():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

@@ -17,7 +17,6 @@ dozen fragile invariants.  We target the observable ones:
 Driven through stackweave.aio.run() (its asyncio.run drop-in), no pytest-asyncio.
 """
 import asyncio
-import os
 import socket
 import sys
 import time
@@ -26,7 +25,8 @@ import pytest
 
 import stackweave.aio as aio
 import stackweave_c as rc
-from adv_util import hang_guard, assert_faster_than, RealBarrier as _RealBarrier
+
+from adv_util import hang_guard, RealBarrier as _RealBarrier
 
 
 def _parked():
@@ -386,4 +386,4 @@ def test_print_tasks_names_a_waiting_task():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

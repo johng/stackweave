@@ -6,7 +6,10 @@ still spawn+run correctly afterwards.  The win itself (a cold burst of long-live
 fibers spawns ~4x slower than a prewarmed one) is a perf property measured out of
 band; here we pin the API contract and that it does no harm.
 """
+import sys
 import time
+
+import pytest
 
 import stackweave
 import stackweave_c
@@ -67,3 +70,7 @@ def test_prewarm_keep_target_zero_stops():
     assert stackweave.prewarm_keep(150) == 0
     assert stackweave.prewarm_keep(0) == 0                 # target<=0 -> stop
     stackweave.prewarm_stop()                              # already stopped: no-op
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

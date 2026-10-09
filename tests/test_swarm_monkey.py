@@ -28,15 +28,15 @@ be FOREIGN-OS-THREAD-safe"): for each patched primitive, drive it from a genuine
 foreign OS thread (raw_thread / _thread.start_new_thread) WHILE fibers also
 use it under stackweave.run(N), asserting no crash and correct behaviour.
 """
-import os
-import sys
+import _thread as _real_thread_mod
 import errno
-import time
+import os
 import signal as _signal
 import socket as _bare_socket_for_pair      # only for socketpair in ssl test
 import subprocess
+import sys
 import textwrap
-import _thread as _real_thread_mod
+import time
 
 import pytest
 
@@ -44,6 +44,7 @@ import pytest
 import stackweave.monkey as monkey
 monkey.patch()
 
+# The rest come after patch(): these names must be the patched ones.
 import threading          # patched
 import queue              # patched
 import socket             # patched
@@ -53,13 +54,9 @@ import select as _select_mod  # patched
 import stackweave
 import stackweave_c as rc
 from stackweave.sync import WaitGroup
-from adv_util import (hang_guard, assert_faster_than, raw_thread,
-                      needs_free_threading, free_tcp_port_pair)
 
-FT = needs_free_threading()
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_SRC = os.path.join(REPO, "src")
-mn_only = pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
+from adv_util import (hang_guard, assert_faster_than, raw_thread,
+                      free_tcp_port_pair, child_env, run_python)
 
 
 # ==========================================================================
@@ -72,19 +69,14 @@ def run_child(body, extra_env=None, timeout=60):
     negative returncode and the crash handler's classification is observable on
     stderr instead of taking down this test process.
     """
-    src = ("import sys; sys.path.insert(0, %r)\n" % _SRC +
-           "import stackweave, stackweave_c\n"
+    src = ("import stackweave, stackweave_c\n"
            "import stackweave.monkey as monkey\n"
            "monkey.patch()\n" +
            textwrap.dedent(body))
-    env = dict(os.environ)
-    env["PYTHON_GIL"] = "0"
-    env["PYTHONPATH"] = _SRC
-    env.setdefault("STACKWEAVE_GOROUTINE_PANIC", "silent")
-    if extra_env:
-        env.update(extra_env)
-    p = subprocess.run([sys.executable, "-c", src],
-                       capture_output=True, text=True, env=env, timeout=timeout)
+    env = {"STACKWEAVE_GOROUTINE_PANIC":
+           os.environ.get("STACKWEAVE_GOROUTINE_PANIC", "silent")}
+    env.update(extra_env or {})
+    p = run_python(src, timeout=timeout, env=env)
     return p.returncode, (p.stdout + p.stderr)
 
 
@@ -167,7 +159,6 @@ def test_queue_uses_cooperative_condition_after_patch():
 # 2. HEADLINE: a patched Lock hammered by MANY fibers AND a foreign OS
 #    thread, EXACT guarded counter (lost mutex / lost cross-thread wake / crash)
 # ==========================================================================
-@mn_only
 def test_lock_exact_count_foreign_plus_fibers_heavy():
     lk = threading.Lock()
     counter = [0]
@@ -213,7 +204,6 @@ def test_lock_exact_count_foreign_plus_fibers_heavy():
         % (counter[0], expected))
 
 
-@mn_only
 def test_rlock_exact_count_foreign_plus_fibers():
     # RLock reentrancy + ownership identity differs between a fiber
     # (stackweave.current()) and a foreign thread (get_ident); both must serialize.
@@ -257,7 +247,6 @@ def test_rlock_exact_count_foreign_plus_fibers():
         counter[0], expected)
 
 
-@mn_only
 def test_semaphore_exact_count_foreign_plus_fibers():
     # A Semaphore(1) is a mutex; foreign + fiber contenders must serialize.
     sem = threading.Semaphore(1)
@@ -401,7 +390,6 @@ def test_event_wakes_all_fiber_waiters_single_thread():
     assert len(woke) == N
 
 
-@mn_only
 def test_event_fanin_mixed_foreign_and_fiber_waiters():
     ev = threading.Event()
     foreign_woke = [0]
@@ -683,7 +671,6 @@ def test_queue_many_producers_consumers_no_lost_item():
     assert len(got) == produced, "lost items: %d != %d" % (len(got), produced)
 
 
-@mn_only
 def test_simplequeue_foreign_producer_fiber_consumer():
     q = queue.SimpleQueue()
     N = 300
@@ -728,7 +715,6 @@ def test_simplequeue_foreign_producer_fiber_consumer():
 # to a temp FILE and run THAT as the subprocess.
 _MP_CORPUS_SCRIPT = '''
 import sys
-sys.path.insert(0, {src!r})
 import stackweave, stackweave_c as rc, time
 import stackweave.monkey as monkey
 monkey.patch()
@@ -744,7 +730,7 @@ def run_it(start_method):
     q = ctx.Queue()
     N = 80
     p = ctx.Process(target=child, args=(q, N))
-    box = {{"got": []}}
+    box = {"got": []}
     def main():
         wg = WaitGroup(); wg.add(1)
         def consumer():
@@ -772,11 +758,8 @@ def _mp_corpus_child(start_method):
     fd, path = tempfile.mkstemp(suffix="_mpcorpus.py")
     try:
         with os.fdopen(fd, "w") as f:
-            f.write(_MP_CORPUS_SCRIPT.format(src=_SRC))
-        env = dict(os.environ)
-        env["PYTHON_GIL"] = "0"
-        env["PYTHONPATH"] = _SRC
-        env["STACKWEAVE_GOROUTINE_PANIC"] = "silent"
+            f.write(_MP_CORPUS_SCRIPT)
+        env = child_env(STACKWEAVE_GOROUTINE_PANIC="silent")
         p = subprocess.run([sys.executable, path, start_method],
                            capture_output=True, text=True, env=env, timeout=120)
         return p.returncode, (p.stdout + p.stderr)
@@ -787,7 +770,6 @@ def _mp_corpus_child(start_method):
             pass
 
 
-@mn_only
 def test_mp_queue_corpus_spawn():
     rc_, out = _mp_corpus_child("spawn")
     assert_no_signal_death(rc_, out, "mp-queue-spawn")
@@ -798,8 +780,6 @@ def test_mp_queue_corpus_spawn():
 # in a subprocess with a HARD timeout so a hang is a bounded failure, never an
 # infinite suite wedge.  Returns "OK" if Process.start()/join() completed.
 _FORKSERVER_BOOTSTRAP_SCRIPT = '''
-import sys, os
-sys.path.insert(0, {src!r})
 import stackweave.monkey as monkey
 monkey.patch()
 import multiprocessing as mp
@@ -810,7 +790,7 @@ def trivial():
 if __name__ == "__main__":
     ctx = mp.get_context("forkserver")
     p = ctx.Process(target=trivial)
-    p.start()                 # <-- hangs here under monkey.patch()
+    p.start()                 # hung here before the _patched_open fix
     p.join(timeout=10)
     print("OK", p.exitcode)
 '''
@@ -821,11 +801,8 @@ def _run_forkserver_bootstrap(timeout):
     fd, path = tempfile.mkstemp(suffix="_fsboot.py")
     try:
         with os.fdopen(fd, "w") as f:
-            f.write(_FORKSERVER_BOOTSTRAP_SCRIPT.format(src=_SRC))
-        env = dict(os.environ)
-        env["PYTHON_GIL"] = "0"
-        env["PYTHONPATH"] = _SRC
-        env["STACKWEAVE_GOROUTINE_PANIC"] = "silent"
+            f.write(_FORKSERVER_BOOTSTRAP_SCRIPT)
+        env = child_env(STACKWEAVE_GOROUTINE_PANIC="silent")
         try:
             p = subprocess.run([sys.executable, path],
                                capture_output=True, text=True, env=env,
@@ -840,7 +817,6 @@ def _run_forkserver_bootstrap(timeout):
             pass
 
 
-@mn_only
 # REGRESSION (was finding #4): monkey.patch() + multiprocessing forkserver no
 # longer hangs at Process.start().  Root cause: _patched_open routed EVERY
 # pollable-fd open through pure-Python _pyio, even off a fiber -- so a forked
@@ -848,14 +824,13 @@ def _run_forkserver_bootstrap(timeout):
 # buffered reader while os.fdopen(pipe_fd)-reading its pickled process spec.
 # _patched_open now uses the robust C io.open when not in a fiber (where _pyio
 # gives no benefit anyway); the in-fiber cooperative pipe-read path is unchanged.
-def test_mp_forkserver_bootstrap_should_not_hang():
+def test_mp_forkserver_bootstrap_does_not_hang():
     if "forkserver" not in __import__("multiprocessing").get_all_start_methods():
         pytest.skip("forkserver unavailable")
-    # Asserts the CORRECT behaviour (start()/join() complete promptly).  It
-    # currently HANGS -> the subprocess times out -> hung is True -> xfail.
+    # start()/join() must complete promptly.
     with hang_guard(60, "mp forkserver bootstrap"):
         rc_, out, hung = _run_forkserver_bootstrap(timeout=30)
-    assert not hung, "forkserver bootstrap hung under monkey.patch()"
+    assert not hung, "forkserver bootstrap hung under monkey.patch(): %r" % (out,)
     assert_no_signal_death(rc_, out, "mp-forkserver-bootstrap")
     assert "OK" in out, out
 
@@ -1138,8 +1113,7 @@ def _make_self_signed_cert():
 # a SUBPROCESS contains any fd-arm residue so it can't poison sibling tests
 # (and a crash would be contained + observed as a negative returncode).
 _SSL_HANDSHAKE_SCRIPT = '''
-import sys, os
-sys.path.insert(0, {src!r})
+import os
 import stackweave.monkey as monkey
 monkey.patch()
 import stackweave, stackweave_c as rc, socket, ssl
@@ -1169,7 +1143,7 @@ def mint():
     return cf.name, kf.name
 
 certfile, keyfile = mint()
-out = {{}}
+out = {}
 def main():
     sp_a, sp_b = socket.socketpair()
     sctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); sctx.load_cert_chain(certfile, keyfile)
@@ -1200,26 +1174,12 @@ print("OK", out["reply"])
 def test_ssl_cooperative_handshake_over_socketpair():
     if _make_self_signed_cert() is None:
         pytest.skip("cryptography not available to mint a self-signed cert")
-    import tempfile
-    fd, path = tempfile.mkstemp(suffix="_sslhs.py")
-    try:
-        with os.fdopen(fd, "w") as f:
-            f.write(_SSL_HANDSHAKE_SCRIPT.format(src=_SRC))
-        env = dict(os.environ)
-        env["PYTHON_GIL"] = "0"
-        env["PYTHONPATH"] = _SRC
-        env["STACKWEAVE_GOROUTINE_PANIC"] = "silent"
-        with hang_guard(60, "ssl handshake subprocess"):
-            p = subprocess.run([sys.executable, path], capture_output=True,
-                               text=True, env=env, timeout=45)
-        out = p.stdout + p.stderr
-        assert_no_signal_death(p.returncode, out, "ssl-handshake")
-        assert "OK b'S:hello'" in out, out
-    finally:
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
+    with hang_guard(60, "ssl handshake subprocess"):
+        p = run_python(_SSL_HANDSHAKE_SCRIPT, timeout=45,
+                       env={"STACKWEAVE_GOROUTINE_PANIC": "silent"})
+    out = p.stdout + p.stderr
+    assert_no_signal_death(p.returncode, out, "ssl-handshake")
+    assert "OK b'S:hello'" in out, out
 
 
 # ==========================================================================
@@ -1362,13 +1322,11 @@ def test_fault_injection_always_backs_off_bounded():
 
 
 # ==========================================================================
-# 14. M:N env-gated stress: drive a monkey workload under sysmon / preempt /
-#     handoff and assert no crash/hang (these detectors fire on a long fiber).
+# 14. M:N env-gated stress: drive a monkey workload under sysmon / preempt
+#     and assert no crash/hang (these detectors fire on a long fiber).
 # ==========================================================================
-@mn_only
 @pytest.mark.parametrize("env", [
     {"STACKWEAVE_SYSMON": "1", "STACKWEAVE_SYSMON_QUIET": "1", "STACKWEAVE_SYSMON_MS": "8"},
-    {"STACKWEAVE_HANDOFF": "1", "STACKWEAVE_HANDOFF_POOL": "2"},
 ])
 def test_monkey_lock_workload_under_env_gated_mode(env):
     rc_, out = run_child("""
@@ -1670,7 +1628,6 @@ def test_os_read_write_pipe_cooperative_integrity_and_overlap():
     assert out["writer_progress"] == 50
 
 
-@mn_only
 def test_os_write_foreign_thread_os_read_fiber_subprocess():
     # os.write from a FOREIGN thread (no fiber -> passthrough _orig_os_write on
     # a nonblocking fd), os.read from a fiber (cooperative wait_fd).  The
@@ -1857,23 +1814,14 @@ def test_udp_recvfrom_sendto_cooperative():
     assert out["from_loopback"] is True
 
 
-# FINDING: socket.recvfrom / sendto / recvmsg / recvmsg_into / sendmsg /
-# recvfrom_into IGNORE the socket timeout -- unlike recv/recv_into/send/sendall/
-# connect/accept (which honor gettimeout() via the `t is not None` deadline
-# branch), the datagram + msg variants park on a bare `wait_fd(fd, READ)` with
-# NO deadline (src/stackweave/monkey/sockets.py _patched_recvfrom etc.).  So a
-# datagram socket with settimeout(0.2) that never receives a packet HANGS the
-# fiber FOREVER instead of raising socket.timeout.  Lost-deadline class.  Run in
-# a SUBPROCESS with a hard 6s timeout so the hang is bounded (it cannot wedge
-# the suite), asserting the CORRECT behaviour (a bounded timeout) -- which
-# currently fails because the subprocess is killed for hanging.
+# A datagram socket with settimeout(0.2) that never receives a packet must
+# raise socket.timeout from recvfrom, not park forever.  Run in a SUBPROCESS so
+# a hang fails the test with the child's output instead of wedging the suite.
 _UDP_TIMEOUT_PROBE = '''
-import sys
-sys.path.insert(0, {src!r})
 import stackweave, stackweave_c as rc, socket, time
 import stackweave.monkey as monkey
 monkey.patch()
-out = {{}}
+out = {}
 def main():
     srv = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     srv.bind(("127.0.0.1", 0))
@@ -1897,31 +1845,11 @@ print("RESULT", out)
 # per-fd side table populated before setblocking(False) and read by _coop_timeout;
 # the datagram/msg/accept ops route their park through the timeout-aware _wait_io.
 def test_udp_recvfrom_honors_socket_timeout_bounded():
-    import tempfile
-    fd, path = tempfile.mkstemp(suffix="_udpto.py")
-    try:
-        with os.fdopen(fd, "w") as f:
-            f.write(_UDP_TIMEOUT_PROBE.format(src=_SRC))
-        env = dict(os.environ)
-        env["PYTHON_GIL"] = "0"; env["PYTHONPATH"] = _SRC
-        env["STACKWEAVE_GOROUTINE_PANIC"] = "silent"
-        hung = False
-        try:
-            p = subprocess.run([sys.executable, path], capture_output=True,
-                               text=True, env=env, timeout=6)
-            out = p.stdout + p.stderr
-        except subprocess.TimeoutExpired:
-            hung = True
-            out = ""
-        # CORRECT behaviour: it returns promptly with a timeout result.  Today
-        # it hangs -> the subprocess is killed -> assertion fails -> xfail.
-        assert not hung, "recvfrom ignored settimeout and HUNG (lost-deadline bug)"
-        assert "RESULT" in out and "'r': 'timeout'" in out, out
-    finally:
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
+    # Returns promptly with a timeout result; a hang fails at 6s.
+    p = run_python(_UDP_TIMEOUT_PROBE, timeout=6,
+                   env={"STACKWEAVE_GOROUTINE_PANIC": "silent"})
+    out = p.stdout + p.stderr
+    assert "RESULT" in out and "'r': 'timeout'" in out, out
 
 
 # --------------------------------------------------------------------------
@@ -2294,7 +2222,6 @@ def test_condition_wait_for_predicate_times_out_bounded():
     assert out["r"] is False
 
 
-@mn_only
 def test_condition_notify_n_exactly_n_mixed_foreign_fiber():
     # NF foreign threads + NG fibers all park on one Condition; a single
     # notify(K) must wake EXACTLY K of them (REORDER / over-wake hunt).  We
@@ -2478,7 +2405,6 @@ def test_open_pollable_pipe_fd_buffered_read_is_cooperative():
 #      of CoLock.acquire -- t0/timeout/_raw_time_sleep).  Never exercised: the
 #      first pass's foreign-thread lock tests all used blocking acquire.
 # --------------------------------------------------------------------------
-@mn_only
 def test_lock_timed_acquire_from_foreign_thread_bounded():
     rc_, out = run_child("""
         import threading, time, _thread
@@ -2680,4 +2606,4 @@ def test_queue_join_task_done_balance():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

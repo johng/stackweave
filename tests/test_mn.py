@@ -19,40 +19,19 @@ Subprocesses run with PYTHON_GIL=0 so hubs genuinely run in parallel
 (true free-threading) -- the condition under which the scheduler's
 concurrency is actually tested.
 """
-import os
-import subprocess
 import sys
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+import pytest
 
-# Only meaningful on a free-threaded ("t") build; mn still runs under the
-# GIL but serially, so the parallel behaviour we care about needs 3.13t+.
-FREE_THREADED = bool(getattr(sys, "_is_gil_enabled", None)) or "t" in getattr(
-    sys, "abiflags", "")
+from adv_util import run_python
 
 
 def run_mn(code, timeout=60):
-    """Run an M:N snippet in a fresh free-threaded subprocess.
+    """Run an M:N snippet in a fresh subprocess.
     Returns (returncode, stdout, stderr).  The snippet should print
-    'PASS' on success."""
-    preamble = (
-        "import sys; sys.path.insert(0, %r)\n"
-        "import stackweave_c\n" % os.path.join(REPO, "src")
-    )
-    env = dict(os.environ)
-    env["PYTHON_GIL"] = "0"          # force GIL off: real parallel hubs
-    env["STACKWEAVE_GIL"] = "0"
-    try:
-        p = subprocess.run(
-            [sys.executable, "-c", preamble + code],
-            cwd=REPO, env=env, timeout=timeout,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    except subprocess.TimeoutExpired as e:
-        # A wedge/lost-wake hang: surface as rc=124 (like coreutils timeout)
-        # rather than letting TimeoutExpired escape as a test error.
-        out = e.stdout.decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
-        err = e.stderr.decode() if isinstance(e.stderr, bytes) else (e.stderr or "")
-        return 124, out, err + "\n[run_mn: timed out after {0}s]".format(timeout)
+    'PASS' on success.  A wedge/lost-wake hang fails the test with the
+    child's output."""
+    p = run_python("import stackweave_c\n" + code, timeout=timeout)
     return p.returncode, p.stdout, p.stderr
 
 
@@ -245,7 +224,7 @@ print("PASS")
 
 
 # ---------------------------------------------------------------------------
-# Known-broken workload, isolated + documented.
+# select() under M:N, with and without a concurrent close().
 # ---------------------------------------------------------------------------
 def test_select_close_conservation():
     """Regression for the M:N blocking-select + close() bug arc.
@@ -439,3 +418,7 @@ for it in range(80):
     experiment(it)
 print("PASS")
 """, timeout=60)
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

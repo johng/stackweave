@@ -18,8 +18,7 @@ JoinSet, Watch, and the differential-vs-Go scenarios are NOT re-ported here.
 Style: %-formatting, no f-strings, no leading-underscore names introduced here.
 Deterministic ordering checks run single-thread under stackweave.run(1, ...); every
 contention / no-overlap / no-loss check runs REAL M:N under stackweave.run(H>=2, ...)
-(GIL-disabled build only) with a hang_guard backstop and race-free per-goroutine
-or guarded counters.
+with a hang_guard backstop and race-free per-goroutine or guarded counters.
 """
 import sys
 
@@ -29,11 +28,8 @@ import stackweave
 import stackweave_c as rc
 from stackweave.sync import (Lock, RWMutex, Semaphore, WaitGroup, Condition,
                           Once, once_func)
-from adv_util import hang_guard, needs_free_threading
 
-FT = needs_free_threading()
-mn = pytest.mark.skipif(
-    not FT, reason="real M:N parallelism needs the GIL-disabled build")
+from adv_util import hang_guard
 
 
 # --------------------------------------------------------------------------
@@ -158,7 +154,6 @@ def test_chan_hundred_ints_fifo():
         assert run_body(body) == "ok"
 
 
-@mn
 def test_chan_p_producers_no_loss_no_dup():
     """TestChan: P producers each send 0..L-1, C consumers drain; every value in
     0..L-1 is delivered exactly P times (no loss, no duplication) across the
@@ -211,7 +206,6 @@ def test_chan_p_producers_no_loss_no_dup():
     assert not bad, "values not delivered exactly P=%d times: %r" % (P, bad[:8])
 
 
-@mn
 def test_self_select_no_self_receive_no_deadlock():
     """TestSelfSelect: two goroutines each send AND recv the same chan inside one
     select; on an unbuffered chan a goroutine must never receive its own send,
@@ -251,7 +245,6 @@ def test_self_select_no_self_receive_no_deadlock():
         assert run_body(body, hubs=2) == "ok"
 
 
-@mn
 def test_select_stress_terminates_with_nil_disable():
     """TestSelectStress: 4 chans (mixed cap) with a sender+receiver goroutine
     each, plus one goroutine sending 4*N via a single select and one receiving
@@ -342,7 +335,6 @@ def test_nonblock_select_always_ready_never_default():
     assert run_body(body) == "ok"
 
 
-@mn
 def test_multi_consumer_preserves_count_and_checksum():
     """TestMultiConsumer: nwork workers range over a work chan (occasionally
     yielding to perturb FIFO), a feeder posts niter values then closes; every
@@ -397,7 +389,6 @@ def test_multi_consumer_preserves_count_and_checksum():
 # ==========================================================================
 # Mutex  (sync/mutex_test.go)  -- stackweave.sync.Lock
 # ==========================================================================
-@mn
 def test_mutex_hammer_mutual_exclusion():
     """TestMutex: G goroutines hammer lock/unlock (with an occasional
     non-blocking TryLock, mirroring HammerMutex's i%3==0 branch); the critical
@@ -476,7 +467,6 @@ def test_mutex_misuse_release_unheld_raises():
 # ==========================================================================
 # RWMutex  (sync/rwmutex_test.go)  -- stackweave.sync.RWMutex
 # ==========================================================================
-@mn
 def test_parallel_readers_all_hold_simultaneously():
     """TestParallelReaders: N readers all acquire the read lock at once (peak
     concurrent readers reaches N); a barrier holds them all before any releases,
@@ -516,7 +506,6 @@ def test_parallel_readers_all_hold_simultaneously():
     assert peak[0] == N, "peak concurrent readers %d != %d" % (peak[0], N)
 
 
-@mn
 def test_rwmutex_activity_invariant_no_overlap():
     """TestRWMutex: under a reader/writer hammer, an 'activity' counter (readers
     add 1, writers add 10000) is only ever seen as 1..<10000 by a reader and
@@ -610,7 +599,6 @@ def test_rlocker_blocks_writer_and_write_lock_blocks_reader():
 # ==========================================================================
 # WaitGroup  (sync/waitgroup_test.go)  -- stackweave.sync.WaitGroup
 # ==========================================================================
-@mn
 def test_waitgroup_two_group_barrier_reusable():
     """TestWaitGroup: the wg1/wg2 barrier -- n goroutines Done wg1 then Wait wg2;
     the main Wait(wg1) must not release before all Done, and the wg2 barrier must
@@ -655,7 +643,6 @@ def test_waitgroup_two_group_barrier_reusable():
         assert run_body(body, hubs=4) == "ok"
 
 
-@mn
 def test_waitgroup_race_no_spurious_wakeup():
     """TestWaitGroupRace: Add(1) x2, two goroutines each atomically bump a counter
     then Done; after Wait the counter is exactly 2 -- Wait never returns before
@@ -682,7 +669,6 @@ def test_waitgroup_race_no_spurious_wakeup():
 # ==========================================================================
 # Once  (sync/once_test.go)  -- stackweave.sync.Once / once_func
 # ==========================================================================
-@mn
 def test_once_runs_once_and_value_visible_to_all():
     """TestOnce: Do runs f exactly once across N callers, and after each caller's
     Do returns, the value produced by f is visible (== 1) to that caller."""
@@ -772,7 +758,6 @@ def test_once_func_caches_success_and_reraises_panic():
 # ==========================================================================
 # Semaphore  (x/sync semaphore_test.go)  -- stackweave.sync.Semaphore (weighted)
 # ==========================================================================
-@mn
 def test_semaphore_value1_as_mutex_hammer():
     """TestSemaphore: a value-1 semaphore hammered by G goroutines acts as a
     mutex -- the guarded section is never entered by two goroutines at once and
@@ -810,7 +795,6 @@ def test_semaphore_value1_as_mutex_hammer():
     assert peak[0] == 1, "value-1 semaphore admitted %d holders" % peak[0]
 
 
-@mn
 def test_weighted_held_never_exceeds_cap():
     """TestWeighted: goroutines acquire/release VARYING weights; the sum of
     currently-held weight never exceeds the semaphore's capacity."""
@@ -875,7 +859,6 @@ def test_weighted_over_release_raises():
     assert run_body(body) == "ok"
 
 
-@mn
 def test_large_acquire_does_not_starve():
     """TestLargeAcquireDoesntStarve: with all CAP tokens initially held and CAP
     goroutines churning single acquire/release, a single Acquire(CAP) must
@@ -1002,7 +985,6 @@ def test_cond_signal_generations_wake_in_fifo_order():
         assert run_body(body) == list(range(6))
 
 
-@mn
 def test_cond_three_goroutine_ordered_handoff():
     """TestRace (cond_test.go): a 3-goroutine ordered handshake through one
     Cond+Mutex -- G1 waits then is signalled and hands to state 3, G2 drives
@@ -1074,4 +1056,4 @@ def test_cond_three_goroutine_ordered_handoff():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

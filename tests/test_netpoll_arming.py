@@ -35,11 +35,11 @@ Every ``wait_fd`` carries a finite timeout, so a *broken* arm surfaces as a 0
 """
 import os
 import socket
+import sys
 import threading
 
 import pytest
 
-# conftest.py already prepends <repo>/src to sys.path.
 import stackweave_c
 
 READ = 1   # RUNLOOM_NETPOLL_READ
@@ -374,3 +374,7 @@ def test_concurrent_distinct_fds_staggered():
     assert not feeder_err, "feeder error: %r" % (feeder_err,)
     assert all(woke[i] == [READ] for i in range(N)), (
         "staggered wake missed a parker on %s: %r" % (BACKEND, woke))
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

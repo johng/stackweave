@@ -12,14 +12,12 @@ review of the design flagged: both callback orderings, the schedule-then-start-
 driver pattern (no deadlock), the driver's own pre-run create_task, a custom
 task_factory, cancel-before-spawn, and the refcycle break.
 """
-import gc
-import os
+import asyncio
 import sys
 import threading
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+import pytest
 
-import asyncio
 import stackweave.aio as aio
 
 
@@ -191,5 +189,4 @@ def test_prerun_deferred_task_no_refcycle():
 
 
 if __name__ == "__main__":
-    import pytest
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

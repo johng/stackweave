@@ -11,14 +11,13 @@ import threading
 import time
 import unittest
 
-
-sys.path.insert(0, "src")
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import pytest
 
 import stackweave
 import stackweave.monkey
 import stackweave_c
-from adv_util import OverlapTracker  # noqa: E402
+
+from adv_util import OverlapTracker
 
 
 def _drive(fn):
@@ -395,4 +394,4 @@ class TestSocketStillWorks(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

@@ -31,24 +31,15 @@ so every scenario asserts a returncode of 0 AND a stdout marker carrying the
 behaviour we assert on (cancel returned True, recv unblocked with ECANCELED,
 echo round-tripped), not merely "it didn't crash".
 """
-import os
-import subprocess
 import sys
 
 import pytest
 
-from adv_util import (IOURING_LOOP_TRAILER, assert_iouring_loop_ran,
-                      needs_free_threading)
-
-FT = needs_free_threading()
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY = sys.executable
+from adv_util import IOURING_LOOP_TRAILER, assert_iouring_loop_ran, run_python
 
 # The loop backend must be genuinely active (io_uring available on this box).
 LOOP_ENV = {"STACKWEAVE_IOURING_LOOP": "1"}
 LOOP_TCPCONN_ENV = {"STACKWEAVE_IOURING_LOOP": "1", "STACKWEAVE_TCPCONN_IOURING": "1"}
-
-pytestmark = pytest.mark.skipif(not FT, reason="M:N + io_uring loop need GIL-disabled build")
 
 
 def _iou_available():
@@ -60,12 +51,7 @@ def _iou_available():
 
 
 def _run(script, env_extra, timeout=240):
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src", **env_extra)
-    try:
-        return subprocess.run([PY, "-c", script], cwd=REPO, env=env,
-                              capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        pytest.skip("workload timed out (box under heavy load)")
+    return run_python(script, timeout=timeout, env=env_extra)
 
 
 def _no_crash(p, label):
@@ -91,7 +77,6 @@ def _no_crash(p, label):
 # that ONLY the hub-ring op produces), L42's non-NULL return is established.
 _SERVE_CECHO = r'''
 import sys, os, socket
-sys.path.insert(0, "src")
 import stackweave
 import stackweave_c as rc
 
@@ -156,7 +141,6 @@ def test_iouring_loop_cecho_drives_current_ring_accessor():
 #     proof).  Asserted symbolically (is_canceled), never against the literal.
 _CANCEL_HUBRING = r'''
 import sys, os, socket, errno
-sys.path.insert(0, "src")
 import stackweave
 import stackweave_c as rc
 from stackweave.sync import WaitGroup
@@ -253,7 +237,6 @@ def test_iouring_hubring_recv_cancel_routes_through_mailbox():
 # (c2=True in ~5% of runs).
 _CANCEL_DOUBLE = r'''
 import sys, os, socket, errno
-sys.path.insert(0, "src")
 import stackweave
 import stackweave_c as rc
 from stackweave.sync import WaitGroup
@@ -334,4 +317,4 @@ def test_iouring_hubring_double_cancel_is_idempotent():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

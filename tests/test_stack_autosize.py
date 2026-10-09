@@ -10,6 +10,7 @@ fibers actually ran with), which the auto-sizer drives.
 """
 import json
 import os
+import sys
 from decimal import Decimal
 
 import pytest
@@ -17,14 +18,12 @@ import pytest
 import stackweave
 import stackweave_c
 
-import os as _hwm_os
-import pytest as _hwm_pytest
 # Stack high-water-mark is precise only with 4 KB pages: macOS 16 KB pages make
 # the mincore-based HWM over-report (it reports the whole stack resident), so
 # these HWM/advice/sizing tests can't measure precisely there -- skip them (the
 # diagnostic itself just over-reserves, which is safe).
-_RELIABLE_HWM = _hwm_os.sysconf("SC_PAGESIZE") == 4096
-pytestmark = _hwm_pytest.mark.skipif(
+_RELIABLE_HWM = os.sysconf("SC_PAGESIZE") == 4096
+pytestmark = pytest.mark.skipif(
     not _RELIABLE_HWM,
     reason="stack HWM is reliable only with 4 KB pages")
 
@@ -342,3 +341,7 @@ def test_autosize_under_mn(monkeypatch):
     # the spawn-time floor caps how far the learned size can be applied
     assert row["reserved"] == max(_learned(row["max_hwm"]), FLOOR)
     assert row["reserved"] < BIG_START                    # learned down from large
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

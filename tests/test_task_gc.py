@@ -13,9 +13,12 @@ a *completed* task therefore leaked forever.  The fix releases g->callable the
 moment the fiber finishes (it is never called again), cutting the cycle at
 the source so the task collects by plain refcounting.
 """
-import gc
 import asyncio
+import gc
+import sys
 import unittest
+
+import pytest
 
 import stackweave.aio as aio
 
@@ -104,4 +107,4 @@ class TestTaskGC(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

@@ -12,6 +12,8 @@ recvmsg/sendmsg) cooperative.  We host:
 Complements the hand-adapted tests/test_socket_compat.py with CPython's own
 much broader assertions.
 """
+import sys
+
 import pytest
 
 from _monkey_stdlib import (HAVE_CPYTHON_TESTS, REALTHREAD, REALTHREAD_REASON,
@@ -35,3 +37,7 @@ if HAVE_CPYTHON_TESTS:
         TestRunloomSocketBasicTCP = hosted(_m.BasicTCPTest, "TestRunloomSocketBasicTCP")
     if hasattr(_m, "BasicUDPTest"):
         TestRunloomSocketBasicUDP = hosted(_m.BasicUDPTest, "TestRunloomSocketBasicUDP")
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

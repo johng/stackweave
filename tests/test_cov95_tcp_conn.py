@@ -44,24 +44,17 @@ OOM-only.
 """
 import os
 import shutil
-import signal
 import socket
-import struct
 import subprocess
 import sys
 
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from adv_util import hang_guard, needs_free_threading  # noqa: E402
+import stackweave
+import stackweave_c as rc
+from stackweave.sync import WaitGroup
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY = sys.executable
-FT = needs_free_threading()
-
-import stackweave  # noqa: E402
-import stackweave_c as rc  # noqa: E402
-from stackweave.sync import WaitGroup  # noqa: E402
+from adv_util import REPO, child_env, hang_guard, run_python
 
 
 # ===========================================================================
@@ -257,7 +250,6 @@ def test_recv_partial_resize():
 
 _SIG_TEMPLATE = r'''
 import os, socket, signal, sys
-sys.path.insert(0, "src")
 import stackweave_c as rc
 
 box = {}
@@ -350,7 +342,6 @@ sys.stdout.write("SIG OP=%s interrupt=%r rv=%r\n" % (OP, box.get("interrupt"), b
 
 _CONNECT_SIG = r'''
 import signal, sys
-sys.path.insert(0, "src")
 import stackweave_c as rc
 box = {}
 def raiser(signum, frame):
@@ -378,14 +369,7 @@ sys.stdout.write("CONNECT_SIG interrupt=%r oserror=%r rv=%r\n" %
 
 
 def _run_child(script, timeout=120, env_extra=None):
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
-    if env_extra:
-        env.update(env_extra)
-    try:
-        return subprocess.run([PY, "-c", script], cwd=REPO, env=env,
-                              capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        pytest.skip("child workload timed out (box under heavy load)")
+    return run_python(script, timeout=timeout, env=env_extra)
 
 
 # This used to carry a TODO calling the failure "a tight timing race" where the
@@ -443,7 +427,6 @@ needs_strace = pytest.mark.skipif(
 
 _CONNECT_HARD = r'''
 import os, socket, sys
-sys.path.insert(0, "src")
 import stackweave_c as rc
 box = {}
 def client():
@@ -467,7 +450,6 @@ print("OK"); sys.exit(0)
 
 _RECVINTO_HARD = r'''
 import os, socket, sys
-sys.path.insert(0, "src")
 import stackweave_c as rc
 box = {}
 def client():
@@ -492,14 +474,10 @@ print("N=%s" % box.get("n")); sys.exit(0)
 
 def _run_strace(script, inject, timeout=60):
     strace = shutil.which("strace")
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
     cmd = [strace, "-f", "-e", "signal=none", "-e", "inject=" + inject,
-           PY, "-c", script]
-    try:
-        return subprocess.run(cmd, cwd=REPO, env=env,
-                              capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        pytest.skip("strace workload timed out (box under heavy load)")
+           sys.executable, "-c", script]
+    return subprocess.run(cmd, cwd=REPO, env=child_env(),
+                          capture_output=True, text=True, timeout=timeout)
 
 
 @needs_strace
@@ -536,8 +514,8 @@ def _iou_available():
 
 
 needs_iouring = pytest.mark.skipif(
-    not (FT and _iou_available()),
-    reason="io_uring TCPConn backend needs a GIL-disabled build + io_uring")
+    not _iou_available(),
+    reason="io_uring not available (the io_uring TCPConn backend needs it)")
 
 _IOU_ENV = {"STACKWEAVE_IOURING_LOOP": "1", "STACKWEAVE_IOURING_MS": "1",
             "STACKWEAVE_TCPCONN_IOURING": "1"}
@@ -548,7 +526,6 @@ _IOU_ENV = {"STACKWEAVE_IOURING_LOOP": "1", "STACKWEAVE_IOURING_MS": "1",
 # multishot ms handle is open + a conn GC'd with ms open (the dealloc ms-close).
 _IOU_OK = r'''
 import sys, struct, socket, gc
-sys.path.insert(0, "src")
 import stackweave, stackweave_c as rc
 from stackweave.sync import WaitGroup
 MSG_PEEK = socket.MSG_PEEK
@@ -598,7 +575,6 @@ sys.stdout.write("IOU_OK %d\n" % ok)
 # ECONNRESET, iouring send/send_all see EPIPE.
 _IOU_ERR = r'''
 import sys, struct, socket, os
-sys.path.insert(0, "src")
 import stackweave, stackweave_c as rc
 from stackweave.sync import WaitGroup
 res = {}
@@ -662,4 +638,4 @@ def test_iouring_tcpconn_error_paths():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

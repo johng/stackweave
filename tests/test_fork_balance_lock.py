@@ -12,10 +12,10 @@ the child deadlocks (detected as a wait timeout); with it, the child returns at
 once and exits 0.
 """
 import os
-import sys
-import time
 import signal
+import sys
 import threading
+import time
 
 import stackweave            # registers the os.register_at_fork(after_in_child) handler
 import stackweave_c

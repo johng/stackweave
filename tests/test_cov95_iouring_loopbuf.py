@@ -20,29 +20,16 @@ from the loop ring).  This suite targets exactly those gaps.
 ALL env-mode / io_uring coverage is via a clean-exiting SUBPROCESS: the parent
 pytest imports stackweave_c once, so the backend/mode is frozen for the process;
 only a child started with the right env runs the path, and it must EXIT
-CLEANLY for gcov to flush.  Timeouts are treated as box contention (this host
-shares io_uring + CPU with a CI runner) -> pytest.skip, never a flaky fail.
+CLEANLY for gcov to flush.  A child that times out fails the test with its
+output.
 
 Each test names the uncovered source line(s) it drives.
 """
-import os
-import socket
-import struct
-import subprocess
 import sys
-import threading
 
 import pytest
 
-from adv_util import (IOURING_LOOP_TRAILER, assert_iouring_loop_ran,
-                      needs_free_threading)
-
-FT = needs_free_threading()
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY = sys.executable
-
-pytestmark = pytest.mark.skipif(
-    not FT, reason="io_uring loop / multishot are M:N (free-threaded) backends")
+from adv_util import IOURING_LOOP_TRAILER, assert_iouring_loop_ran, run_python
 
 
 def _iou_available():
@@ -57,15 +44,8 @@ needs_iouring = pytest.mark.skipif(not _iou_available(), reason="io_uring unavai
 
 
 def _run(script, env_extra, timeout=300):
-    """Run `script` in a child with the given env.  A TimeoutExpired is box
-    contention (a competing CI/build run starving io_uring + CPU), not a bug,
-    so we skip rather than fail -- the suite must be robust, never flaky."""
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src", **env_extra)
-    try:
-        return subprocess.run([PY, "-c", script], cwd=REPO, env=env,
-                              capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        pytest.skip("io_uring workload timed out (box under heavy load)")
+    """Run `script` in a child with the given env."""
+    return run_python(script, timeout=timeout, env=env_extra)
 
 
 # ===========================================================================
@@ -76,7 +56,7 @@ def _run(script, env_extra, timeout=300):
 #    (module_io.c.inc L171-173) -> loop_recv -> loop_io.  Exact-once byte oracle.
 # ===========================================================================
 _LOOP_RECV = r'''
-import sys, struct; sys.path.insert(0, "src")
+import sys, struct
 import stackweave, stackweave_c as rc
 from stackweave.sync import WaitGroup
 N = 32
@@ -130,7 +110,7 @@ def test_loop_single_shot_recv_ms_off():
 #    (no UAF on the cancelled in-flight multishot freeing the handle).
 # ===========================================================================
 _MS_CANCEL = r'''
-import sys, struct, socket, threading; sys.path.insert(0, "src")
+import sys, struct, socket, threading
 import stackweave, stackweave_c as rc
 RealThread = threading.Thread          # captured pre-import; never patched here
 N = 12
@@ -194,7 +174,7 @@ def test_loop_ms_close_while_armed_on_peer_rst():
 #    which also re-exercises the multishot buffer ring under real pressure.
 # ===========================================================================
 _HICONC = r'''
-import sys, struct; sys.path.insert(0, "src")
+import sys, struct
 import stackweave, stackweave_c as rc
 from stackweave.sync import WaitGroup
 N = 192
@@ -240,7 +220,7 @@ def test_loop_high_concurrency_sq_pressure():
 #    use TCPConn.recv -> global multishot.  Exact-once byte oracle.
 # ===========================================================================
 _GLOBAL_MS = r'''
-import sys, struct; sys.path.insert(0, "src")
+import sys, struct
 import stackweave, stackweave_c as rc
 from stackweave.sync import WaitGroup
 N = 48
@@ -289,7 +269,7 @@ def test_global_ring_multishot_recv():
 #    (the cancel op record is freed exactly once, no double-free / leak).
 # ===========================================================================
 _GLOBAL_CANCEL = r'''
-import sys, struct; sys.path.insert(0, "src")
+import sys, struct
 import stackweave, stackweave_c as rc
 from stackweave.sync import WaitGroup
 N = 32
@@ -340,7 +320,7 @@ def test_global_ring_multishot_close_while_armed():
 #    Confirms the byte-exact copy-out into a preallocated bytearray.
 # ===========================================================================
 _GLOBAL_RECV_INTO = r'''
-import sys, struct; sys.path.insert(0, "src")
+import sys, struct
 import stackweave, stackweave_c as rc
 from stackweave.sync import WaitGroup
 N = 40
@@ -375,4 +355,4 @@ def test_global_ring_multishot_recv_into():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

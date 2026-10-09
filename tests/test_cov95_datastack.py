@@ -34,28 +34,18 @@ build/coverage/runloom_sched_datastack.c.inc.gcov):
   406     runloom_sched_ready_pop -> runloom_pct_pick dispatch
   545-547 runloom_timer_push sift-up loop body
 """
-import os
-import subprocess
 import sys
 
 import pytest
 
-from adv_util import needs_free_threading
-
-FT = needs_free_threading()
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY = sys.executable
+from adv_util import run_python
+from known_gaps import MIGRATION_GAP
 
 
 def _run(script, env_extra, timeout=240):
-    # Generous timeout + skip-on-timeout: this box is shared with a CI runner
-    # that competes for CPU; a timeout is contention, not a bug.
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src", **env_extra)
-    try:
-        return subprocess.run([PY, "-c", script], cwd=REPO, env=env,
-                              capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        pytest.skip("datastack-cov workload timed out (box under heavy load)")
+    # Generous timeout: this box is shared with a CI runner that competes for
+    # CPU.  A workload still running after it fails the test with its output.
+    return run_python(script, timeout=timeout, env=env_extra)
 
 
 # ==========================================================================
@@ -80,7 +70,7 @@ def _run(script, env_extra, timeout=240):
 #    the zero-resident fast path).
 # ==========================================================================
 _DATASTACK = r'''
-import sys, socket, struct; sys.path.insert(0, "src")
+import sys, socket, struct
 import stackweave, stackweave_c as rc
 from stackweave.sync import WaitGroup
 
@@ -142,7 +132,11 @@ sys.stdout.write("DS cgot=%d pywoke=%d tail=%d resident=%d chunks=%d\n"
 '''
 
 
-@pytest.mark.skipif(not FT, reason="datastack dwell sweep is an M:N hub-idle path")
+@MIGRATION_GAP(
+    "the datastack dwell sweep accounts the hub thread state's chunks, and "
+    "each fiber has its own; the chunk and resident assertions run on Linux "
+    "only, so elsewhere this passes",
+    strict=sys.platform.startswith("linux"))
 def test_datastack_sweep_debug_decompose():
     p = _run(_DATASTACK, {
         "STACKWEAVE_STACK_PARK_SWEEP_MS": "1", "STACKWEAVE_DATASTACK_DEBUG": "1",
@@ -177,7 +171,7 @@ def test_datastack_sweep_debug_decompose():
 # debug never accumulated) counters AND the madvise main body WITHOUT the
 # debug block -- confirming the gate at L111 short-circuits cleanly.
 _DATASTACK_NODEBUG = r'''
-import sys, socket; sys.path.insert(0, "src")
+import sys, socket
 import stackweave, stackweave_c as rc
 from stackweave.sync import WaitGroup
 NP = 20
@@ -211,7 +205,6 @@ sys.stdout.write("NODBG woke=%d tail=%d chunks=%d\n" % (sum(woke), tail, chunks)
 '''
 
 
-@pytest.mark.skipif(not FT, reason="datastack dwell sweep is an M:N hub-idle path")
 def test_datastack_sweep_no_debug_counters_zero():
     p = _run(_DATASTACK_NODEBUG, {
         "STACKWEAVE_STACK_PARK_SWEEP_MS": "1",   # DEBUG deliberately absent
@@ -245,7 +238,7 @@ def test_datastack_sweep_no_debug_counters_zero():
 #      - every step ran exactly once (no g dropped/duplicated by the shift).
 # ==========================================================================
 _PCT = r'''
-import sys; sys.path.insert(0, "src")
+import sys
 import stackweave_c as rc
 
 NF = 4          # FIFO gs (must keep relative spawn order)
@@ -297,7 +290,7 @@ sys.stdout.write("PCT ok_fifo=%s fifo_full=%s raw_full=%s total=%d\n"
 
 
 def test_pct_controlled_scheduler_fifo_and_change_points():
-    # PCT lives on the single-hub run(1) path; works with or without the GIL.
+    # PCT lives on the single-hub run(1) path.
     p = _run(_PCT, {
         "STACKWEAVE_PCT_SEED": "1234",   # nonzero decimal seed (strtoull base 10)
         "STACKWEAVE_PCT_DEPTH": "4",     # depth>=2 -> change points exist
@@ -322,7 +315,7 @@ def test_pct_controlled_scheduler_fifo_and_change_points():
 # branch never run), exercising runloom_pct_pick's no-change-point straight
 # line and argmax over a single ready g.  Different priority through the init.
 _PCT_DEPTH1 = r'''
-import sys; sys.path.insert(0, "src")
+import sys
 import stackweave_c as rc
 runs = [0] * 6
 def main():
@@ -402,7 +395,7 @@ def test_pct_depth_clamp_high():
 #    the long one.
 # ==========================================================================
 _TIMER = r'''
-import sys; sys.path.insert(0, "src")
+import sys
 import stackweave_c as rc
 from stackweave.sync import WaitGroup
 res = {}
@@ -458,4 +451,4 @@ def test_timer_push_siftup():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

@@ -34,7 +34,6 @@ Drive: single-thread via stackweave.run(1, ...) / rc.fiber+rc.run; M:N via
 stackweave.run(N>=2, main) where children are spawned with rc.mn_fiber / stackweave.fiber.
 """
 import gc
-import os
 import subprocess
 import sys
 import traceback
@@ -48,12 +47,8 @@ from stackweave.sync import (
     WaitGroup, Future, gather, Semaphore, RWMutex, Once,
     once_value, once_func, Group, Watch, JoinSet,
 )
-from adv_util import (
-    hang_guard, assert_faster_than, raw_thread, needs_free_threading,
-)
 
-FT = needs_free_threading()
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from adv_util import REPO, hang_guard, assert_faster_than, raw_thread, child_env
 
 
 # --------------------------------------------------------------------------
@@ -109,15 +104,10 @@ def _foreign_result(callable_):
 
 def _subprocess(script, env_extra=None, timeout=60):
     """Run a Python snippet in a fresh interpreter (contains SIGSEGV/abort so a
-    crash is a NEGATIVE returncode, not a killed pytest)."""
-    env = dict(os.environ)
-    env["PYTHON_GIL"] = "0"
-    env["PYTHONPATH"] = os.path.join(REPO, "src")
-    if env_extra:
-        env.update(env_extra)
+    crash is a NEGATIVE returncode, not a killed pytest).  Output is bytes."""
     return subprocess.run(
         [sys.executable, "-c", script],
-        cwd=REPO, env=env, timeout=timeout,
+        cwd=REPO, env=child_env(**(env_extra or {})), timeout=timeout,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 
@@ -667,7 +657,7 @@ def test_unconsumed_unbuffered_send_value_not_leaked_when_chan_dropped():
                 pass
         rc.fiber(sender)
         # no receiver: run() returns once nothing else runnable (chan park does
-        # not keep run() alive -- documented FINDING in chan_waiters.c.inc)
+        # not keep run() alive -- deliberate, documented in chan_waiters.c.inc)
 
     with hang_guard(15, "orphan send"):
         rc.fiber(main)
@@ -1169,7 +1159,6 @@ def test_semaphore_acquire_from_foreign_thread_rejected():
     assert res == "RuntimeError", res
 
 
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_semaphore_bounds_concurrency_under_mn():
     # Under real M:N, the number of fibers simultaneously inside the critical
     # section must never exceed the semaphore limit (race-free per-fiber slot).
@@ -1425,11 +1414,10 @@ def test_once_func_runs_once():
     assert _run_single(main) == "ok"
 
 
-# TODO(stackweave): FOREIGN-THREAD LOST WAKEUP -- a genuine stackweave bug, NOT a
-# 3.13t/CPython issue.  Once.do() from a foreign OS thread intermittently strands
-# (TIMEOUT).  Reproduced on a Linux 2-core box on BOTH 3.13t AND 3.14t; the same
-# foreign-thread load under stock asyncio is clean (0/40) and gc.disable() does
-# not help -- so gh-116738/gh-137433 are falsified.  The fault is stackweave's
+# Regression: this once timed out on loaded boxes, read as a lost wakeup.  The
+# foreign caller was still spinning in Once.do(): its ~1s "no executor will
+# elect" budget was counted in 0.5 ms sleeps, which run long under load.  It is
+# a monotonic deadline since 37f51bae.
 def test_once_do_from_foreign_thread_as_first_executor_rejected():
     # A foreign thread may not be the FIRST executor (it would wake parked
     # fibers); must reject cleanly.
@@ -1647,7 +1635,6 @@ def test_joinset_context_manager_propagates_task_exc():
 # SECTION 17 -- M:N integrity: fan-in/fan-out NO-DUP-NO-LOSS under work-stealing,
 #               select arbitration under M:N, mutex exclusion under M:N.
 # ==========================================================================
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_mn_buffered_fan_in_set_equality_no_dup_no_loss():
     # Distinct from test_adv_chan's unbuffered fan-in: here the channel is
     # BUFFERED and there are MANY producers/consumers, hammering buf_push /
@@ -1689,7 +1676,6 @@ def test_mn_buffered_fan_in_set_equality_no_dup_no_loss():
     assert set(got) == expected, "value set mismatch (lost or duplicated)"
 
 
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_mn_select_send_and_recv_mixed_no_loss():
     # Producers select-SEND into a set of channels; consumers select-RECV out.
     # Set-equality across the whole transfer proves the select CAS arbitration
@@ -1744,7 +1730,6 @@ def test_mn_select_send_and_recv_mixed_no_loss():
     assert set(sink) == set(range(total)), "select dropped or duplicated a value"
 
 
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_mn_mutex_serializes_under_work_stealing():
     # A stackweave_c.Mutex under M:N must give true mutual exclusion: a non-atomic
     # read-modify-write inside the critical section loses NO increments.
@@ -2603,7 +2588,6 @@ def test_mutex_locked_reflects_parked_locker_under_mn():
 #        buffer): set-equality no-dup-no-loss. Distinct from the first pass's
 #        BUFFERED fan-in -- this hammers the sender-park / recv-pull handoff.
 # ==========================================================================
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_mn_unbuffered_rendezvous_fan_in_out_set_equality():
     P, C, PER = 8, 8, 300
     ch = rc.Chan(0)                         # UNBUFFERED -> every send rendezvous
@@ -2640,7 +2624,6 @@ def test_mn_unbuffered_rendezvous_fan_in_out_set_equality():
     assert set(got) == expected, "unbuffered rendezvous lost or duplicated a value"
 
 
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_mn_select_competes_with_direct_recv_no_double_consume():
     # Half the consumers use select-recv, half use direct recv() on the SAME set
     # of channels. The CAS arbitration must keep set-equality even when a select
@@ -2715,7 +2698,6 @@ def test_mn_select_competes_with_direct_recv_no_double_consume():
 # A13 -- gather / JoinSet under M:N (the mn_hub_count() routing path the first
 #        pass only drove single-threaded), and a nested gather inside a hub.
 # ==========================================================================
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_gather_and_joinset_route_to_mn_under_run_n():
     out = {}
 
@@ -2736,7 +2718,6 @@ def test_gather_and_joinset_route_to_mn_under_run_n():
     assert out["joinset"] == [v * v + 1000 for v in range(8)], out["joinset"]
 
 
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_joinset_first_exception_by_spawn_order_under_mn():
     out = {}
 
@@ -3098,4 +3079,4 @@ def test_select_recv_delivered_value_refcount_conserved():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

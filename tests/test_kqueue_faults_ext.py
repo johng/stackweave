@@ -48,7 +48,7 @@ What this file ADDS (each test names the code branch it targets):
 
 All sockets are loopback/UDP-bound-or-socketpair, every fiber has a short
 deadline so the workload ALWAYS terminates regardless of the fault, and the
-point measured is the runtime's RESPONSE.  no-gil (PYTHON_GIL=0) only.
+point measured is the runtime's RESPONSE.
 """
 import os
 import re
@@ -57,13 +57,13 @@ import sys
 
 import pytest
 
+from adv_util import REPO, child_env, run_python
+
 pytestmark = pytest.mark.skipif(
     not sys.platform.startswith(("darwin", "freebsd", "openbsd", "netbsd")),
     reason="kqueue backend only")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.dirname(HERE)
-SRC = os.path.join(REPO, "src")
 WORKLOAD = os.path.join(HERE, "netpoll_inproc_fault_workload.py")
 
 # Darwin/BSD errno values (stable across macOS + the BSDs for these).
@@ -82,20 +82,17 @@ MAX_FAULTS_BACKOFF = TIMEOUT_MS * 6
 MAX_FAULTS_EINTR = TIMEOUT_MS * 200
 
 
-def _base_env(site, spec):
-    env = dict(os.environ)
-    env["PYTHONPATH"] = SRC
-    env["PYTHON_GIL"] = "0"                       # focus: free-threaded only
-    env["FAULT_SITE"] = site
-    env["FAULT_TIMEOUT_MS"] = str(TIMEOUT_MS)
-    env["STACKWEAVE_FAULT_" + site] = spec
-    return env
+def _fault_env(site, spec):
+    """The child-env overrides that arm fault point `site` with `spec`."""
+    return {"FAULT_SITE": site, "FAULT_TIMEOUT_MS": TIMEOUT_MS,
+            "STACKWEAVE_FAULT_" + site: spec}
 
 
 def _run_workload(site, spec, timeout=40):
     """Drive the shared single-thread workload (one parked fiber, deadline)."""
     return subprocess.run(
-        [sys.executable, WORKLOAD], cwd=REPO, env=_base_env(site, spec),
+        [sys.executable, WORKLOAD], cwd=REPO,
+        env=child_env(**_fault_env(site, spec)),
         timeout=timeout, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True)
 
@@ -104,10 +101,7 @@ def _run_snippet(site, spec, code, timeout=60):
     """Drive an inline -c workload that the shared file is too thin for
     (second-park-after-rollback, M:N hubs, heavy concurrency).  Same env
     contract + sentinels as the shared workload."""
-    return subprocess.run(
-        [sys.executable, "-c", code], cwd=REPO, env=_base_env(site, spec),
-        timeout=timeout, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        text=True)
+    return run_python(code, timeout=timeout, env=_fault_env(site, spec))
 
 
 def _field(out, key):
@@ -167,8 +161,7 @@ def test_register_once_error_surfaces_then_rolls_back(errno_):
     runloom_fd_bit_set would still see the bit set on the second register and
     return ENOMEM early (line 123-127), stranding the second parker forever."""
     code = r"""
-import os, socket, sys, threading, time
-sys.path.insert(0, "src")
+import os, socket, threading, time
 import stackweave_c
 SITE = "KQUEUE_CTL"
 TO = int(os.environ["FAULT_TIMEOUT_MS"])
@@ -243,8 +236,7 @@ def test_kqueue_create_once_under_mn(hubs, errno_):
     default-pool init fault under M:N to prove the M:N teardown path is clean
     on a hard init failure too."""
     code = r"""
-import os, socket, sys
-sys.path.insert(0, "src")
+import os, socket
 import stackweave, stackweave_c
 SITE = "KQUEUE_CREATE"
 HUBS = int(os.environ["RL_HUBS"])
@@ -275,11 +267,9 @@ print("RESULT=%r" % (result,))
 print("FAULTS=%d" % stackweave_c._fault_count(SITE))
 print("DONE")
 """
-    env = _base_env("KQUEUE_CREATE", "once:%d" % errno_)
-    env["RL_HUBS"] = str(hubs)
-    p = subprocess.run(
-        [sys.executable, "-c", code], cwd=REPO, env=env, timeout=60,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    env = _fault_env("KQUEUE_CREATE", "once:%d" % errno_)
+    env["RL_HUBS"] = hubs
+    p = run_python(code, timeout=60, env=env)
     _assert_terminated(p)
     assert int(_field(p.stdout, "FAULTS")) == 1, (
         "CREATE once never fired under M:N:\n%s" % p.stdout)
@@ -306,8 +296,7 @@ print("DONE")
 # ===========================================================================
 
 _HEAVY_CODE = r"""
-import os, socket, sys
-sys.path.insert(0, "src")
+import os, socket
 import stackweave_c
 SITE = os.environ["FAULT_SITE"]
 TO = int(os.environ["FAULT_TIMEOUT_MS"])
@@ -354,11 +343,9 @@ def test_heavy_concurrency_wait_always_backoff(npark):
     is faulted (always:EBADF) -- the deadline sweep must still wake every fiber
     (each returns a clean timeout 0) and the backoff must keep the fault count
     bounded.  A crash/hang under this load is a real bug to report."""
-    env = _base_env("KQUEUE_WAIT", "always:%d" % EBADF)
-    env["RL_NPARK"] = str(npark)
-    p = subprocess.run(
-        [sys.executable, "-c", _HEAVY_CODE], cwd=REPO, env=env, timeout=90,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    env = _fault_env("KQUEUE_WAIT", "always:%d" % EBADF)
+    env["RL_NPARK"] = npark
+    p = run_python(_HEAVY_CODE, timeout=90, env=env)
     _assert_terminated(p)
     assert int(_field(p.stdout, "NPARK")) == npark, p.stdout
     # Every fiber must have FINISHED (none stranded by the faulted pump).
@@ -381,11 +368,9 @@ def test_heavy_concurrency_ctl_always_oserror(npark):
     clean OSError(EINVAL) (the fd-bit is rolled back per fd, line 153) and every
     fiber must FINISH.  Stresses the per-fd CTL rollback path under load; a
     crash/hang/strand is a real bug to report."""
-    env = _base_env("KQUEUE_CTL", "always:%d" % EINVAL)
-    env["RL_NPARK"] = str(npark)
-    p = subprocess.run(
-        [sys.executable, "-c", _HEAVY_CODE], cwd=REPO, env=env, timeout=90,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    env = _fault_env("KQUEUE_CTL", "always:%d" % EINVAL)
+    env["RL_NPARK"] = npark
+    p = run_python(_HEAVY_CODE, timeout=90, env=env)
     _assert_terminated(p)
     assert int(_field(p.stdout, "NPARK")) == npark, p.stdout
     res = _field(p.stdout, "RESULT") or ""
@@ -413,8 +398,7 @@ def test_heavy_concurrency_ctl_always_oserror(npark):
 # ===========================================================================
 
 _PERHUB_CODE = r"""
-import socket, sys
-sys.path.insert(0, "src")
+import socket
 import stackweave, stackweave_c
 socks = []
 outcomes = []
@@ -460,4 +444,4 @@ def test_perhub_kqueue_create_failure(rep):
 
 
 if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

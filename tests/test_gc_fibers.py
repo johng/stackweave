@@ -3,7 +3,7 @@
 A parked fiber holds its Python locals on a SWAPPED-OUT stack: the
 suspended interpreter frames are NOT on the scheduler thread's current-frame
 chain, so the cyclic GC never traverses them as roots.  If the GC's
-reachability accounting (which on free-threaded 3.13t also involves deferred
+reachability accounting (which on free-threaded CPython also involves deferred
 / biased refcounting) failed to keep alive a reference cycle held only by
 such a parked fiber, gc.collect() would free live objects -> a
 use-after-free when the fiber resumes.
@@ -15,10 +15,10 @@ turn any premature free into a hard error.
 """
 import gc
 import sys
-import weakref
 import unittest
+import weakref
 
-sys.path.insert(0, "src")
+import pytest
 
 import stackweave
 import stackweave_c
@@ -145,4 +145,4 @@ class TestGCWithParkedGoroutines(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

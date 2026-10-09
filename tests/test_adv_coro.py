@@ -14,9 +14,9 @@ import pytest
 
 import stackweave
 import stackweave_c as rc
-from adv_util import hang_guard, needs_free_threading
 
-FT = needs_free_threading()
+from adv_util import hang_guard
+
 _DEVNULL = os.open(os.devnull, os.O_WRONLY)
 
 
@@ -113,7 +113,6 @@ def test_introspection_during_single_thread_churn():
     assert snap.get("stack_ok") is True
 
 
-@pytest.mark.skipif(not FT, reason="M:N needs GIL-disabled build")
 def test_introspection_during_mn_churn():
     # Poll the introspection surface from inside hubs while many gs run/park.
     from stackweave.sync import WaitGroup
@@ -143,4 +142,4 @@ def test_introspection_during_mn_churn():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

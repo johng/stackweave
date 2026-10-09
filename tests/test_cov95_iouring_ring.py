@@ -31,21 +31,12 @@ while still armed (cancel branch) and after the peer EOF terminated it
 (immediate-free branch).
 """
 import errno
-import os
-import subprocess
 import sys
 
 import pytest
 
 from adv_util import (kernel_needs_pbuf_resv_quirk, kernel_pbuf_ring_errno,
-                      needs_free_threading)
-
-FT = needs_free_threading()
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY = sys.executable
-
-pytestmark = pytest.mark.skipif(
-    not FT, reason="io_uring hub-ring paths are M:N + free-threaded only")
+                      run_python)
 
 
 def _iou_available():
@@ -68,17 +59,10 @@ TCPCONN_ENV = {"STACKWEAVE_TCPCONN_IOURING": "1"}
 
 
 def _run(script, env_extra=None, timeout=240):
-    # Generous timeout + skip-on-timeout: this box is shared with a CI runner
-    # that competes for io_uring + CPU, so a timeout is contention, not a bug.
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
-    env.pop("STACKWEAVE_IOURING_PBUF_RESV_QUIRK", None)
+    env = {"STACKWEAVE_IOURING_PBUF_RESV_QUIRK": None}
     env.update(env_extra or {})
     env.update(TCPCONN_ENV)
-    try:
-        return subprocess.run([PY, "-c", script], cwd=REPO, env=env,
-                              capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        pytest.skip("io_uring workload timed out (box under heavy load)")
+    return run_python(script, timeout=timeout, env=env)
 
 
 def _no_crash(p, label):
@@ -95,7 +79,6 @@ def _no_crash(p, label):
 # child failure with a traceback, never a wedged pytest).
 _PRE = r'''
 import sys, os, socket, errno
-sys.path.insert(0, "src")
 import stackweave
 import stackweave_c as rc
 from stackweave.sync import WaitGroup
@@ -662,4 +645,4 @@ def test_hub_ring_cancel_drives_ring_drain_cancel_and_wake():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

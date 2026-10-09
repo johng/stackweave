@@ -5,7 +5,10 @@ Lock/Event coordination, all written WITHOUT a single async def or
 await keyword.  Same scheduler as stackweave.aio; same throughput.
 """
 import socket
+import sys
 import unittest
+
+import pytest
 
 import stackweave.sync as ps
 
@@ -167,4 +170,4 @@ class TestPrimitives(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

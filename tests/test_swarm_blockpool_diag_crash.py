@@ -31,12 +31,11 @@ negative returncode.  Hang-prone scenarios are wrapped in hang_guard / finite
 timeouts.  Cooperative-overlap is proven with OverlapTracker (peak concurrency),
 not with a wall-clock budget -- a budget measures the machine, not the scheduler.
 
-Findings are encoded as @pytest.mark.xfail(strict=False, reason="FINDING: ...") or a
-subprocess test with a leading "# FINDING:" comment.  No C/Python source is modified.
+The defects this file found are fixed; their tests stay as regression guards
+(the comments marked "REGRESSION").
 """
 import os
 import signal
-import subprocess
 import sys
 import tempfile
 import textwrap
@@ -46,15 +45,8 @@ import pytest
 
 import stackweave
 import stackweave_c as rc
-from adv_util import (
-    hang_guard,
-    OverlapTracker,
-    raw_thread,
-    needs_free_threading,
-)
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_SRC = os.path.join(REPO, "src")
+from adv_util import hang_guard, OverlapTracker, raw_thread, run_python
 
 BACKEND = rc.backend()
 NETPOLL = rc.netpoll_backend()
@@ -72,10 +64,6 @@ FAULT_RCS = {-signal.SIGSEGV}
 if hasattr(signal, "SIGBUS"):
     FAULT_RCS |= {-signal.SIGBUS}
 
-mn_only = pytest.mark.skipif(
-    not needs_free_threading(),
-    reason="M:N needs the GIL-disabled (3.13t) build",
-)
 requires_guard = pytest.mark.skipif(
     not HAS_GUARD,
     reason="crash classification needs a POSIX guard-page backend (got %s)" % BACKEND,
@@ -88,23 +76,18 @@ requires_guard = pytest.mark.skipif(
 def run_child(body, extra_env=None, timeout=60, panic_silent=True):
     """Run `body` as a fresh child interpreter; return (returncode, combined_output).
 
-    The child imports the same in-tree source (PYTHONPATH=src, PYTHON_GIL=0).
+    The child imports the same in-tree source (run_python's child_env).
     A negative returncode is a fatal SIGNAL -- the containment we want for the
     crash tests (a SIGSEGV here is OBSERVED, not propagated into this process).
     """
     src = "import stackweave, stackweave_c, ctypes, sys, os, time\n" + textwrap.dedent(body)
-    env = dict(os.environ)
-    env["PYTHON_GIL"] = "0"
-    env["PYTHONPATH"] = _SRC + os.pathsep + env.get("PYTHONPATH", "")
-    if panic_silent:
+    env = {}
+    if panic_silent and "STACKWEAVE_GOROUTINE_PANIC" not in os.environ:
         # Keep fiber-panic noise off stderr unless a test wants it.
-        env.setdefault("STACKWEAVE_GOROUTINE_PANIC", "silent")
+        env["STACKWEAVE_GOROUTINE_PANIC"] = "silent"
     if extra_env:
         env.update(extra_env)
-    p = subprocess.run(
-        [sys.executable, "-c", src],
-        capture_output=True, text=True, env=env, timeout=timeout,
-    )
+    p = run_python(src, timeout=timeout, env=env)
     return p.returncode, (p.stdout + p.stderr)
 
 
@@ -246,7 +229,6 @@ class TestBlockingOverlap:
         assert sorted(done) == list(range(N))
         ov.assert_peak_at_least(2, "concurrent offload (single)")
 
-    @mn_only
     def test_mn_offloads_overlap(self):
         # Under M:N the same overlap must hold -- the worker wakes the fiber via
         # runloom_mn_wake_g, and a long blocking call on one fiber must not stall
@@ -270,7 +252,6 @@ class TestBlockingOverlap:
         assert sorted(done) == list(range(N))
         ov.assert_peak_at_least(2, "concurrent offload (mn)")
 
-    @mn_only
     def test_sibling_keeps_running_while_one_offloads(self):
         # A burner fiber must make progress WHILE another fiber's blocking()
         # call is offloaded -- the scheduler did not serialize on the offload.
@@ -304,7 +285,6 @@ class TestBlockingOverlap:
 #  Pool stress: MANY concurrent offloads -- the cross-thread stack-job surface
 # ===========================================================================
 class TestBlockingPoolStress:
-    @mn_only
     def test_many_concurrent_offloads_correct(self):
         # Far more concurrent offloads than the 8-worker default pool: jobs queue
         # on the MPSC and the worker pool drains them.  Each job record lives on
@@ -326,7 +306,6 @@ class TestBlockingPoolStress:
         assert results == [i * i + 1 for i in range(N)]
         assert rc._self_check(0) == 0
 
-    @mn_only
     def test_offload_storm_no_result_crosstalk(self):
         # Each fiber offloads a callable that sleeps a tiny jittered amount then
         # returns its OWN id.  A torn cross-thread read of job->result (the UAF
@@ -349,7 +328,6 @@ class TestBlockingPoolStress:
             stackweave.run(4, main)
         assert got == [("id", i) for i in range(N)]
 
-    @mn_only
     def test_repeated_offload_from_one_fiber(self):
         # One fiber offloads many times in sequence (re-using its own stack job
         # slot each park/unpark cycle) -- the job record is re-initialised every
@@ -373,7 +351,6 @@ class TestBlockingPoolStress:
 #  Offload racing teardown (subprocess: a hung teardown self-exits via timeout)
 # ===========================================================================
 class TestBlockingTeardownRace:
-    @mn_only
     def test_offloads_inflight_at_main_return(self):
         # main returns while offloads are still being submitted/completed; the
         # M:N drain must not exit with a job inflight (the inflight counter keeps
@@ -401,7 +378,6 @@ class TestBlockingTeardownRace:
         assert rc2 == 0, out
         assert "SELFCHECK_OK" in out, out
 
-    @mn_only
     def test_offload_then_immediate_fini_cycle(self):
         # Tight stackweave.run() cycles each spawning offloads, in a subprocess.
         # A teardown that joined the pool workers wrong (or freed a stack job a
@@ -428,7 +404,6 @@ class TestBlockingTeardownRace:
 #  Env-gated worker-pool modes (subprocess)
 # ===========================================================================
 class TestBlockingEnvModes:
-    @mn_only
     def test_single_worker_pool_still_completes(self):
         # STACKWEAVE_BLOCKPOOL_WORKERS=1 -> all offloads SERIALIZE through one worker.
         # Correctness must hold (only the concurrency bound is lost); no deadlock.
@@ -448,7 +423,6 @@ class TestBlockingEnvModes:
         assert rc2 == 0, out
         assert "DONE True" in out, out
 
-    @mn_only
     def test_zero_workers_falls_back_to_default(self):
         # WORKERS=0 is invalid -> the init clamps to the default pool; offloads
         # must still complete (no division-by-zero / no-worker hang).
@@ -468,7 +442,6 @@ class TestBlockingEnvModes:
         assert rc2 == 0, out
         assert "DONE 8" in out, out
 
-    @mn_only
     def test_oversized_worker_request_clamped(self):
         # WORKERS far above RUNLOOM_BLOCKPOOL_MAX (64) -> clamped, not an array
         # overrun (bp_threads[RUNLOOM_BLOCKPOOL_MAX]).  Must run cleanly.
@@ -583,8 +556,8 @@ class TestCrashClassification:
             stackweave.inspect.install_crash_handler("on")
             def boom():
                 stackweave_c._crash_selftest_overflow()   # unbounded real-C recursion
-            # 256 KiB: honored exactly on both 3.13 (16 KiB floor) and FT-3.14
-            # (256 KiB floor, the p226 fix in 289ecb99).
+            # 256 KiB: honored exactly -- it is the free-threaded 3.14 floor
+            # (the p226 fix in 289ecb99).
             stackweave_c.fiber(boom, 256 * 1024)
             stackweave_c.run()
         """, timeout=40)
@@ -594,7 +567,6 @@ class TestCrashClassification:
         assert "256 KiB" in out, out
         assert "=== stackweave fiber dump" in out, out
 
-    @mn_only
     def test_fiber_overflow_classified_under_mn(self):
         # The fault fires on a HUB thread -> proves the per-thread sigaltstack was
         # armed at hub start (runloom_coro_thread_init), so the handler can run.
@@ -931,7 +903,7 @@ class TestAgeTracking:
         assert rc2 == 0, out
         assert "AGE None" in out, out
 
-    # REGRESSION (was finding #8): the fiber snapshot now gates `age` on the
+    # REGRESSION: the fiber snapshot now gates `age` on the
     # introspect-timestamps flag, so a g recycled from the slab while tracking
     # is OFF -- carrying a stale state_since_ns from a prior ON incarnation --
     # reports age None instead of a nonsensical cross-incarnation value.  (When
@@ -939,7 +911,7 @@ class TestAgeTracking:
     def test_recycled_g_reports_no_stale_age_when_off(self):
         # Deterministic repro in a fresh subprocess: phase 1 ages a sleeper with
         # tracking ON; phase 2 turns tracking OFF and spawns a sleeper that
-        # recycles the prior g -- its age must be None, but currently isn't.
+        # recycles the prior g -- its age must be None.
         rc2, out = run_child("""
             def main1():
                 stackweave_c.set_introspect_timestamps(True)
@@ -968,7 +940,6 @@ class TestAgeTracking:
 # ===========================================================================
 #  Introspection RACE-SAFETY: hammer while hundreds of gs churn under M:N
 # ===========================================================================
-@mn_only
 class TestIntrospectRaceSafety:
     def test_hammer_introspection_under_churn(self):
         # Sampler fibers call EVERY introspection primitive in a tight loop WHILE
@@ -1238,7 +1209,6 @@ class TestForkReset:
 #  Fault injection: spawn faults WHILE introspecting/offloading (no crash)
 # ===========================================================================
 class TestFaultInjectionResilience:
-    @mn_only
     def test_spawn_g_fault_once_clean_error(self):
         # STACKWEAVE_FAULT_SPAWN_G=once:12 fails the FIRST g allocation with
         # ENOMEM(12).  Under stackweave.run that first allocation IS the main fiber
@@ -1304,7 +1274,6 @@ class TestFaultInjectionResilience:
 #  Env-gated M:N detector modes do not crash a blocking/introspect workload
 # ===========================================================================
 class TestEnvGatedModes:
-    @mn_only
     def test_sysmon_with_blocking_offloads(self):
         # The sysmon wedge detector + a blocking offload (a DETACHED hub during
         # the offloaded call) + introspection must coexist without a crash.
@@ -1326,10 +1295,9 @@ class TestEnvGatedModes:
         assert rc2 == 0, out
         assert "DONE 10 0" in out, out
 
-    @mn_only
-    def test_handoff_pool_with_offloads(self):
-        # Handoff rescue ON + offloads (a wedged-looking DETACHED hub) must not
-        # crash; the rescue path interacts with the blockpool-parked fibers.
+    def test_offloads_from_fibers_on_four_hubs(self):
+        # Offloads park their fibers in the blockpool and leave a hub looking
+        # wedged (DETACHED) meanwhile; the run must still finish cleanly.
         rc2, out = run_child("""
             done = []
             def main():
@@ -1344,8 +1312,7 @@ class TestEnvGatedModes:
             print("DONE", len(done))
             assert stackweave_c._self_check(0) == 0
             print("OK")
-        """, extra_env={"STACKWEAVE_HANDOFF": "1", "STACKWEAVE_HANDOFF_POOL": "2"},
-            timeout=40)
+        """, timeout=40)
         assert rc2 == 0, out
         assert "DONE 12" in out and "OK" in out, out
 
@@ -1353,7 +1320,6 @@ class TestEnvGatedModes:
 # ===========================================================================
 #  Cross-thread safety: introspection from a FOREIGN OS thread
 # ===========================================================================
-@mn_only
 class TestForeignThreadIntrospection:
     def test_foreign_thread_reads_registry_during_run(self):
         # A genuine OS thread (raw_thread) hammers the introspection primitives
@@ -1423,7 +1389,7 @@ class TestForeignThreadIntrospection:
 #      set_deadlock_mode/set_max_fibers/set_introspect_timestamps(non-int),
 #      dump_fibers/_diag_dump(bad fd) -> no crash, install_traceback_signal(bad
 #      signum) -> OSError, install_crash_handler(bad level) -> default,
-#      install_crash_handler(unwritable file) -> silent drop (FINDING).
+#      install_crash_handler(unopenable file) -> OSError.
 #    * fiber_stack of a blockpool-PARKED (PARKED_SAFE) fiber.
 #    * deadlock WARN mode (default 1) end-to-end -- only off/raise were covered.
 #    * SPAWN_TSTATE fault site (the 3rd spawn fault, untested).
@@ -1467,7 +1433,6 @@ class TestBlockingSpuriousWake:
         assert cap.get("res") == 7
         assert rc._self_check(0) == 0
 
-    @mn_only
     def test_spurious_wake_under_mn_does_not_uaf(self):
         # Same, under M:N (the wake routes through runloom_mn_wake_g on the g's
         # recorded hub).  stackweave.fiber returns None under M:N, so each offloader
@@ -1541,7 +1506,6 @@ class TestBlockingResultEdges:
             return None
         assert _drive_single(body) == "KI"
 
-    @mn_only
     def test_kwargs_forwarded_under_mn(self):
         # kwargs forwarding through the pool was only proven inline / single
         # thread; prove it under a real hub offload too.
@@ -1562,7 +1526,6 @@ class TestBlockingResultEdges:
             stackweave.run(2, main)
         assert got["r"] == (1, 2, 3, 9)
 
-    @mn_only
     def test_nested_blocking_runs_inline_no_deadlock(self):
         # blocking() called from INSIDE an offloaded worker: the worker is off
         # any fiber (g == NULL), so the inner blocking() must fall back to
@@ -1593,7 +1556,6 @@ class TestBlockingResultEdges:
 #  blocking(): worker GILState + free-threaded refcount stress with OBJECTS
 # ---------------------------------------------------------------------------
 class TestBlockingObjectStress:
-    @mn_only
     def test_concurrent_workers_build_objects_no_crosstalk(self):
         # Each worker BUILDS a distinct Python object graph (list of tuples) on
         # a pool thread under its own PyGILState_Ensure, returns it across the
@@ -1626,7 +1588,6 @@ class TestBlockingObjectStress:
         assert flat == exp_flat
         assert rc._self_check(0) == 0
 
-    @mn_only
     def test_worker_result_identity_preserved_across_threads(self):
         # A worker returns a SHARED sentinel object; the parked fiber must get
         # the SAME object back (identity), proving the cross-thread hand-off of
@@ -1705,10 +1666,10 @@ class TestDiagArgValidation:
 
 
 # ---------------------------------------------------------------------------
-#  FINDING: install_crash_handler(file=<unopenable>) silently drops the file
+#  install_crash_handler(file=<unopenable>) raises instead of dropping the file
 # ---------------------------------------------------------------------------
-def test_crash_report_file_unopenable_is_silently_ignored():
-    # REGRESSION (was finding #19): install_crash_handler with an explicit
+def test_crash_report_file_unopenable_raises_oserror():
+    # REGRESSION: install_crash_handler with an explicit
     # report `file=` that CANNOT be opened (parent dir does not exist) now
     # raises OSError instead of silently dropping the open() failure and
     # installing without the file -- matching install_traceback_signal's
@@ -1817,7 +1778,6 @@ class TestSpawnTstateFault:
         tail = out.split("RESULT", 1)[1].split()
         assert tail[1] == "True" and tail[2] == "True", out
 
-    @mn_only
     def test_spawn_tstate_fault_once_clean_error_mn(self):
         rc2, out = run_child("""
             raised = False
@@ -1867,7 +1827,6 @@ class TestResetAfterForkIdempotent:
 # ---------------------------------------------------------------------------
 @requires_guard
 class TestConcurrentCrash:
-    @mn_only
     def test_two_fibers_overflow_concurrently_serialize_and_die_once(self):
         # Two fibers on two hubs both run unbounded C recursion off small stacks,
         # faulting into their guard pages at ~the same time.  The crash handler's
@@ -1936,7 +1895,6 @@ class TestStatsDuringOffload:
 #  blocking() racing reset/teardown harder: a partial-completion main return
 # ---------------------------------------------------------------------------
 class TestBlockingTeardownHarder:
-    @mn_only
     def test_main_returns_with_all_offloads_still_pending(self):
         # main() spawns offloaders that each sleep LONGER than main's own brief
         # wait, then returns -- so EVERY offload is still in flight at main()
@@ -1960,7 +1918,6 @@ class TestBlockingTeardownHarder:
         assert rc2 == 0, out
         assert "DONE 30" in out and "SELFCHECK_OK" in out, out
 
-    @mn_only
     def test_single_worker_pool_serializes_but_drains_at_teardown(self):
         # WORKERS=1 + every offload pending at main-return: the single worker
         # must still drain all 20 jobs SERIALLY before run() returns (no job
@@ -1982,4 +1939,4 @@ class TestBlockingTeardownHarder:
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

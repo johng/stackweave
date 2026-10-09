@@ -19,8 +19,11 @@ run on epoll / kqueue / select alike.
 """
 import signal
 import socket
+import sys
 import time
 import unittest
+
+import pytest
 
 import stackweave.monkey as monkey
 
@@ -44,7 +47,7 @@ def _run_fiber(body):
     def wrapper():
         try:
             body(box)
-        except BaseException as e:   # noqa: BLE001 -- record, don't swallow silently
+        except BaseException:   # noqa: BLE001 -- record, don't swallow silently
             box["result"] = "ESCAPED_GOROUTINE"
             raise
     try:
@@ -162,4 +165,4 @@ class TestSignalInterruptsCooperativeCall(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

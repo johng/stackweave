@@ -38,22 +38,12 @@ runs are wrapped in a wall-clock timeout to prove no hang -- pure scheduler
 work-stealing, no io_uring / sockets, so there is no backpressure-deadlock
 risk.
 """
-import os
-import subprocess
 import sys
 import textwrap
 
 import pytest
 
-from adv_util import needs_free_threading
-
-FT = needs_free_threading()
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY = sys.executable
-
-pytestmark = pytest.mark.skipif(
-    not FT, reason="cldeque work-stealing is only exercised by the GIL-disabled "
-                   "M:N runtime (run(N>=2) with real idle-hub steals)")
+from adv_util import run_python
 
 
 def _run_py(src, env_extra=None, timeout=90):
@@ -65,13 +55,8 @@ def _run_py(src, env_extra=None, timeout=90):
     deque legitimately strands gs on one hub while neighbours drain it) don't
     pollute stderr we surface on failure.
     """
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src",
-               STACKWEAVE_SYSMON_QUIET="1")
-    if env_extra:
-        env.update(env_extra)
-    return subprocess.run([PY, "-c", textwrap.dedent(src)],
-                          cwd=REPO, env=env, capture_output=True, text=True,
-                          timeout=timeout)
+    return run_python(textwrap.dedent(src), timeout=timeout,
+                      env={"STACKWEAVE_SYSMON_QUIET": "1", **(env_extra or {})})
 
 
 # ---------------------------------------------------------------------------
@@ -232,4 +217,4 @@ def test_work_stealing_soak_exact_once():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

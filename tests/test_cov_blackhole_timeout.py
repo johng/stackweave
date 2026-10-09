@@ -32,8 +32,10 @@ import sys
 import textwrap
 import unittest
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SRC = os.path.join(REPO, "src")
+import pytest
+
+from adv_util import child_env, run_python
+
 PY = sys.executable
 
 # Each scenario runs stackweave.run() in its own subprocess (a clean runtime per
@@ -42,7 +44,6 @@ PY = sys.executable
 # netem 100% loss + server close) over the silent-hold variant.
 WORKER = textwrap.dedent("""\
     import os, sys, subprocess, time
-    sys.path.insert(0, {src!r})
     import stackweave, stackweave_c
     stackweave.monkey.patch()
     import socket
@@ -50,7 +51,7 @@ WORKER = textwrap.dedent("""\
     BLACKHOLE = os.environ.get("PG_BLACKHOLE") == "1"
     if BLACKHOLE:
         subprocess.run(["ip", "link", "set", "lo", "up"], check=True)
-    out = {{}}
+    out = {}
 
     def worker():
         srv = socket.socket(); srv.bind(("127.0.0.1", 0)); srv.listen(1)
@@ -80,11 +81,7 @@ WORKER = textwrap.dedent("""\
 
     stackweave.run(2, main_fn=lambda: stackweave.fiber(worker))
     print("RESULT", out.get("r"), "%.2f" % out.get("dt", -1))
-    """).format(src=SRC)
-
-
-def _base_env():
-    return dict(os.environ, PYTHON_GIL="0", PYTHON_TLBC="0", PYTHONPATH=SRC)
+    """)
 
 
 def _parse(stdout):
@@ -98,8 +95,7 @@ def _parse(stdout):
 class TestBlackholeTimeout(unittest.TestCase):
     def test_silent_established_reader_times_out(self):
         """No privilege: peer silent after partial data, timer must free the reader."""
-        r = subprocess.run([PY, "-c", WORKER], capture_output=True, text=True,
-                           timeout=60, env=_base_env())
+        r = run_python(WORKER, timeout=60, env={"PYTHON_TLBC": "0"})
         verdict, dt = _parse(r.stdout)
         self.assertEqual(verdict, "TIMEOUT",
                          "reader not released by its own timer on a silent "
@@ -125,7 +121,7 @@ class TestBlackholeTimeout(unittest.TestCase):
             capture_output=True, text=True)
         if probe.returncode != 0:
             self.skipTest("no userns netns / netem here: " + probe.stderr.strip()[-200:])
-        env = dict(_base_env(), PG_BLACKHOLE="1")
+        env = child_env(PYTHON_TLBC="0", PG_BLACKHOLE="1")
         r = subprocess.run(["unshare", "-rn", PY, "-c", WORKER],
                            capture_output=True, text=True, timeout=90, env=env)
         verdict, dt = _parse(r.stdout)
@@ -139,4 +135,4 @@ class TestBlackholeTimeout(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

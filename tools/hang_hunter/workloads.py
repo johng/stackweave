@@ -50,7 +50,7 @@ def _knobs(rng):
     # Flight recorder (#1): record the scheduler event ring, and have the
     # workload install the crash handler (HH_CRASH) so any crash carries its
     # recent per-thread timeline.
-    env = {"PYTHON_GIL": "0", "STACKWEAVE_GIL": "0",
+    env = {"PYTHON_GIL": "0",
            "STACKWEAVE_DEBUG": "ring", "HH_CRASH": "on"}
     if rng.random() < 0.3:
         env["STACKWEAVE_SYSMON"] = "0"
@@ -93,7 +93,7 @@ def stress_job(rng, py):
 
 def hypo_job(rng, py):
     sd = rng.randrange(1, 2 ** 31)
-    env = {"PYTHON_GIL": "0", "STACKWEAVE_GIL": "0",
+    env = {"PYTHON_GIL": "0",
            "STACKWEAVE_DEBUG": "ring", "HH_CRASH": "on",
            "HH_MAX_EXAMPLES": str(rng.choice([50, 100, 150]))}
     argv = [py, os.path.join(WL, "hypo_model.py"), str(sd)]

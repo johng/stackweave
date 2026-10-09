@@ -19,15 +19,14 @@ different number of levels through another C path, shift where their yields
 fall, and some always land in the window.  Each case runs in a subprocess,
 since a regression here is a crash.
 """
-import os
-import pathlib
 import signal
-import subprocess
 import sys
 
 import pytest
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
+from adv_util import run_python
+from known_gaps import KNOWN_GAP
+
 NOTE = "copy-grow is off"
 
 PRELUDE = """
@@ -85,14 +84,11 @@ report()
 
 
 def _run(code, **env):
-    full = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
     # Pinned: the knob under test, and the stack arena (with it on, the old
     # stack stays mapped after a grow and a broken grow need not crash).
-    full.pop("STACKWEAVE_STACK_GROW", None)
-    full.pop("STACKWEAVE_STACK_ARENA", None)
+    full = {"STACKWEAVE_STACK_GROW": None, "STACKWEAVE_STACK_ARENA": None}
     full.update(env)
-    p = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=full,
-                       capture_output=True, text=True, timeout=120)
+    p = run_python(code, timeout=120, env=full)
     return p.returncode, p.stdout, p.stderr
 
 
@@ -115,10 +111,9 @@ def test_a_fiber_yielding_deep_in_c_recursion_keeps_its_stack(case):
     assert err.count(NOTE) == 1, err[-2000:]
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="KNOWN BROKEN: copy-grow leaves pointers into the old "
-                          "stack and the fiber SIGSEGVs; off unless "
-                          "STACKWEAVE_STACK_GROW is set")
+@KNOWN_GAP("copy-grow leaves pointers into the old stack and the fiber "
+           "SIGSEGVs; off unless STACKWEAVE_STACK_GROW is set",
+           raises=AssertionError)
 @pytest.mark.parametrize("case", list(CASES))
 def test_copy_grow_when_turned_on(case):
     rc, out, err = _run(CASES[case], STACKWEAVE_STACK_GROW="1")
@@ -135,3 +130,7 @@ def test_copy_grow_when_turned_on(case):
                     % (-rc, err[-1000:]))
     # The known break: SIGSEGV/SIGBUS once the fiber resumes grown.
     assert rc == 0, ("copy-grow crashed the fiber", rc, out, err[-500:])
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

@@ -26,6 +26,8 @@ import sys
 import time
 import unittest
 
+import pytest
+
 import stackweave
 import stackweave.monkey
 import stackweave_c
@@ -392,4 +394,4 @@ class TestOsWait34(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

@@ -14,7 +14,10 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   migration keeps its code and env var, is guarded off with a one-time stderr
   note, and has strict xfails that assert it actually ran (`[GON_TIMING]` for
   bulk spawn), after the test's own correctness checks. Known gaps are xfail,
-  never skip (`tests/conftest.py`). Fixing one turns its xfails into XPASSes;
+  never skip, and every one is marked at its test with a `tests/known_gaps.py`
+  helper (`KNOWN_GAP`, `MIGRATION_GAP`, `INTERMITTENT`, `SEEDED_MN_TODO`,
+  `GON_BULK_GAP`; conftest rejects a bare xfail, and `pytest -m known_gap`
+  lists them). Fixing one turns its xfails into XPASSes;
   then drop the xfails and keep a positive it-ran check (the loop backend's
   `assert_iouring_loop_ran` in `tests/adv_util.py` reads the hub ring-wait
   count).
@@ -52,7 +55,13 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   every `tests/test_greenlet_interop.py` test time out. Hosted CI doesn't
   install greenlet, so that file skips there.
 - Run the suite via `tests/run_isolated.py` (one file/subprocess — in-process
-  `pytest tests/` flakes on cross-file state leaks).
+  `pytest tests/` flakes on cross-file state leaks). It and `tests/conftest.py`
+  refuse to run unless migration is sound: the GIL off, and both the
+  interpreter and the extension built with both patches. Nothing in the suite
+  skips for want of free threading or M:N any more, so a stock run fails
+  loudly instead of passing on a fraction of the tests. A child interpreter
+  goes through `adv_util.run_python()` / `child_env()`, which fail the test on
+  a timeout rather than skip it.
 
 ## Gating
 - **Locally: `scripts/check_all_fast.sh` before any merge**;
@@ -263,8 +272,8 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   `STACKWEAVE_SIM_MN` runs are refused by `mn_init`: woken fibers run from the
   global run-queue, which the seeded baton does not order, so replay would not
   be deterministic. The controller is compiled in behind `RUNLOOM_MN_CTRL`
-  (default 0) until it is re-implemented; its tests are skipped via
-  `_SEEDED_MN_TODO` in `tests/conftest.py`.
+  (default 0) until it is re-implemented; its tests are `SEEDED_MN_TODO`
+  xfails (`tests/known_gaps.py`).
 - **A hub's io_uring ring has one producer: its own hub thread.** Under the
   loop backend (`STACKWEAVE_IOURING_LOOP`) a fiber may write SQEs only into the
   ring of the hub it runs on NOW, since every park is a possible migration.

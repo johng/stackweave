@@ -86,16 +86,12 @@ chase (see the structured report's `exclusions` for the precise category):
     DEFENSIVE.
 """
 import os
-import signal
-import subprocess
 import sys
 
 import pytest
 
-import stackweave_c as rc
+from adv_util import run_python
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY = sys.executable
 
 def _run_child(body, timeout=200):
     """Run `body` in a fresh clean-exit child (so gcov flushes its counters).
@@ -103,11 +99,9 @@ def _run_child(body, timeout=200):
     The child starts with NO STACKWEAVE_CRASH_WAIT_SECS, so a parent's env never
     skews how long a "wait" install blocks.
     """
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
-    env.pop("STACKWEAVE_CRASH_WAIT_SECS", None)
     src = "import os, signal, time\nimport stackweave, stackweave_c as rc\n" + body
-    return subprocess.run([PY, "-c", src], cwd=REPO, env=env,
-                          capture_output=True, text=True, timeout=timeout)
+    return run_python(src, timeout=timeout,
+                      env={"STACKWEAVE_CRASH_WAIT_SECS": None})
 
 
 # --------------------------------------------------------------------------
@@ -135,10 +129,7 @@ stackweave.inspect.uninstall_crash_handler()
 assert rc.crash_handler_installed() is False, "uninstall left handler armed"
 print("WAIT_INSTALL_OK", WAIT_FLAGS, flags2)
 """
-    try:
-        p = _run_child(body)
-    except subprocess.TimeoutExpired:
-        pytest.skip("wait-install subprocess timed out (shared-box contention)")
+    p = _run_child(body)
     assert p.returncode == 0, "child failed rc=%d\n%s" % (p.returncode, p.stderr[-1500:])
     assert "WAIT_INSTALL_OK" in p.stdout, (p.stdout, p.stderr[-800:])
     # The "wait" flags and "gdb" flags must differ from each other AND both be
@@ -178,10 +169,7 @@ stackweave.inspect.uninstall_crash_handler()
 os.kill(os.getpid(), signal.SIGCONT)
 print("SIGCONT_AFTER_UNINSTALL_OK")
 """
-    try:
-        p = _run_child(body)
-    except subprocess.TimeoutExpired:
-        pytest.skip("SIGCONT subprocess timed out (shared-box contention)")
+    p = _run_child(body)
     # The whole point: the process must EXIT CLEANLY (rc 0), not be terminated
     # by SIGCONT -- crash_cont_handler returned normally.
     assert p.returncode == 0, "child died rc=%d (SIGCONT handler not harmless?)\n%s" % (
@@ -215,10 +203,7 @@ assert rc.crash_handler_installed() is False
 os.kill(os.getpid(), signal.SIGCONT)
 print("SIGCONT_RESTORE_OK")
 """
-    try:
-        p = _run_child(body)
-    except subprocess.TimeoutExpired:
-        pytest.skip("sigcont-restore subprocess timed out (shared-box contention)")
+    p = _run_child(body)
     assert p.returncode == 0, "child failed rc=%d\n%s" % (p.returncode, p.stderr[-1500:])
     assert "SIGCONT_RESTORE_OK" in p.stdout, (p.stdout, p.stderr[-800:])
 
@@ -248,10 +233,7 @@ assert rc.crash_handler_installed() is True
 stackweave.inspect.uninstall_crash_handler()
 print("REPORT_REINSTALL_OK")
 """.format(a=fileA, b=fileB)
-    try:
-        p = _run_child(body)
-    except subprocess.TimeoutExpired:
-        pytest.skip("report-reinstall subprocess timed out (shared-box contention)")
+    p = _run_child(body)
     assert p.returncode == 0, "child failed rc=%d\n%s" % (p.returncode, p.stderr[-1500:])
     assert "REPORT_REINSTALL_OK" in p.stdout, (p.stdout, p.stderr[-800:])
     # Both files must have been created on disk -- proof each install actually
@@ -286,10 +268,7 @@ for _ in range(50):
 assert rc.crash_handler_installed() is False
 print("REPORT_CLOSE_OK")
 """.format(f=f)
-    try:
-        p = _run_child(body)
-    except subprocess.TimeoutExpired:
-        pytest.skip("report-close subprocess timed out (shared-box contention)")
+    p = _run_child(body)
     assert p.returncode == 0, "child failed rc=%d\n%s" % (p.returncode, p.stderr[-1500:])
     assert "REPORT_CLOSE_OK" in p.stdout, (p.stdout, p.stderr[-800:])
 
@@ -306,9 +285,6 @@ print("REPORT_CLOSE_OK")
 # --------------------------------------------------------------------------
 def test_mn_hub_disarm_runs_full_body():
     body = r"""
-import sys
-if not (hasattr(sys, "_is_gil_enabled") and not sys._is_gil_enabled()):
-    print("SKIP_NO_FT"); raise SystemExit(0)
 # Install BEFORE any hub thread starts so each hub arms its sigaltstack.
 flags = stackweave.inspect.install_crash_handler("on")
 assert flags and rc.crash_handler_installed() is True
@@ -332,12 +308,7 @@ assert ran == N, ("not all fibers ran", ran)
 stackweave.inspect.uninstall_crash_handler()
 print("MN_DISARM_OK", ran)
 """
-    try:
-        p = _run_child(body, timeout=200)
-    except subprocess.TimeoutExpired:
-        pytest.skip("mn-disarm subprocess timed out (shared-box contention)")
-    if "SKIP_NO_FT" in p.stdout:
-        pytest.skip("M:N hub disarm needs a GIL-disabled (free-threaded) build")
+    p = _run_child(body, timeout=200)
     assert p.returncode == 0, "child failed rc=%d\n%s" % (p.returncode, p.stderr[-1500:])
     assert "MN_DISARM_OK 20" in p.stdout, (p.stdout, p.stderr[-800:])
     # Also assert the hub teardown emitted no self-check / leak diagnostics --
@@ -361,9 +332,10 @@ r = stackweave.inspect.install_crash_handler("off")
 assert rc.crash_handler_installed() is False, "off-level did not uninstall"
 print("OFF_GDB_OK", fg, repr(r))
 """
-    try:
-        p = _run_child(body)
-    except subprocess.TimeoutExpired:
-        pytest.skip("off/gdb subprocess timed out (shared-box contention)")
+    p = _run_child(body)
     assert p.returncode == 0, "child failed rc=%d\n%s" % (p.returncode, p.stderr[-1500:])
     assert "OFF_GDB_OK" in p.stdout, (p.stdout, p.stderr[-800:])
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

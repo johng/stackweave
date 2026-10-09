@@ -13,7 +13,10 @@ inputs:
   * misuse: lock release without acquire, send on closed chan
 """
 import asyncio
+import sys
 import unittest
+
+import pytest
 
 import stackweave_c
 import stackweave.aio as paio
@@ -438,4 +441,4 @@ class TestRunReentrancy(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

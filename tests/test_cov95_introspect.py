@@ -59,16 +59,13 @@ structured report's `exclusions` for the precise category of each):
     ``malloc`` there has no STACKWEAVE_FAULT_ hook / interposer site.  OOM.
 """
 import os
-import subprocess
 import sys
 
 import pytest
 
 import stackweave_c as rc
-from adv_util import hang_guard
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY = sys.executable
+from adv_util import hang_guard, run_python
 
 # Every reason whose runloom_wait_reason_name arm the normal corpus leaves cold.
 # (SYNC / FUTURE / WAITGROUP are already covered, so they are not exercised here.)
@@ -150,7 +147,6 @@ def test_dump_labels_every_dark_wait_reason():
 # --------------------------------------------------------------------------
 _TS_CHILD = r"""
 import os, sys
-sys.path.insert(0, 'src')
 import stackweave_c as rc
 
 rc.set_introspect_timestamps(True)
@@ -182,14 +178,9 @@ sys.stdout.write("INTROSPECT_TIME_OK\n")
 
 
 def test_introspect_timestamps_enable_age_tracking():
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
     # Make sure the cap env doesn't leak in from a parent run and skew this.
-    env.pop("STACKWEAVE_MAX_GOROUTINES", None)
-    try:
-        p = subprocess.run([PY, "-c", _TS_CHILD], cwd=REPO, env=env,
-                           capture_output=True, text=True, timeout=200)
-    except subprocess.TimeoutExpired:
-        pytest.skip("introspect-timestamps subprocess timed out (shared-box contention)")
+    p = run_python(_TS_CHILD, timeout=200,
+                   env={"STACKWEAVE_MAX_GOROUTINES": None})
     assert p.returncode == 0, "introspect-timestamps child failed rc=%d\n%s" % (
         p.returncode, p.stderr[-1500:])
     assert "INTROSPECT_TIME_OK" in p.stdout, (p.stdout, p.stderr[-800:])
@@ -203,7 +194,6 @@ def test_introspect_timestamps_enable_age_tracking():
 # --------------------------------------------------------------------------
 _MAXG_CHILD = r"""
 import os, sys
-sys.path.insert(0, 'src')
 import stackweave_c as rc
 
 CAP = {cap}
@@ -239,14 +229,8 @@ sys.stdout.write("MAX_GOROUTINES_OK\n")
 
 def test_max_fibers_env_installs_admission_gate():
     cap = 6
-    env = dict(os.environ, STACKWEAVE_MAX_GOROUTINES=str(cap),
-               PYTHON_GIL="0", PYTHONPATH="src")
-    try:
-        p = subprocess.run([PY, "-c", _MAXG_CHILD.format(cap=cap)],
-                           cwd=REPO, env=env, capture_output=True, text=True,
-                           timeout=200)
-    except subprocess.TimeoutExpired:
-        pytest.skip("MAX_GOROUTINES subprocess timed out (shared-box contention)")
+    p = run_python(_MAXG_CHILD.format(cap=cap), timeout=200,
+                   env={"STACKWEAVE_MAX_GOROUTINES": cap})
     assert p.returncode == 0, "STACKWEAVE_MAX_GOROUTINES child failed rc=%d\n%s" % (
         p.returncode, p.stderr[-1500:])
     assert "MAX_GOROUTINES_OK" in p.stdout, (p.stdout, p.stderr[-800:])
@@ -261,7 +245,6 @@ def test_max_fibers_env_installs_admission_gate():
 # --------------------------------------------------------------------------
 _MAXG_BAD_CHILD = r"""
 import os, sys
-sys.path.insert(0, 'src')
 import stackweave_c as rc
 assert rc.get_max_fibers() == 0, (
     "non-numeric STACKWEAVE_MAX_GOROUTINES installed a cap: %d" % rc.get_max_fibers())
@@ -283,17 +266,12 @@ sys.stdout.write("MAX_GOROUTINES_BAD_OK\n")
 
 
 def test_max_fibers_env_invalid_is_unlimited():
-    env = dict(os.environ, STACKWEAVE_MAX_GOROUTINES="notanumber",
-               PYTHON_GIL="0", PYTHONPATH="src")
-    try:
-        p = subprocess.run([PY, "-c", _MAXG_BAD_CHILD], cwd=REPO, env=env,
-                           capture_output=True, text=True, timeout=200)
-    except subprocess.TimeoutExpired:
-        pytest.skip("MAX_GOROUTINES(bad) subprocess timed out (shared-box contention)")
+    p = run_python(_MAXG_BAD_CHILD, timeout=200,
+                   env={"STACKWEAVE_MAX_GOROUTINES": "notanumber"})
     assert p.returncode == 0, "bad STACKWEAVE_MAX_GOROUTINES child failed rc=%d\n%s" % (
         p.returncode, p.stderr[-1500:])
     assert "MAX_GOROUTINES_BAD_OK" in p.stdout, (p.stdout, p.stderr[-800:])
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

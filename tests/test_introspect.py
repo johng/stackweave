@@ -1,17 +1,18 @@
 """Goroutine registry + dump (stackweave.inspect / stackweave_c introspection)."""
 import io
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
 
 import pytest
 
-sys.path.insert(0, "src")
-
 import stackweave
 import stackweave_c
 import stackweave.inspect as gi
+
+from adv_util import child_env
 
 
 class TestCountAndRegistry(unittest.TestCase):
@@ -225,19 +226,11 @@ class TestDump(unittest.TestCase):
         self.assertIn("fiber", cap["text"])
 
 
-import subprocess
-
-
 def _run_script(code, env_extra=None):
     """Run `code` in a fresh interpreter (full isolation: a deadlock leaves
     fibers parked, which mustn't pollute the test process).  Returns
     (returncode, stdout+stderr)."""
-    env = dict(os.environ)
-    env["PYTHON_GIL"] = "0"
-    env["STACKWEAVE_SYSMON"] = "0"
-    env["PYTHONPATH"] = "src" + os.pathsep + env.get("PYTHONPATH", "")
-    if env_extra:
-        env.update(env_extra)
+    env = child_env(STACKWEAVE_SYSMON="0", **(env_extra or {}))
     p = subprocess.run([sys.executable, "-c", code], env=env,
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                        timeout=30)
@@ -402,4 +395,4 @@ class TestOutsideGoroutine(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

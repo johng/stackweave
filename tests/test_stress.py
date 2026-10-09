@@ -17,9 +17,10 @@ import sys
 import time
 import unittest
 
+import pytest
+
 import stackweave_c
 import stackweave.aio as paio
-import stackweave.sync as ps
 
 
 _FULL = os.environ.get("STACKWEAVE_RUN_STRESS", "").strip() not in ("", "0", "no", "false")
@@ -417,4 +418,4 @@ class TestNetworkStress(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

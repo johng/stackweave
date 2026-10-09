@@ -14,9 +14,12 @@ import contextlib
 import errno
 import os
 import socket
+import sys
 import tempfile
 import time
 import unittest
+
+import pytest
 
 import stackweave
 import stackweave.monkey
@@ -240,4 +243,4 @@ class TestSendfileFaults(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

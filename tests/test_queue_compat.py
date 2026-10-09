@@ -15,9 +15,12 @@ needs the dedicated CoSimpleQueue replacement.  These tests cover:
     delivered exactly once (no loss, no duplication, no lost wakeups).
 """
 import queue
+import sys
 import threading
 import time
 import unittest
+
+import pytest
 
 import stackweave
 import stackweave.monkey
@@ -249,4 +252,4 @@ class TestQueueOrdering(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

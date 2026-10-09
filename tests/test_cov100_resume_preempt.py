@@ -31,19 +31,15 @@ cleanup branches L190-193, L329-331) and the wait_armed-shadowed startup guard
 L278 are documented in the structured report; there is no fault-injection site
 for PyMem_* and no safe trigger.
 """
-import os
 import subprocess
 import sys
 
 import pytest
 
-from adv_util import needs_free_threading
+from adv_util import REPO, child_env
+from known_gaps import SEEDED_MN_TODO
 
-FT = needs_free_threading()
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY = sys.executable
-
-pytestmark = pytest.mark.skipif(not FT, reason="controlled M:N baton needs GIL-disabled build")
+pytestmark = SEEDED_MN_TODO
 
 
 def _run_workload(env_extra, hubs=4, timeout=90):
@@ -51,10 +47,10 @@ def _run_workload(env_extra, hubs=4, timeout=90):
 
     Returns the CompletedProcess.  The caller asserts rc==0 + WORKLOAD_OK so the
     subprocess is known to have EXITED CLEANLY (gcov counters flushed)."""
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src", **env_extra)
     return subprocess.run(
-        [PY, "tests/cov_workload.py", "--hubs", str(hubs)],
-        cwd=REPO, env=env, capture_output=True, text=True, timeout=timeout)
+        [sys.executable, "tests/cov_workload.py", "--hubs", str(hubs)],
+        cwd=REPO, env=child_env(**env_extra), capture_output=True, text=True,
+        timeout=timeout)
 
 
 def _assert_ok(p, label):
@@ -227,4 +223,4 @@ def test_pct_depth_one_no_change_points():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

@@ -16,6 +16,7 @@ timeout); a clean finish IS the assertion.  Mirrors the deterministic repro: eac
 round closes its sockets and the next round reuses the fd numbers.
 """
 import socket
+import sys
 
 import pytest
 
@@ -112,3 +113,7 @@ def test_udp_recvfrom_after_tcp_churn_no_hang():
             srv.close()
     finally:
         loop.close()
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

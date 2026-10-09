@@ -14,7 +14,10 @@ iteration, so B finishes before A's shutdown; under a plain run-to-next-park
 scheduler A races ahead and shuts down a still-registered connection.  A
 run_ready() at the teardown checkpoint restores asyncio's ordering.
 """
+import sys
 import unittest
+
+import pytest
 
 import stackweave_c
 
@@ -126,4 +129,4 @@ class TestRunReady(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

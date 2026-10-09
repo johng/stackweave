@@ -31,17 +31,14 @@ whatever a fiber legitimately leaves alive keeps the pool non-empty after an
 Each scenario runs in a fresh subprocess: the damage is process-wide and
 permanent, so it must not leak into (or out of) the rest of the suite.
 """
-import os
-import subprocess
 import sys
 
 import pytest
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from adv_util import run_python
 
 SCENARIO = r'''
 import gc, sys, time
-sys.path.insert(0, %(src)r)
 import stackweave, stackweave_c
 
 HUBS = 4
@@ -128,18 +125,16 @@ for _ in range(15):
 b1 = allocated_blocks()
 after = remote_spawn_p50_us()
 drain_after = remote_drain_us_per_fiber()
-print("RESULT before_us=%%.1f after_us=%%.1f drain_before_us=%%.2f "
-      "drain_after_us=%%.2f leaked_per_fiber=%%.3f fibers=%%d"
-      %% (before, after, drain_before, drain_after, (b1 - b0) / fibers, fibers),
+print("RESULT before_us=%.1f after_us=%.1f drain_before_us=%.2f "
+      "drain_after_us=%.2f leaked_per_fiber=%.3f fibers=%d"
+      % (before, after, drain_before, drain_after, (b1 - b0) / fibers, fibers),
       flush=True)
 '''
 
 
 @pytest.fixture(scope="module")
 def result():
-    env = dict(os.environ, PYTHON_GIL="0")
-    p = subprocess.run([sys.executable, "-c", SCENARIO % {"src": os.path.join(REPO, "src")}],
-                       cwd=REPO, env=env, capture_output=True, text=True, timeout=120)
+    p = run_python(SCENARIO, timeout=120)
     assert p.returncode == 0, (p.returncode, p.stdout[-2000:], p.stderr[-4000:])
     line = [ln for ln in p.stdout.splitlines() if ln.startswith("RESULT ")]
     assert line, p.stdout[-2000:]
@@ -173,3 +168,7 @@ def test_fiber_teardown_does_not_slow_down_after_a_fiber_heavy_load(result):
         "after %d stackweave.fiber children (%r)"
         % (result["drain_before_us"], result["drain_after_us"],
            result["fibers"], result))
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

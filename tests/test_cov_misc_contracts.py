@@ -3,9 +3,8 @@
   (1) immortalize(x) -- must be an IDENTITY function (returns the SAME object),
       the object must stay fully usable afterwards, and immortalizing an
       already-immortal singleton (None/True/42/an interned str) must be a pure
-      no-op that leaves the runtime self-check clean.  The existing coverage for
-      this lives in big_100/p229 which is skipped under the GIL; this is a plain
-      top-level test so it runs on the free-threaded interpreter.
+      no-op that leaves the runtime self-check clean.  big_100/p229 covers it
+      too; this is the plain top-level test.
 
   (2) set_stack_scrub(True) actually WIPES a recycled fiber stack.  A single
       fiber (A) writes a 0xAB sentinel onto its own C stack at a fixed frame
@@ -34,9 +33,9 @@ import tempfile
 
 import pytest
 
-import stackweave
 import stackweave_c as rc
 import stackweave.aio as aio
+
 from adv_util import hang_guard
 
 
@@ -260,4 +259,4 @@ def test_datagram_error_received_on_icmp_unreachable():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

@@ -23,7 +23,7 @@ a timeout with a cooperative-state dump, not a silent wedge).
 import sys
 import unittest
 
-sys.path.insert(0, "src")
+import pytest
 
 import stackweave_c
 
@@ -130,4 +130,4 @@ class TestUnbufferedTryRecv(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

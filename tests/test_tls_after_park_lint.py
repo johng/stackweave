@@ -162,3 +162,7 @@ def test_fixture_helper_cases(tmp_path, case):
         assert "STALE" in out and "[rng]" in out, out
     else:
         assert "UNSAFE" not in out, out
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

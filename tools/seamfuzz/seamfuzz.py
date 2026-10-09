@@ -83,7 +83,6 @@ def build_spec(seed):
 def worker_env(spec):
     env = dict(os.environ)
     env["PYTHON_GIL"] = "0"
-    env["STACKWEAVE_GIL"] = "0"
     env["PYTHONPATH"] = os.path.join(ROOT, "src") + os.pathsep + env.get("PYTHONPATH", "")
     env["STACKWEAVE_DEBUG"] = "ring,gstate"
     env["RUNLOOM_DBG_GSTATE"] = "1"

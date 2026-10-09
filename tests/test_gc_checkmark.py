@@ -25,11 +25,11 @@ deterministic UAF detection -- the weakref oracle here needs no sanitizer.)
 """
 import gc
 import sys
-import threading
 import unittest
 import weakref
 
-sys.path.insert(0, __file__.rsplit("/tests/", 1)[0] + "/src")
+import pytest
+
 import stackweave
 import stackweave.sync as rsync
 
@@ -110,4 +110,4 @@ class GCCheckmark(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

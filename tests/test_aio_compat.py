@@ -5,9 +5,11 @@ identified by `grep -rhoE 'asyncio\\.[a-zA-Z_]+' src/` of aionetiface.
 If a test fails it surfaces the exact API gap before it bites a real
 port.  See the survey comment at the top of each section."""
 import asyncio
-import os
 import socket
+import sys
 import unittest
+
+import pytest
 
 import stackweave.aio as paio
 
@@ -472,15 +474,6 @@ class TestTaskExceptionRefcycle(unittest.TestCase):
         # ExceptionGroups must have NO lingering referrers once the groups
         # unwind (the driver-frame traceback cycle would pin it).
         import gc
-        import sys
-        # 3.14 free-threaded defers GC reclamation of the ExceptionGroup refcycle:
-        # the referrers clear at run teardown, but not via an in-test gc.collect(),
-        # so the "no lingering referrers" assert fails. 3.14-FT deferred-reclamation
-        # family (cf. gh-149816); not a bridge pin -- the cycle IS collected, just
-        # later. Runs only if the GIL is re-enabled at runtime.
-        if not sys._is_gil_enabled():
-            self.skipTest("3.14 free-threaded defers in-test GC reclamation "
-                          "(deferred-reclamation family, cf. gh-149816); not a bridge pin")
         async def main():
             class _Done(Exception):
                 pass
@@ -499,12 +492,16 @@ class TestTaskExceptionRefcycle(unittest.TestCase):
                     cur = cur.exceptions[0]
                 exc = cur
             assert isinstance(exc, _Done), exc
+            # Drop the checking frame.  On 3.14 it is listed as the coroutine
+            # that runs it, GIL or no GIL, so match that too.
+            me = sys._getframe()
             return [r for r in gc.get_referrers(exc)
-                    if not (hasattr(r, "f_code"))]  # drop the checking frame
+                    if not (hasattr(r, "f_code")
+                            or getattr(r, "cr_frame", None) is me)]
         extra = paio.run(main())
         self.assertEqual(extra, [],
                          "leaf exception pinned by a refcycle: %r" % (extra,))
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

@@ -13,9 +13,11 @@ import os
 import sys
 import unittest
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+import pytest
+
+from adv_util import REPO
+
 sys.path.insert(0, os.path.join(REPO, "tools", "lifefuzz"))
-sys.path.insert(0, REPO)
 import lifefuzz as lf  # noqa: E402
 
 
@@ -95,4 +97,4 @@ class TestGrammarOracleTeeth(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

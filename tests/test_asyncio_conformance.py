@@ -26,14 +26,14 @@ CONFORMANCE (updated 2026-06-02 after fixing the gaps it surfaced):
   BaseTestBufferedProtocol after the get_buffer()/buffer_updated() path was
   implemented.
 """
+import functools
 import sys
-import unittest
 
 import pytest
 
-sys.path.insert(0, "src")
-
 import stackweave.aio as paio
+
+from known_gaps import KNOWN_GAP
 
 # CPython's own asyncio test machinery.  Not every interpreter ships the
 # stdlib `test` package (e.g. some manually-installed/embedded Windows builds);
@@ -59,8 +59,8 @@ if not _HAVE_CPYTHON_TESTS:
 
 
 # Methods that fail against StackweaveEventLoop for a *characterised* reason -- each
-# is a small, real stackweave.aio conformance gap, skipped (not silenced) with the
-# exact divergence so it reads as a TODO, not a mystery.
+# is a small, real stackweave.aio conformance gap, a KNOWN_GAP xfail with the
+# exact divergence, so it still runs and reads as a TODO, not a mystery.
 #
 # (Previously this listed test_sock_client_ops, test_unix_sock_client_ops and
 # test_sock_accept; all three were FIXED -- sock_* now enforce asyncio's
@@ -80,8 +80,7 @@ _KNOWN_GAPS = {
         "wake is delivered straight to the fiber rather than through the loop's "
         "ready queue -- it can resume the fiber and complete accept() before the "
         "one-shot cancel is delivered, so CancelledError is not raised.  A real "
-        "cancellation-ordering gap in the wait_fd/cancel interaction; skipped "
-        "(documented, not silenced) as a TODO, not fixed here.",
+        "cancellation-ordering gap in the wait_fd/cancel interaction.",
 }
 
 
@@ -89,28 +88,30 @@ class RunloomSockLowlevelConformance(_tsl.BaseSockTestsMixin, _test_utils.TestCa
     """CPython's BaseSockTestsMixin, driven by a StackweaveEventLoop.
 
     Every test_* method here is CPython's, unmodified; only the loop under test
-    is stackweave's.  The known-gap methods are replaced by skips below."""
+    is stackweave's.  The known-gap methods are marked KNOWN_GAP below."""
 
     def create_event_loop(self):
         return paio.StackweaveEventLoop()
 
 
-# Replace the known-gap methods with documented skips so the file stays green
-# while still running every conformant CPython test body.
-def _make_skip(reason):
-    @unittest.skip(reason)
-    def _skipped(self):
-        pass
-    return _skipped
+# Mark the known-gap methods on a wrapper, so the upstream mixin's own
+# function objects stay unmarked.
+def _known_gap(upstream, reason):
+    @KNOWN_GAP(reason)
+    @functools.wraps(upstream)
+    def test(self):
+        return upstream(self)
+    return test
 
 
 for _name, _reason in _KNOWN_GAPS.items():
-    # Only shadow a method the upstream mixin actually defines on THIS interpreter
-    # (test_sock_accept_racing is 3.15+), so older versions don't grow a spurious
-    # skipped test that upstream never had.
+    # Only wrap a method the upstream mixin actually defines on THIS interpreter
+    # (test_sock_accept_racing is 3.15+), so older versions don't grow a test
+    # that upstream never had.
     if hasattr(_tsl.BaseSockTestsMixin, _name):
-        setattr(RunloomSockLowlevelConformance, _name, _make_skip(_reason))
+        setattr(RunloomSockLowlevelConformance, _name,
+                _known_gap(getattr(_tsl.BaseSockTestsMixin, _name), _reason))
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

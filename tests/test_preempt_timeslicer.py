@@ -15,7 +15,7 @@ assert it positively:
      sibling has advanced a counter N times; each of the sibling's N steps needs
      the hog preempted, so completion PROVES ~N preemptions happened while the hog
      span.  A dead slicer => the counter never advances => the hog spins forever
-     => subprocess TIMEOUT (rc 124), a clean failure.
+     => the child times out, which fails the test with its output.
   2. SAFETY (in-dealloc gate, runloom_sched_preempt.c.inc:25): the time-slicer
      reaches its yield via its own path (a pending call, not the scheduler); it must
      defer while a tstate is mid object-destruction, else a concurrent
@@ -24,33 +24,17 @@ assert it positively:
      no crash (rc 0) + self_check clean (this is a no-UAF safety oracle, the
      correct shape for this invariant; the defer is not separately counted).
 """
-import os
-import subprocess
 import sys
 
 import pytest
 
-from adv_util import needs_free_threading
-
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-pytestmark = pytest.mark.skipif(
-    not needs_free_threading(),
-    reason="preempt_init (time-slicer) requires free-threaded Python")
+from adv_util import run_python
 
 
 def _run(code, timeout=30):
     """Run a snippet in a fresh subprocess."""
-    preamble = "import sys; sys.path.insert(0, %r)\nimport stackweave_c as rc\n" % (
-        os.path.join(REPO, "src"))
-    env = dict(os.environ, PYTHON_GIL="0")
-    try:
-        p = subprocess.run([sys.executable, "-c", preamble + code],
-                           cwd=REPO, env=env, timeout=timeout,
-                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    except subprocess.TimeoutExpired as e:
-        return 124, (e.stdout or b"").decode() if isinstance(e.stdout, bytes) else (e.stdout or ""), \
-               "TIMEOUT after {0}s (preemption never fired?)".format(timeout)
+    preamble = "import sys\nimport stackweave_c as rc\n"
+    p = run_python(preamble + code, timeout=timeout)
     return p.returncode, p.stdout, p.stderr
 
 
@@ -165,4 +149,4 @@ sys.stdout.write("SLICER_DEALLOC_OK %d\n" % finalized[0])
 
 
 if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

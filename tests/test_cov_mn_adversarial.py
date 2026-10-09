@@ -11,20 +11,17 @@ guard-page stack overflow on a hub.
 Every scenario runs in a SUBPROCESS so a SIGSEGV/abort is contained and OBSERVED
 (a negative returncode) rather than killing the suite.  The assertion is the
 adversarial one: the runtime must NOT crash (signal) or hang (timeout) -- a
-clean Python error is fine (it handled the injected fault), a signal/timeout is
-a finding.  The one deliberate-crash scenario (stack overflow) asserts the crash
-is a CLASSIFIED guard-page trap, not silent corruption.
+clean Python error is fine (it handled the injected fault), a signal or a
+timeout fails the test.  The one deliberate-crash scenario (stack overflow)
+asserts the crash is a CLASSIFIED guard-page trap, not silent corruption.
 """
-import os
 import subprocess
 import sys
 
 import pytest
 
-from adv_util import needs_free_threading
+from adv_util import REPO, child_env
 
-FT = needs_free_threading()
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PY = sys.executable
 
 SYSMON_ON = {"STACKWEAVE_SYSMON": "1", "STACKWEAVE_SYSMON_QUIET": "1", "STACKWEAVE_SYSMON_MS": "5"}
@@ -34,8 +31,8 @@ ALL_MODES = dict(SYSMON_ON, **{
 
 
 def _run(env_extra, cmd, timeout=60):
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src", **env_extra)
-    return subprocess.run(cmd, cwd=REPO, env=env, capture_output=True, text=True, timeout=timeout)
+    return subprocess.run(cmd, cwd=REPO, env=child_env(**env_extra),
+                          capture_output=True, text=True, timeout=timeout)
 
 
 def _assert_no_crash(p, label):
@@ -49,7 +46,7 @@ def _assert_no_crash(p, label):
 # spawn faults: the admission-slot backout / cleanup path under a storm
 # --------------------------------------------------------------------------
 _SPAWN_FAULT = r'''
-import sys; sys.path.insert(0, "src")
+import sys
 import stackweave, stackweave_c as rc
 def main():
     ran = [0]; failed = [0]
@@ -64,7 +61,6 @@ sys.stdout.write("SPAWN_OK r=%d\n" % 0)
 '''
 
 
-@pytest.mark.skipif(not FT, reason="M:N")
 @pytest.mark.parametrize("site", ["SPAWN_G", "SPAWN_STACK", "SPAWN_TSTATE"])
 @pytest.mark.parametrize("spec", ["once:12", "always:12"])
 def test_spawn_fault_no_crash(site, spec):
@@ -76,7 +72,6 @@ def test_spawn_fault_no_crash(site, spec):
 # --------------------------------------------------------------------------
 # I/O faults under a running M:N workload (TCP/fd syscalls erroring)
 # --------------------------------------------------------------------------
-@pytest.mark.skipif(not FT, reason="M:N")
 @pytest.mark.parametrize("site,spec", [
     ("TCP_RECV", "once:104"), ("TCP_SEND", "once:32"),
     ("FD_READ", "once:5"), ("FD_WRITE", "once:5"),
@@ -93,7 +88,7 @@ def test_io_fault_under_workload_no_crash(site, spec):
 # teardown raced against in-flight gs, under the detector modes
 # --------------------------------------------------------------------------
 _TEARDOWN_STORM = r'''
-import sys; sys.path.insert(0, "src")
+import sys
 import stackweave_c as rc
 for cycle in range(40):
     rc.mn_init(8)
@@ -107,7 +102,6 @@ sys.stdout.write("TEARDOWN_OK\n")
 '''
 
 
-@pytest.mark.skipif(not FT, reason="M:N")
 def test_teardown_storm_under_detectors_no_hang():
     p = _run(ALL_MODES, [PY, "-c", _TEARDOWN_STORM], timeout=90)
     _assert_no_crash(p, "teardown storm")
@@ -118,7 +112,7 @@ def test_teardown_storm_under_detectors_no_hang():
 # exception storm: half the gs raise, under every mode at once
 # --------------------------------------------------------------------------
 _EXC_STORM = r'''
-import sys; sys.path.insert(0, "src")
+import sys
 import stackweave, stackweave_c as rc
 def main():
     def boom(): raise ValueError("storm")
@@ -130,7 +124,6 @@ sys.stdout.write("EXC_OK\n")
 '''
 
 
-@pytest.mark.skipif(not FT, reason="M:N")
 def test_exception_storm_all_modes_no_crash():
     p = _run(dict(ALL_MODES, STACKWEAVE_GOROUTINE_PANIC="silent"),
              [PY, "-c", _EXC_STORM], timeout=90)
@@ -142,7 +135,7 @@ def test_exception_storm_all_modes_no_crash():
 # fiber-admission exhaustion under an M:N spawn storm
 # --------------------------------------------------------------------------
 _MAXFIB = r'''
-import sys; sys.path.insert(0, "src")
+import sys
 import stackweave, stackweave_c as rc
 rc.set_max_fibers(16)
 def main():
@@ -159,7 +152,6 @@ sys.stdout.write("MAXFIB_OK\n")
 '''
 
 
-@pytest.mark.skipif(not FT, reason="M:N")
 def test_fiber_admission_exhaustion_no_crash():
     p = _run(SYSMON_ON, [PY, "-c", _MAXFIB], timeout=60)
     _assert_no_crash(p, "max-fibers exhaustion")
@@ -170,7 +162,7 @@ def test_fiber_admission_exhaustion_no_crash():
 # channel close raced against parked senders + receivers, under M:N
 # --------------------------------------------------------------------------
 _CHAN_CLOSE = r'''
-import sys; sys.path.insert(0, "src")
+import sys
 import stackweave, stackweave_c as rc
 from stackweave.sync import WaitGroup
 def main():
@@ -194,7 +186,6 @@ sys.stdout.write("CHANCLOSE_OK\n")
 '''
 
 
-@pytest.mark.skipif(not FT, reason="M:N")
 def test_channel_close_race_storm_no_crash():
     p = _run(SYSMON_ON, [PY, "-c", _CHAN_CLOSE], timeout=90)
     _assert_no_crash(p, "channel close race")
@@ -205,7 +196,7 @@ def test_channel_close_race_storm_no_crash():
 # deliberate guard-page stack overflow ON A HUB -> classified crash
 # --------------------------------------------------------------------------
 _OVERFLOW = r'''
-import sys; sys.path.insert(0, "src")
+import sys
 import stackweave, stackweave_c as rc
 rc.install_crash_handler("backtrace")
 def main():
@@ -215,7 +206,6 @@ sys.stdout.write("UNREACHABLE\n")
 '''
 
 
-@pytest.mark.skipif(not FT, reason="M:N")
 def test_hub_stack_overflow_is_classified_not_silent():
     p = _run({}, [PY, "-c", _OVERFLOW], timeout=30)
     assert p.returncode != 0 and "UNREACHABLE" not in p.stdout, "overflow did not crash"
@@ -227,7 +217,6 @@ def test_hub_stack_overflow_is_classified_not_silent():
 # --------------------------------------------------------------------------
 # everything hostile at once: all modes + I/O fault + the full workload
 # --------------------------------------------------------------------------
-@pytest.mark.skipif(not FT, reason="M:N")
 def test_all_modes_plus_io_fault_no_crash():
     p = _run(dict(ALL_MODES, STACKWEAVE_FAULT_FD_READ="once:5",
                   STACKWEAVE_FAULT_TCP_SEND="once:32", STACKWEAVE_GOROUTINE_PANIC="silent"),
@@ -236,4 +225,4 @@ def test_all_modes_plus_io_fault_no_crash():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

@@ -6,20 +6,19 @@ baseline.  Targets stackweave's leak history (FD leaks, task<->driver cycles) no
 extended to the monkey layer's new allocation surface (thread-pool offload,
 DNS cache, subprocess pipes, cooperative wrappers).
 """
-import os
 import sys
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
 
 import stackweave.monkey
 
-stackweave.monkey.patch()
+from adv_util import REPO
 
-from tools.leak_check import (check_leak, _wl_socketpair, _wl_simplequeue,
+sys.path.insert(0, REPO)
+from tools.leak_check import (check_leak, _wl_socketpair, _wl_simplequeue,  # noqa: E402
                               _wl_file_offload, _wl_subprocess)
+
+stackweave.monkey.patch()
 
 
 def test_no_leak_socketpair():
@@ -34,9 +33,11 @@ def test_no_leak_file_offload():
     check_leak(_wl_file_offload, iters=50, name="file_offload")
 
 
-# TODO(stackweave): the monkey-patched subprocess path leaks fds.  Pre-existing
-# stackweave bug -- reproduces on STOCK CPython, not a patched-interpreter
-# regression.  Skipped to keep the required CI gate green;
-# fix and remove this skip.
+# The monkey-patched subprocess path once leaked fds, and this test was
+# quarantined until 40c61955 dropped the quarantine.
 def test_no_leak_subprocess():
     check_leak(_wl_subprocess, iters=25, name="subprocess")
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

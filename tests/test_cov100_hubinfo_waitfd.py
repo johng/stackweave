@@ -48,18 +48,16 @@ L56 / L347 / L390 (defensive guards / weak-memory-only races), with reasons.
 """
 import os
 import socket
-import subprocess
 import sys
 
 import pytest
 
 import stackweave_c as rc
-from adv_util import hang_guard, needs_free_threading, pollable_pipe
+
+from adv_util import hang_guard, pollable_pipe, run_python
+from known_gaps import MIGRATION_GAP
 
 READ, WRITE = 1, 2
-FT = needs_free_threading()
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY = sys.executable
 
 
 def _drop(fd):
@@ -75,9 +73,7 @@ def _drop(fd):
 
 
 def _run_subprocess(script, env_extra, timeout=40):
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src", **env_extra)
-    return subprocess.run([PY, "-c", script], cwd=REPO, env=env,
-                          capture_output=True, text=True, timeout=timeout)
+    return run_python(script, timeout=timeout, env=env_extra)
 
 
 # ==========================================================================
@@ -92,7 +88,6 @@ def _run_subprocess(script, env_extra, timeout=40):
 # DETACHED and walked the wedged hub's top Python frame.
 _HUBINFO_WEDGE = r'''
 import sys, time
-sys.path.insert(0, "src")
 import stackweave
 import stackweave_c as rc
 
@@ -129,7 +124,8 @@ def _parse_hubinfo_ok(stdout):
     return None
 
 
-@pytest.mark.skipif(not FT, reason="DETACHED-wedge snapshot needs the M:N runtime")
+@MIGRATION_GAP("hubinfo blocked_at walks the hub's thread state, and a "
+              "fiber's frames are on its own")
 def test_hubinfo_blocked_at_for_detached_wedge():
     """Drives mn_sched_hubinfo.c.inc's `blocked_at` capture: a DETACHED wedge
     yields the wedged hub's top Python frame.
@@ -163,7 +159,6 @@ def test_hubinfo_blocked_at_for_detached_wedge():
 # ==========================================================================
 # netpoll_wait_fd.c.inc -- drain_parked CAS-retry load (L37)
 # ==========================================================================
-@pytest.mark.skipif(not FT, reason="single-thread drain needs the runtime")
 def test_sched_reset_drains_same_thread_wait_fd_parker():
     """Drives netpoll_wait_fd.c.inc L37 (the `cur = load(&p->commit)` inside
     drain_parked's claim loop).
@@ -216,7 +211,6 @@ def test_sched_reset_drains_same_thread_wait_fd_parker():
         "not complete")
 
 
-@pytest.mark.skipif(not FT, reason="single-thread drain needs the runtime")
 def test_sched_reset_drains_many_same_thread_parkers():
     """Re-exercises the drain claim loop (L37) across MANY parkers so the loop
     is walked repeatedly (each linked parker runs the L36-44 claim), not just
@@ -270,7 +264,6 @@ def test_sched_reset_drains_many_same_thread_parkers():
 # (L401-411) and returns -1 so it raises out of the cooperative call.
 _SIGNAL_WAKE = r'''
 import sys, signal, socket
-sys.path.insert(0, "src")
 import stackweave_c as rc
 READ = 1
 
@@ -313,7 +306,6 @@ sys.stdout.write("SIGWAKE caught=%r rv=%r escaped=%r\n" % (
 '''
 
 
-@pytest.mark.skipif(not FT, reason="signal-into-wait_fd needs the runtime")
 def test_signal_handler_raises_into_wait_fd_parker():
     """Drives netpoll_wait_fd.c.inc L101 (the signal_wake claim-loop load) and
     the wait_fd signal-restore tail (L401-411).
@@ -351,7 +343,6 @@ def test_signal_handler_raises_into_wait_fd_parker():
 # ==========================================================================
 # netpoll_wait_fd.c.inc -- post-register pending re-check (L313-322 / L316-320)
 # ==========================================================================
-@pytest.mark.skipif(not FT, reason="needs the multi-hub M:N runtime")
 def test_park_on_ready_sockets_across_hubs_post_register_recheck():
     """Targets netpoll_wait_fd.c.inc L313-322 (the SECOND pending-wake consume,
     after netpoll_register): when a parker links and then epoll ADD synthesizes
@@ -409,4 +400,4 @@ def test_park_on_ready_sockets_across_hubs_post_register_recheck():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

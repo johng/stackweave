@@ -91,7 +91,6 @@ jobs:
       - name: Netpoll capacity / init probe
         env:
           PYTHON_GIL: "0"
-          STACKWEAVE_GIL: "0"
         run: |
           set -u
           echo "=============================================="
@@ -102,7 +101,6 @@ jobs:
         if: inputs.probe_only != 'true'
         env:
           PYTHON_GIL: "0"
-          STACKWEAVE_GIL: "0"
           STACKWEAVE_TIMEOUT_MULT: "2"
           STACKWEAVE_TEST_NORETRY: "1"      # the retry re-runs alone+unloaded: a different experiment
         run: |

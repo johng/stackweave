@@ -15,13 +15,11 @@ import socket
 import sys
 import time
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-
 import pytest
 
-import stackweave            # noqa: E402
-import stackweave.monkey     # noqa: E402
-import stackweave_c       # noqa: E402
+import stackweave
+import stackweave.monkey
+import stackweave_c
 
 pytestmark = pytest.mark.skipif(not hasattr(os, "fork"), reason="os.fork required")
 
@@ -210,3 +208,7 @@ def test_fork_child_recv_on_armed_inherited_fd():
     finally:
         a.close()
         b.close()
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

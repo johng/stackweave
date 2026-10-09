@@ -11,8 +11,11 @@ offload() runs a blocking callable on the backend pool, parking the fiber
 cooperative (buffered FileIO on slow media, C DB drivers, CPU-bound work).
 """
 import os
+import sys
 import time
 import unittest
+
+import pytest
 
 import stackweave
 import stackweave.monkey
@@ -149,4 +152,4 @@ class TestOffload(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

@@ -1,7 +1,7 @@
 """Memory + scheduler stability soak tests.
 
 Marked SKIP by default so the normal test suite stays fast.  Run with:
-    STACKWEAVE_RUN_SOAK=1 python -m unittest tests.test_soak
+    STACKWEAVE_RUN_SOAK=1 python -m pytest tests/test_soak.py
 
 Tests here exercise long lifetimes and high spawn rates to catch:
   * stack / coro / g leaks (RSS climbs over many drains)
@@ -16,8 +16,11 @@ RSS by hundreds of MiB across the soak run is a real bug.
 """
 import gc
 import os
+import sys
 import time
 import unittest
+
+import pytest
 
 import stackweave_c
 
@@ -98,4 +101,4 @@ class TestChannelSoak(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

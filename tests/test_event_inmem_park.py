@@ -10,8 +10,11 @@ Guards the fd reduction AND the load-bearing correctness: wake-before-park, a
 foreign-thread setter, the timed-park exactly-once race, and the timed paths.
 """
 import os
+import sys
 import threading
 import time
+
+import pytest
 
 import stackweave
 import stackweave.monkey as monkey
@@ -358,3 +361,7 @@ def test_condition_timeout_does_not_steal_a_later_notify():
     stackweave.run(8, main)
     assert out["timed_out"]
     assert out["woke"] == [True], out["woke"]
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

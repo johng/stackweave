@@ -33,13 +33,11 @@ import sys
 
 import pytest
 
+import stackweave_c
+
 pytestmark = pytest.mark.skipif(
     not sys.platform.startswith(("darwin", "freebsd", "openbsd", "netbsd")),
     reason="kqueue backend only")
-
-sys.path.insert(0, "src")
-
-import stackweave_c  # noqa: E402
 
 READ = 1
 WRITE = 2
@@ -426,4 +424,4 @@ def test_unregister_clears_write_arm_for_reuse():
 
 
 if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

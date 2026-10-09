@@ -1,9 +1,8 @@
 """Tests for stackweave_c.Chan -- Go-style channels."""
 import sys
-import time
 import unittest
 
-sys.path.insert(0, "src")
+import pytest
 
 import stackweave_c
 
@@ -405,10 +404,6 @@ class TestSelect(unittest.TestCase):
         self.assertEqual(sys.getrefcount(marker), base)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestNoGoroutineGuard(unittest.TestCase):
     """A blocking channel op with NO fiber context (top-level call or a
     foreign OS thread) must raise RuntimeError, NOT busy-spin forever.  Audit
@@ -444,3 +439,7 @@ class TestNoGoroutineGuard(unittest.TestCase):
         t.join(timeout=5.0)
         self.assertFalse(t.is_alive(), "foreign-thread blocking recv hung (busy-spin)")
         self.assertEqual(out.get("r"), "RuntimeError")
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

@@ -12,22 +12,19 @@ runs in its own subprocess so one strand can't wedge the file.
 
 House style: %/.format, prints kept.
 """
-import os
 import subprocess
 import sys
 import textwrap
 
 import pytest
 
-PY = sys.executable
-ENV = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
+from adv_util import run_python
 
 
 def run_body(body, timeout=30):
     script = ("import stackweave_c as rc, stackweave, socket, sys, os, threading\n"
               + textwrap.dedent(body))
-    return subprocess.run([PY, "-c", script], env=ENV, capture_output=True,
-                          timeout=timeout)
+    return run_python(script, timeout=timeout, raise_timeout=True)
 
 
 def _tail(raw, n=1200):
@@ -72,9 +69,9 @@ def expect(body, sentinel="OK", timeout=30):
             "              stackweave.stats() from a live fiber shows whether the\n"
             "              fibers actually COMPLETED (mn_completed_total).\n"
             "--- child stdout ---\n{2}\n--- child stderr ---\n{3}".format(
-                timeout, PY, _tail(exc.stdout), _tail(exc.stderr))
+                timeout, sys.executable, _tail(exc.stdout), _tail(exc.stderr))
         )
-    assert sentinel.encode() in p.stdout, (p.stdout[-800:], p.stderr[-800:])
+    assert sentinel in p.stdout, (p.stdout[-800:], p.stderr[-800:])
 
 
 # ---- teardown vector: cancel_all_parked() wakes netpoll waiters -------------
@@ -162,11 +159,8 @@ def test_fork_child_usable_when_parent_has_parked_fiber():
 
 # ---- teardown vector: mn (multi-hub) run exits after waking parked fibers ----
 
-# TODO(stackweave): this intermittently STRANDS (~2/5 locally) -- under M:N a hub can
-# occasionally hang on a parked-but-woken fiber during run() teardown, so the
-# child never prints OK and the 30 s guard fires.  A real (pre-existing) teardown
-# race, not a patched-interpreter regression; reproduces on a dev box too.
-# check_all_fast until the strand is fixed.
+# This once timed out ~2 runs in 5 and was read as a teardown strand; the cause
+# was the body's own unlocked completion latch (fixed in 49f21834, see below).
 def test_mn_run_exits_after_parked_fibers_woken():
     # Under M:N, fibers park on a chan across hubs; a producer wakes them, and
     # stackweave.run(N) must return (not strand a hub on a parked-but-woken fiber).
@@ -197,4 +191,4 @@ def test_mn_run_exits_after_parked_fibers_woken():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

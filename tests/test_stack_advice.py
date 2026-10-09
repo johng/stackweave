@@ -3,11 +3,12 @@
 
 The profiler MEASURES each fiber kind's real C-stack high-water mark and
 recommends a stack_size; it never changes or persists sizes itself.  Note that
-on 3.13 pure-Python recursion lives on the datastack, so it barely touches the
-C stack -- real C-stack depth comes from C-extension recursion (json/repr/
+pure-Python recursion lives on the datastack, so it barely touches the C
+stack -- real C-stack depth comes from C-extension recursion (json/repr/
 OpenSSL/...), which is what these tests use to get a measurable signal.
 """
 import json
+import os
 import sys
 
 import pytest
@@ -15,14 +16,12 @@ import pytest
 import stackweave
 import stackweave_c
 
-import os as _hwm_os
-import pytest as _hwm_pytest
 # Stack high-water-mark is precise only with 4 KB pages: macOS 16 KB pages make
 # the mincore-based HWM over-report (it reports the whole stack resident), so
 # these HWM/advice/sizing tests can't measure precisely there -- skip them (the
 # diagnostic itself just over-reserves, which is safe).
-_RELIABLE_HWM = _hwm_os.sysconf("SC_PAGESIZE") == 4096
-pytestmark = _hwm_pytest.mark.skipif(
+_RELIABLE_HWM = os.sysconf("SC_PAGESIZE") == 4096
+pytestmark = pytest.mark.skipif(
     not _RELIABLE_HWM,
     reason="stack HWM is reliable only with 4 KB pages")
 
@@ -38,8 +37,8 @@ def _nested(depth):
 
 
 # Depth chosen so the C json encoder uses a clear, measurable amount of C stack
-# (~15 KiB) while staying well under the 32 KiB M:N default -- so the M:N test
-# below does not trip the (separate, pre-existing) deep-recursion overflow.
+# (~15 KiB) while staying well under the 256 KiB fiber stack floor -- so the
+# M:N test below does not trip a deep-recursion overflow.
 NESTED = _nested(80)
 
 
@@ -169,3 +168,7 @@ def test_records_under_mn_scheduler():
     assert _kname(c_heavy) in rows
     assert rows[_kname(c_heavy)]["samples"] == 20
     assert rows[_kname(c_heavy)]["max_hwm"] > 8 * 1024
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

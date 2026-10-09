@@ -13,6 +13,7 @@ it untouched.
 """
 import json
 import os
+import sys
 
 import pytest
 
@@ -199,3 +200,7 @@ def test_arg_bearing_binds_to_real_function():
     stackweave.run(4, main)
     store = worker.__dict__.get(GROW_DOWN_KEY)
     assert store is not None and store[0] >= 32 * 1024
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

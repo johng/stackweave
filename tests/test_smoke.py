@@ -3,7 +3,7 @@ import sys
 import time
 import unittest
 
-sys.path.insert(0, "src")
+import pytest
 
 import stackweave
 import stackweave_c
@@ -98,4 +98,4 @@ class TestScheduler(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

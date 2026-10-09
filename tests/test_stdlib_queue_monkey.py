@@ -7,6 +7,8 @@ has its own internal locking that the monkey layer does not patch, so only the
 Python variants go cooperative.  The blocking get/put tests spawn real OS
 threads, exercising cooperative-primitive <-> real-thread coordination.
 """
+import sys
+
 import pytest
 
 from _monkey_stdlib import (HAVE_CPYTHON_TESTS, REALTHREAD, REALTHREAD_REASON,
@@ -29,3 +31,7 @@ if HAVE_CPYTHON_TESTS:
     TestRunloomQueue = hosted(_m.PyQueueTest, "TestRunloomQueue")
     TestRunloomLifoQueue = hosted(_m.PyLifoQueueTest, "TestRunloomLifoQueue")
     TestRunloomPriorityQueue = hosted(_m.PyPriorityQueueTest, "TestRunloomPriorityQueue")
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

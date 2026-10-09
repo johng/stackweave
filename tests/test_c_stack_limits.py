@@ -13,18 +13,15 @@ RecursionError.
 
 stackweave_c._c_stack_limits() reads the calling thread state's limits.
 """
-import os
-import pathlib
-import subprocess
 import sys
 
 import pytest
 
 import stackweave
 import stackweave_c
-from adv_util import needs_free_threading
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
+from adv_util import run_python
+
 limits = stackweave_c._c_stack_limits
 
 
@@ -53,11 +50,7 @@ def test_the_drain_frees_a_finished_fibers_objects_under_its_own_limits():
     assert freed == [before]
 
 
-@pytest.mark.parametrize("n", [
-    1,
-    pytest.param(2, marks=pytest.mark.skipif(
-        not needs_free_threading(), reason="M:N needs free-threaded CPython")),
-])
+@pytest.mark.parametrize("n", [1, 2])
 def test_a_fiber_gets_its_limits_back_from_a_nested_run1_and_coro(n):
     # Under run(1) the nested drain and the Coro share the main thread's
     # state; under run(2) they run on the outer fiber's own (per-g) state.
@@ -83,7 +76,6 @@ def test_a_fiber_gets_its_limits_back_from_a_nested_run1_and_coro(n):
         assert seen[k] == seen["outer"], (k, seen)
 
 
-@pytest.mark.skipif(not needs_free_threading(), reason="M:N needs free-threaded CPython")
 def test_run2_leaves_the_callers_limits_alone():
     before = limits()
     stackweave.run(2, lambda: None)
@@ -123,9 +115,7 @@ AFTER = {
 
 
 def _run(code):
-    p = subprocess.run([sys.executable, "-c", code], cwd=ROOT,
-                       env=dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src"),
-                       capture_output=True, text=True, timeout=300)
+    p = run_python(code, timeout=300)
     return p.returncode, p.stdout + p.stderr[-2000:]
 
 
@@ -155,3 +145,7 @@ def test_freeing_a_deep_structure_after_run1_does_not_crash():
                    + "del l\n"
                    + "print('freed')\n")
     assert rc == 0 and "freed" in out, (rc, out)
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

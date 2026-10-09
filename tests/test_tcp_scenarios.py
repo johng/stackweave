@@ -23,7 +23,7 @@ import sys
 import unittest
 import zlib
 
-sys.path.insert(0, "src")
+import pytest
 
 import stackweave_c
 import stackweave.sync as psync
@@ -297,4 +297,4 @@ class TestManyConcurrentConnections(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

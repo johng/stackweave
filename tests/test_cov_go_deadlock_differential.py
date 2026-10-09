@@ -24,11 +24,12 @@ import tempfile
 import textwrap
 import unittest
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
+import pytest
+
+from adv_util import run_python
+
 
 GO = shutil.which("go")
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY = sys.executable
 
 # Each scenario: a Go body and an equivalent pygo body, plus the expected verdict.
 SCENARIOS = {
@@ -52,7 +53,6 @@ SCENARIOS = {
 GO_TMPL = "package main\nfunc main() {{\n\t{body}\n}}\n"
 PG_TMPL = textwrap.dedent("""\
     import os, sys
-    sys.path.insert(0, {src!r})
     import stackweave, stackweave_c
     stackweave_c.set_deadlock_mode(2)          # Go-equivalent always-on census
     def body():
@@ -77,12 +77,8 @@ class TestGoDeadlockDifferential(unittest.TestCase):
         return "deadlock" in (r.stdout + r.stderr).lower()
 
     def _pg_verdict(self, body):
-        src = os.path.join(REPO, "src")
-        prog = PG_TMPL.format(src=src, body=body)
-        env = dict(os.environ, PYTHON_GIL="0", PYTHON_TLBC="0",
-                   PYTHONPATH=src)
-        r = subprocess.run([PY, "-c", prog], capture_output=True, text=True,
-                           timeout=60, env=env)
+        prog = PG_TMPL.format(body=body)
+        r = run_python(prog, timeout=60, env={"PYTHON_TLBC": "0"})
         out = r.stdout
         if "DEADLOCK" in out:
             return True
@@ -104,4 +100,4 @@ class TestGoDeadlockDifferential(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

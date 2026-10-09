@@ -12,16 +12,12 @@ Each case runs in a subprocess, which forks; the child reports back over a
 pipe.
 """
 import os
-import pathlib
-import subprocess
 import sys
 import textwrap
 
 import pytest
 
-from adv_util import needs_free_threading
-
-ROOT = pathlib.Path(__file__).resolve().parent.parent
+from adv_util import run_python
 
 pytestmark = pytest.mark.skipif(not hasattr(os, "fork"), reason="os.fork required")
 
@@ -91,9 +87,7 @@ PRELUDE = textwrap.dedent("""
 
 
 def _run(body):
-    p = subprocess.run([sys.executable, "-c", PRELUDE + textwrap.dedent(body)],
-                       cwd=ROOT, env=dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src"),
-                       capture_output=True, text=True, timeout=120)
+    p = run_python(PRELUDE + textwrap.dedent(body), timeout=120)
     assert p.returncode == 0, p.stdout + p.stderr[-3000:]
     return p.stdout
 
@@ -115,7 +109,6 @@ def test_a_child_of_an_importer_inherits_no_extra_pollers():
     assert _extra(out) <= 2, out
 
 
-@pytest.mark.skipif(not needs_free_threading(), reason="M:N needs free-threaded CPython")
 def test_a_child_of_a_hub_runner_inherits_no_extra_pollers():
     out = _run("""
         assert io_on_every_hub(4) == 4     # the parent's hub pools are live
@@ -125,7 +118,6 @@ def test_a_child_of_a_hub_runner_inherits_no_extra_pollers():
     assert _extra(out) <= 2, out
 
 
-@pytest.mark.skipif(not needs_free_threading(), reason="M:N needs free-threaded CPython")
 def test_a_child_creates_hub_pollers_on_first_use():
     # A hub pool the child never inherited a poller for still parks and wakes,
     # on every hub, twice: once on pools it creates, once on pools it made.
@@ -135,3 +127,7 @@ def test_a_child_creates_hub_pollers_on_first_use():
         print("PARKS", parks)
     """)
     assert "PARKS 8" in out, out
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

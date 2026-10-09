@@ -66,25 +66,17 @@ Lines this file deliberately does NOT chase (see the structured exclusions):
   * L773 (hwm-scan batch continuation): needs >2 MiB live C stack, > CPython's
     own recursion guard.
 """
-import os
-import subprocess
 import sys
 import textwrap
 
 import pytest
 
 import stackweave_c as rc
-from adv_util import needs_free_threading
 
-FT = needs_free_threading()
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY = sys.executable
+from adv_util import run_python
 
-# Same skip rationale as batch 1: coro.c's stack pool / arena / madvise live
-# behind the guard-page (fcontext/ucontext) backends and the workloads need the
-# real scheduler -- skip the whole file on a GIL build.
-pytestmark = pytest.mark.skipif(
-    not FT, reason="coro.c stack-release paths need the M:N / FT build")
+# As in batch 1: coro.c's stack pool / arena / madvise live behind the
+# guard-page (fcontext/ucontext) backends.
 
 # Must exceed RUNLOOM_CORO_POOL_CAP (512) so the SINGLE M:1 coro pool overflows
 # on finish and the surplus coros actually call runloom_stack_release.  700 gives
@@ -97,21 +89,12 @@ def _run_worker(body, env_extra=None, timeout=240):
     """Run a dedented worker snippet in a fresh subprocess; return CompletedProcess.
 
     Generous timeout: holding 700 fibers concurrently alive + churning stack
-    releases can run slow on a box shared with the local CI runner.  A timeout
-    there is contention, not a bug -- callers pytest.skip on TimeoutExpired.
+    releases can run slow on a box shared with the local CI runner.  A worker
+    still running after it fails the test with its output.
     """
-    src = ("import sys\n"
-           "sys.path.insert(0, 'src')\n"
-           "import stackweave_c as rc\n"
+    src = ("import stackweave_c as rc\n"
            + textwrap.dedent(body))
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
-    if env_extra:
-        env.update(env_extra)
-    try:
-        return subprocess.run([PY, "-c", src], cwd=REPO, env=env,
-                              capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        pytest.skip("coro.c release worker timed out (box under heavy load)")
+    return run_python(src, timeout=timeout, env=env_extra)
 
 
 def _assert_clean(p, marker):
@@ -290,3 +273,7 @@ def test_default_mode_pool_overflow_baseline_in_process():
         stackweave.run(1, main)
     assert sum(ran) == N, "only %d/%d ran" % (sum(ran), N)
     assert rc._self_check(0) == 0
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

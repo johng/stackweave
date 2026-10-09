@@ -11,8 +11,8 @@ hold no PyThreadState, so no bulk fiber gets the per-g tstate every M:N fiber
 needs, and hub_main skips a g with no tstate as dead: a bulk batch never runs.
 runloom_fibern_bulk_enabled (mn_sched_init_fini.c.inc) therefore keeps fiber_n
 on its per-fiber loop and says so once on stderr.  Every test here that needs
-the bulk builder to RUN is a strict xfail (TODO_MIGRATION_FAIL), and asserts it
-the only way the bulk path is observable: STACKWEAVE_GON_TIMING=1 makes the
+the bulk builder to RUN is a GON_BULK_GAP xfail (tests/known_gaps.py), and
+asserts it the only way the bulk path is observable: STACKWEAVE_GON_TIMING=1 makes the
 builder print one "[GON_TIMING]" line per batch it built.  When the batch grows
 a per-g tstate pass (and registers each g with runloom_greg_link, or the
 parked-frame GC anchor cannot see bulk fibers -- see CLAUDE.md) and the guard
@@ -26,20 +26,14 @@ Every case runs in its own subprocess: the gates are read once per process, and
 the low-level mn_init/mn_fini here must never share runtime state with the
 high-level stackweave.run tests.
 """
-import os
-import subprocess
 import sys
 import textwrap
 
 import pytest
 
-from adv_util import needs_free_threading
+from adv_util import run_python
+from known_gaps import GON_BULK_GAP
 
-FT = needs_free_threading()
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY = sys.executable
-
-pytestmark = pytest.mark.skipif(not FT, reason="M:N scheduler needs GIL-disabled build")
 
 # The warm-stack arena + bulk + FRESH config the fast path was validated with.
 BULK_ENV = {
@@ -51,29 +45,13 @@ BULK_ENV = {
 BULK_IGNORED = "STACKWEAVE_GON_BULK ignored"
 
 
-def TODO_MIGRATION_FAIL(reason):
-    """Strict xfail for a known migration-mode gap (same convention as
-    tests/test_cross_hub_migration.py): the moment the gap closes the test
-    XPASSes and fails, forcing the marker off."""
-    return pytest.mark.xfail(strict=True, reason="TODO_MIGRATION_FAIL: " + reason)
-
-
-_BULK_GAP = TODO_MIGRATION_FAIL(
-    "STACKWEAVE_GON_BULK is ignored under migration: the bulk fiber_n builder "
-    "allocates no per-g tstate, so hub_main would skip every bulk fiber as dead")
-
-
 def _run(body, env_extra, timeout=120):
-    src = ("import sys\nsys.path.insert(0, 'src')\nimport stackweave_c\n"
-           + textwrap.dedent(body))
-    env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src",
-               STACKWEAVE_SYSMON="0", **env_extra)
-    for k in ("STACKWEAVE_GON_BULK", "STACKWEAVE_GON_FRESH", "STACKWEAVE_GON_TIMING",
-              "STACKWEAVE_STACK_ARENA", "STACKWEAVE_STACK_ARENA_N"):
-        if k not in env_extra:
-            env.pop(k, None)
-    return subprocess.run([PY, "-c", src], cwd=REPO, env=env,
-                          capture_output=True, text=True, timeout=timeout)
+    env = dict.fromkeys(("STACKWEAVE_GON_BULK", "STACKWEAVE_GON_FRESH",
+                         "STACKWEAVE_GON_TIMING", "STACKWEAVE_STACK_ARENA",
+                         "STACKWEAVE_STACK_ARENA_N"))   # None: unset unless asked
+    env.update(STACKWEAVE_SYSMON="0", **env_extra)
+    return run_python("import stackweave_c\n" + textwrap.dedent(body),
+                      env=env, timeout=timeout)
 
 
 def _assert_ran(p, marker):
@@ -118,7 +96,7 @@ _SMALL = """
 """
 
 
-@_BULK_GAP
+@GON_BULK_GAP
 def test_gon_bulk_takes_bulk_path_under_migration():
     """The gap, stated once: with GON_BULK=1, fiber_n(N) must run every fiber
     AND build them with the bulk builder.  Today every fiber runs (the guard
@@ -157,14 +135,14 @@ def test_gon_bulk_is_ignored_safely_under_migration():
     assert _bulk_batches(p) == 0, p.stderr[-800:]
 
 
-@_BULK_GAP
+@GON_BULK_GAP
 def test_bulk_large_n_lifecycle_correct():
     p = _run(_LARGE, BULK_ENV)
     _assert_ran(p, "LARGE_OK")
     assert _bulk_batches(p) == 3, p.stderr[-800:]
 
 
-@_BULK_GAP
+@GON_BULK_GAP
 def test_bulk_small_n_still_correct():
     p = _run(_SMALL, BULK_ENV)
     _assert_ran(p, "SMALL_OK")
@@ -180,3 +158,7 @@ def test_stack_arena_fiber_n_lifecycle():
     _assert_ran(p, "LARGE_OK")
     p = _run(_SMALL, {"STACKWEAVE_STACK_ARENA": "1"})
     _assert_ran(p, "SMALL_OK")
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))

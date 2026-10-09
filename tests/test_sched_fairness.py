@@ -7,11 +7,11 @@ proc_test.go has explicit guards for exactly the failure modes this scheduler
 can have -- and one of them (yield starvation, TestYieldProgress) is the class
 of bug just fixed in 7a93a3e.  These are the standing regressions for it.
 
-Each workload runs in a fresh free-threaded subprocess (PYTHON_GIL=0) so the
-hubs run in genuine parallel.  The dominant failure signal is the subprocess
-TIMEOUT: mn_run() only returns when every fiber has finished, so a starved
-or never-scheduled fiber wedges mn_run forever -> rc 124 -> clean failure
-(not a hung pytest).
+Each workload runs in a fresh subprocess so the hubs run in genuine parallel.
+The dominant failure signal is the subprocess TIMEOUT: mn_run() only returns
+when every fiber has finished, so a starved or never-scheduled fiber wedges
+mn_run forever, and run_python fails the test with the child's output (not a
+hung pytest).
 
 Go originals (golang/go, src/runtime/proc_test.go):
   TestYieldProgress / TestYieldLocked, TestGoroutineParallelism{,2},
@@ -22,35 +22,18 @@ What is asserted vs. what Go asserts:
   * Parallelism -> work observably runs on >1 hub OS-thread (Go uses a tighter
     in-loop check; the OS-thread spread is the robust, non-flaky proxy).
   * Preemption -> a fiber in a tight loop with NO explicit yield still lets
-    a sibling run.  Needs M:N preemption, which migration mode stands down:
-    skipped as a known gap (tests/conftest.py _PER_G_KNOWN_GAPS).
+    a sibling run.  sysmon preempts a fiber that holds its hub past the time
+    slice (on by default; STACKWEAVE_PREEMPT_MS sets the slice).
 """
-import os
-import subprocess
 import sys
 
 import pytest
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from adv_util import run_python
 
 
 def run_mn(code, timeout=30):
-    preamble = (
-        "import sys; sys.path.insert(0, %r)\n"
-        "import stackweave_c\n" % os.path.join(REPO, "src")
-    )
-    env = dict(os.environ)
-    env["PYTHON_GIL"] = "0"
-    env["STACKWEAVE_GIL"] = "0"
-    try:
-        p = subprocess.run(
-            [sys.executable, "-c", preamble + code],
-            cwd=REPO, env=env, timeout=timeout,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    except subprocess.TimeoutExpired as e:
-        out = e.stdout.decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
-        err = e.stderr.decode() if isinstance(e.stderr, bytes) else (e.stderr or "")
-        return 124, out, err + "\n[run_mn: timed out after {0}s]".format(timeout)
+    p = run_python("import stackweave_c\n" + code, timeout=timeout)
     return p.returncode, p.stdout, p.stderr
 
 
@@ -191,7 +174,7 @@ print("PASS", len(seen), max(seen.values()))
 # ---------------------------------------------------------------------------
 # TestPreemption -- a fiber in a tight loop with NO explicit yield point
 # still yields the hub so a sibling can run.  Failure => infinite busy loop =>
-# timeout.  Currently a known migration-mode gap (no M:N preemption).
+# timeout.
 # ---------------------------------------------------------------------------
 def test_preemption_busy_loop_yields_to_sibling():
     """A fiber running `while not flag: pass` with NO sched_yield must
@@ -222,4 +205,4 @@ print("PASS")
 
 
 if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__] + sys.argv[1:]))
