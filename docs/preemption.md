@@ -155,6 +155,9 @@ budget, `STACKWEAVE_SYSMON_MS`).  Each hub's currently-running fiber gets
 preempted independently.  Two CPU-bound fibers on different hubs
 will both make progress without needing to yield to each other
 (they're on different OS threads); preemption keeps any single hub
-from being monopolised by one greedy fiber.
+from being monopolised by one greedy fiber.  A preempted fiber resumes
+on the hub it was preempted on: its slice can end anywhere, including
+inside `with rlock:` or an import, whose locks belong to the OS thread.
+A fiber that yields or sleeps can resume on another hub.
 
 See [Parallelism](parallelism.md) for the M:N model.

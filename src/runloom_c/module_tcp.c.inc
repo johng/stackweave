@@ -8,11 +8,11 @@
 static PyObject *m_yield(PyObject *self, PyObject *unused)
 {
     (void)self; (void)unused;
-    /* yield is just "switch back to caller".  We hold the GIL across the
-     * switch on GIL-builds because the caller will resume us on the same
-     * OS thread; under free-threaded Python the thread state stays
-     * attached.  This is safe because we never migrate a coroutine
-     * between OS threads (each thread has its own scheduler). */
+    /* yield is just "switch back to caller".  On a single-thread scheduler
+     * the caller resumes us on the same OS thread with the thread state
+     * still attached.  On an M:N hub, hub_main re-queues the fiber on its
+     * stealable yield queue, so it may resume on another hub, as after any
+     * park (runloom_mn_requeue_local). */
     runloom_coro_yield();
     Py_RETURN_NONE;
 }

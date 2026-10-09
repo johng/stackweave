@@ -186,13 +186,16 @@ int runloom_mn_ctrl_controlled(void);
  * nondeterministic yields into a seeded mn-sim run. */
 int runloom_preempt_active(void);
 
-/* Phase C v2 hook.  Called from runloom_sched_yield to give the M:N
- * scheduler a chance to handle the yield in hub context.  Returns
- * 1 if we're inside a hub and the yield was handled (g re-queued on
- * the hub's local FIFO, state snapped, asm-yield done, control will
- * return when hub re-resumes g).  Returns 0 if we're not in a hub
- * and the caller should fall through to the single-thread sched path. */
+/* Called from runloom_sched_yield to give the M:N scheduler a chance to
+ * handle the yield in hub context.  Returns 1 if we're inside a hub and the
+ * yield was handled (the fiber switched out; the hub re-queues it on its
+ * stealable yield queue, so it may resume on another hub).  Returns 0 if
+ * we're not in a hub and the caller should fall through to the
+ * single-thread sched path.  runloom_mn_preempt_current is the same for a
+ * preemption (the preempt_init time-slicer), which re-queues on the hub's
+ * ready ring instead, so the fiber resumes on the same hub. */
 int runloom_mn_yield_current(void);
+int runloom_mn_preempt_current(void);
 
 /* Returns the number of M:N hubs currently running (0 if mn_init was
  * never called or after mn_fini). */
@@ -200,10 +203,12 @@ int runloom_mn_hub_count(void);
 
 /* R0 gauges (lock-free per-hub census): live in-scheduler gs (submitted minus
  * completed, sum conserved under work-stealing); cumulative retired gs
- * (odometer); fresh stealable gs across all hub deques. */
+ * (odometer); stealable gs across all hub deques and yield queues; gs other
+ * hubs took from a yield queue (odometer). */
 long      runloom_mn_pending_total(void);
 long long runloom_mn_completed_total(void);
 long      runloom_mn_deque_depth_total(void);
+unsigned long long runloom_mn_yield_steals_total(void);
 
 /* ---- per-hub diagnostic snapshot (runloom.inspect.hubs()) ----
  * A point-in-time view of every hub's scheduler state, for answering

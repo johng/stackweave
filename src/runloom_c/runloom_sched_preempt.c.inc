@@ -25,10 +25,11 @@ static int runloom_preempt_yield_cb(void *user)
     if (runloom_tstate_in_destruction(PyThreadState_GET())) {
         return 0;
     }
-    /* If we're in a hub, yield via M:N path.  Otherwise check the
-     * single-thread global scheduler.  Either way, this is a no-op
-     * when no fiber is currently running on this tstate. */
-    if (runloom_mn_yield_current()) {
+    /* If we're in a hub, yield via M:N path -- as a preemption, which
+     * resumes the fiber on this hub.  Otherwise check the single-thread
+     * global scheduler.  Either way, this is a no-op when no fiber is
+     * currently running on this tstate. */
+    if (runloom_mn_preempt_current()) {
         return 0;
     }
     {

@@ -268,6 +268,20 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   because the owner may be mid-fiber and never reach its pick step --
   restoring the old `>1` there reopens a lost-wake vs park_enter.
   Guard: `tests/test_local_wake.py`.
+- **A yield or an ended sleep re-queues where another hub can take it; a
+  preemption does not.** `runloom_mn_requeue_local` puts an unpinned g its hub
+  switched out still runnable (a yield, a sleep whose timer fired there, a
+  fresh g the full deque refused) on `h->yieldq`, a Chase-Lev deque every
+  consumer takes from the TOP (the owner too, so its order stays FIFO), and
+  idle hubs steal from it. Two rules: (1) push only from hub_main, after the
+  g switched out and its tstate is detached, never from inside the fiber: a
+  thief resumes it the moment it is queued; (2) a preempted g goes back on the
+  ready ring (`runloom_mn_preempt_yield`), which only its hub reads: a time
+  slice ends wherever the fiber is, maybe inside `with rlock:` or an import,
+  whose locks key on the OS thread. A timer for a g pinned to another hub
+  wakes it like a channel wake (QUEUED, global run-queue), so the pin holds.
+  Guards: `tests/test_cross_hub_migration.py -k "idle_hub_takes or
+  preempted_fiber_keeps or pinned_fiber_resumes"` (`stats()["mn_yield_steals"]`).
 - **A sysmon preemption request names the resume it is for.** sysmon asks two
   ways at once, a flag the eval-frame wrapper reads at the next call and a
   pending call run at the next backward jump; `h->preempt_seq` holds the

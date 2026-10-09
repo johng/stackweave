@@ -21,7 +21,10 @@ int runloom_mn_hub_count(void)
  * mn_completed_total: cumulative retired gs across hubs -- an odometer
  * (never falls), a liveness signal to confirm the soak is retiring work.
  * mn_deque_depth_total: stealable gs across all hub deques -- fresh ones, plus
- * locally-woken ones under migration (runloom_mn_woken_enqueue). */
+ * locally-woken ones under migration (runloom_mn_woken_enqueue) -- and yield
+ * queues (runloom_mn_requeue_local).
+ * mn_yield_steals_total: gs a hub took from another hub's yield queue (an
+ * odometer): a yield or an ended sleep that moved the fiber. */
 long runloom_mn_pending_total(void)
 {
     long total = 0;
@@ -50,9 +53,16 @@ long runloom_mn_deque_depth_total(void)
     if (runloom_hubs == NULL) return 0;
     for (i = 0; i < n; i++) {
         long d = runloom_cldeque_size(&runloom_hubs[i].deque);
+        long y = runloom_cldeque_size(&runloom_hubs[i].yieldq);
         if (d > 0) total += d;
+        if (y > 0) total += y;
     }
     return total;
+}
+
+unsigned long long runloom_mn_yield_steals_total(void)
+{
+    return __atomic_load_n(&runloom_mn_yieldq_steals_total, __ATOMIC_RELAXED);
 }
 
 void *runloom_mn_current_hub_opaque(void)
@@ -611,7 +621,11 @@ void runloom_mn_sweep_claim_release(runloom_g_t *g)
     runloom_mn_woken_enqueue(g);
 }
 
-int runloom_mn_yield_current(void)
+/* preempted: the fiber did not choose this point (the preempt_init
+ * time-slicer), so it goes on the ready ring and resumes on this hub, as the
+ * other two preemption sites do (runloom_preempt_eval_frame); a yield goes on
+ * the stealable yield queue (runloom_mn_requeue_local). */
+static int runloom_mn_yield_current_ex(int preempted)
 {
     runloom_hub_t *h = runloom_tls_hub;
     runloom_g_t *g = runloom_tls_current_g;
@@ -630,6 +644,7 @@ int runloom_mn_yield_current(void)
      * scheduler is allowed to leave stealable items on a busy hub.
      * This matches single-thread's runloom_sched_yield fast path. */
     if (__builtin_expect(runloom_sched_ready_empty(&h->sched)
+                         && runloom_cldeque_size(&h->yieldq) == 0
                          && runloom_cldeque_size(&h->deque) == 0
                          && h->sched.sleep_size == 0
                          && runloom_netpoll_parked_count() == 0
@@ -648,11 +663,26 @@ int runloom_mn_yield_current(void)
         }
     }
     runloom_tls_fastpath_streak = 0;
-    runloom_sched_ready_push(&h->sched, g);
+    if (preempted) {
+        runloom_mn_preempt_yield(h, g);
+        return 1;
+    }
+    /* Not pushed here: hub_main queues the g once it has switched out and
+     * its tstate is detached (runloom_mn_requeue_local), since the yield
+     * queue is stealable and a thief must never resume a g still running. */
     runloom_pystate_snap(&g->snap);
-    runloom_tls_self_queued = 1;
     runloom_coro_yield();
-    /* On return: hub_main has loaded g->snap, so we're back in our
-     * own tstate slice and can keep running user code. */
+    /* After a yield we may be on another hub: anything thread-local is
+     * re-read (see the TLS-after-park rule in CLAUDE.md). */
     return 1;
+}
+
+int runloom_mn_yield_current(void)
+{
+    return runloom_mn_yield_current_ex(0);
+}
+
+int runloom_mn_preempt_current(void)
+{
+    return runloom_mn_yield_current_ex(1);
 }

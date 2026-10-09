@@ -1075,13 +1075,11 @@ stackweave.run(4, main)
         "the second importer on the same hub got the half-built module", got)
 
 
-@KNOWN_GAP(
-    "a timer wake re-queues the sleeper on the hub whose heap held it, ignoring pin_hub1; a channel or park wake routes through the pin",
-    raises=AssertionError)
 def test_sched_pinned_fiber_resumes_on_its_hub_after_a_sleep():
-    """Known gap: G.pin(N) confines a fiber's next resume to hub N, and a
-    channel wake honours that, but a sleep -- timed, or sleep(0) -- resumes the
-    fiber on the hub it slept on.  The channel wake runs first, as the control
+    """G.pin(N) confines a fiber's next resume to hub N, after a sleep --
+    timed, or sleep(0) -- as after a channel wake.  The sleep's timer fires on
+    the hub that held it, which wakes the fiber through the global run-queue
+    when it is pinned elsewhere.  The channel wake runs first, as the control
     that the pin itself took.
     """
     rc, out, err = run_scenario(r'''
@@ -1115,6 +1113,81 @@ stackweave.run(4, main)
     got = ast.literal_eval(landed[0][len("LANDED "):])
     assert all(want == hub for want, hub in got.values()), (
         "(pinned hub, hub it resumed on) after each sleep: %r" % (got,))
+
+
+# Eight CPU-bound fibers all start on hub 0 (a pinned spawn each undoes at
+# once) and pause after every 1 ms slice; the other three hubs have nothing
+# of their own.  Each fiber records the OS threads it ran on.
+_HUB0_CROWD = r'''
+_watchdog(60)
+def busy(sec):
+    end = time.perf_counter() + sec
+    while time.perf_counter() < end:
+        pass
+idents = set()
+def worker():
+    stackweave_c.current_g().pin(None)
+    for _ in range(100):
+        busy(0.001)
+        PAUSE()
+        idents.add(threading.get_ident())
+def main():
+    for _ in range(8):
+        stackweave_c.mn_fiber(worker, hub=0)
+steals = stackweave_c.stats()["mn_yield_steals"]
+stackweave.run(4, main)
+steals = stackweave_c.stats()["mn_yield_steals"] - steals
+print("threads", len(idents), "steals", steals, flush=True)
+assert steals > 0, "no hub took a g from another hub's yield queue"
+assert len(idents) > 1, "every fiber stayed on the hub it started on"
+print("PASS", flush=True)
+'''
+
+
+@pytest.mark.parametrize("pause", ["stackweave.yield_now()",
+                                   "stackweave.sleep(0.0005)"])
+def test_sched_an_idle_hub_takes_a_fiber_that_yielded_or_slept(pause):
+    """A fiber that yields, or whose sleep has ended, waits on its hub's
+    yield queue, which an idle hub steals from.  It used to wait on the
+    hub's ready ring, which no other hub reads: all eight fibers ran on
+    hub 0 to the end while the other three idled (1.7 s here, against
+    0.46 s with the yield queue).  stats()["mn_yield_steals"] counts the
+    takes."""
+    assert_pass(_HUB0_CROWD.replace("PAUSE()", pause))
+
+
+def test_identity_a_preempted_fiber_keeps_its_os_thread():
+    """A time slice ends wherever the fiber happens to be -- inside `with
+    rlock:` or an import, whose locks key on the OS thread -- so a preempted
+    fiber goes back on its hub's ready ring, which nothing steals from, and
+    resumes on the same hub.  A CPU-bound fiber that never yields runs for
+    0.4 s while a second fiber waits on its hub and three hubs idle; its OS
+    thread must not change.  The second fiber getting a turn while the hog
+    runs is the check that the hog was preempted."""
+    assert_pass(r'''
+_watchdog(60)
+state = {"hog_started": False, "hog_done": False, "turn_during_hog": False}
+hog_idents = set()
+def step(end):
+    return time.perf_counter() < end
+def hog():
+    stackweave_c.current_g().pin(None)
+    state["hog_started"] = True
+    end = time.perf_counter() + 0.4
+    while step(end):
+        hog_idents.add(threading.get_ident())
+    state["hog_done"] = True
+def other():
+    state["turn_during_hog"] = state["hog_started"] and not state["hog_done"]
+def main():
+    stackweave_c.mn_fiber(hog, hub=0)
+    stackweave_c.mn_fiber(other, hub=0)
+stackweave.run(4, main)
+print("hog threads", len(hog_idents), state, flush=True)
+assert state["turn_during_hog"], "the hog was never preempted"
+assert len(hog_idents) == 1, "a preempted fiber changed OS thread"
+print("PASS", flush=True)
+''')
 
 
 def test_identity_current_frames_lists_the_running_fiber_under_get_ident():

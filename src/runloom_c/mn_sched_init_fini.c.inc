@@ -219,6 +219,7 @@ int runloom_mn_init(int n_threads)
         h->id = i;
         runloom_sched_init(&h->sched);
         runloom_cldeque_init(&h->deque);
+        runloom_cldeque_init(&h->yieldq);
         runloom_mutex_init(&h->sub_lock);
         h->sub_tail = NULL;
         __atomic_store_n(&h->sub_head, (runloom_g_t *)NULL, __ATOMIC_RELAXED);
@@ -375,6 +376,8 @@ static void runloom_mn_hub_drain_leftovers(runloom_hub_t *h)
     while ((g = runloom_sched_ready_pop(&h->sched)) != NULL)
         runloom_g_decref(g);
     while ((g = (runloom_g_t *)runloom_cldeque_pop(&h->deque)) != NULL)
+        runloom_g_decref(g);
+    while ((g = (runloom_g_t *)runloom_cldeque_pop(&h->yieldq)) != NULL)
         runloom_g_decref(g);
     /* Each sleep entry holds its own ref on its g.  A LIVE one (ticket still
      * the g's) is also a fiber that never woke, so drop its scheduler ref too;
@@ -1377,10 +1380,11 @@ static int runloom_mn_has_wakeable_work(void)
         runloom_hub_t *h = &runloom_hubs[i];
         /* Mid-resume: the hub is running a fiber right now. */
         if (__atomic_load_n(&h->resume_start_ns, __ATOMIC_RELAXED) != 0) return 1;
-        /* Runnable work queued on this hub: ready ring / steal deque / the
-         * mn_fiber + wake_g submission list. */
+        /* Runnable work queued on this hub: ready ring / steal deque / yield
+         * queue / the mn_fiber + wake_g submission list. */
         if (!runloom_sched_ready_empty(&h->sched))                  return 1;
         if (runloom_cldeque_size(&h->deque) != 0)                   return 1;
+        if (runloom_cldeque_size(&h->yieldq) != 0)                  return 1;
         /* Lock-free ACQUIRE read of the submission list head, paired with RELEASE
          * stores at the 6 sub_head WRITE sites (mn_api / hub_main / hub_resume /
          * init): a publish (store g) is RELEASE so this read sees a non-NULL head
@@ -1398,8 +1402,8 @@ static int runloom_mn_has_wakeable_work(void)
 }
 
 /* For the mn_run progress-stall watchdog: TRUE iff some hub has a QUEUED runnable
- * fiber (ready ring / steal deque / submission list / global runq) AND no hub is
- * currently resuming one.  That is the stranded-runnable signature -- work that
+ * fiber (ready ring / steal deque / yield queue / submission list / global runq)
+ * AND no hub is currently resuming one.  That is the stranded-runnable signature -- work that
  * should be executing but nothing is running it and nothing is completing.  It
  * deliberately EXCLUDES fibers parked on I/O / timers / foreign waits (a
  * legitimately idle server must NOT be kicked) and the case where a hub is
@@ -1414,6 +1418,7 @@ static int runloom_mn_stalled_with_runnable(void)
         if (!runnable &&
             (!runloom_sched_ready_empty(&h->sched) ||
              runloom_cldeque_size(&h->deque) != 0 ||
+             runloom_cldeque_size(&h->yieldq) != 0 ||
              __atomic_load_n(&h->sub_head, __ATOMIC_ACQUIRE) != NULL))
             runnable = 1;
     }

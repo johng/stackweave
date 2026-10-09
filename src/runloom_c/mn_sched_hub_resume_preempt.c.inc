@@ -1193,17 +1193,17 @@ static inline int runloom_mn_nested_here(void)
     runloom_g_t *g = runloom_tls_current_g;
     return g != NULL && g->nest_depth > 0;
 }
-/* Set by runloom_mn_yield_current() before runloom_coro_yield(); read by
- * hub_main after runloom_coro_resume returns.  Tells hub_main "the g
- * has already put itself on a queue, you don't need to requeue".
- * Distinguishes scheduler-aware yield (sched_yield) from raw yield
- * (runloom_c.yield_() -> runloom_coro_yield directly). */
+/* Set before runloom_coro_yield() by a fiber that has put itself on a queue
+ * (a preemption, onto the ready ring) or parked (runloom_mn_tls_mark_parked);
+ * read by hub_main after runloom_coro_resume returns.  Clear for a yield --
+ * runloom_mn_yield_current or a raw runloom_coro_yield -- which hub_main
+ * re-queues itself (runloom_mn_requeue_local). */
 static RUNLOOM_TLS int runloom_tls_self_queued = 0;
 /* Set ONLY by runloom_mn_tls_mark_parked (the off-queue park path: netpoll /
  * chan / sleep all route through it).  Distinguishes a g that parked off-queue
  * -- so a wake_g will route it back, and it must NOT be re-pushed -- from a
- * cooperative yield_current (self_queued too, but it already pushed itself to
- * the local FIFO).  Read by hub_main's per-g-tstate release to decide PARKED
+ * preempted g (self_queued too, but it already pushed itself to the ready
+ * ring).  Read by hub_main's per-g-tstate release to decide PARKED
  * (wakeable) vs RUNNING (hub-pinned) for the wake state machine.  Unused by the
  * default scheduler, which keys re-push purely on self_queued. */
 static RUNLOOM_TLS int runloom_tls_parked_offqueue = 0;
@@ -1228,11 +1228,14 @@ static _PyFrameEvalFunction runloom_preempt_prev_eval = NULL;
  * (first mn_init) and never swapped back -- see runloom_preempt_install. */
 static int runloom_preempt_installed = 0;
 
-/* The preemption yield, shared by the eval-frame wrapper and the liveness
- * pending call: back on this hub's ready ring, which no other hub reads, so
- * the fiber can push itself before it switches out.  Out of line so the TLS
- * store has one copy: duplicated in cold paths, clang's outliner once merged
- * them into a TLV tail call that check_tls_after_park.py cannot read. */
+/* The preemption yield, shared by every preemption site (the eval-frame
+ * wrapper, the liveness pending call, the preempt_init time-slicer): back on
+ * this hub's ready ring and resumed here, never on the stealable yield queue.
+ * A time slice ends wherever the fiber happens to be, perhaps holding a lock
+ * keyed on the OS thread (see runloom_mn_requeue_local).  Pushing from inside
+ * the fiber is safe only because no other hub reads the ring.  Out of line so
+ * the TLS store has one copy: duplicated in cold paths, clang's outliner once
+ * merged them into a TLV tail call that check_tls_after_park.py cannot read. */
 static RUNLOOM_NOINLINE void runloom_mn_preempt_yield(runloom_hub_t *h,
                                                       runloom_g_t *g)
 {

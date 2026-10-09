@@ -1,42 +1,24 @@
 /* mn_sched.c -- M:N scheduler.
  *
- * N OS threads, each one a "hub" with its own runloom_sched_t and a
- * Chase-Lev work-stealing deque.  Goroutines spawned by runloom_mn_fiber
- * are round-robined onto hubs at spawn time; once running, a g is
- * pinned to its hub (its C stack is absolute address).
+ * N OS threads, each one a "hub" with its own runloom_sched_t.  Every
+ * fiber owns its own PyThreadState, which the hub running it attaches for
+ * the resume and detaches after, so a switched-out fiber can resume on any
+ * hub (cross-hub migration; its C stack is its own coroutine stack).
  *
- * Two queues per hub:
- *   - Chase-Lev deque   (h->deque)        -- FRESH gs only.  Stealable.
- *   - Local FIFO        (h->sched.ready)  -- YIELDED gs.  Hub-pinned.
+ * Where a runnable g waits:
+ *   - Chase-Lev deque (h->deque)        -- fresh gs, and gs a fiber on
+ *     this hub woke (local wake).  Owner pops LIFO; others steal.
+ *   - yield queue     (h->yieldq)       -- gs this hub switched out still
+ *     runnable: a yield, an ended sleep.  FIFO for the owner; others
+ *     steal (runloom_mn_requeue_local).
+ *   - ready ring      (h->sched.ready)  -- pinned gs, and a preempted g,
+ *     which must not change OS thread mid-slice.  This hub only.
+ *   - global run-queue                  -- foreign, pinned and overflow
+ *     wakes; any hub (a pinned entry only its hub) pulls them.
  *
- * A g moves between the two: it lives in the deque until first
- * resume, may be stolen by another hub.  Once it yields, it's pinned
- * to its hub (Phase B snap holds pointers into the g's own stack +
- * datastack chunks; cross-thread migration would require careful
- * tstate-field-by-tstate-field migration that we don't attempt).
- *
- * Work stealing: when a hub's local queues are both empty, it tries
- * to steal a g from a neighbour's deque.  Stolen gs are by
- * construction fresh (never run), so no migration concerns.
- *
- * Phase C v2 (this file): yield support inside hubs.  A fiber
- * running on hub H can call sched_yield(); the call routes through
- * runloom_mn_yield_current() which pushes the g back to H's local FIFO,
- * snapshots the per-g PythonState, and asm-yields back to hub_main
- * which then loads its own hub_snap and loops to the next g.
- *
- * Free-threaded Python is what makes this parallel: each hub thread
- * has its own PyThreadState and runs Python code without contending on
- * a global lock.
- *
- * What's NOT in v2:
- *   - cross-hub netpoll: each hub has its own epoll fd; a g that
- *     parks on I/O stays on its hub.  A future version could share
- *     a single epoll across hubs and wake whichever hub is idle.
- *   - sleep-in-hub: runloom_sched_sleep_until still uses the global
- *     scheduler's sleep heap.  Hubs don't process timers.
- *   - park-on-eventfd: today hubs busy-loop trying to steal when
- *     local is empty.  A real impl uses futex / eventfd to sleep.
+ * A hub with nothing local pulls the global run-queue, then steals from
+ * the other hubs' deques, then from their yield queues, then idles in its
+ * poller.  The scheduler invariants are in CLAUDE.md.
  */
 #define _POSIX_C_SOURCE 200809L
 #ifndef _GNU_SOURCE
@@ -157,6 +139,13 @@ typedef struct runloom_hub {
     runloom_thread_t thread;
     runloom_sched_t sched;
     runloom_cldeque_t deque;
+    /* Yield queue: unpinned gs this hub switched out still runnable -- a
+     * yield, a sleep its timer ended, a fresh g the full deque refused (see
+     * runloom_mn_requeue_local).  Only this hub pushes; it pops the TOP
+     * (runloom_mn_yieldq_pop), so its own order is FIFO like the ready ring,
+     * and an idle hub steals from the top too.  Every g here is RUNNING and
+     * carries no queue ref. */
+    runloom_cldeque_t yieldq;
     PyThreadState *tstate;        /* per-hub tstate */
     /* FSM SCOPE (RUNLOOM_FSM_VALIDATE): tier-3 HARDEN-IN-PLACE (FSM_ADOPTION.md).
      * A ONE-WAY lifecycle flag: 0 (running) -> 1 (stopping), set once by
