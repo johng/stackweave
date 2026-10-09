@@ -396,6 +396,7 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
     /* Per-OS-thread coro-backend setup (arms this thread's crash-handler
      * sigaltstack).  Must run BEFORE the first runloom_coro_resume. */
     runloom_coro_thread_init();
+    runloom_chunk_pool_hub_thread();
     runloom_tls_hub = h;
     /* From here until this thread exits, only it may mutate h->sched's sleep
      * heap (checked under STACKWEAVE_DEBUG=sleepheap). */
@@ -1522,6 +1523,11 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
             /* Drops of this hub's objects now land on the FIBER's tstate,
              * whose eval loop merges them as it runs (runloom_iframe_brc_adopt). */
             runloom_iframe_brc_adopt(g->tstate, hub_ts);
+            /* A Python fiber's first resume: its first frame-stack chunk
+             * comes from this hub's pool, not a fresh mapping.  A C-only g
+             * (no callable) never pushes a frame, so it takes none. */
+            if (g->tstate->datastack_chunk == NULL && g->callable != NULL)
+                runloom_fiber_datastack_install(g->tstate);
             /* Deep-surface migration oracle (RUNLOOM_DBG_MIGRATE; zero-cost
              * otherwise).  The per-g tstate's mimalloc heap / brc / QSBR are
              * bound to the OS thread that first used them; running it on a
@@ -1604,6 +1610,11 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                 runloom_advice_record_g(g);   /* fold stack HWM (profiling) */
                 runloom_g_state_set(g, RUNLOOM_GST_DONE);
                 runloom_netpoll_force_unlink_g_parker(g);
+                /* Its frames are all popped and its state detached: give
+                 * the chunks to this hub's pool now, rather than leaving
+                 * them for PyThreadState_Delete to unmap whenever the last
+                 * ref drops (maybe on a thread with no pool). */
+                runloom_fiber_datastack_release(g->tstate);
                 runloom_g_decref(g);                  /* scheduler ref */
                 if (from_runq) runloom_g_decref(g);   /* queue ref */
                 /* pending_complete LAST: the final decref may run a fiber_n

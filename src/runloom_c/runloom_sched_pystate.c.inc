@@ -499,12 +499,19 @@ void runloom_pystate_snap_clear(runloom_pystate_snap_t *snap)
  * doesn't compose with our M:N hubs (each hub already has its own
  * tstate, so the slot would be cold across hub-to-hub g migration),
  * and the pool is also useful for the single-thread sched. */
-/* 4096 chunks = ~16 MB / thread reserved when full, but matches
+/* 4096 chunks = ~64 MB / thread reserved when full, but matches
  * spawn-heavy peak working sets without falling back to the arena. */
 #define RUNLOOM_CHUNK_POOL_CAP 4096
+/* An M:N hub thread's cap (runloom_chunk_pool_hub_thread).  Every hub keeps a
+ * pool, so 4096 would let a burst leave up to ~66 MB per hub resident once the
+ * chunks have been fully touched.  512 still holds a hub's share of a
+ * fork-join wave (8 spawners x 200 fibers at 4 hubs is ~400 a hub); a burst
+ * past it unmaps the rest, as M:N did before it pooled. */
+#define RUNLOOM_CHUNK_POOL_HUB_CAP 512
 /* RUNLOOM_TLS expands to __thread (see plat.h). */
 static RUNLOOM_TLS _PyStackChunk *runloom_chunk_pool = NULL;
 static RUNLOOM_TLS int runloom_chunk_pool_size = 0;
+static RUNLOOM_TLS int runloom_chunk_pool_cap = RUNLOOM_CHUNK_POOL_CAP;
 
 /* GRACE delay-ring in FRONT of the reuse pool -- the targeted fix for the
  * cross-thread frame UAF (mac/arm64 big_100 p200).  sys._current_frames() (and
@@ -573,6 +580,16 @@ static RUNLOOM_TLS _PyStackChunk *runloom_chunk_grace_head = NULL;  /* oldest */
 static RUNLOOM_TLS _PyStackChunk *runloom_chunk_grace_tail = NULL;  /* newest */
 static RUNLOOM_TLS int runloom_chunk_grace_count = 0;
 
+/* M:N fibers' first chunks (runloom_fiber_datastack_install): taken from this
+ * thread's pool (reused) or left to CPython to map (mapped).  Per-thread so
+ * the spawn path pays no shared atomic; an exiting hub adds its counts to the
+ * process totals in runloom_chunk_pool_thread_flush, so stats() has them once
+ * run() returns. */
+static RUNLOOM_TLS unsigned long long runloom_fiber_chunks_reused_tls = 0;
+static RUNLOOM_TLS unsigned long long runloom_fiber_chunks_mapped_tls = 0;
+static unsigned long long runloom_fiber_chunks_reused = 0;
+static unsigned long long runloom_fiber_chunks_mapped = 0;
+
 /* Global chunk graveyard.  The reuse pool + grace ring above are per-thread
  * (RUNLOOM_TLS): every completed fiber parks its 16 KB datastack chunk there, so
  * a hub OS thread that exits at mn_fini takes its whole cache with it -- the
@@ -602,6 +619,12 @@ void runloom_chunk_pool_thread_flush(void)
     runloom_chunk_pool = NULL;        runloom_chunk_pool_size = 0;
     runloom_chunk_grace_head = NULL;  runloom_chunk_grace_tail = NULL;
     runloom_chunk_grace_count = 0;
+    __atomic_add_fetch(&runloom_fiber_chunks_reused,
+                       runloom_fiber_chunks_reused_tls, __ATOMIC_RELAXED);
+    __atomic_add_fetch(&runloom_fiber_chunks_mapped,
+                       runloom_fiber_chunks_mapped_tls, __ATOMIC_RELAXED);
+    runloom_fiber_chunks_reused_tls = 0;
+    runloom_fiber_chunks_mapped_tls = 0;
     if (head == NULL) return;
     pthread_mutex_lock(&runloom_chunk_graveyard_lock);
     tail->previous = runloom_chunk_graveyard;
@@ -655,7 +678,7 @@ static RUNLOOM_NOINLINE _PyStackChunk *runloom_chunk_pool_get(void)
 /* Push one chunk onto the LIFO reuse pool now.  At cap, arena-free instead. */
 static void runloom_chunk_pool_put_now(_PyStackChunk *c, PyObjectArenaAllocator *alloc)
 {
-    if (runloom_chunk_pool_size >= RUNLOOM_CHUNK_POOL_CAP) {
+    if (runloom_chunk_pool_size >= runloom_chunk_pool_cap) {
         if (alloc->free != NULL) {
             alloc->free(alloc->ctx, c, c->size);
         }
@@ -713,4 +736,25 @@ static int runloom_chunk_pool_install(PyThreadState *ts)
     ts->datastack_top = &c->data[1];
     ts->datastack_limit = (PyObject **)((char *)c + c->size);
     return 1;
+}
+
+/* See runloom_sched.h. */
+RUNLOOM_NOINLINE void runloom_chunk_pool_hub_thread(void)
+{
+    runloom_chunk_pool_cap = RUNLOOM_CHUNK_POOL_HUB_CAP;
+}
+
+/* See runloom_sched.h.  Out of line: it bumps this thread's counters. */
+RUNLOOM_NOINLINE void runloom_fiber_datastack_install(PyThreadState *ts)
+{
+    if (ts->datastack_chunk != NULL) return;
+    if (runloom_chunk_pool_install(ts)) runloom_fiber_chunks_reused_tls++;
+    else runloom_fiber_chunks_mapped_tls++;
+}
+
+void runloom_fiber_chunk_counts(unsigned long long *reused,
+                                unsigned long long *mapped)
+{
+    *reused = __atomic_load_n(&runloom_fiber_chunks_reused, __ATOMIC_RELAXED);
+    *mapped = __atomic_load_n(&runloom_fiber_chunks_mapped, __ATOMIC_RELAXED);
 }

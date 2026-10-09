@@ -34,9 +34,9 @@ def maps_count():
 
 
 @MIGRATION_GAP(
-    "each fiber's own thread state adds a datastack mapping per fiber slot: "
-    "the pool plateaus ~40x higher (bounded: flat over 320 rounds) and "
-    "sometimes only after the midpoint window",
+    "the mappings that keep climbing are pooled fiber stacks (512 KB + a "
+    "4 KB guard page each), not datastack chunks: about 1,200-1,500 stacks "
+    "at 4 hubs, and the second half sometimes still adds more than the bound",
     strict=False)
 def test_stack_pool_plateaus_under_fanout():
     samples = []

@@ -152,9 +152,8 @@ void runloom_sched_datastack_sweep_stats(unsigned long long *tail_bytes,
  * allocator pulls from.
  *
  * Algorithm matches greenlet's PythonState::did_finish, plus pool reuse. */
-void runloom_drain_g_datastack(void)
+static void runloom_drain_datastack_of(PyThreadState *ts)
 {
-    PyThreadState *ts = PyThreadState_GET();
     _PyStackChunk *chunk = ts->datastack_chunk;
     PyObjectArenaAllocator alloc;
 
@@ -169,6 +168,25 @@ void runloom_drain_g_datastack(void)
         _PyStackChunk *prev = chunk->previous;
         runloom_chunk_pool_put(chunk, &alloc);
         chunk = prev;
+    }
+}
+
+void runloom_drain_g_datastack(void)
+{
+    runloom_drain_datastack_of(PyThreadState_GET());
+}
+
+/* See runloom_sched.h.  The one-slot cache CPython keeps of a popped
+ * overflow chunk goes back too, so PyThreadState_Delete unmaps nothing. */
+void runloom_fiber_datastack_release(PyThreadState *ts)
+{
+    _PyStackChunk *cached = ts->datastack_cached_chunk;
+    runloom_drain_datastack_of(ts);
+    if (cached != NULL) {
+        PyObjectArenaAllocator alloc;
+        ts->datastack_cached_chunk = NULL;
+        PyObject_GetArenaAllocator(&alloc);
+        runloom_chunk_pool_put(cached, &alloc);
     }
 }
 

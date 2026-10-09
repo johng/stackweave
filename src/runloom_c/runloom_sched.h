@@ -993,6 +993,22 @@ void runloom_chunk_pool_reclaim(void);
  * fields NULL so PyEval will arena-allocate.  Either is correct. */
 void runloom_first_run_install_datastack(void);
 
+/* The same pool for M:N fibers, which each have their own thread state:
+ * without it CPython maps a fresh 16 KB chunk at each fiber's first call and
+ * unmaps it in PyThreadState_Delete, most of a no-op spawn's cost.
+ * install: hub_main, a Python fiber's first resume, its state attached; gives
+ * it a pooled chunk unless it has one, and counts the hit or the miss.
+ * release: hub_main, once the fiber is done and its state detached; its
+ * chunks (the cached one too) go to this thread's pool through the grace
+ * ring.  chunk_counts: the hits and misses of hubs that have exited.
+ * hub_thread: a hub thread calls it once at start, to keep a smaller pool
+ * (RUNLOOM_CHUNK_POOL_HUB_CAP) than the single-thread scheduler's. */
+void runloom_chunk_pool_hub_thread(void);
+void runloom_fiber_datastack_install(PyThreadState *ts);
+void runloom_fiber_datastack_release(PyThreadState *ts);
+void runloom_fiber_chunk_counts(unsigned long long *reused,
+                                unsigned long long *mapped);
+
 /* Reclaim the idle tail of a parked Python fiber's datastack chunk.
  * The companion of runloom_coro_madvise_idle (which drops the C stack below
  * SP): here we MADV_DONTNEED the free pages of g's CURRENT _PyStackChunk
