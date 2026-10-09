@@ -1,13 +1,14 @@
-# stackweave runtime comparison 20261009-070019
+# stackweave runtime comparison 20261009-070019-linux-c32
 
 - host: stackweave-bench-c32, Intel(R) Xeon(R) Platinum 8280 CPU @ 2.70GHz, 32 vCPU
-- stackweave  on python 3.14.4 (gil off), 4 hubs, netpoll epoll, TLBC on; builds: cur=/root/sw/src
+- stackweave  on python 3.14.4 (gil off), 4 hubs, netpoll epoll, TLBC on; builds: cur
 - other runtimes: threads/asyncio/uvloop/trio/gevent on python 3.14.4 (gil off); asyncio-gil/uvloop-gil on python 3.14.4 (GIL build); go on go1.26.6 (GOMAXPROCS = the hub count)
-- 1-min load average across the runs: 0.2 .. 13.0
+- 1-min load average across the runs: 0.1 .. 16.7
 - 3 interleaved pass(es); cells are the median over passes.  Brackets compare with `default`: % for a stackweave config, a ratio (value / stackweave's) for another runtime; ▲ better / ▼ worse than it, marked only with 2+ passes that all agree and a gap over 3%.  `-` = no analogue (see bench/baselines.py, bench/gobench).
 - stackweave bench/compare-runtimes @ f9a5b9c5 (main #65) + this branch's bench changes; copied without .git, so the sha fields are blank
 - DigitalOcean c-32: 32 dedicated vCPU Xeon Platinum 8280 (no SMT, 1 NUMA node), Ubuntu 24.04, kernel 7.0.0-38-generic; ASLR off (setarch -R); stackweave pinned to its first CPUs by the harness, the other runtimes unpinned
 - three CPython 3.14.4 built the same way (clang-19, PGO, tail-call interp, no LTO): patched free-threaded (stackweave), stock free-threaded (threads + event loops: uvloop/trio/gevent from PyPI), stock GIL build (asyncio-gil, uvloop-gil)
+- two legs on the same box and builds: mnsched + echo 07:00-07:50Z, apps + memory 08:50-09:30Z (the apps/memory suites were added between them)
 
 ## mnsched
 
@@ -60,4 +61,20 @@
 | c-echo @16h | 106807 | 103400 (-1.5%) | 104613 (-1.7%) | 176929 (+65.0% ▲) | 280484 (+162.6% ▲) | 268720 (+151.6% ▲) | - | - | - | - | - | - | - | 899595 (8.42× ▲) |
 | py-echo @16h | 105065 | 103050 (-2.6%) | 105107 (+0.0%) | 142231 (+35.4% ▲) | 314845 (+197.5% ▲) | 314895 (+199.7% ▲) | - | - | - | - | - | - | - | 899595 (8.62× ▲) |
 
-_total 2961 s_
+## apps
+
+| bench | default | stack-arena | optimize-throughput | tcpconn-iouring | iouring-loop | iouring-loop-ms | threads | asyncio | uvloop | trio | gevent | asyncio-gil | uvloop-gil | go |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| http json api 64 conns | 70124 | 70548 (+0.6%) | 71347 (+1.7%) | 67283 (-4.0% ▼) | 89507 (+27.6% ▲) | 88317 (+26.0% ▲) | 243628 (3.47× ▲) | 23400 (0.33× ▼) | 25318 (0.36× ▼) | 14478 (0.21× ▼) | 19122 (0.27× ▼) | 12510 (0.18× ▼) | 27660 (0.39× ▼) | 70966 (1.01×) |
+| api gateway fan-out 8 x 1ms | 6608 | 6080 (-8.0% ▼) | 7215 (+9.2% ▲) | 6719 (+0.7%) | 6613 (+0.1%) | 6509 (-1.5%) | 4243 (0.64× ▼) | 10581 (1.60× ▲) | 15887 (2.41× ▲) | 3989 (0.60× ▼) | 5158 (0.78× ▼) | 12252 (1.85× ▲) | 19294 (2.92× ▲) | 66717 (10× ▲) |
+| parse+hash pipeline 4 workers | 385512 | 384705 (-0.0%) | 381100 (-0.5%) | 387500 (-0.0%) | 388313 (+0.6%) | 385760 (+0.8%) | 171694 (0.45× ▼) | 135869 (0.35× ▼) | 134236 (0.35× ▼) | 36153 (0.09× ▼) | 155287 (0.40× ▼) | 138661 (0.36× ▼) | 139257 (0.36× ▼) | 684670 (1.76× ▲) |
+| pub/sub broadcast 256 subs | 3802530 | 3881976 (+0.9%) | 4059828 (+7.2% ▲) | 3761035 (-1.1%) | 3760611 (-1.1%) | 3801437 (-1.3%) | 160384 (0.04× ▼) | 1054169 (0.28× ▼) | 1092120 (0.29× ▼) | 94744 (0.03× ▼) | 1285724 (0.34× ▼) | 1190809 (0.31× ▼) | 1241542 (0.33× ▼) | 4290076 (1.14× ▲) |
+| crawler 10k concurrent x 3 fetches | 56826 | 60983 (+5.6% ▲) | 58373 (+2.6%) | 57956 (+2.0%) | 56265 (-1.7%) | 58446 (-0.0%) | 15314 (0.27× ▼) | 109656 (1.89× ▲) | 166065 (2.94× ▲) | 34422 (0.59× ▼) | 68187 (1.20× ▲) | 124384 (2.14× ▲) | 198258 (3.50× ▲) | 1641280 (28× ▲) |
+
+## memory
+
+| bench | default | stack-arena | optimize-throughput | tcpconn-iouring | iouring-loop | iouring-loop-ms | threads | asyncio | uvloop | trio | gevent | asyncio-gil | uvloop-gil | go |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| rss per parked unit @10k [RSS/unit] | 25.8 KB | 25.8 KB (-0.0%) | 24.5 KB (-4.9% ▲) | 25.8 KB (-0.0%) | 25.8 KB (-0.0%) | 25.8 KB (+0.0%) | 172.5 KB (6.69× ▼) | 1.2 KB (0.05× ▲) | 1.2 KB (0.05× ▲) | 2.5 KB (0.10× ▲) | 8.2 KB (0.32× ▲) | 1.1 KB (0.04× ▲) | 1.1 KB (0.04× ▲) | 2.7 KB (0.10× ▲) |
+| rss per parked unit @100k [RSS/unit] | 22.9 KB | 24.5 KB (+7.6%) | 23.2 KB (-6.0%) | 24.9 KB (+0.8%) | 22.4 KB (-0.6%) | 23.4 KB (+0.2%) | - | 1.0 KB (0.05× ▲) | 1.0 KB (0.05× ▲) | 2.2 KB (0.10× ▲) | 7.9 KB (0.34× ▲) | 1.1 KB (0.05× ▲) | 1.1 KB (0.05× ▲) | 2.4 KB (0.10× ▲) |
+

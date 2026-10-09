@@ -2,14 +2,19 @@
 
 One set of workloads, run on stackweave (per feature config) and on the
 runtimes people would otherwise use: OS threads, asyncio, uvloop, trio,
-gevent and Go. Every runtime runs the same entries, with the same names and
+gevent and Go.  Four suites: scheduler microbenchmarks (`mnsched`), TCP echo
+(`echo`), application-shaped programs (`apps`) and memory per parked unit
+(`memory`). Every runtime runs the same entries, with the same names and
 inner counts, so one table compares them all.
 
 | Path | What |
 | --- | --- |
 | `mnsched.py` | stackweave scheduler workloads on M:N hubs (migration is the only M:N mode): park/wake routing (local wake, pinned, cross-hub, busy and drifted pools), spawn / yield / pairs / fan-out / Mutex / WaitGroup / select / `blocking()`, 64-pair hub scaling, latency percentiles (foreign-thread and cross-hub wakes, spawn-to-first-run, timer lateness) |
 | `echo.py` | stackweave in-process TCP echo round-trips (all-C and Python handlers, `TCPConn` clients) at 2/4/8/16 hubs -- measures whichever I/O path the environment selects |
-| `baselines.py` | the same entries on threads, asyncio, uvloop, trio and gevent (no stackweave imported; run on a stock interpreter) |
+| `apps.py` | application-shaped programs on stackweave: an HTTP/1.1 JSON API (64 keep-alive clients), an API gateway fanning out to 8 slow backends per request, a CPU-bound parse+hash pipeline, a 256-subscriber pub/sub broadcast, a 10k-task crawler |
+| `memory.py` | RSS growth per parked fiber at 10k and 100k, from the OS |
+| `appspec.py` | the one definition of the apps and memory workloads (sizes, payloads, HTTP framing, checksums) that every Python runtime imports and Go mirrors |
+| `baselines.py`, `baselines_apps.py` | the same entries on threads, asyncio, uvloop, trio and gevent (no stackweave imported; run on a stock interpreter) |
 | `gobench/` | the same entries in Go (GOMAXPROCS stands in for the hub count) |
 | `compare.py` | the driver: every stackweave config and every other runtime as a column, interleaved passes, one `summary.md` |
 | `harness.py`, `gil.py` | env capture + warmup/samples + median/MAD/min + bootstrap CI + JSON writer; the free-threading guard |
@@ -48,7 +53,8 @@ interpreter, no `go`) are skipped with a note.
 ## Reading the table
 
 - A cell is the median over passes. Throughput rows are ops/s (higher is
-  better); `[p50]` / `[p99]` rows are latency (lower is better).
+  better); `[p50]` / `[p99]` rows are latency and `[RSS/unit]` rows are
+  resident memory per parked unit (lower is better).
 - The bracket compares the cell with stackweave `default`: a percentage for
   another stackweave config, a ratio (value / stackweave's) for another
   runtime. ▲ / ▼ mark better / worse only when every pass agrees and the gap
@@ -65,6 +71,15 @@ interpreter, no `go`) are skipped with a note.
   the critical section) while trio's does; threads call the `blocking()` row's
   sleep directly, the loops go through their thread offload; Go's
   `blocking()` is `time.Sleep`, a runtime timer.
+- Apps are written the way each runtime is normally used: Go uses net/http
+  (a full HTTP stack) where the Python runtimes share one small HTTP/1.1
+  parser; threads run a thread per connection / task and a
+  ThreadPoolExecutor for the gateway's backend calls. The single-threaded
+  loops run the pipeline's CPU work on one core by design -- that is the
+  point of that row. Threads skip the 100k memory row.
+- Memory is the OS's RSS growth while N units are parked, so it includes
+  stacks, thread states and allocator overhead -- and the page size (16 KB on
+  Apple silicon, 4 KB on x86 Linux) rounds it up.
 
 ## Methodology
 
@@ -84,7 +99,7 @@ interpreter, no `go`) are skipped with a note.
   pins hub threads; a run that lands hubs on efficiency cores reads ~2.4x
   slower on ping-pong, so check the load before trusting a gap.
 
-What this does not measure: an external load generator across network
-namespaces, connection churn, and RSS per parked fiber. The old `suite/`
-measured those on Linux; it was retired with this consolidation (see git
-history) and they are the next things to add here.
+What this does not measure yet: an external load generator across network
+namespaces, connection churn, and spawn rate as N grows to 1M. The old
+`suite/` measured those on Linux; it was retired with this consolidation (see
+git history) and they are the next things to add here.

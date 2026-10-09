@@ -1,0 +1,6 @@
+runtime: trio  python 3.14.4  gil=False
+
+  rss per parked unit @10k               2.46 KB/unit  (10000 units, RSS 35.2 -> 59.3 MB)
+  rss per parked unit @100k              2.21 KB/unit  (100000 units, RSS 60.1 -> 275.8 MB)
+
+wrote /root/sw/benchmark/bench/results/compare/20261009-070019-linux-c32/memory-rt-trio-p0.json

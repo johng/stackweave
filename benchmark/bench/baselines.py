@@ -29,9 +29,12 @@ drifted routing variants and hub scaling.  asyncio.Lock and gevent's
 Semaphore never contend (no yield inside the critical section); trio.Lock
 does (acquire is a checkpoint).
 
+The application-shaped workloads and the memory probe (bench.apps,
+bench.memory) are in bench/baselines_apps.py, selected with --suite.
+
 Run:
     PYTHONPATH=benchmark python -m bench.baselines --kind uvloop --out x.json
-    ... --suite mnsched|echo|all  --quick
+    ... --suite mnsched|echo|apps|memory|all  --quick
 """
 import sys
 
@@ -1186,12 +1189,13 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="other Python runtimes on the stackweave workloads")
     ap.add_argument("--kind", choices=KINDS, required=True)
     ap.add_argument("--quick", action="store_true")
-    ap.add_argument("--suite", choices=("mnsched", "echo", "all"), default="all")
+    ap.add_argument("--suite", choices=("mnsched", "echo", "apps", "memory", "all"),
+                    default="all", help="all = mnsched + echo")
     ap.add_argument("--out", default=None)
     args = ap.parse_args(argv)
     q = 10 if args.quick else 1
     n = 400 if args.quick else 4_000
-    samples, warmup = (3, 1) if args.quick else (12, 3)
+    samples, warmup = (3, 1) if args.quick else ((10, 2) if args.suite == "apps" else (12, 3))
     s = Suite("baseline-" + args.kind, pin_cpus=[], samples=samples, warmup=warmup)
     s.env["runtime"] = args.kind
     rt = make(args.kind)
@@ -1216,6 +1220,16 @@ def main(argv=None):
 
     if args.suite in ("echo", "all"):
         rt.echo(s, 64, max(10, 500 // q), samples, warmup)
+    if args.suite in ("apps", "memory"):
+        from bench import appspec, baselines_apps
+        apps = baselines_apps.make(args.kind, rt)
+        if args.suite == "apps":
+            z = appspec.scaled(args.quick)
+            appspec.pipe_expected(z["pipe_records"])     # build the records untimed
+            apps.run(s, z)
+        else:
+            apps.memory(s, [c // 10 for c in appspec.MEM_COUNTS] if args.quick
+                        else list(appspec.MEM_COUNTS))
     s.write(args.out)
 
 

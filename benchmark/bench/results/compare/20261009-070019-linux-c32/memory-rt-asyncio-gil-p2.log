@@ -1,0 +1,6 @@
+runtime: asyncio  python 3.14.4  gil=True
+
+  rss per parked unit @10k               1.10 KB/unit  (10000 units, RSS 23.7 -> 34.5 MB)
+  rss per parked unit @100k              1.06 KB/unit  (100000 units, RSS 28.2 -> 131.9 MB)
+
+wrote /root/sw/benchmark/bench/results/compare/20261009-070019-linux-c32/memory-rt-asyncio-gil-p2.json

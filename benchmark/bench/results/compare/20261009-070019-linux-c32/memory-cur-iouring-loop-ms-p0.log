@@ -1,0 +1,10 @@
+==============================================================================
+suite: memory
+python 3.14.4 CPython  gil=False  | stackweave fcontext-asm/epoll @ 
+cpu: Intel(R) Xeon(R) Platinum 8280 CPU @ 2.70GHz  | 32 vCPU / 1 NUMA  | pinned=none  aslr=2  load=2.28/1.77/1.01
+tlbc: on (gc_frames_active=1, PYTHON_TLBC=None)  | build: -  | env: STACKWEAVE_IOURING_LOOP=1 STACKWEAVE_IOURING_MS=1 STACKWEAVE_IOURING_MS_BUFS=1024
+==============================================================================
+  rss per parked unit @10k              25.77 KB/unit  (10000 units, RSS 35.7 -> 287.3 MB)
+  rss per parked unit @100k             23.41 KB/unit  (100000 units, RSS 473.5 -> 2759.7 MB)
+
+wrote /root/sw/benchmark/bench/results/compare/20261009-070019-linux-c32/memory-cur-iouring-loop-ms-p0.json

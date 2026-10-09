@@ -1,0 +1,6 @@
+runtime: go go1.26.6  GOMAXPROCS=4 (scaling 1,2,4,8,16)
+
+  rss per parked unit @10k               2.69 KB/unit  (10000 units, RSS 8.3 -> 34.6 MB)
+  rss per parked unit @100k              2.40 KB/unit  (100000 units, RSS 34.8 -> 268.8 MB)
+
+wrote /root/sw/benchmark/bench/results/compare/20261009-070019-linux-c32/memory-rt-go-p0.json

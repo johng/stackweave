@@ -1,0 +1,58 @@
+{
+  "env": {
+    "aslr": "2",
+    "build_label": "",
+    "cpu_model": "Intel(R) Xeon(R) Platinum 8280 CPU @ 2.70GHz",
+    "cpu_perflevels": null,
+    "gc_frames_active": null,
+    "gil_enabled": true,
+    "git_dirty": false,
+    "git_sha": "",
+    "governor": "n/a (virtualized)",
+    "host": "stackweave-bench-c32",
+    "iouring_available": null,
+    "kernel": "7.0.0-38-generic",
+    "loadavg": [
+      "14.25",
+      "5.24",
+      "3.02"
+    ],
+    "nproc": 32,
+    "numa_nodes": 1,
+    "optimize": null,
+    "perf_event_paranoid": "4",
+    "pinned_cpus": null,
+    "py_cflags": "-fno-strict-overflow -Wsign-compare -Wunreachable-code -DNDEBUG -g -O3 -Wall",
+    "py_config_args": "'--prefix=/opt/py-gil' '--enable-optimizations' '--with-tail-call-interp' 'CC=clang-19' 'CPPFLAGS='",
+    "python": "3.14.4",
+    "python_build": "main Oct  9 2026 06:52:10",
+    "python_impl": "CPython",
+    "python_tlbc_env": null,
+    "runloom_backend": "import-failed: ModuleNotFoundError('import of stackweave_c halted; None in sys.modules')",
+    "runloom_netpoll": "import-failed: ModuleNotFoundError('import of stackweave_c halted; None in sys.modules')",
+    "runloom_so": "import-failed: ModuleNotFoundError('import of stackweave_c halted; None in sys.modules')",
+    "runtime": "asyncio",
+    "stackweave_env": {},
+    "timestamp": "2026-10-09T09:29:16+00:00"
+  },
+  "memory": [
+    {
+      "bytes_per_unit": 1128.8576,
+      "name": "rss per parked unit @10k",
+      "note": "tasks parked on Event.wait",
+      "rss_after": 36155392,
+      "rss_before": 24866816,
+      "units": 10000
+    },
+    {
+      "bytes_per_unit": 1087.77472,
+      "name": "rss per parked unit @100k",
+      "note": "tasks parked on Event.wait",
+      "rss_after": 138297344,
+      "rss_before": 29519872,
+      "units": 100000
+    }
+  ],
+  "results": [],
+  "suite": "baseline-asyncio"
+}

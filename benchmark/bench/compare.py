@@ -1,15 +1,19 @@
 """Runtime comparison: stackweave (per feature config) vs threads, asyncio,
 uvloop, trio, gevent and Go, on the same workloads, in one table.
 
-The workloads are bench.mnsched (scheduler: park/wake, spawn, yield, sync
-primitives, scaling, latency) and bench.echo (in-process TCP echo).
-bench.baselines runs them on the other Python runtimes and gobench/ on Go,
-under the same entry names and inner counts, so every row lines up.
+The suites are bench.mnsched (scheduler: park/wake, spawn, yield, sync
+primitives, scaling, latency), bench.echo (in-process TCP echo), bench.apps
+(application-shaped programs: an HTTP JSON API, an API gateway, a parse+hash
+pipeline, pub/sub, a crawler -- defined once in bench/appspec.py) and
+bench.memory (RSS per parked unit).  bench.baselines (+ baselines_apps) runs
+them on the other Python runtimes and gobench/ on Go, under the same entry
+names and inner counts, so every row lines up.
 
 Every column runs in its own process (stackweave's switches are read from the
 environment when the hubs start), in interleaved passes (A B C, then C B A,
 ...) because run-to-run drift on one box is larger than most real deltas.
-Each cell is the median over passes; the bracket compares it with stackweave
+Each cell is the median over passes (throughput: higher is better; latency
+and RSS/unit: lower is better); the bracket compares it with stackweave
 `default`: a percentage for a stackweave config, a ratio for another runtime,
 marked ▲ (better than stackweave default) / ▼ (worse) only when every pass
 agrees and the gap is over 3%.
@@ -65,7 +69,7 @@ RUNTIMES = {
 }
 DEFAULT_CONFIGS = list(CONFIGS)
 DEFAULT_RUNTIMES = ["threads", "asyncio", "uvloop", "trio", "gevent", "go"]
-SUITES = ("mnsched", "echo")
+SUITES = ("mnsched", "echo", "apps", "memory")
 RT = "rt"            # the "build" slot of a non-stackweave column's key
 
 
@@ -134,6 +138,8 @@ def summarize(runs):
             for r in d.get("latency") or []:
                 t.setdefault(("p50", r["name"]), {}).setdefault(key, []).append(r["p50_us"])
                 t.setdefault(("p99", r["name"]), {}).setdefault(key, []).append(r["p99_us"])
+            for r in d.get("memory") or []:
+                t.setdefault(("mem", r["name"]), {}).setdefault(key, []).append(r["bytes_per_unit"])
     return table
 
 
@@ -148,6 +154,8 @@ def fmt_row(kind, name, per_key, keys, base_key):
         med = statistics.median(vals)
         if kind == "tput":
             cell = "%.0f" % med if med >= 100 else "%.1f" % med
+        elif kind == "mem":
+            cell = "%.1f KB" % (med / 1024)
         else:
             cell = "%.1f us" % med
         if base and k != base_key and len(vals) == len(base):
@@ -163,7 +171,7 @@ def fmt_row(kind, name, per_key, keys, base_key):
                 else:
                     cell += " (%+.1f%%%s)" % ((r - 1) * 100, mark)
         cells.append(cell)
-    label = name if kind == "tput" else "%s [%s]" % (name, kind)
+    label = {"tput": name, "mem": "%s [RSS/unit]" % name}.get(kind, "%s [%s]" % (name, kind))
     return "| %s | %s |" % (label, " | ".join(cells))
 
 

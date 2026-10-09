@@ -302,6 +302,7 @@ class Suite:
         self.env["optimize"] = optimized
         self.results = []
         self.latency_results = []
+        self.memory_results = []
 
     def bench(self, name, fn, *, inner=1, samples=None, warmup=None, note="",
               setup=None, teardown=None):
@@ -358,6 +359,18 @@ class Suite:
         self.print_row(stats)
         return stats
 
+    def memory(self, name, units, rss_before, rss_after, *, note=""):
+        """Record RSS growth while ``units`` parked units were alive.  Kept
+        apart from ``results`` (not a throughput) and ``latency``."""
+        stats = {"name": name, "note": note, "units": units,
+                 "rss_before": rss_before, "rss_after": rss_after,
+                 "bytes_per_unit": (rss_after - rss_before) / units}
+        self.memory_results.append(stats)
+        print("  %-34s %8.2f KB/unit  (%d units, RSS %.1f -> %.1f MB)"
+              % (name, stats["bytes_per_unit"] / 1024, units,
+                 rss_before / 2**20, rss_after / 2**20))
+        return stats
+
     def latency(self, name, samples_ns, *, note=""):
         """Record a latency DISTRIBUTION (one value per event, ns) as
         percentiles.  Kept apart from ``results``: a tail is not a
@@ -405,6 +418,8 @@ class Suite:
         }
         if self.latency_results:
             doc["latency"] = self.latency_results
+        if self.memory_results:
+            doc["memory"] = self.memory_results
         with open(path, "w") as f:
             json.dump(doc, f, indent=2, sort_keys=True)
             f.write("\n")

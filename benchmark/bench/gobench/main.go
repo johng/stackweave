@@ -9,7 +9,9 @@
 // Not here: stackweave's pinned / busy / drifted routing variants and a
 // foreign-OS-thread wake (Go has no non-runtime threads without cgo).
 //
-//	go build -o gobench . && ./gobench -out go.json [-quick] [-suite mnsched|echo|all]
+//	go build -o gobench . && ./gobench -out go.json [-quick] [-suite mnsched|echo|apps|memory|all]
+//
+// apps.go has the application-shaped workloads and the memory probe.
 package main
 
 import (
@@ -439,7 +441,7 @@ func main() {
 		hubs = v
 	}
 	quick := flag.Bool("quick", false, "3 samples, smaller inner counts")
-	suite := flag.String("suite", "all", "mnsched|echo|all")
+	suite := flag.String("suite", "all", "mnsched|echo|apps|memory|all (all = mnsched + echo)")
 	out := flag.String("out", "go.json", "result JSON path")
 	scale := flag.String("scale", "1,2,4,8,16", "GOMAXPROCS for the 64-pair scaling rows")
 	echoProcs := flag.String("echo-procs", "2,4,8,16", "GOMAXPROCS for the echo rows")
@@ -491,6 +493,12 @@ func main() {
 			}
 		}
 	}
+	if *suite == "apps" {
+		runApps(*quick, hubs)
+	}
+	if *suite == "memory" {
+		runMemory(*quick, hubs)
+	}
 
 	host, _ := os.Hostname()
 	load := strings.Fields(strings.Trim(sh("sysctl", "-n", "vm.loadavg"), "{ }"))
@@ -506,7 +514,7 @@ func main() {
 			"nproc": ncpu, "runtime": "go", "go": runtime.Version(),
 			"gomaxprocs": hubs, "loadavg": load,
 		},
-		"results": results, "latency": latencies,
+		"results": results, "latency": latencies, "memory": memories,
 	}
 	f, err := os.Create(*out)
 	if err != nil {
