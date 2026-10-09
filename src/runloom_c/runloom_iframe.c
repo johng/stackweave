@@ -153,7 +153,7 @@ void runloom_iframe_hand_over_freelists(PyThreadState *dead)
  * whenever they need memory (mimalloc's reclaim-on-allocate) and on their
  * exit.  So when the state provably owns nothing, point its segment tld at an
  * empty private pool for the duration of the Clear.  Checked against the
- * mimalloc 2.1.2 that CPython 3.14 and 3.15 vendor (3.15.0rc1-rc3's
+ * mimalloc 2.1.2 that CPython 3.14 and 3.15 vendor (3.15.0rc1-3.15.0's
  * Objects/mimalloc/segment.c, mi_abandoned_pool_t and pycore_mimalloc.h are
  * byte-identical to 3.14.4's); other versions keep the plain Clear until
  * checked. */

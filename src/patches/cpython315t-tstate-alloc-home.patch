@@ -1,7 +1,7 @@
 # CPython 3.15t OPTIONAL feature patch: per-tstate allocation "home"
 #   build flag:  -DPy_TSTATE_ALLOC_HOME      (OFF by default)
-#   pinned to:   Python-3.15.0rc3  (applies at ZERO fuzz: patch -p1 -F0; so do rc1
-#                and rc2, one hunk 3 lines off)
+#   pinned to:   Python-3.15.0  (applies at ZERO fuzz: patch -p1 -F0; so does rc3,
+#                and so do rc1 and rc2, one hunk 3 lines off)
 #   series pair: this is the ALLOCATION half for the 3.15 series.  The matching
 #                EXECUTION half is cpython315t-tstate-exec-home.patch; migration
 #                needs BOTH.  Ports of cpython314t-tstate-alloc-home.patch -- NOT
