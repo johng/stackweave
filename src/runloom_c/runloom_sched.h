@@ -996,8 +996,8 @@ void runloom_first_run_install_datastack(void);
 /* The same pool for M:N fibers, which each have their own thread state:
  * without it CPython maps a fresh 16 KB chunk at each fiber's first call and
  * unmaps it in PyThreadState_Delete, most of a no-op spawn's cost.
- * install: hub_main, a Python fiber's first resume, its state attached; gives
- * it a pooled chunk unless it has one, and counts the hit or the miss.
+ * install: runloom_g_entry, once per Python fiber, before its callable runs;
+ * gives it a pooled chunk unless it has one, and counts the hit or the miss.
  * release: hub_main, once the fiber is done and its state detached; its
  * chunks (the cached one too) go to this thread's pool through the grace
  * ring.  chunk_counts: the hits and misses of hubs that have exited.

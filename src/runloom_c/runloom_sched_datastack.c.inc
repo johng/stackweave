@@ -143,11 +143,14 @@ void runloom_sched_datastack_sweep_stats(unsigned long long *tail_bytes,
 /* Drain the datastack-chunk chain currently attached to tstate,
  * returning tstate's datastack pointers to NULL.
  *
- * Called after a fiber completes, BEFORE we restore the scheduler
- * or hub snapshot (which would overwrite tstate->datastack_chunk with
- * the scheduler's saved value and leak g's chain).
+ * Two callers: the single-thread drain, after a fiber completes and BEFORE
+ * it restores the scheduler snapshot (which would overwrite
+ * tstate->datastack_chunk with the scheduler's saved value and leak g's
+ * chain); and hub_main, for a finished M:N fiber's own detached state
+ * (runloom_fiber_datastack_release).
  *
- * Reused chunks go to the per-thread pool (up to RUNLOOM_CHUNK_POOL_CAP).
+ * Reused chunks go to the per-thread pool (up to the thread's cap:
+ * RUNLOOM_CHUNK_POOL_CAP, or RUNLOOM_CHUNK_POOL_HUB_CAP on a hub).
  * Overflow goes back to the arena allocator that CPython's frame
  * allocator pulls from.
  *

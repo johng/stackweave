@@ -297,12 +297,15 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
 - **An M:N fiber's data-stack chunks come from its hub's pool and go back to
   it.** Each fiber has its own thread state, so unpooled, CPython mapped a
   16 KB chunk at the fiber's first call and unmapped it in
-  `PyThreadState_Delete`: ~60% of a hub's busy time on no-op fibers. hub_main
-  installs one at a Python fiber's first resume, after the attach
-  (`runloom_fiber_datastack_install`; a C-only fiber takes none), and releases
+  `PyThreadState_Delete`: ~60% of a hub's busy time on no-op fibers. A Python
+  fiber's entry (`runloom_g_entry`) installs one once, before its callable runs
+  (`runloom_fiber_datastack_install`; a C-only fiber takes none). Not at a
+  resume in hub_main: a callable that parks in C before pushing a frame was
+  offered one again, and counted again, at every resume. hub_main releases
   them in the done branch, after the detach (`runloom_fiber_datastack_release`),
   through the same grace ring as the single-thread drain. A hub thread caps its
-  pool at 512 (`RUNLOOM_CHUNK_POOL_HUB_CAP`). The dwell sweep reads an M:N
+  pool at 512 (`RUNLOOM_CHUNK_POOL_HUB_CAP`); the grace ring is outside the
+  cap. The dwell sweep reads an M:N
   fiber's chunk from `g->tstate`, not from its snapshot, which per-g fibers
   skip (so the sweep never reached one), under its sweep claim: hub_main
   publishes PARKED only after the fiber's brc_release and detach. Guards:

@@ -1523,11 +1523,6 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
             /* Drops of this hub's objects now land on the FIBER's tstate,
              * whose eval loop merges them as it runs (runloom_iframe_brc_adopt). */
             runloom_iframe_brc_adopt(g->tstate, hub_ts);
-            /* A Python fiber's first resume: its first frame-stack chunk
-             * comes from this hub's pool, not a fresh mapping.  A C-only g
-             * (no callable) never pushes a frame, so it takes none. */
-            if (g->tstate->datastack_chunk == NULL && g->callable != NULL)
-                runloom_fiber_datastack_install(g->tstate);
             /* Deep-surface migration oracle (RUNLOOM_DBG_MIGRATE; zero-cost
              * otherwise).  The per-g tstate's mimalloc heap / brc / QSBR are
              * bound to the OS thread that first used them; running it on a

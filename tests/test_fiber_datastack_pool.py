@@ -3,13 +3,14 @@
 Each M:N fiber has its own thread state.  Before it pooled, CPython mapped a
 fresh 16 KB chunk at each fiber's first Python call and unmapped it when the
 state was deleted: on macOS that was ~60% of a hub's busy time running no-op
-fibers.  Now a Python fiber's first resume takes a chunk from the hub's pool
-(the one the single-thread scheduler uses), and the hub gives the chunks back
-when the fiber ends.  stats() counts each first resume once, as
+fibers.  Now a Python fiber takes a chunk from the hub's pool when it starts
+(the pool the single-thread scheduler uses), and the hub gives the chunks back
+when the fiber ends.  stats() counts each Python fiber once, as
 `fiber_chunks_reused` (from the pool) or `fiber_chunks_mapped` (the pool was
 empty, so CPython mapped one); each hub adds its counts when it exits, so they
 are complete once run() returns.
 """
+import functools
 import sys
 
 import pytest
@@ -56,7 +57,7 @@ def test_fork_join_fibers_reuse_pooled_chunks():
 
     reused, mapped = _run_counted(main)
     fibers = spawners * rounds * width + spawners + 1   # + the spawners and main
-    # Every Python fiber's first resume is counted, once.
+    # Every Python fiber is counted, once.
     assert reused + mapped == fibers, (reused, mapped, fibers)
     # Measured ~92% on macOS and Linux arm64.  A hub reuses only what fibers
     # finished on it have released (past the 128-chunk grace ring), and a
@@ -123,6 +124,28 @@ def test_a_chunk_from_a_deep_fiber_serves_later_fibers():
     fields = dict(kv.split("=") for kv in line[0][5:].split())
     assert fields["exact"] == "1", line[0]
     assert int(fields["reused"]) > 0, line[0]
+
+
+# C all the way down: the fiber parks in sched_sleep before any Python frame.
+_NAP = functools.partial(stackweave_c.sched_sleep, 0.01)
+
+
+@pytest.mark.parametrize("spawn", ["mn_fiber", "fiber"])
+def test_a_fiber_that_parks_in_c_first_is_counted_once(spawn):
+    # The chunk is installed when a fiber starts, not at a resume: installed
+    # at each resume until the fiber pushed a frame, a fiber like this one
+    # was counted (and offered a chunk) again every time it woke.
+    # stackweave.fiber wraps the first few spawns of a callable in Python
+    # while the stack auto-sizer samples it, and spawns the rest bare.
+    n = 200
+
+    def main():
+        go = stackweave_c.mn_fiber if spawn == "mn_fiber" else stackweave.fiber
+        for _ in range(n):
+            go(_NAP)
+
+    reused, mapped = _run_counted(main)
+    assert reused + mapped == n + 1, (reused, mapped, n + 1)   # + main
 
 
 _C_ONLY = r'''

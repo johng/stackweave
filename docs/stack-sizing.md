@@ -170,7 +170,9 @@ fiber's thread state is deleted. A hub keeps at most 512, behind a ring of the
 last 128 released (so a stale frame reader on another thread never sees one
 reused at once); `stats()["fiber_chunks_reused"]` and
 `stats()["fiber_chunks_mapped"]` count the fibers that got a pooled chunk and
-the ones that found the pool empty.
+the ones that found the pool empty. The ring is not part of the 512: raising
+`STACKWEAVE_CHUNK_GRACE` (to 4096 for the p200 soak, say) keeps that many
+released chunks on each hub: 64 MB a hub at 4096.
 
 While stack sizes are being *measured* (the calibration window, stack advice,
 autosize), released stacks do drop their pages (`MADV_DONTNEED`) so the next
