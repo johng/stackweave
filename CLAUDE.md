@@ -268,6 +268,18 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   because the owner may be mid-fiber and never reach its pick step --
   restoring the old `>1` there reopens a lost-wake vs park_enter.
   Guard: `tests/test_local_wake.py`.
+- **A sysmon preemption request names the resume it is for.** sysmon asks two
+  ways at once, a flag the eval-frame wrapper reads at the next call and a
+  pending call run at the next backward jump; `h->preempt_seq` holds the
+  wedged resume's `resume_seq`, and each path yields only while it still
+  matches (`runloom_mn_preempt_due`). As a plain flag, whichever came second
+  preempted the next fiber the hub ran before its first line, so a sibling on
+  a CPU-bound fiber's hub never got a turn. Still open (KNOWN_GAP): a fiber
+  preempted from the pending call is suspended inside CPython's
+  `make_pending_calls`, which keeps the interpreter's pending-call slot
+  (`handling_thread`) until it resumes, so a second single-frame loop cannot
+  be preempted meanwhile. Guard:
+  `tests/test_sched_fairness.py::test_preemption_takes_turns_between_fibers_on_one_hub`.
 - **The seeded M:N scheduler is disabled (TODO).** `STACKWEAVE_MN_SEED` /
   `STACKWEAVE_SIM_MN` runs are refused by `mn_init`: woken fibers run from the
   global run-queue, which the seeded baton does not order, so replay would not

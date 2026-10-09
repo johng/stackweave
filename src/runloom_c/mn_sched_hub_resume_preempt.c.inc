@@ -1228,6 +1228,35 @@ static _PyFrameEvalFunction runloom_preempt_prev_eval = NULL;
  * (first mn_init) and never swapped back -- see runloom_preempt_install. */
 static int runloom_preempt_installed = 0;
 
+/* The preemption yield, shared by the eval-frame wrapper and the liveness
+ * pending call: back on this hub's ready ring, which no other hub reads, so
+ * the fiber can push itself before it switches out.  Out of line so the TLS
+ * store has one copy: duplicated in cold paths, clang's outliner once merged
+ * them into a TLV tail call that check_tls_after_park.py cannot read. */
+static RUNLOOM_NOINLINE void runloom_mn_preempt_yield(runloom_hub_t *h,
+                                                      runloom_g_t *g)
+{
+    runloom_sched_ready_push(&h->sched, g);
+    runloom_pystate_snap(&g->snap);
+    runloom_tls_self_queued = 1;
+    runloom_coro_yield();
+}
+
+/* Is a sysmon preemption request pending for the resume running on hub h now?
+ * A request names the resume it was for (h->preempt_seq = its resume_seq);
+ * one left over from an earlier resume is dropped here, by a CAS so a fresh
+ * request stored meanwhile survives.  Hub thread only (resume_seq is its own
+ * write). */
+static inline int runloom_mn_preempt_due(runloom_hub_t *h)
+{
+    long want = __atomic_load_n(&h->preempt_seq, __ATOMIC_RELAXED);
+    if (__builtin_expect(want == 0, 1)) return 0;
+    if (want == __atomic_load_n(&h->resume_seq, __ATOMIC_RELAXED)) return 1;
+    (void)__atomic_compare_exchange_n(&h->preempt_seq, &want, 0, 0,
+                                      __ATOMIC_RELAXED, __ATOMIC_RELAXED);
+    return 0;
+}
+
 static PyObject *runloom_preempt_eval_frame(PyThreadState *ts,
                                          struct _PyInterpreterFrame *frame,
                                          int throwflag)
@@ -1243,8 +1272,7 @@ static PyObject *runloom_preempt_eval_frame(PyThreadState *ts,
     if (h != NULL && runloom_mn_ctrl.preempt_frames > 0) {
         do_preempt = (++runloom_mn_preempt_ctr >= runloom_mn_ctrl.preempt_frames);
     } else {
-        do_preempt = (h != NULL &&
-                      __atomic_load_n(&h->preempt_requested, __ATOMIC_RELAXED));
+        do_preempt = (h != NULL && runloom_mn_preempt_due(h));
     }
     /* Never yield the fiber while CPython is mid object-destruction on this
      * tstate -- a tp_dealloc and its weakref callbacks / finalizers, driven by
@@ -1257,14 +1285,14 @@ static PyObject *runloom_preempt_eval_frame(PyThreadState *ts,
      * (test_weakref.test_threaded_weak_key_dict_copy).  Cooperative yields never
      * hit this: they only happen at Python-level call points, never nested
      * inside a C destructor.  The trigger is left ARMED (frame counter not
-     * reset / preempt_requested not cleared) so the very next frame entry after
+     * reset / preempt_seq not cleared) so the very next frame entry after
      * the destructor unwinds takes the yield -- preemption is deferred a few
      * frames, never lost. */
     if (do_preempt && runloom_tstate_in_destruction(ts)) {
         do_preempt = 0;
     } else if (do_preempt) {
         if (runloom_mn_ctrl.preempt_frames > 0) runloom_mn_preempt_ctr = 0;
-        else __atomic_store_n(&h->preempt_requested, 0, __ATOMIC_RELAXED);
+        else __atomic_store_n(&h->preempt_seq, 0, __ATOMIC_RELAXED);
     }
     if (h != NULL && do_preempt && (g = runloom_tls_current_g) != NULL &&
             !runloom_mn_nested_here()) {
@@ -1293,10 +1321,7 @@ static PyObject *runloom_preempt_eval_frame(PyThreadState *ts,
             runloom_fsm_violation("preempt_gate", 1 /*about-to-yield*/, 0,
                                   __FILE__, __LINE__);
 #endif
-        runloom_sched_ready_push(&h->sched, g);
-        runloom_pystate_snap(&g->snap);
-        runloom_tls_self_queued = 1;
-        runloom_coro_yield();
+        runloom_mn_preempt_yield(h, g);
     }
     /* Acquire-load: install/uninstall (other thread, or main during the
      * init/fini windows while hub gs already run Python) writes this pointer
@@ -1325,9 +1350,10 @@ static PyObject *runloom_preempt_eval_frame(PyThreadState *ts,
  * its siblings no matter the mode).  Frame-bearing code is already broken off
  * by the eval-frame wrapper before its frames re-enter, so in practice only a
  * genuine single-frame loop is still spinning when this rides its backward-jump
- * check; if it does fire for frame-bearing code the extra yield is harmless (the
- * g was about to yield at the wrapper anyway).  No-op when no fiber is
- * running on this hub. */
+ * check.  Whichever of the two yields first consumes the request; the other
+ * then finds it gone, or naming a resume that has ended, and does nothing (it
+ * used to yield whatever fiber ran next).  No-op when no fiber is running on
+ * this hub. */
 /* Per-thread pending call (flags=0 -> runs on ANY thread's eval-breaker, not
  * just the main thread's, which is what the public Py_AddPendingCall is pinned
  * to in 3.13 -- and the main thread is parked in mn_run, so it would never
@@ -1350,7 +1376,14 @@ static int runloom_mn_liveness_pending_cb(void *arg)
     if (runloom_tstate_in_destruction(PyThreadState_GET())) {
         return 0;
     }
-    if (h != NULL && (g = runloom_tls_current_g) != NULL && !runloom_mn_nested_here()) {
+    /* Only for the resume sysmon flagged: the call was posted for that one,
+     * and may run after it already yielded at a frame entry.  Consume the
+     * request, as the eval-frame wrapper does. */
+    if (h == NULL || !runloom_mn_preempt_due(h)) {
+        return 0;
+    }
+    __atomic_store_n(&h->preempt_seq, 0, __ATOMIC_RELAXED);
+    if ((g = runloom_tls_current_g) != NULL && !runloom_mn_nested_here()) {
 #if defined(RUNLOOM_FSM_VALIDATE)
         /* Same p69b witness as the eval-frame wrapper: the guard at the top of
          * this callback returned already if in_destruction, so this is unreachable
@@ -1359,10 +1392,7 @@ static int runloom_mn_liveness_pending_cb(void *arg)
             runloom_fsm_violation("preempt_gate", 1 /*about-to-yield*/, 0,
                                   __FILE__, __LINE__);
 #endif
-        runloom_sched_ready_push(&h->sched, g);
-        runloom_pystate_snap(&g->snap);
-        runloom_tls_self_queued = 1;
-        runloom_coro_yield();
+        runloom_mn_preempt_yield(h, g);
     }
     return 0;
 }

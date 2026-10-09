@@ -30,6 +30,7 @@ import sys
 import pytest
 
 from adv_util import run_python
+from known_gaps import KNOWN_GAP
 
 
 def run_mn(code, timeout=30):
@@ -202,6 +203,53 @@ run(1)
 run(2)
 print("PASS")
 """, timeout=25)
+
+
+# A single-frame loop is preempted from inside a CPython pending call, and
+# CPython runs pending calls on one thread state at a time
+# (_pending_calls.handling_thread): until the first fiber resumes and the call
+# returns, no other one can be preempted that way.
+_PENDING_CALL_GAP = KNOWN_GAP(
+    "a fiber preempted from the liveness pending call stays suspended inside "
+    "CPython's make_pending_calls, which holds the interpreter's pending-call "
+    "slot (handling_thread) until it resumes, so a second single-frame loop "
+    "on the hub cannot be preempted and runs to the end",
+    raises=AssertionError)
+
+
+@pytest.mark.parametrize("spin", [
+    "while step(end): pass",                    # a call: the eval-frame wrapper
+    pytest.param("while time.perf_counter() < end: pass",   # one frame: the
+                 marks=_PENDING_CALL_GAP),                   # pending call
+], ids=["calls", "single_frame"])
+def test_preemption_takes_turns_between_fibers_on_one_hub(spin):
+    """Two CPU-bound fibers pinned to one hub, neither yielding, must take
+    turns as sysmon preempts each.  sysmon asks two ways at once -- a flag the
+    eval-frame wrapper reads at the next call, and a pending call run at the
+    next backward jump -- and whichever came second used to preempt the NEXT
+    fiber the hub ran before it ran a line, so the two ran one after the
+    other.  Each runs 30 steps of 10 ms and records who ran; with a ~50 ms
+    slice they alternate several times."""
+    assert_pass(r"""
+import time
+seq = []
+def step(end):
+    return time.perf_counter() < end
+def hog(name):
+    for _ in range(30):
+        end = time.perf_counter() + 0.01
+        SPIN
+        if not seq or seq[-1] != name:
+            seq.append(name)
+stackweave_c.mn_init(2)
+stackweave_c.mn_fiber(lambda: hog("A"), hub=0)
+stackweave_c.mn_fiber(lambda: hog("B"), hub=0)
+stackweave_c.mn_run()
+stackweave_c.mn_fini()
+print("turns", "".join(seq))
+assert len(seq) >= 4, "the two fibers did not take turns: %s" % "".join(seq)
+print("PASS")
+""".replace("SPIN", spin), timeout=25)
 
 
 if __name__ == "__main__":

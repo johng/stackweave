@@ -251,12 +251,18 @@ typedef struct runloom_hub {
      * when its fiber completes.  NULL = idle. */
     void *volatile       resume_tstate;
     /* Set by the sysmon watchdog when this hub is ATTACHED-wedged (a CPU-bound /
-     * non-yielding fiber, which work-stealing can't drain).  The installed
-     * eval-frame wrapper reads it at the next Python frame boundary on THIS
-     * hub's owner thread and yields the running g back to the scheduler -- Go
-     * pre-1.14 cooperative preemption.  Written rarely (only while wedged);
-     * read every frame. */
-    volatile int         preempt_requested;
+     * non-yielding fiber, which work-stealing can't drain), to the resume_seq
+     * of the wedged resume; 0 = no request.  The installed eval-frame wrapper
+     * reads it at the next Python frame boundary on THIS hub's owner thread,
+     * and the liveness pending call at the next backward jump, and whichever
+     * comes first yields the running g back to the scheduler -- Go pre-1.14
+     * cooperative preemption.  Each yields only while resume_seq still
+     * matches: a request outlives the resume it was for (the other path's
+     * pending call is still queued, or the fiber parked first), and a plain
+     * flag then preempted the NEXT fiber the hub ran at its first frame, so a
+     * sibling sharing a CPU-bound fiber's hub never got a real turn.  Written
+     * rarely (only while wedged); read every frame. */
+    volatile long        preempt_seq;
     /* Cross-thread io_uring single-op cancel mailbox.  A hub ring is
      * SINGLE_ISSUER, so a foreign task.cancel cannot submit the ASYNC_CANCEL
      * itself -- it deposits the target op here (CAS NULL->op) and signals
