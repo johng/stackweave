@@ -996,13 +996,16 @@ void runloom_first_run_install_datastack(void);
 /* Reclaim the idle tail of a parked Python fiber's datastack chunk.
  * The companion of runloom_coro_madvise_idle (which drops the C stack below
  * SP): here we MADV_DONTNEED the free pages of g's CURRENT _PyStackChunk
- * above the live frontier (snap->datastack_top) up to the chunk end
- * (snap->datastack_limit).  Frames live in [chunk, top); everything above
- * is unpushed free space that refaults zero on the next frame push.
+ * above the live frontier (datastack_top) up to the chunk end
+ * (datastack_limit).  Frames live in [chunk, top); everything above
+ * is unpushed free space that refaults zero on the next frame push.  An M:N
+ * fiber's chunk is read from its own thread state (g->tstate), anything
+ * else's from its snapshot.
  *
  * SAFE under the same M:N contract as the C-stack sweep: the caller must
  * be g's OWNING hub (so nothing resumes g while we madvise) and g must be
- * suspended with a stable snap.  No-op for C-only gs (datastack_chunk
+ * suspended: a stable snap, or for an M:N fiber a sweep claim
+ * (runloom_mn_sweep_try_claim).  No-op for C-only gs (datastack_chunk
  * NULL), gs that never went deep enough to have a reclaimable tail, and
  * on platforms without MADV_DONTNEED.
  *

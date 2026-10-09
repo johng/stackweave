@@ -57,7 +57,7 @@ void runloom_sched_madvise_datastack_idle(runloom_g_t *g)
 {
 #if defined(MADV_DONTNEED)
     static int dbg = -1;             /* read RUNLOOM_DATASTACK_DEBUG once */
-    runloom_pystate_snap_t *snap;
+    _PyStackChunk *chunk;
     uintptr_t top, limit, lo, hi;
     long ps;
     size_t page;
@@ -69,16 +69,29 @@ void runloom_sched_madvise_datastack_idle(runloom_g_t *g)
      * throughput cost); on the common deep-then-park shape it reclaims real
      * resident RAM. */
     if (g == NULL) return;
-    snap = &g->snap;
-    if (!snap->valid || snap->datastack_chunk == NULL ||
-        snap->datastack_top == NULL || snap->datastack_limit == NULL) {
+    if (g->tstate != NULL) {
+        /* An M:N fiber: its frames are on its own thread state, which the
+         * snapshot skips (runloom_pystate_snap leaves snap invalid).  The
+         * caller's sweep claim keeps that state detached: hub_main publishes
+         * PARKED only after the fiber's brc_release and detach, and the claim
+         * takes PARKED, so nothing pushes a frame on it while we read it. */
+        PyThreadState *ts = g->tstate;
+        chunk = ts->datastack_chunk;
+        top   = (uintptr_t)ts->datastack_top;
+        limit = (uintptr_t)ts->datastack_limit;
+    } else {
+        runloom_pystate_snap_t *snap = &g->snap;
+        if (!snap->valid) return;
+        chunk = snap->datastack_chunk;
+        top   = (uintptr_t)snap->datastack_top;
+        limit = (uintptr_t)snap->datastack_limit;
+    }
+    if (chunk == NULL || top == 0 || limit == 0) {
         return;                      /* C-only g, or no chunk installed */
     }
 
     ps = sysconf(_SC_PAGESIZE);
     page = (ps > 0) ? (size_t)ps : (size_t)4096;
-    top   = (uintptr_t)snap->datastack_top;
-    limit = (uintptr_t)snap->datastack_limit;
     if (limit <= top) return;
     lo = (top + page - 1) & ~(uintptr_t)(page - 1);   /* align UP past frontier */
     hi = limit & ~(uintptr_t)(page - 1);              /* align DOWN to chunk end */
