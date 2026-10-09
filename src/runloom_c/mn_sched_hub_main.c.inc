@@ -396,6 +396,7 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
     /* Per-OS-thread coro-backend setup (arms this thread's crash-handler
      * sigaltstack).  Must run BEFORE the first runloom_coro_resume. */
     runloom_coro_thread_init();
+    runloom_chunk_pool_hub_thread();
     runloom_tls_hub = h;
     /* From here until this thread exits, only it may mutate h->sched's sleep
      * heap (checked under STACKWEAVE_DEBUG=sleepheap). */
@@ -1604,6 +1605,11 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                 runloom_advice_record_g(g);   /* fold stack HWM (profiling) */
                 runloom_g_state_set(g, RUNLOOM_GST_DONE);
                 runloom_netpoll_force_unlink_g_parker(g);
+                /* Its frames are all popped and its state detached: give
+                 * the chunks to this hub's pool now, rather than leaving
+                 * them for PyThreadState_Delete to unmap whenever the last
+                 * ref drops (maybe on a thread with no pool). */
+                runloom_fiber_datastack_release(g->tstate);
                 runloom_g_decref(g);                  /* scheduler ref */
                 if (from_runq) runloom_g_decref(g);   /* queue ref */
                 /* pending_complete LAST: the final decref may run a fiber_n

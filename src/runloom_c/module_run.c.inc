@@ -397,6 +397,15 @@ static PyObject *m_stats(PyObject *self, PyObject *unused)
     RUNLOOM_STATS_SET("mn_deque_depth",    runloom_mn_deque_depth_total());
     RUNLOOM_STATS_SET("mn_yield_steals",
                       (Py_ssize_t)runloom_mn_yield_steals_total());
+    /* M:N fibers' first frame-stack chunks: from a hub's pool, or mapped by
+     * CPython because the pool was empty.  Summed as each hub exits, so
+     * complete once run() returns. */
+    {
+        unsigned long long reused, mapped;
+        runloom_fiber_chunk_counts(&reused, &mapped);
+        RUNLOOM_STATS_SET("fiber_chunks_reused", (Py_ssize_t)reused);
+        RUNLOOM_STATS_SET("fiber_chunks_mapped", (Py_ssize_t)mapped);
+    }
     RUNLOOM_STATS_SET("coro_stack_live",   runloom_coro_stack_live());
     RUNLOOM_STATS_SET("coro_depot_pooled", runloom_coro_depot_pooled());
     RUNLOOM_STATS_SET("blockpool_inflight",runloom_blockpool_inflight());

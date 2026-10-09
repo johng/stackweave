@@ -159,7 +159,20 @@ warm. The cost is RSS: the pool holds up to *depot cap × touched stack depth*.
 
 Parked fibers are different: a hub-idle dwell sweep hands the idle pages of
 long-parked fibers' Python data stacks back to the OS (threshold via
-`STACKWEAVE_STACK_PARK_SWEEP_MS`, default 100 ms).
+`STACKWEAVE_STACK_PARK_SWEEP_MS`, default 100 ms). It frees only whole pages
+above a fiber's live frames, so where a page is as big as the 16 KB data-stack
+chunk (macOS on Apple silicon) it has nothing to free.
+
+Python data-stack chunks are pooled too. A finished fiber's chunks go back to
+its hub's pool, and the next fiber to start there takes one, instead of
+CPython mapping a fresh 16 KB chunk for every fiber and unmapping it when the
+fiber's thread state is deleted. A hub keeps at most 512, behind a ring of the
+last 128 released (so a stale frame reader on another thread never sees one
+reused at once); `stats()["fiber_chunks_reused"]` and
+`stats()["fiber_chunks_mapped"]` count the fibers that got a pooled chunk and
+the ones that found the pool empty. The ring is not part of the 512: raising
+`STACKWEAVE_CHUNK_GRACE` (to 4096 for the p200 soak, say) keeps that many
+released chunks on each hub: 64 MB a hub at 4096.
 
 While stack sizes are being *measured* (the calibration window, stack advice,
 autosize), released stacks do drop their pages (`MADV_DONTNEED`) so the next

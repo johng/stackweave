@@ -57,7 +57,7 @@ void runloom_sched_madvise_datastack_idle(runloom_g_t *g)
 {
 #if defined(MADV_DONTNEED)
     static int dbg = -1;             /* read RUNLOOM_DATASTACK_DEBUG once */
-    runloom_pystate_snap_t *snap;
+    _PyStackChunk *chunk;
     uintptr_t top, limit, lo, hi;
     long ps;
     size_t page;
@@ -69,16 +69,29 @@ void runloom_sched_madvise_datastack_idle(runloom_g_t *g)
      * throughput cost); on the common deep-then-park shape it reclaims real
      * resident RAM. */
     if (g == NULL) return;
-    snap = &g->snap;
-    if (!snap->valid || snap->datastack_chunk == NULL ||
-        snap->datastack_top == NULL || snap->datastack_limit == NULL) {
+    if (g->tstate != NULL) {
+        /* An M:N fiber: its frames are on its own thread state, which the
+         * snapshot skips (runloom_pystate_snap leaves snap invalid).  The
+         * caller's sweep claim keeps that state detached: hub_main publishes
+         * PARKED only after the fiber's brc_release and detach, and the claim
+         * takes PARKED, so nothing pushes a frame on it while we read it. */
+        PyThreadState *ts = g->tstate;
+        chunk = ts->datastack_chunk;
+        top   = (uintptr_t)ts->datastack_top;
+        limit = (uintptr_t)ts->datastack_limit;
+    } else {
+        runloom_pystate_snap_t *snap = &g->snap;
+        if (!snap->valid) return;
+        chunk = snap->datastack_chunk;
+        top   = (uintptr_t)snap->datastack_top;
+        limit = (uintptr_t)snap->datastack_limit;
+    }
+    if (chunk == NULL || top == 0 || limit == 0) {
         return;                      /* C-only g, or no chunk installed */
     }
 
     ps = sysconf(_SC_PAGESIZE);
     page = (ps > 0) ? (size_t)ps : (size_t)4096;
-    top   = (uintptr_t)snap->datastack_top;
-    limit = (uintptr_t)snap->datastack_limit;
     if (limit <= top) return;
     lo = (top + page - 1) & ~(uintptr_t)(page - 1);   /* align UP past frontier */
     hi = limit & ~(uintptr_t)(page - 1);              /* align DOWN to chunk end */
@@ -130,18 +143,20 @@ void runloom_sched_datastack_sweep_stats(unsigned long long *tail_bytes,
 /* Drain the datastack-chunk chain currently attached to tstate,
  * returning tstate's datastack pointers to NULL.
  *
- * Called after a fiber completes, BEFORE we restore the scheduler
- * or hub snapshot (which would overwrite tstate->datastack_chunk with
- * the scheduler's saved value and leak g's chain).
+ * Two callers: the single-thread drain, after a fiber completes and BEFORE
+ * it restores the scheduler snapshot (which would overwrite
+ * tstate->datastack_chunk with the scheduler's saved value and leak g's
+ * chain); and hub_main, for a finished M:N fiber's own detached state
+ * (runloom_fiber_datastack_release).
  *
- * Reused chunks go to the per-thread pool (up to RUNLOOM_CHUNK_POOL_CAP).
+ * Reused chunks go to the per-thread pool (up to the thread's cap:
+ * RUNLOOM_CHUNK_POOL_CAP, or RUNLOOM_CHUNK_POOL_HUB_CAP on a hub).
  * Overflow goes back to the arena allocator that CPython's frame
  * allocator pulls from.
  *
  * Algorithm matches greenlet's PythonState::did_finish, plus pool reuse. */
-void runloom_drain_g_datastack(void)
+static void runloom_drain_datastack_of(PyThreadState *ts)
 {
-    PyThreadState *ts = PyThreadState_GET();
     _PyStackChunk *chunk = ts->datastack_chunk;
     PyObjectArenaAllocator alloc;
 
@@ -156,6 +171,25 @@ void runloom_drain_g_datastack(void)
         _PyStackChunk *prev = chunk->previous;
         runloom_chunk_pool_put(chunk, &alloc);
         chunk = prev;
+    }
+}
+
+void runloom_drain_g_datastack(void)
+{
+    runloom_drain_datastack_of(PyThreadState_GET());
+}
+
+/* See runloom_sched.h.  The one-slot cache CPython keeps of a popped
+ * overflow chunk goes back too, so PyThreadState_Delete unmaps nothing. */
+void runloom_fiber_datastack_release(PyThreadState *ts)
+{
+    _PyStackChunk *cached = ts->datastack_cached_chunk;
+    runloom_drain_datastack_of(ts);
+    if (cached != NULL) {
+        PyObjectArenaAllocator alloc;
+        ts->datastack_cached_chunk = NULL;
+        PyObject_GetArenaAllocator(&alloc);
+        runloom_chunk_pool_put(cached, &alloc);
     }
 }
 
