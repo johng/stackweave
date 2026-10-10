@@ -16,7 +16,7 @@ series — take the pair matching your interpreter:
 | target | allocation | execution |
 |---|---|---|
 | **CPython 3.14.4t** | `cpython314t-tstate-alloc-home.patch` | `cpython314t-tstate-exec-home.patch` |
-| **CPython 3.15.0rc3t** | `cpython315t-tstate-alloc-home.patch` | `cpython315t-tstate-exec-home.patch` |
+| **CPython 3.15.0t** | `cpython315t-tstate-alloc-home.patch` | `cpython315t-tstate-exec-home.patch` |
 
 All four apply at **zero fuzz** (`patch -p1 -F0`) to their pinned release, and
 `tools/ci/check_patches.sh` enforces that in seconds. The cross-version deltas
