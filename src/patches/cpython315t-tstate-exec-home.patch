@@ -1,7 +1,7 @@
 # CPython 3.15t OPTIONAL feature patch: thread-state EXECUTION home
 #   build flag:  -DPy_TSTATE_EXEC_HOME      (OFF by default)
-#   pinned to:   Python-3.15.0rc3  (applies at ZERO fuzz: patch -p1 -F0.  NOT to
-#                rc1/rc2 -- see item 6; their copy is in git history)
+#   pinned to:   Python-3.15.0  (applies at ZERO fuzz: patch -p1 -F0; so does
+#                rc3.  NOT to rc1/rc2 -- see item 6; their copy is in git history)
 #   series pair: this is the EXECUTION half for the 3.15 series.  The matching
 #                ALLOCATION half is cpython315t-tstate-alloc-home.patch; migration
 #                needs BOTH.  Port of cpython314t-tstate-exec-home.patch -- NOT
