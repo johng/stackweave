@@ -34,12 +34,12 @@ build/coverage/runloom_sched_datastack.c.inc.gcov):
   406     runloom_sched_ready_pop -> runloom_pct_pick dispatch
   545-547 runloom_timer_push sift-up loop body
 """
+import os
 import sys
 
 import pytest
 
 from adv_util import run_python
-from known_gaps import MIGRATION_GAP
 
 
 def _run(script, env_extra, timeout=240):
@@ -59,7 +59,7 @@ def _run(script, env_extra, timeout=240):
 #        (gcov L44-56) -- by faulting the chunk tail (deep recurse) then
 #        parking SHALLOW so the faulted pages sit RESIDENT above the frontier;
 #      - the C-only-g early return (gcov L92) -- the all-C rc.serve accept/recv
-#        fibers have snap.datastack_chunk == NULL (no Python frame pushed
+#        fibers have no datastack chunk (no Python frame pushed
 #        before they park) and are skipped;
 #      - runloom_sched_datastack_sweep_stats via rc._datastack_sweep_stats()
 #        (gcov L128-145).
@@ -132,11 +132,6 @@ sys.stdout.write("DS cgot=%d pywoke=%d tail=%d resident=%d chunks=%d\n"
 '''
 
 
-@MIGRATION_GAP(
-    "the datastack dwell sweep accounts the hub thread state's chunks, and "
-    "each fiber has its own; the chunk and resident assertions run on Linux "
-    "only, so elsewhere this passes",
-    strict=sys.platform.startswith("linux"))
 def test_datastack_sweep_debug_decompose():
     p = _run(_DATASTACK, {
         "STACKWEAVE_STACK_PARK_SWEEP_MS": "1", "STACKWEAVE_DATASTACK_DEBUG": "1",
@@ -150,13 +145,13 @@ def test_datastack_sweep_debug_decompose():
     # the CORRECTNESS oracle, asserted on every platform.
     assert int(fields["cgot"]) == 16, line[0]
     assert int(fields["pywoke"]) == 24, line[0]
-    # The resident-tail accounting is measured via mincore() (runloom_coro_scan_hwm).
-    # Linux and macOS disagree on mincore's resident-bit semantics for the
-    # never-faulted / MADV_FREE'd tail pages of the data stack, so on macOS the
-    # decompose legitimately reports resident=chunks=0 (the pages read as
-    # not-incore) even though the sweep ran.  Assert the resident-accumulation body
-    # ran only where mincore reports residency the way this oracle expects (Linux).
-    if sys.platform == "linux":
+    # The sweep frees only WHOLE pages above the live frames of a chunk.  A
+    # chunk is 16 KB, so with 16 KB pages (macOS arm64) a parked fiber's chunk
+    # never has one and the decompose reads chunks=resident=0 although the
+    # sweep visited it.  With smaller pages it must have found and measured
+    # them: an M:N fiber's chunk is on its own thread state, which the
+    # snapshot skips, and a sweep that read only the snapshot found none.
+    if os.sysconf("SC_PAGE_SIZE") < 16384:
         # the DEBUG decompose actually accounted real chunks AND measured a resident
         # tail -> runloom_ds_resident_bytes' accumulation body ran (not just L0 path)
         assert int(fields["chunks"]) > 0, line[0]

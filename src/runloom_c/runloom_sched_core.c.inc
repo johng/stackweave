@@ -454,6 +454,14 @@ void runloom_g_entry(void *user)
 
     runloom_install_initial_root_frame();
 
+    /* An M:N fiber has its own thread state: its first frame-stack chunk
+     * comes from this hub's pool, not a fresh mapping.  Here rather than at
+     * a resume in hub_main, so it happens once per fiber: a callable that
+     * parks in C before pushing any frame isn't offered one again at every
+     * resume.  (A C-only g returned above and takes none.) */
+    if (g->tstate != NULL)
+        runloom_fiber_datastack_install(g->tstate);
+
     /* Reset recursion counters at g entry -- each g has its own
      * physical C stack, so the per-tstate counters don't reflect
      * actual stack usage when shared across multiple gs. */

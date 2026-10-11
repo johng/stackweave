@@ -993,16 +993,35 @@ void runloom_chunk_pool_reclaim(void);
  * fields NULL so PyEval will arena-allocate.  Either is correct. */
 void runloom_first_run_install_datastack(void);
 
+/* The same pool for M:N fibers, which each have their own thread state:
+ * without it CPython maps a fresh 16 KB chunk at each fiber's first call and
+ * unmaps it in PyThreadState_Delete, most of a no-op spawn's cost.
+ * install: runloom_g_entry, once per Python fiber, before its callable runs;
+ * gives it a pooled chunk unless it has one, and counts the hit or the miss.
+ * release: hub_main, once the fiber is done and its state detached; its
+ * chunks (the cached one too) go to this thread's pool through the grace
+ * ring.  chunk_counts: the hits and misses of hubs that have exited.
+ * hub_thread: a hub thread calls it once at start, to keep a smaller pool
+ * (RUNLOOM_CHUNK_POOL_HUB_CAP) than the single-thread scheduler's. */
+void runloom_chunk_pool_hub_thread(void);
+void runloom_fiber_datastack_install(PyThreadState *ts);
+void runloom_fiber_datastack_release(PyThreadState *ts);
+void runloom_fiber_chunk_counts(unsigned long long *reused,
+                                unsigned long long *mapped);
+
 /* Reclaim the idle tail of a parked Python fiber's datastack chunk.
  * The companion of runloom_coro_madvise_idle (which drops the C stack below
  * SP): here we MADV_DONTNEED the free pages of g's CURRENT _PyStackChunk
- * above the live frontier (snap->datastack_top) up to the chunk end
- * (snap->datastack_limit).  Frames live in [chunk, top); everything above
- * is unpushed free space that refaults zero on the next frame push.
+ * above the live frontier (datastack_top) up to the chunk end
+ * (datastack_limit).  Frames live in [chunk, top); everything above
+ * is unpushed free space that refaults zero on the next frame push.  An M:N
+ * fiber's chunk is read from its own thread state (g->tstate), anything
+ * else's from its snapshot.
  *
  * SAFE under the same M:N contract as the C-stack sweep: the caller must
  * be g's OWNING hub (so nothing resumes g while we madvise) and g must be
- * suspended with a stable snap.  No-op for C-only gs (datastack_chunk
+ * suspended: a stable snap, or for an M:N fiber a sweep claim
+ * (runloom_mn_sweep_try_claim).  No-op for C-only gs (datastack_chunk
  * NULL), gs that never went deep enough to have a reclaimable tail, and
  * on platforms without MADV_DONTNEED.
  *
