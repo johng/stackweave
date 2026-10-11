@@ -152,7 +152,17 @@ void runloom_iframe_hand_over_freelists(PyThreadState *dead)
  * do -- only the pool sweep, which the threads that do allocate still perform
  * whenever they need memory (mimalloc's reclaim-on-allocate) and on their
  * exit.  So when the state provably owns nothing, point its segment tld at an
- * empty private pool for the duration of the Clear.  Checked against the
+ * empty private pool for the duration of the Clear.
+ *
+ * Each abandon also frees QSBR-delayed pages (_PyMem_mi_heap_collect_qsbr),
+ * for each heap with page_use_qsbr set -- but from the page list of the
+ * CURRENT state's allocator, i.e. the hub's, not the cleared one's.  When the
+ * oldest page's goal is unmet, _Py_qsbr_poll scans one QSBR slot per thread
+ * state in the interpreter, and every live fiber holds one, so each teardown
+ * cost O(live fibers): waking 50k parked fibers on one hub took ~7 s instead
+ * of ~0.6 s.  That collect is the hub's own housekeeping, which its
+ * allocation slow path already does (mimalloc page.c), so clear page_use_qsbr
+ * on the borrower's heaps for the Clear as well.  Checked against the
  * mimalloc 2.1.2 that CPython 3.14 and 3.15 vendor (3.15.0rc1-3.15.0's
  * Objects/mimalloc/segment.c, mi_abandoned_pool_t and pycore_mimalloc.h are
  * byte-identical to 3.14.4's); other versions keep the plain Clear until
@@ -172,9 +182,16 @@ void runloom_iframe_clear_fiber_tstate(PyThreadState *ts)
         if (owns_nothing) {
             mi_abandoned_pool_t empty;
             mi_abandoned_pool_t *shared = m->tld.segments.abandoned;
+            bool use_qsbr[_Py_MIMALLOC_HEAP_COUNT];
             memset(&empty, 0, sizeof(empty));
             m->tld.segments.abandoned = &empty;
+            for (i = 0; i < _Py_MIMALLOC_HEAP_COUNT; i++) {
+                use_qsbr[i] = m->heaps[i].page_use_qsbr;
+                m->heaps[i].page_use_qsbr = false;
+            }
             PyThreadState_Clear(ts);
+            for (i = 0; i < _Py_MIMALLOC_HEAP_COUNT; i++)
+                m->heaps[i].page_use_qsbr = use_qsbr[i];
             m->tld.segments.abandoned = shared;
             return;
         }
