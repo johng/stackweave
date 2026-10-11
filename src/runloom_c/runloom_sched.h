@@ -956,13 +956,11 @@ void runloom_pystate_snap(runloom_pystate_snap_t *snap);
 void runloom_pystate_load(runloom_pystate_snap_t *snap);
 void runloom_pystate_snap_clear(runloom_pystate_snap_t *snap);
 
-/* An M:N run is live (set by mn_init, cleared by mn_fini).  A cheap test that
- * lets single-thread-scheduler code skip runloom_mn_current_sched() when no
- * hub exists; a hub fiber is the one with runloom_mn_current_sched() != NULL,
- * and runloom_pystate_snap no-ops for it, since its own tstate carries its
- * state. */
+/* An M:N run is live (set by mn_init, cleared by mn_fini).  runloom_pystate_snap
+ * reads it to skip runloom_mn_current_sched() when no hub exists; a hub fiber
+ * is the one with runloom_mn_current_sched() != NULL, and the snap no-ops for
+ * it, since its own tstate carries its state. */
 void runloom_set_mn_live(int on);
-int  runloom_mn_live(void);
 
 /* The user's callable trampoline for a fiber; installs an initial
  * root cframe / current_frame on g's own stack, then runs g->callable.

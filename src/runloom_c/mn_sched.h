@@ -222,7 +222,8 @@ unsigned long long runloom_mn_yield_steals_total(void);
  * for the safety argument). */
 /* sysmon hazard pointer (mn_sched_sysmon.c.inc).  A per-g tstate's deleter
  * calls retire_wait BEFORE PyThreadState_Clear so the watchdog never reads a
- * freed tstate; hub_attach_state is the watchdog's (and hubinfo's) safe read. */
+ * freed tstate; hub_attach_state is the watchdog's (and hubinfo's) safe read,
+ * and hubinfo's blocked_at frame walk takes the same hazard. */
 struct runloom_hub;                       /* defined in mn_sched.c */
 void runloom_sysmon_tstate_retire_wait(PyThreadState *ts);
 int  runloom_sysmon_hub_attach_state(struct runloom_hub *h, PyThreadState *hts);

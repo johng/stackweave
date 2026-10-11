@@ -133,10 +133,10 @@ Each dict has:
 | `blocked_at` | best-effort Python call site of a **DETACHED-wedged** hub's blocking call, e.g. `cursor.execute (db.py:88)`, else `None` |
 | `stack_cmd` | a ready-to-run `py-spy dump --pid <PID>` for **this** process — the always-safe, out-of-process full C+Python stack of every thread |
 
-**`blocked_at` is best-effort.** It is read from another hub's thread-state, so
-it only fills for a hub that is *stably* DETACHED (a fiber parked in a
-blocking syscall — the owner thread won't touch its frames until the call
-returns). For an
+**`blocked_at` is best-effort.** It is read from the running fiber's own
+thread-state, from another thread, so it only fills for a fiber that is
+*stably* DETACHED (parked in a blocking syscall — its thread won't touch its
+frames until the call returns). For an
 **ATTACHED** (CPU) wedge, or when the read can't be taken safely, it is `None` —
 fall back to `stack_cmd`. `py-spy` reads the process out-of-process, so it
 always works and gives the **complete** C + Python stack of *every* thread (the

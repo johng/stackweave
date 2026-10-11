@@ -31,7 +31,6 @@ double runloom_sched_monotonic_seconds(void)
  * exists; that call is what tells a hub fiber apart. */
 static int runloom_mn_live_flag = 0;
 void runloom_set_mn_live(int on) { runloom_mn_live_flag = on ? 1 : 0; }
-int  runloom_mn_live(void)       { return runloom_mn_live_flag; }
 
 /* ---- DEBUG: exception-state object validator (RUNLOOM_DBG_EXCSTATE) ----
  *
