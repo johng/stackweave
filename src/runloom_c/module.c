@@ -187,9 +187,9 @@ RUNLOOM_INLINE void runloom_tstate_restore(RunloomTstateSnapshot *s)
 /* runloom_coro_pre_swap hook (registered in PyInit on free-threaded 3.14+):
  * re-arm the live thread state's SP-based C-stack overflow check at THIS fiber's
  * stack on every resume.  3.14 replaced the integer recursion counter with an
- * SP-vs-soft_limit check; because the default mode shares one tstate across all
- * fibers on a hub, the limit set at a fiber's entry is overwritten by the next
- * fiber to enter -- so a parked-then-resumed deep recurser would run off its own
+ * SP-vs-soft_limit check; because the single-thread scheduler's fibers share one
+ * tstate, the limit set at a fiber's entry is overwritten by the next fiber to
+ * enter -- so a parked-then-resumed deep recurser would run off its own
  * stack into the guard page (SIGSEGV).  Re-reading base+size each resume also
  * tracks runloom_coro_maybe_grow's copy-grow, when it is turned on.
  *

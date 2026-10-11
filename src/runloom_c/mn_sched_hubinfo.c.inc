@@ -76,7 +76,7 @@ runloom_hub_info_t *runloom_mn_hub_snapshot(long *count_out)
     if (arr == NULL) return NULL;
 
     now        = runloom_monotonic_ns();
-    per_g      = runloom_get_per_g_tstate_mode();
+    per_g      = runloom_mn_live();
 
     for (i = 0; i < n; i++) {
         runloom_hub_t *h = &runloom_hubs[i];

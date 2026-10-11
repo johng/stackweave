@@ -164,9 +164,8 @@ int main(void)
         usleep(2000);
     }
 
-    int per_g = runloom_get_per_g_tstate_mode();
-    printf("per_g_tstate=%d N=%d hubs=%d stall=%dms responded=%ld/%d\n",
-           per_g, N_WORKERS, NHUBS, STALL_MS, responded, N_WORKERS);
+    printf("N=%d hubs=%d stall=%dms responded=%ld/%d\n",
+           N_WORKERS, NHUBS, STALL_MS, responded, N_WORKERS);
     int pass = (responded == N_WORKERS);
     printf("%s\n", pass ? "PASS: every worker ran -- no lost wake behind the stalled hub"
                         : "FAIL: worker(s) permanently stranded -- lost wake");

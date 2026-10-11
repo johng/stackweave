@@ -2,13 +2,10 @@
 
 WHAT THIS FRAGMENT IS
 ---------------------
-mn_sched_runq.c.inc holds the *global stealable run-queue* (push/pull) plus
-runloom_use_global_runq(), which says whether that queue is in use:
+mn_sched_runq.c.inc holds the *global stealable run-queue*:
 
   * runloom_mn_global_runq_push
   * runloom_mn_global_runq_pull
-  * runloom_use_global_runq  (== runloom_get_per_g_tstate_mode(): set by mn_init,
-    cleared by mn_fini)
 
 Cross-hub migration is always on, so the queue is live in every M:N run.  A wake
 performed on a hub thread lands on the waker's own deque (Go-style local wake,

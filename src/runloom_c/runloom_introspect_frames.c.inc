@@ -19,10 +19,11 @@
  *     Task.get_stack(), so the top frame is the useful add for the raw
  *     fibers (channels, pump, accept loops) all_tasks() never sees.
  *
- *   - default M:N with hubs running and no per-g tstate: a parked g can be
- *     resumed by its owning hub concurrently, and we hold no claim that
- *     stops it -- so we DON'T touch its frames.  Callable + structural
- *     state still come through; only the source line is withheld.
+ *   - a single-thread fiber (no tstate of its own) while M:N hubs run: a
+ *     run(1) nested in an M:N fiber, or one on another thread.  Its
+ *     scheduler can resume it concurrently, and we hold no claim that stops
+ *     it -- so we DON'T touch its frames.  Callable + structural state still
+ *     come through; only the source line is withheld.
  *
  * In every case the caller already holds a live reference to g (via
  * runloom_g_try_incref), so the struct + its owned objects cannot be freed
@@ -117,7 +118,8 @@ PyObject *runloom_fiber_frames_by_id(long long id)
         if (g->snap.valid)
             frames_walk((void *)g->snap.current_frame, frames);
     }
-    /* else: default M:N, no safe claim -> leave (None, []). */
+    /* else: a single-thread fiber while hubs run, no safe claim ->
+     * leave (None, []). */
 
     runloom_g_decref(g);
 

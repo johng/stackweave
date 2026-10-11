@@ -7,11 +7,9 @@ self-contained):
 
   GROUP A -- the per-g-tstate / global stealable run-queue machine (the
   timer-wake claim, from_runq=1, the per-g-tstate resume/claim/park/done/yield,
-  the steal-woken QUEUED->RUNNING claim, the global-runq snap-mode release).
-  EVERY one of these is gated by runloom_use_global_runq() /
-  runloom_get_per_g_tstate_mode(), which is true for every M:N run (cross-hub
-  migration is always on), so every M:N test in the corpus drives it.  Not
-  targeted separately here.
+  the steal-woken QUEUED->RUNNING claim, the global-runq release).  This is the
+  only M:N wake path (cross-hub migration is always on), so every M:N test in
+  the corpus drives it.  Not targeted separately here.
 
   GROUP B -- hard error/cleanup paths with NO fault hook:
     * L154-155: the hub's OWN PyThreadState_New returns NULL (a raw alloc at
@@ -24,8 +22,8 @@ self-contained):
       `runloom_iouring_loop_hub_arm` only fails on a real eventfd()/submit
       shortfall).
     * L1013-1017 / L1066: the stale/duplicate-queue-entry defensive skips,
-      closed at the source by the hub_submit try_incref-before-CAS queue ref
-      (documented in CLAUDE.md as "proven non-load-bearing" on the happy path).
+      closed at the source by the wake_state machine (a g is enqueued once per
+      PARKED->QUEUED edge) and the in_sub_queue CAS on a fresh spawn.
   Classified unreachable / defensive.
 
   GROUP C -- REACHABLE, and driven by THIS suite:

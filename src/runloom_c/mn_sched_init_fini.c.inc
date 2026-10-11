@@ -175,7 +175,7 @@ int runloom_mn_init(int n_threads)
      * stand the snap down BEFORE any hub thread starts running fibers.  Always
      * on for an M:N run; mn_fini clears it again. */
     runloom_mn_interp = interp;
-    runloom_set_per_g_tstate_mode(1);
+    runloom_set_mn_live(1);
     /* Configure the sysmon watchdog (threshold, logging) BEFORE the hubs
      * spawn so the per-resume progress instrumentation is live immediately. */
     runloom_sysmon_config();
@@ -449,7 +449,7 @@ void runloom_mn_fini(void)
     /* controlled-mode baton: all hubs joined, nobody can acquire/release now */
     runloom_mn_ctrl_fini();
     /* Free the retired bulk-arena g-struct arenas.  Every hub thread is joined,
-     * so no wake_g can be in flight and no try_incref can read a garena g -- the
+     * so no wake_g can be in flight and no stale wake can read a garena g -- the
      * grace period that makes returning these structs to the OS sound.  The
      * helper is defined with the bulk-arena path below (after the batch struct).
      * See runloom_garena_quar / runloom_fibern_batch_finish_one. */
@@ -588,7 +588,7 @@ void runloom_mn_fini(void)
     /* (No global pending counter to reset -- runloom_mn_run sums the per-hub
      * fields, which are freed along with the hub array just above.) */
     /* Stand the snap back up for any later single-thread scheduler use. */
-    runloom_set_per_g_tstate_mode(0);
+    runloom_set_mn_live(0);
     runloom_mn_interp = NULL;
     /* Sysmon is joined -> no more auto-cap ticks; forget the watermark so the next
      * session (or a sysmon-less context) falls back to the static default. */
@@ -614,7 +614,7 @@ void runloom_mn_reset_after_fork(void)
     runloom_mn_spawn_counter = 0;
     runloom_mn_nidle = 0;           /* WAKEP parked-hub count: no hubs in the child */
     runloom_mn_interp = NULL;
-    runloom_set_per_g_tstate_mode(0);
+    runloom_set_mn_live(0);
     runloom_mutex_init(&runloom_global_runq_lock);   /* may be inherited held */
     runloom_global_runq_head = runloom_global_runq_tail = NULL;
     __atomic_store_n(&runloom_global_runq_len, 0, __ATOMIC_RELAXED);
@@ -906,9 +906,9 @@ PyObject *runloom_mn_fiber_pinned(PyObject *callable, size_t stack_size,
  * with tstate == NULL is skipped as dead, so a bulk batch never ran; with this
  * guard lifted, fiber_n(fn, 2000) on 4 hubs builds the batch and mn_run never
  * returns -- the census reports a STALL with 2000 live fibers and an empty
- * fiber dump, since bulk gs are not in the registry either).  Per-g
- * mode is on for the life of every M:N run, so fiber_n always takes the
- * per-fiber loop and says so once on stderr.  The bulk path below stays
+ * fiber dump, since bulk gs are not in the registry either).  So fiber_n
+ * always takes the per-fiber loop and says so once on stderr.  The bulk path
+ * below stays
  * compiled for the day the batch grows a per-g tstate pass; drop the guard
  * then and the xfail turns into an XPASS.  That fix must also register each
  * bulk g with runloom_greg_link: the builder skips the fiber registry, and the
@@ -916,15 +916,15 @@ PyObject *runloom_mn_fiber_pinned(PyObject *callable, size_t stack_size,
 static int runloom_fibern_bulk_enabled(void)
 {
     static int v = -1;
-    static int per_g_noted = 0;
+    static int noted = 0;
     int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
     if (cur < 0) {
         const char *e = getenv("STACKWEAVE_GON_BULK");
         cur = (e != NULL && *e != '0' && *e != '\0') ? 1 : 0;
         __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
     }
-    if (cur && runloom_get_per_g_tstate_mode()) {
-        if (__atomic_exchange_n(&per_g_noted, 1, __ATOMIC_RELAXED) == 0)
+    if (cur) {
+        if (__atomic_exchange_n(&noted, 1, __ATOMIC_RELAXED) == 0)
             fprintf(stderr, "[stackweave] STACKWEAVE_GON_BULK ignored: the bulk "
                             "fiber_n builder allocates no per-g tstate, so it "
                             "does not work under migration; fiber_n spawns "
@@ -957,23 +957,22 @@ struct runloom_fibern_batch {
  * g-struct arena must NOT be freed at completion.
  *
  * A stale/dup wake_g (a netpoll dup-wake, a chan/iouring waiter, a cancel/drain
- * path) can still be mid-flight to runloom_mn_hub_submit -> runloom_g_try_incref,
- * which reads g->refcount to decide whether to re-queue.  That read is only sound
- * while g is a VALID g struct (refcount 0 -> try_incref bails).  The per-thread
- * g-slab upholds exactly this by NEVER returning a g struct to the OS
- * (runloom_sched_core.c.inc:700).  The bulk-arena path used to free(b->garena) at
+ * path) can still be mid-flight to runloom_mn_wake_g, which loads and CASes
+ * g->wake_state.  That is only sound while g is a VALID g struct (a completed g
+ * keeps wake_state RUNNING, so the stale wake enqueues nothing).  The
+ * per-thread g-slab upholds exactly this by NEVER returning a g struct to the
+ * OS (runloom_g_slab_free).  The bulk-arena path used to free(b->garena) at
  * the last finish, returning every g struct in the batch to the OS -- inverting
- * that contract: a freed, malloc-reused g yields a garbage refcount>0, so
- * try_incref spuriously resurrects a non-g, re-submits it, and resumes a
- * destroyed coro (the arm64 reused-g SIGSEGV the slab retention prevents).
+ * that contract: a freed, malloc-reused g yields garbage, so a stale wake can
+ * spuriously resurrect a non-g, enqueue it, and resume a destroyed coro (the
+ * arm64 reused-g SIGSEGV the slab retention prevents).
  *
- * Fix: at the last finish, release the coro arena + stack slots (no wake reads
- * those -- try_incref bails before any coro_resume), but RETAIN the g-struct
- * arena by pushing the whole batch here, and free the lot at mn_fini, when every
- * hub thread is joined and no wake_g can be in flight.  garena stays valid
- * (refcount 0) the entire time, so a stale try_incref always bails -- the slab's
- * contract, applied to the arena.  (A bounded per-quiescence reclaim is a future
- * memory refinement, mirroring the slab's own QSBR TODO.) */
+ * Fix: at the last finish, release the coro arena + stack slots (no stale wake
+ * reaches those), but RETAIN the g-struct arena by pushing the whole batch
+ * here, and free the lot at mn_fini, when every hub thread is joined and no
+ * wake_g can be in flight.  garena stays a valid g struct the entire time --
+ * the slab's contract, applied to the arena.  (A bounded per-quiescence reclaim
+ * is a future memory refinement, mirroring the slab's own QSBR TODO.) */
 static struct runloom_fibern_batch *runloom_garena_quar = NULL;  /* quarantine head */
 /* A tiny test-and-set int spinlock guards the head push; the push under it is
  * a plain two-pointer splice. */
@@ -1103,7 +1102,6 @@ static int runloom_mn_fiber_n_bulk(PyObject *callable, long n, size_t stack_size
     size_t gsz = sizeof(runloom_g_t);
     size_t csz = runloom_coro_struct_size();
     size_t hub_stack;
-    int use_grunq = runloom_use_global_runq();
     char *garena, *carena;
     runloom_g_t *heads[64], *tails[64];
     long counts[64];
@@ -1152,18 +1150,16 @@ static int runloom_mn_fiber_n_bulk(PyObject *callable, long n, size_t stack_size
 
         memset(&tmpl, 0, sizeof tmpl);
         tmpl.callable     = callable;             /* refs batched below */
-        /* refcount = spawn ref (+ the default queue ref implied by
-         * in_sub_queue=1, which hub_main drops when it consumes the entry --
-         * mirrors the runloom_g_incref in hub_submit).  Per-g-tstate mode uses
-         * the global-runq from_runq ref instead, so it needs only the spawn ref. */
-        tmpl.refcount     = runloom_get_per_g_tstate_mode() ? 1 : 2;
+        /* refcount = the spawn ref alone, as runloom_mn_hub_submit expects: a
+         * fresh g on a submission list holds no queue ref. */
+        tmpl.refcount     = 1;
         tmpl.park_fd      = -1;
         tmpl.in_sub_queue = 1;
         tmpl.state        = (unsigned char)RUNLOOM_GST_SUBMITTED;
         tmpl.arena        = (batch != NULL);      /* arena-owned: skip individual free */
         tmpl.batch        = batch;                /* final decref -> batch_finish_one */
         tmpl.pass_index   = (unsigned char)(indexed != 0);  /* fiber_n(indexed=True): fn(i) */
-        if (use_grunq) tmpl.wake_state = RUNLOOM_WS_RUNNING;
+        tmpl.wake_state   = RUNLOOM_WS_RUNNING;
 
         if (tmg) t0 = runloom_create_now_ns();
         if (!nofields) {

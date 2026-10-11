@@ -161,8 +161,10 @@ typedef enum runloom_delay_site {
     RUNLOOM_DLY_G_ENTRY,            /* a fiber starts running */
     RUNLOOM_DLY_G_COMPLETE,         /* a fiber completes */
     RUNLOOM_DLY_HUB_RESUME,         /* a hub picks a g to resume */
-    RUNLOOM_DLY_G_RESURRECT,        /* hub_submit try_incref -> in_sub_queue CAS
-                                     * (the g-resurrection ABA window, sched_qref) */
+    RUNLOOM_DLY_G_RESURRECT,        /* retired, no call site: hub_submit took a
+                                     * queue ref only for the removed per-hub
+                                     * wake path; kept so a seed picks the same
+                                     * sites */
     RUNLOOM_DLY_SPAWN_PUBLISH,      /* spawn_common: g is registry-linked but not
                                      * yet state_set(RUNNABLE) -- widens the window a
                                      * cross-hub fibers() reader must SKIP (the

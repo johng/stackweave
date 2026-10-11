@@ -22,8 +22,10 @@
  *   Global fiber pool: thread-safe stack of fresh G structs so
  *   runloom_mn_fiber from outside any hub can place a g without contending.
  *
- *   Sleep heap: still per-hub.  Sleep duration includes a check for
- *   cross-hub wakeups (no -- gs cannot migrate; sleep is hub-local).
+ *   Sleep heap: per-hub, edited only by its own hub thread.  A sleep's timer
+ *   fires on the hub the g parked on, which re-queues it where an idle hub
+ *   can take it (runloom_mn_requeue_local), or, for a g pinned to another
+ *   hub, wakes it through the global run-queue.
  *
  *   Netpoll: one epoll_fd shared across hubs; each hub adds parks to
  *   it.  pump() runs in any hub when its local queue is empty and

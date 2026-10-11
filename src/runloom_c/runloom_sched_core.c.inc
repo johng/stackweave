@@ -485,11 +485,11 @@ void runloom_g_entry(void *user)
      * Give each fiber its own context, exactly as asyncio runs each Task in
      * copy_context(), so a set() stays fiber-local.  Skipped only for a fiber
      * with its OWN tstate (an M:N hub fiber), which already has a distinct
-     * context; a single-thread fiber on any other thread still needs the
-     * private context even while an M:N run is live (the mode flag is global).
-     * On OOM we leave the shared context in place (leaky across siblings, but
-     * correct for this fiber and never a crash). */
-    if (!(runloom_get_per_g_tstate_mode() && runloom_mn_current_sched() != NULL)) {
+     * context; a single-thread fiber, on any thread and whether or not an M:N
+     * run is live, still needs the private context.  On OOM we leave the
+     * shared context in place (leaky across siblings, but correct for this
+     * fiber and never a crash). */
+    if (g->tstate == NULL) {
         PyThreadState *cts = PyThreadState_GET();
         /* Give this fiber a PRIVATE, EMPTY context as its baseline (p460).
          *
@@ -812,16 +812,18 @@ RUNLOOM_NOINLINE void runloom_g_slab_free(runloom_g_t *g)
     g->magic = 0xDEADu;   /* source-hunt: freed-g marker (distinguishes UAF from reuse) */
 #endif
     runloom_g_state_set(g, RUNLOOM_GST_FREED);
-    /* Do NOT return the g STRUCT to the OS.  A stale wake_g (the netpoll
-     * dup-wake) can reach hub_submit with a pointer to an already-freed g;
-     * hub_submit's try_incref reads g->refcount to decide whether to re-queue,
-     * which is only sound while g is still a VALID g struct (refcount 0).  If the
-     * struct were freed to the OS and its memory reused, try_incref reads garbage
-     * and spuriously resurrects a non-g -> the arm64 crash residual (a reused g:
-     * magic != 0x600DC0DE, owner=NULL, garbage coro, reaching coro_resume from
-     * the ready FIFO).  The g's coro/stack are still released at completion; only
-     * the small g STRUCT is retained, cached in the per-thread slab forever so
-     * the try_incref read stays sound.  Memory is bounded by peak concurrency
+    /* Do NOT return the g STRUCT to the OS.  A stale wake (the netpoll
+     * dup-wake) can reach runloom_mn_wake_g with a pointer to an already-freed
+     * g and load/CAS its wake_state, and a cross-hub introspection reader's
+     * try_incref reads g->refcount; both are only sound while g is still a
+     * VALID g struct (a completed g keeps wake_state RUNNING, so a stale wake
+     * only marks it RUNNING_WOKEN and enqueues nothing).  If the struct were
+     * freed to the OS and its memory reused, those reads see garbage and can
+     * resurrect a non-g -> the arm64 crash residual (a reused g: magic !=
+     * 0x600DC0DE, owner=NULL, garbage coro, reaching coro_resume).  The g's
+     * coro/stack are still released at completion; only the small g STRUCT is
+     * retained, cached in the per-thread slab forever so those reads stay
+     * sound.  Memory is bounded by peak concurrency
      * (the max-fibers admission cap); RUNLOOM_G_SLAB_CAP is now a soft hint (we
      * keep caching past it rather than free).  A bounded QSBR/quarantine reclaim
      * that frees only after no wake can reference the struct is a later
@@ -839,7 +841,7 @@ RUNLOOM_NOINLINE void runloom_g_slab_free(runloom_g_t *g)
 
 /* ---- teardown reclaim (mn_fini) -------------------------------------------
  * runloom_g_slab_free never returns a g STRUCT to the OS *while a runtime is
- * live* (a stale netpoll dup-wake can still try_incref it -- see the invariant
+ * live* (a stale netpoll dup-wake can still read its wake_state -- see the invariant
  * in runloom_g_slab_free).  That retention is meant to be BOUNDED by peak
  * concurrency and REUSED, but a per-thread slab dies WITH its owning hub thread
  * at mn_fini: the hub's TLS cache of completed-fiber structs is stranded (no
@@ -850,7 +852,7 @@ RUNLOOM_NOINLINE void runloom_g_slab_free(runloom_g_t *g)
  * The reclaim below is sound for the SAME reason mn_fini already frees the
  * bulk-arena g structs (runloom_garena_quar_drain) to the OS at teardown: by the
  * time it runs every hub thread is joined and no wake_g can be in flight, so no
- * try_incref can reach these structs -- the grace period that makes returning
+ * stale read can reach these structs -- the grace period that makes returning
  * them to the OS safe.  Two halves:
  *   runloom_g_slab_thread_flush() -- an EXITING hub thread splices its OWN TLS
  *       slab into the shared global pool BEFORE it dies (call it from hub_main),

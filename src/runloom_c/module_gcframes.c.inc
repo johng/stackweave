@@ -47,15 +47,16 @@ static int runloom_gcframes_visit_snap(runloom_pystate_snap_t *snap,
                                        visitproc visit, void *arg, int subtract);
 
 /* Visit one registered g's saved chains.  Skips gs with no live snap (running:
- * chain is on the hub/sched tstate and CPython walks it; fresh/done: no frames)
- * and FREED slab residents.  Returns the first non-zero visit result. */
+ * chain is on the sched tstate and CPython walks it; an M:N fiber: chain is on
+ * its own tstate; fresh/done: no frames) and FREED slab residents.  Returns the
+ * first non-zero visit result. */
 static int runloom_gcframes_visit_g(runloom_g_t *g, visitproc visit, void *arg, int subtract)
 {
     if (__atomic_load_n(&g->state, __ATOMIC_RELAXED) == RUNLOOM_GST_FREED) {
         return 0;   /* FREED slab resident, still registry-linked: no live snap */
     }
     if (!g->snap.valid) {
-        return 0;   /* running (hub-tstate-visible) or fresh/done */
+        return 0;   /* running, an M:N fiber, or fresh/done */
     }
     runloom_gcframes_walked_gs++;
     return runloom_gcframes_visit_snap(&g->snap, visit, arg, subtract);
@@ -94,8 +95,10 @@ static int runloom_gcframes_traverse(PyObject *self, visitproc visit, void *arg)
     }
     subtract = runloom_gc_in_subtract_pass(self);
     runloom_gcframes_walks++;
-    /* 1. Every registered g: default-mode M:N fibers AND single-thread-scheduler
-     * fibers, all of which park through runloom_pystate_snap into g->snap. */
+    /* 1. Every registered g.  Single-thread-scheduler fibers (run(1), a Coro, a
+     * drain nested in an M:N fiber) park through runloom_pystate_snap into
+     * g->snap; an M:N fiber's frames stay on its own tstate, which the collector
+     * walks itself, so its snap is never valid and visit_g skips it. */
     for (g = runloom_greg_head_for_gc(); g != NULL; g = g->reg_next) {
         int r = runloom_gcframes_visit_g(g, visit, arg, subtract);
         if (r) return r;

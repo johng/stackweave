@@ -189,9 +189,12 @@ static PyObject *RunloomG_stack(RunloomG *self, PyObject *unused)
     } else if (self->g->snap.valid) {
         state = (runloom_sched_get()->current == self->g) ? "running" : "parked";
         has_snap = 1;
-    } else if (runloom_get_per_g_tstate_mode()) {
-        /* Migration mode has no snap (the per-g tstate carries the suspended
-         * state), so the wake state machine is authoritative; has_snap stays 0. */
+    } else if (self->g->tstate != NULL) {
+        /* An M:N fiber has no snap (its own tstate carries the suspended
+         * state), so the wake state machine is authoritative; has_snap stays 0.
+         * Asked per fiber, not per process: a single-thread fiber on another
+         * thread has no tstate of its own and no wake state, even while an M:N
+         * run is live. */
         int ws = __atomic_load_n(&self->g->wake_state, __ATOMIC_ACQUIRE);
         switch (ws) {
         case RUNLOOM_WS_PARKED:   state = "parked";  break;

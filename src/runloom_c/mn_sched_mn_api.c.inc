@@ -152,58 +152,24 @@ struct runloom_iouring_ring *runloom_mn_current_iouring_ring(void)
     return h ? h->iouring_ring : NULL;
 }
 
-/* Push g onto a hub's submission list.  Called by netpoll pump to
- * route an I/O-woken g back to whichever hub it was running on.
- * (Also used internally by mn_fiber.)  Hub_main drains submissions every
- * iteration and routes each entry to either the deque (if g is fresh)
- * or the local FIFO (if g has saved state -- the netpoll-wake case).
+/* Publish a FRESH g on hub h's submission list (the spawn path,
+ * runloom_mn_fiber_core).  hub_main drains submissions every iteration onto
+ * its stealable deque (or its ready ring, if the g is pinned there).  A woken
+ * g never comes here: runloom_mn_wake_g routes it through the wake state
+ * machine to a deque or the global run-queue.
  *
- * Idempotency: a CAS on g->in_sub_queue makes duplicate submissions
- * no-ops.  Under M:N + free-threaded 3.13t a parker can legitimately
- * be wake_g'd more than once (e.g., wake_g from a netpoll pump that
- * unlinked it normally, followed by a stale wake from the safety
- * unlink at the next wait_fd's yield-return).  Without the CAS the
- * sub queue ends up with g twice, hub_main pops it twice, and the
- * second resume hits a g whose coro was already destroyed by the
- * decref that ran after the first run-to-completion -- segfault in
- * runloom_asm_swap on *(NULL coro). */
+ * No queue ref is taken: the queued g is kept alive by its spawn (scheduler)
+ * ref, which hub_main drops only when the g completes.  The in_sub_queue CAS
+ * makes a second publish of the same g a no-op; hub_main clears it before
+ * the resume. */
 static void runloom_mn_hub_submit(runloom_hub_t *h, runloom_g_t *g)
 {
     int expected = 0;
-    int per_g = runloom_get_per_g_tstate_mode();
-    /* QUEUE REF, taken via TRY_INCREF *before* touching g->in_sub_queue.
-     *
-     * A queued g used to be held only by its spawn ref, so a STALE wake_g racing
-     * the g's completion (the duplicate-wake the comment above describes) could
-     * re-reference a g that completion had already freed -> use-after-free (the
-     * arm64 per-hub-kqueue crash: a freed g, magic 0xDEAD, re-submitted into a
-     * hub's sub_head and resumed).
-     *
-     * The ref MUST be a refcount>0-gated try_incref taken up front, not a plain
-     * incref after the CAS: CBMC (tools/verify/cbmc/sched_qref_cbmc.c) shows the latter
-     * still has a window where completion frees the g between the CAS and the
-     * incref (it resurrects a freed g).  try_incref FAILS if the g is already
-     * freeing (refcount 0), so a stale wake on a completed g bails here, and on
-     * success the g is pinned for the lifetime of THIS queue entry -- hub_main
-     * drops it exactly once when it consumes the entry (the in_sub_queue 1->0
-     * exchange).  Per-g-tstate mode uses the global-runq from_runq ref instead,
-     * so it keeps the original path. */
-    if (!per_g && !runloom_g_try_incref(g))
-        return;                          /* g is freeing -> drop the stale wake */
-    /* Perturbation seam (RUNLOOM_DELAY): widen the window between the
-     * try_incref that guards resurrection and the in_sub_queue CAS below -- the
-     * exact ABA window sched_qref_cbmc.c proves.  The formal proof shows it is
-     * safe FOR ALL interleavings; this widener lets a soak/TSan run actually
-     * HIT that window on the real .so.  No-op unless RUNLOOM_DELAY names it. */
-    runloom_delay_inject(RUNLOOM_DLY_G_RESURRECT);
     /* Defence-in-depth (debug): a live g must not already be DONE/FREED. */
     RUNLOOM_G_ASSERT_NOT(g, RUNLOOM_GST_MASK_DEAD);
     if (!__atomic_compare_exchange_n(&g->in_sub_queue, &expected, 1,
                                      0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
-        /* Already queued -> drop the ref we just took and bail.  The pending
-         * resume picks up whatever state the g has when hub_main reaches it. */
-        if (!per_g) runloom_g_decref(g);
-        return;
+        return;                          /* already queued */
     }
     /* Controlled-replay deferred publish: a cross-hub submit made DURING a
      * running segment (the spawning hub holds the baton and is running a g) is
@@ -390,6 +356,7 @@ static void runloom_mn_woken_enqueue(runloom_g_t *g)
 
 void runloom_mn_wake_g(void *hub_opaque, runloom_g_t *g)
 {
+    int st;
     if (hub_opaque == NULL) {
         /* g belongs to a per-thread (single-thread) scheduler, or netpoll was
          * used outside any hub context.  Route via runloom_sched_wake, which (Phase
@@ -401,67 +368,61 @@ void runloom_mn_wake_g(void *hub_opaque, runloom_g_t *g)
         runloom_sched_wake(g);
         return;
     }
-    if (runloom_use_global_runq()) {
-        /* per-g-tstate OR steal-woken: g is migratable, so route it where a
-         * hub other than its origin can reach it -- the waker's own deque, else
-         * the global run-queue (runloom_mn_woken_enqueue) -- instead of the
-         * origin hub's owner-drained sub list; recovers it even if the origin
-         * hub is wedged in a blocking C call.  Drive the per-g wake state machine (see
-         * runloom_sched.h); it is tstate-agnostic -- the snap (steal-woken) or the
-         * per-g tstate (per-g-tstate) carries the migrated state:
-         *
-         *   PARKED  -> QUEUED          : we won the wake; enqueue exactly once
-         *                                (+ a queue ref so the entry keeps g
-         *                                alive until a hub consumes it).
-         *   RUNNING -> RUNNING_WOKEN    : g is owned by a hub mid-resume; just
-         *                                remember the wake -- the owner enqueues
-         *                                it at release.  Enqueuing now would let
-         *                                a second hub attach g's live tstate
-         *                                during the owner's commit->detach gap.
-         *   QUEUED / RUNNING_WOKEN      : a wake is already pending -> drop, so a
-         *                                g is never enqueued twice (the old
-         *                                two-flag design's livelock).
-         *
-         * CAS-on-failure reloads `st`, so the loop only spins while it keeps
-         * losing the PARKED->QUEUED or RUNNING->RUNNING_WOKEN race (a couple of
-         * instructions); every other state returns immediately. */
-        int st = __atomic_load_n(&g->wake_state, __ATOMIC_ACQUIRE);
-        (void)hub_opaque;   /* origin no longer needed: no per-hub rebalance */
-        RUNLOOM_G_ASSERT_NOT(g, RUNLOOM_GST_MASK_DEAD);
-        for (;;) {
-            if (st == RUNLOOM_WS_PARKED) {
-                if (__atomic_compare_exchange_n(&g->wake_state, &st,
-                                                RUNLOOM_WS_QUEUED, 0,
-                                                __ATOMIC_ACQ_REL,
-                                                __ATOMIC_ACQUIRE)) {
-                    RUNLOOM_WS_NOTE(RUNLOOM_WS_PARKED, RUNLOOM_WS_QUEUED);
-                    runloom_g_incref(g);   /* queue ref, dropped when consumed */
-                    runloom_mn_woken_enqueue(g);
-                    return;
-                }
-                /* lost: st reloaded to the current state; re-evaluate */
-            } else if (st == RUNLOOM_WS_RUNNING) {
-                if (__atomic_compare_exchange_n(&g->wake_state, &st,
-                                                RUNLOOM_WS_RUNNING_WOKEN, 0,
-                                                __ATOMIC_ACQ_REL,
-                                                __ATOMIC_ACQUIRE)) {
-                    RUNLOOM_WS_NOTE(RUNLOOM_WS_RUNNING, RUNLOOM_WS_RUNNING_WOKEN);
-                    return;   /* owner will enqueue at release */
-                }
-            } else if (st == RUNLOOM_WS_SWEEPING) {
-                if (__atomic_compare_exchange_n(&g->wake_state, &st,
-                                                RUNLOOM_WS_SWEEPING_WOKEN, 0,
-                                                __ATOMIC_ACQ_REL,
-                                                __ATOMIC_ACQUIRE)) {
-                    RUNLOOM_WS_NOTE(RUNLOOM_WS_SWEEPING, RUNLOOM_WS_SWEEPING_WOKEN);
-                    return;   /* sweeper will enqueue at release */
-                }
-            } else {
-                return;   /* QUEUED / RUNNING_WOKEN / SWEEPING_WOKEN: pending */
+    /* Every M:N g owns its tstate and is migratable, so route it where any
+     * hub can reach it -- the waker's own deque, else the global run-queue
+     * (runloom_mn_woken_enqueue) -- never back to its origin hub only, so it
+     * is recovered even if that hub is wedged in a blocking C call.  Drive
+     * the per-g wake state machine (see runloom_sched.h):
+     *
+     *   PARKED  -> QUEUED          : we won the wake; enqueue exactly once
+     *                                (+ a queue ref so the entry keeps g
+     *                                alive until a hub consumes it).
+     *   RUNNING -> RUNNING_WOKEN    : g is owned by a hub mid-resume; just
+     *                                remember the wake -- the owner enqueues
+     *                                it at release.  Enqueuing now would let
+     *                                a second hub attach g's live tstate
+     *                                during the owner's commit->detach gap.
+     *   QUEUED / RUNNING_WOKEN      : a wake is already pending -> drop, so a
+     *                                g is never enqueued twice (the old
+     *                                two-flag design's livelock).
+     *
+     * CAS-on-failure reloads `st`, so the loop only spins while it keeps
+     * losing the PARKED->QUEUED or RUNNING->RUNNING_WOKEN race (a couple of
+     * instructions); every other state returns immediately. */
+    st = __atomic_load_n(&g->wake_state, __ATOMIC_ACQUIRE);
+    RUNLOOM_G_ASSERT_NOT(g, RUNLOOM_GST_MASK_DEAD);
+    for (;;) {
+        if (st == RUNLOOM_WS_PARKED) {
+            if (__atomic_compare_exchange_n(&g->wake_state, &st,
+                                            RUNLOOM_WS_QUEUED, 0,
+                                            __ATOMIC_ACQ_REL,
+                                            __ATOMIC_ACQUIRE)) {
+                RUNLOOM_WS_NOTE(RUNLOOM_WS_PARKED, RUNLOOM_WS_QUEUED);
+                runloom_g_incref(g);   /* queue ref, dropped when consumed */
+                runloom_mn_woken_enqueue(g);
+                return;
             }
+            /* lost: st reloaded to the current state; re-evaluate */
+        } else if (st == RUNLOOM_WS_RUNNING) {
+            if (__atomic_compare_exchange_n(&g->wake_state, &st,
+                                            RUNLOOM_WS_RUNNING_WOKEN, 0,
+                                            __ATOMIC_ACQ_REL,
+                                            __ATOMIC_ACQUIRE)) {
+                RUNLOOM_WS_NOTE(RUNLOOM_WS_RUNNING, RUNLOOM_WS_RUNNING_WOKEN);
+                return;   /* owner will enqueue at release */
+            }
+        } else if (st == RUNLOOM_WS_SWEEPING) {
+            if (__atomic_compare_exchange_n(&g->wake_state, &st,
+                                            RUNLOOM_WS_SWEEPING_WOKEN, 0,
+                                            __ATOMIC_ACQ_REL,
+                                            __ATOMIC_ACQUIRE)) {
+                RUNLOOM_WS_NOTE(RUNLOOM_WS_SWEEPING, RUNLOOM_WS_SWEEPING_WOKEN);
+                return;   /* sweeper will enqueue at release */
+            }
+        } else {
+            return;   /* QUEUED / RUNNING_WOKEN / SWEEPING_WOKEN: pending */
         }
     }
-    runloom_mn_hub_submit((runloom_hub_t *)hub_opaque, g);
 }
 
 static void runloom_mn_kick_hub_all_modes(runloom_hub_t *h);   /* below */
