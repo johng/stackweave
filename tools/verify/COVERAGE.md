@@ -35,7 +35,7 @@ Driver: `verify/run_verify.sh` (Spin + CBMC + GenMC + herd7 + Coq + Iris + Alloy
 | park_safe/wake_safe | `runloom_sched_parkwake.c.inc` | `parked_safe.pml`, `park_generic_timed.pml`, `sched_parkwake.c` + `_seam.c`(GenMC; the SC fence was *discovered* here), `OneShotWake.v`(Iris) | **deep** |
 | Cross-thread wake routing | `mn_sched_mn_api.c.inc` | `cross_thread_wake.pml`, `wakelist_mpsc.litmus`, `WakeListHandoff.v`(iRC11) | **deep** |
 | select claim / close | `chan_select_main.c.inc`, `chan_waiters.c.inc` | `select_claim.pml`, `select_close.pml`(+4 controls), `Select.v`(Coq ∞) | **deep** |
-| Default M:N wake dedup | `mn_sched_mn_api.c.inc` (`hub_submit`) | `hub_submit.pml`, `sched_qref.c`(CBMC) | good |
+| M:N spawn placement (hub_submit) | `mn_sched_mn_api.c.inc` (`hub_submit`) | `hub_fanout.pml`(Spin), `RunloomMNWake.tla`(TLC) | good |
 | Ready-ring FIFO | `runloom_sched_core.c.inc` | `sched_readyring_cbmc.c`(CBMC) | good |
 | netpoll commit + arm (epoll/kqueue) | `netpoll_*.c.inc` | `netpoll_commit`,`netpoll_rearm`,`netpoll_kqueue`,`netpoll_multipool`,`netpoll_deadline`,`netpoll_forceunlink`(Spin), `netpoll_claim.c`(GenMC), `commit_*.litmus` | **deep** (see drift note on `netpoll_rearm`) |
 | **io_uring-as-loop backend wake/re-arm** | `io_uring_l_loop.c.inc`, `netpoll_wake_iouring.c.inc`, `mn_sched_hub_main.c.inc` | **`netpoll_iouring_loop.pml`(Spin) — NEW 2026-06-17** | good (NEW) |
@@ -185,7 +185,6 @@ TLA+ `RunloomMnRun`.
 | `park_generic_timed.pml` | fd-free TIMED in-memory park: enqueued exactly once |
 | `select_claim.pml` | select() cross-channel `fired_case` claim CAS |
 | `select_close.pml` | select() Phase-2 vs send/close (+4 controls) |
-| `hub_submit.pml` | default M:N wake: `in_sub_queue` dedup + done-check |
 | `blockpool.pml` | blocking-offload wake order: re-queue before dec inflight |
 | `netpoll_commit.pml` | netpoll park/wake commit (Go netpollblockcommit) |
 | `netpoll_rearm.pml` | netpoll LT re-arm vs not-yet-linked window (⚠ drift: models replaced EPOLLONESHOT scheme) |
@@ -209,7 +208,6 @@ TLA+ `RunloomMnRun`.
 | `wake_state_fsm_cbmc.c` | per-g wake_state FSM totality + no-lost-wake (+ `BUG_TIMER_CLAIM_DROPS`) |
 | `io_classify_cbmc.c` | **I/O-return classifier FSM** totality + mask-soundness (T5) |
 | `preempt_defer_cbmc.c` | preempt defer-during-destruction gate (p69b) |
-| `sched_qref_cbmc.c` | default-path goroutine queue-membership ref (try_incref-before-CAS) |
 | `sched_readyring_cbmc.c` | per-sched ready FIFO ring |
 | `sched_pystate_cbmc.c` | per-goroutine tstate snapshot harness |
 | `chan_refflow_cbmc.c` | PyObject ref conservation through a channel |

@@ -3,10 +3,10 @@ r"""iouwake_trace_conform.py -- TRACE CONFORMANCE for the io_uring CQE WAKE
 protocol: replay a REAL extension run against RunloomIouringWake.tla (the
 CQ-overflow lost-wakeup + drain-first overflow-flush heal model).
 
-RunloomWake binds the single-thread foreign-poke drain; RunloomMNWake binds the
-M:N hub-submit route; this binds the io_uring CQE drain.  The io_uring drain emits
-its transitions (STACKWEAVE_IOUWAKE_TRACE=<path>): SUBMIT (an SQE submitted + the
-fiber about to park) on the submitter; DRAIN_FLUSH (the GETEVENTS overflow flush
+RunloomWake binds the single-thread foreign-poke drain; this binds the io_uring
+CQE drain.  The io_uring drain emits its transitions
+(STACKWEAVE_IOUWAKE_TRACE=<path>): SUBMIT (an SQE submitted + the fiber about
+to park) on the submitter; DRAIN_FLUSH (the GETEVENTS overflow flush
 fired -- IORING_SQ_CQ_OVERFLOW was set), DRAIN_CONSUME (a CQE walked + its fiber
 readied), DRAIN_BLOCK / DRAIN_UNBLOCK (the pump block while an iouring op is
 inflight) and RESUME (the woken submitter returns from park) on the drainer.  This

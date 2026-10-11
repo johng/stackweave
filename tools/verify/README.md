@@ -122,26 +122,16 @@ controls (`-DBUG_CLOSE_NULL`, `-DBUG_ABORT_NOCASE`, `-DBUG_ABORT_DROP`,
 `-DBUG_SPURIOUS`) each reintroduce a bug and make the model fail, so the
 properties demonstrably have teeth.
 
-### 6. M:N hub submission list -- `spin/hub_submit.pml`
+### 6. M:N hub submission list -- `spin/hub_fanout.pml`
 
-`runloom_mn_hub_submit` pushes a g onto a hub's MPSC submission list. It was
-the default M:N wake path while cross-hub migration was opt-in; migration is
-now always on, so every M:N wake goes through the global-runq `wake_state`
-machine of #2, and `hub_submit` carries spawn placement
-(`runloom_mn_fiber_core`) and wakes outside a run. A g can be submitted more
-than once (historically a netpoll-pump unlink + a stale safety-unlink wake);
-two defenses keep that safe and are modelled here:
-
-* **No resume-after-done** -- the hub never resumes a g that already ran to
-  completion (the second resume would touch a coro freed by the
-  post-completion decref -- the segfault these defenses prevent). Guarded
-  by the `in_sub_queue` CAS dedup **and** the done-check at pop.
-* **Runs exactly once** -- coalesced wakes resume the g exactly once (no
-  lost wake, no double-resume).
-* **At most one entry** -- the dedup keeps g's submission count ≤ 1.
-
-Negative control `-DBUG_NO_DEDUP` removes both defenses and the model
-fails (resume-after-done).
+`runloom_mn_hub_submit` pushes a FRESH g (a spawn, `runloom_mn_fiber_core`)
+onto a hub's MPSC submission list. It was also the M:N wake path while
+cross-hub migration was opt-in, and `spin/hub_submit.pml` (plus
+`cbmc/sched_qref_cbmc.c`) modelled its defenses against a g submitted twice by
+a stale wake. Migration is now the only mode, so every M:N wake goes through
+the `wake_state` machine of #2 and nothing submits a g twice; both models were
+retired with that path. `spin/hub_fanout.pml` proves what is left: whichever
+wait mode the target hub is in, one of the submitter's kicks reaches it.
 
 ### 7. Blocking-offload wake order -- `spin/blockpool.pml`
 
@@ -547,7 +537,6 @@ verify/
     parked_safe.pml        park_safe/wake_safe handshake
     select_claim.pml       select fired_case CAS
     select_close.pml       select Phase-2 vs send/close (+ 4 bug controls)
-    hub_submit.pml         default M:N wake dedup (+ BUG_NO_DEDUP control)
     blockpool.pml          blocking-offload wake order (+ BUG_DEC_BEFORE_REQUEUE)
     netpoll_commit.pml     netpoll park/wake commit protocol (+ BUG_NO_COMMIT)
     netpoll_rearm.pml      netpoll LEVEL register-once arm vs not-yet-linked window (+ BUG_EDGE_TRIGGERED)

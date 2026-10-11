@@ -1282,13 +1282,7 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                          * the waiter woken (cross-hub via mn_wake_g).  Cheap no-op
                          * when the global ring is uninitialised or its CQ empty. */
                         runloom_iouring_drain();
-                        /* MNWAKE-TRACE: idle hub blocks in the netpoll pump, a
-                         * BOUNDED timed wait (pump_ns, ~1ms base) -- model
-                         * HubDrainEmpty->HubDecide->HubBlock; cap=1 witnesses the
-                         * bounded poll (the BoundedPoll arm). */
-                        runloom_mnwake_trace_event("HUB_BLOCK", 0, 1);
                         runloom_netpoll_pump(pump_ns);
-                        runloom_mnwake_trace_event("HUB_UNBLOCK", 0, 0);
                     } else {
                         int waited = 0;
                         int have_sub;
@@ -1403,13 +1397,8 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                              * stop-the-world sees this hub already stopped and
                              * the cond wait holds no tstate. */
                             saved = PyEval_SaveThread();
-                            /* MNWAKE-TRACE: idle hub blocks on its per-hub
-                             * idle_cond, a BOUNDED timed wait (idle_ns) -- model
-                             * HubDrainEmpty->HubDecide->HubBlock; cap=1 = bounded. */
-                            runloom_mnwake_trace_event("HUB_BLOCK", 0, 1);
                             runloom_cond_timedwait_ns(&h->idle_cond,
                                                       &h->idle_lock, idle_ns);
-                            runloom_mnwake_trace_event("HUB_UNBLOCK", 0, 0);
                             waited = 1;
                         }
                         __atomic_store_n(&h->idle_waiting, 0, __ATOMIC_RELEASE);

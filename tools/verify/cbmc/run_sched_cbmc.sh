@@ -63,14 +63,6 @@ launch want_bug sched_readyring_cbmc.c "-DBUG_NO_CAPCHECK"   "push skips full ch
 launch want_ok  sched_pystate_cbmc.c ""
 launch want_bug sched_pystate_cbmc.c "-DBUG_DROP_FIELD" "load forgets a field -> cross-g leak"
 
-# default-path queue-membership + refcount: a stale wake racing completion must
-# not leave a queue entry pointing at a freed g (the per-hub-kqueue arm64 UAF).
-# The FIX (try_incref before touching g) is correct; BOTH the naive queue ref
-# (incref AFTER the in_sub_queue CAS) and the original no-ref code have the UAF.
-launch want_ok  sched_qref_cbmc.c ""
-launch want_bug sched_qref_cbmc.c "-DBUG_INCREF_AFTER_CAS" "naive queue ref (incref after CAS) -> stale-wake UAF window"
-launch want_bug sched_qref_cbmc.c "-DBUG_NO_QUEUE_REF"     "no queue ref -> stale-wake-after-completion UAF (original)"
-
 # rl_handle generation-stamped PIN protocol (item 3): pin (gen-checked refcount
 # upgrade) holds the object so the owner cannot free it under a live resolver.
 # BUG_NO_PIN = the naive resolve-without-refcount design the torture test caught.

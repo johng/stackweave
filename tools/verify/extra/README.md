@@ -39,8 +39,8 @@ the current suite, and the install.
    correctness is proven for an *arbitrary* number of thieves/wakers/hubs, not
    the current bounded `2`. Directly answers the README's "but they are bounds"
    caveat via an inductive invariant (EPR-decidable). `pip install ms-ivy`
-   (z3-backed). Target: `wake_state` + `hub_submit` as a parameterized system;
-   prove no-lost-wake / exactly-once for all N.
+   (z3-backed). Target: `wake_state` + its deque/global-runq routing as a
+   parameterized system; prove no-lost-wake / exactly-once for all N.
 
 2. **CDSChecker** — C11 stateless model checker. Third independent weak-memory
    angle on `cldeque.c` and the netpoll claim, complementary to GenMC/Nidhugg.

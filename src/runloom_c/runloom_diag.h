@@ -214,17 +214,8 @@ void runloom_mn_trace_event(const char *action, int hub);
 void runloom_wake_trace_event(const char *action, unsigned long g, int cap);
 
 
-/* ---- M:N hub-submit wake trace (TLA+ trace conformance, RUNLOOM_MNWAKE_TRACE) ----
- * One ndjson line per M:N wake transition ({"a":<FOREIGN_WAKE|SIGNAL|HUB_DRAIN|
- * HUB_BLOCK|HUB_UNBLOCK|RESUME>,"g":<fiber-ptr token>,"cap":<0|1 bounded-poll,
- * HUB_BLOCK only>}); tools/mnwake_trace_conform.py replays it through
- * RunloomMNWake.tla.  Off (zero-cost -- one predictable-NULL load) unless set. */
-void runloom_mnwake_trace_event(const char *action, unsigned long g, int cap);
-int  runloom_mnwake_trace_active(void);   /* fp != NULL: gate advisory reads off in production */
-
-
 /* ---- io_uring CQE wake trace (TLA+ trace conformance, RUNLOOM_IOUWAKE_TRACE) ----
- * Sibling of the wake/mnwake emitters for the io_uring CQE drain route: one
+ * Sibling of the wake emitter for the io_uring CQE drain route: one
  * ndjson line per transition ({"a":<SUBMIT|DRAIN_FLUSH|DRAIN_CONSUME|RESUME|
  * DRAIN_BLOCK|DRAIN_UNBLOCK>,"g":<op-pointer token>,"cap":<0|1, DRAIN_BLOCK
  * only>}); tools/iouwake_trace_conform.py lowers it to RunloomIouringWake.tla's
