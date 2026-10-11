@@ -1,7 +1,7 @@
 """Tearing down a finished fiber's per-g PyThreadState must stay cheap and
-leak nothing, however many fibers the process has already run.
+leak nothing, however many fibers the process has already run, or has alive.
 
-Two separate costs, both in ``runloom_iframe_clear_fiber_tstate``:
+Three separate costs, all in ``runloom_iframe_clear_fiber_tstate``:
 
 The leak.  Free-threaded CPython caches freed ints, floats, tuples, lists,
 dicts, ... on per-thread-state freelists, and ``PyThreadState_Clear`` drains
@@ -27,6 +27,14 @@ behind for good: spawn->first-run latency onto an idle hub went from ~250 us
 to tens of milliseconds, for the rest of the process.  Even without the leak,
 whatever a fiber legitimately leaves alive keeps the pool non-empty after an
 ``mn_fini``, and a quiet hub then spent ~80 us per trivial fiber instead of ~5.
+
+The QSBR poll.  Abandoning a heap also frees the QSBR-delayed pages of the
+CURRENT thread state's allocator -- the hub's -- and polls QSBR for each
+heap that uses it.  A poll that finds the goal unmet scans one slot per
+thread state in the interpreter, and every live fiber has one, so each
+teardown cost O(live fibers): with 30k fibers parked, finishing one took
+~60 us against ~3 us with 2k parked, and waking 50k parked fibers on one hub
+took ~7 s.
 
 Each scenario runs in a fresh subprocess: the damage is process-wide and
 permanent, so it must not leak into (or out of) the rest of the suite.
@@ -157,6 +165,66 @@ def test_remote_spawn_to_run_stays_fast_after_a_fiber_heavy_load(result):
         "remote spawn->first-run went from %.0f us to %.0f us after %d "
         "stackweave.fiber children (%r)"
         % (result["before_us"], result["after_us"], result["fibers"], result))
+
+
+MANY_ALIVE = r'''
+import time
+import stackweave_c
+
+
+def finish_us_per_fiber(n):
+    """Park n fibers on one hub, wake them all, and time the finish: each
+    waiter runs, ends and is torn down while the rest are still alive."""
+    out = {}
+
+    def main():
+        chans = [stackweave_c.Chan(1) for _ in range(n)]
+        done = stackweave_c.Chan(n)
+
+        def waiter(c):
+            c.recv()
+            done.send(1)
+
+        for c in chans:
+            stackweave_c.mn_fiber(lambda c=c: waiter(c))
+        stackweave_c.sched_sleep(0.02)
+        t = time.perf_counter()
+        for c in chans:
+            c.send(1)
+        for _ in range(n):
+            done.recv()
+        out["t"] = time.perf_counter() - t
+
+    stackweave_c.mn_init(1)
+    try:
+        stackweave_c.mn_fiber(main)
+        stackweave_c.mn_run()
+    finally:
+        stackweave_c.mn_fini()
+    return out["t"] / n * 1e6
+
+
+# Few first: CPython never shrinks its QSBR array, so after the large run
+# every poll in the process scans the large run's high-water mark.
+few = min(finish_us_per_fiber(2000) for _ in range(3))
+many = min(finish_us_per_fiber(30000) for _ in range(2))
+print("RESULT few_us=%.2f many_us=%.2f" % (few, many), flush=True)
+'''
+
+
+def test_fiber_teardown_does_not_slow_down_with_many_fibers_alive():
+    # Before the fix: ~3.5 us per fiber with 2k alive, ~60 us with 30k (15-18x).
+    # Fixed: ~2.5 vs ~5 us; what is left is mostly the stack depot unmapping
+    # stacks past its cap, which a 2k run never reaches.
+    p = run_python(MANY_ALIVE, timeout=120)
+    assert p.returncode == 0, (p.returncode, p.stdout[-2000:], p.stderr[-4000:])
+    line = [ln for ln in p.stdout.splitlines() if ln.startswith("RESULT ")]
+    assert line, p.stdout[-2000:]
+    r = {k: float(v) for k, v in (kv.split("=") for kv in line[-1].split()[1:])}
+    assert r["many_us"] <= 5 * r["few_us"], (
+        "finishing a fiber took %.1f us with 30k fibers alive vs %.1f us with "
+        "2k: teardown scales with the live fiber count (%r)"
+        % (r["many_us"], r["few_us"], r))
 
 
 def test_fiber_teardown_does_not_slow_down_after_a_fiber_heavy_load(result):
