@@ -264,13 +264,26 @@ static PyObject *m_park(PyObject *self, PyObject *args, PyObject *kw)
     }
 }
 
+/* A new G handle on g, holding its own ref. */
+static PyObject *runloom_g_handle_new(runloom_g_t *g)
+{
+    RunloomG *handle = PyObject_New(RunloomG, &RunloomGType);
+    if (handle == NULL) return NULL;
+    runloom_g_incref(g);
+    handle->born_gen = runloom_mn_generation_get();   /* tag the live M:N session */
+    /* RELEASE: pairs with the ACQUIRE load in RunloomG_wake/done/result so a
+     * cross-thread reader of a reused object slot is properly synchronized
+     * (silences the half-instrumented-TSan allocator-reuse false positive). */
+    __atomic_store_n(&handle->g, g, __ATOMIC_RELEASE);
+    return (PyObject *)handle;
+}
+
 /* Return a G handle to the currently-running fiber, or None if
  * called outside any fiber.  Used by runloom.aio's RunloomTask driver
  * to capture its own handle for wake-from-callback. */
 static PyObject *m_current_g(PyObject *self, PyObject *unused)
 {
     runloom_g_t *g;
-    RunloomG *handle;
     (void)self; (void)unused;
 
     /* On an M:N hub the running fiber lives in the hub's TLS, NOT in
@@ -294,15 +307,22 @@ static PyObject *m_current_g(PyObject *self, PyObject *unused)
     if (g == NULL) {
         Py_RETURN_NONE;
     }
-    handle = PyObject_New(RunloomG, &RunloomGType);
-    if (handle == NULL) return NULL;
-    runloom_g_incref(g);
-    handle->born_gen = runloom_mn_generation_get();   /* tag the live M:N session */
-    /* RELEASE: pairs with the ACQUIRE load in RunloomG_wake/done/result so a
-     * cross-thread reader of a reused object slot is properly synchronized
-     * (silences the half-instrumented-TSan allocator-reuse false positive). */
-    __atomic_store_n(&handle->g, g, __ATOMIC_RELEASE);
-    return (PyObject *)handle;
+    return runloom_g_handle_new(g);
+}
+
+/* _nest_owner(): the hub fiber whose stack the caller is running on, inside a
+ * run(1) drain or a Coro nested on it (runloom_mn_nested_enter); None
+ * anywhere else.  That fiber cannot run again until the nest returns, so
+ * stackweave._importlock counts an import here that waits for a module the
+ * fiber is importing as a deadlock, not a wait. */
+static PyObject *m_nest_owner(PyObject *self, PyObject *unused)
+{
+    runloom_g_t *g = (runloom_g_t *)runloom_mn_nest_owner();
+    (void)self; (void)unused;
+    if (g == NULL) {
+        Py_RETURN_NONE;
+    }
+    return runloom_g_handle_new(g);
 }
 
 /* in_fiber(): whether the caller is a running fiber -- current_g() is not

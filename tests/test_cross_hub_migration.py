@@ -21,12 +21,11 @@ Each scenario runs in a fresh subprocess so a lost fiber or a wedged hub is a
 clean timeout rather than a hung pytest, and so one scenario's leak cannot
 leak into the next.
 
-Fifteen gaps are closed (their docstrings start "Was a gap").  The five
-that remain are strict xfails (tests/known_gaps.py): four OS-thread-identity
-checks that live in C or in importlib and need a pin or a monkey patch (one,
-the same-hub importer, needs no migration at all: every fiber on a hub shares
-its thread id), and a timer wake that ignores G.pin.  A strict xfail still
-runs, and flips to a hard XPASS failure the moment its gap is closed.  The cost of one PyThreadState per fiber (gc.collect() per parked
+The gaps that are closed have docstrings that start "Was a gap".  The two
+that remain are strict xfails (tests/known_gaps.py): OS-thread-identity
+checks in C (stock RLock, sqlite3) that need a pin or a monkey patch.  A
+strict xfail still runs, and flips to a hard XPASS failure the moment its gap
+is closed.  The cost of one PyThreadState per fiber (gc.collect() per parked
 fiber, RSS per parked fiber, spawn) was bounded against the per-hub
 scheduler while that scheduler existed; with migration the only mode there
 is no in-tree baseline, so those three comparisons are not carried here.
@@ -65,7 +64,7 @@ import sys
 import pytest
 
 from adv_util import run_python
-from known_gaps import KNOWN_GAP, MIGRATION_GAP
+from known_gaps import MIGRATION_GAP
 
 # Shared prelude for every subprocess: a watchdog so a wedge is a clean exit,
 # and force_migrate(), which moves the caller to another hub (foreign-thread
@@ -143,6 +142,15 @@ def require_migration(moved):
     if not moved:
         print("NOMIG: the scenario saw no cross-hub migration", flush=True)
         os._exit(4)
+
+def held_by_this_fiber(module):
+    """Whether the calling fiber holds `module`'s import lock as itself: the
+    lock is stackweave's (stackweave/_importlock.py) and names this fiber,
+    not the OS thread it is on."""
+    import importlib._bootstrap as bootstrap
+    lock = bootstrap._module_locks[module]()
+    return (type(lock).__name__ == "_FiberModuleLock"
+            and lock.owner == stackweave_c.current_g())
 '''
 
 
@@ -973,22 +981,24 @@ print("PASS", flush=True)
 ''', timeout=90)
 
 
-@MIGRATION_GAP(
-    'importlib._ModuleLock keys on _thread.get_ident() at Python level; fix is a fiber-aware get_ident behind monkey.patch() (gevent-style)')
 def test_identity_module_import_lock_releases_after_a_migration():
-    """Known gap: importlib's _ModuleLock keys its owner on
-    _thread.get_ident(); an importer that parks and migrates inside the
-    module body cannot release the lock and every other importer of that
-    module hangs.
+    """Was a gap (fixed: importlib's module locks key on the fiber,
+    stackweave/_importlock.py): importlib's _ModuleLock keyed its owner on
+    _thread.get_ident(); an importer that parked and migrated inside the
+    module body could not release the lock and every other importer of that
+    module hung.
     """
     assert_pass(r'''
 import tempfile, importlib
 _watchdog(15)
 d = tempfile.mkdtemp()
 with open(os.path.join(d, "parks_on_import.py"), "w") as f:
-    f.write("import __main__\n__main__.MOVED = __main__.force_migrate()\nREADY = True\n")
+    f.write("import __main__\n"
+            "__main__.HELD = __main__.held_by_this_fiber('parks_on_import')\n"
+            "__main__.MOVED = __main__.force_migrate()\nREADY = True\n")
 sys.path.insert(0, d)
 MOVED = False
+HELD = None
 def main():
     res = stackweave.Chan(2)
     def importer(i):
@@ -1001,35 +1011,37 @@ def main():
     stackweave.sleep(0)          # first importer is inside the module body now
     stackweave.fiber(importer, 1)
     got = sorted(res.recv()[0] for _ in range(2))
-    print("importers: %r moved=%s" % (got, MOVED), flush=True)
+    print("importers: %r moved=%s held=%s" % (got, MOVED, HELD), flush=True)
     require_migration(MOVED)
+    assert HELD, "the importer did not hold the module lock as itself"
     assert got == [(0, True, None), (1, True, None)], got
     print("PASS", flush=True)
 stackweave.run(4, main)
 ''')
 
 
-@KNOWN_GAP(
-    "importlib._ModuleLock is re-entrant per OS thread, so every fiber on the importer's hub re-enters it and gets the half-built module; same fix as the migrating importer above",
-    raises=AssertionError)
 def test_identity_same_hub_importer_waits_for_a_parked_import():
-    """Known gap: importlib's _ModuleLock keys its owner on
-    _thread.get_ident(), which every fiber on one hub shares.  While one fiber
-    is parked inside a module body, a second fiber on the same hub that
-    imports the module re-enters the lock instead of waiting, and gets the
-    partially initialised module.  No migration: both importers are spawned
-    onto hub 0, which keeps them there, and the first stays inside the body
-    until the second has called import.
+    """Was a gap (fixed: importlib's module locks key on the fiber,
+    stackweave/_importlock.py): importlib's _ModuleLock keyed its owner on
+    _thread.get_ident(), which every fiber on one hub shares.  While one
+    fiber was parked inside a module body, a second fiber on the same hub
+    that imported the module re-entered the lock instead of waiting, and got
+    the partially initialised module.  No migration: both importers are
+    spawned onto hub 0, which keeps them there, and the first stays inside
+    the body until the second has called import.
     """
     rc, out, err = run_scenario(r'''
 import tempfile, importlib
 _watchdog(20)
 d = tempfile.mkdtemp()
 with open(os.path.join(d, "parks_in_its_body.py"), "w") as f:
-    f.write("import __main__\n__main__.IN_BODY = True\n__main__.GATE.recv()\nLATE = 2\n")
+    f.write("import __main__\n__main__.IN_BODY = True\n"
+            "__main__.HELD = __main__.held_by_this_fiber('parks_in_its_body')\n"
+            "__main__.GATE.recv()\nLATE = 2\n")
 sys.path.insert(0, d)
 GATE = stackweave.Chan(0)
 IN_BODY = False
+HELD = None
 def main():
     res = stackweave.Chan(2)
     calling = []
@@ -1046,8 +1058,9 @@ def main():
     while "B" not in calling:
         stackweave.sleep(0.001)
     print("TRIGGER B called import while A was parked in the module body", flush=True)
-    # B either returns at once (the gap) or blocks on the module lock; give it
-    # a moment either way, then let A finish the import.
+    print("HELD", HELD, flush=True)
+    # B either returns at once (the old gap) or waits on the module lock; give
+    # it a moment either way, then let A finish the import.
     got = {}
     deadline = time.monotonic() + 0.5
     while not got and time.monotonic() < deadline:
@@ -1071,6 +1084,8 @@ stackweave.run(4, main)
     got = ast.literal_eval(results[0][len("RESULT "):])
     if got.get("A") != 2:
         pytest.fail("the importer parked in the module body failed: %r" % (got,))
+    assert "HELD True" in out, (
+        "the importer did not hold the module lock as itself", _key_line(out, err))
     assert got.get("B") == 2, (
         "the second importer on the same hub got the half-built module", got)
 
