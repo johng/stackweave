@@ -1,0 +1,58 @@
+{
+  "env": {
+    "aslr": "2",
+    "build_label": "",
+    "cpu_model": "Intel(R) Xeon(R) Platinum 8280 CPU @ 2.70GHz",
+    "cpu_perflevels": null,
+    "gc_frames_active": null,
+    "gil_enabled": false,
+    "git_dirty": false,
+    "git_sha": "80790bd6",
+    "governor": "n/a (virtualized)",
+    "host": "stackweave-bench-c32",
+    "iouring_available": null,
+    "kernel": "7.0.0-38-generic",
+    "loadavg": [
+      "3.75",
+      "3.73",
+      "3.72"
+    ],
+    "nproc": 32,
+    "numa_nodes": 1,
+    "optimize": null,
+    "perf_event_paranoid": "4",
+    "pinned_cpus": null,
+    "py_cflags": "-fno-strict-overflow -Wsign-compare -Wunreachable-code -DNDEBUG -g -O3 -Wall",
+    "py_config_args": "'--prefix=/opt/py-ft' '--enable-optimizations' '--with-tail-call-interp' '--disable-gil' 'CC=clang-19'",
+    "python": "3.14.4",
+    "python_build": "main Oct 12 2026 19:02:01",
+    "python_impl": "CPython",
+    "python_tlbc_env": null,
+    "runloom_backend": "import-failed: ModuleNotFoundError('import of stackweave_c halted; None in sys.modules')",
+    "runloom_netpoll": "import-failed: ModuleNotFoundError('import of stackweave_c halted; None in sys.modules')",
+    "runloom_so": "import-failed: ModuleNotFoundError('import of stackweave_c halted; None in sys.modules')",
+    "runtime": "trio",
+    "stackweave_env": {},
+    "timestamp": "2026-10-12T20:22:17+00:00"
+  },
+  "results": [
+    {
+      "ci95_hi_s": 1.4851996305,
+      "ci95_lo_s": 1.4739286775,
+      "inner": 32000,
+      "mad_s": 0.0049356740000000565,
+      "mean_s": 1.4792217795833331,
+      "median_s": 1.4802639565,
+      "min_s": 1.462843186,
+      "name": "py-echo @4h",
+      "note": "serve_tcp + 64 client tasks, one trio.run",
+      "ops_per_s": 21617.76611494492,
+      "per_op_ns": 46258.248640625,
+      "per_op_s": 4.6258248640625e-05,
+      "rsd_pct": 0.5113518497646986,
+      "samples": 12,
+      "stdev_s": 0.007564027932021667
+    }
+  ],
+  "suite": "baseline-trio"
+}

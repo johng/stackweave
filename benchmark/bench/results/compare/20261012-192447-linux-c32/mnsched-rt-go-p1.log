@@ -1,0 +1,22 @@
+runtime: go go1.26.6  GOMAXPROCS=4 (scaling 1,2,4,8,16)
+
+  pingpong local-wake                 2311484.0 ops/s       432.6 ns/op  med=  43.262ms  rsd=11.0%
+  spawn noop mn_fiber                 2940971.3 ops/s       340.0 ns/op  med=   6.800ms  rsd= 1.0%
+  spawn noop stackweave.fiber         2940971.3 ops/s       340.0 ns/op  med=   6.800ms  rsd= 1.0%
+  yield 1000 fibers x200              2789143.7 ops/s       358.5 ns/op  med=  71.707ms  rsd= 1.5%
+  64 pairs pingpong                   4172106.4 ops/s       239.7 ns/op  med=  30.680ms  rsd= 3.7%
+  fan-out 1->32 buf64                 3683023.9 ops/s       271.5 ns/op  med=  27.152ms  rsd= 1.8%
+  mutex 64 fibers contended           8056561.6 ops/s       124.1 ns/op  med=  15.888ms  rsd= 1.5%
+  waitgroup fork-join 100x50          2496876.4 ops/s       400.5 ns/op  med=   2.003ms  rsd= 2.9%
+  select 2 chans                      3658867.0 ops/s       273.3 ns/op  med=  13.665ms  rsd= 0.8%
+  blocking() sleep(100us)               31643.8 ops/s     31601.8 ns/op  med= 101.126ms  rsd= 4.7%
+  64 pairs pingpong @1h               2409850.1 ops/s       415.0 ns/op  med=  53.115ms  rsd= 2.8%
+  64 pairs pingpong @2h               2830519.6 ops/s       353.3 ns/op  med=  45.221ms  rsd= 7.4%
+  64 pairs pingpong @4h               4438120.1 ops/s       225.3 ns/op  med=  28.841ms  rsd= 3.4%
+  64 pairs pingpong @8h               6315231.1 ops/s       158.3 ns/op  med=  20.268ms  rsd= 3.6%
+  64 pairs pingpong @16h              9453700.2 ops/s       105.8 ns/op  med=  13.540ms  rsd= 2.9%
+  cross-hub pinned wake              p50=     1.8us  p90=     2.1us  p99=     3.3us  max=     22.4us  n=4000
+  spawn->run round-robin             p50=     1.0us  p90=     2.8us  p99=    16.4us  max=    157.4us  n=1000
+  timer lateness 1ms                 p50=   378.8us  p90=   897.7us  p99=  1093.6us  max=   1141.0us  n=10000
+
+wrote /root/sw/benchmark/bench/results/compare/20261012-192447/mnsched-rt-go-p1.json

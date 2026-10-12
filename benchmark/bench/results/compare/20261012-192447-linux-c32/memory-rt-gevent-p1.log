@@ -1,0 +1,6 @@
+runtime: gevent  python 3.14.4  gil=False
+
+  rss per parked unit @10k               8.19 KB/unit  (10000 units, RSS 29.3 -> 109.3 MB)
+  rss per parked unit @100k              7.88 KB/unit  (100000 units, RSS 71.0 -> 840.1 MB)
+
+wrote /root/sw/benchmark/bench/results/compare/20261012-192447/memory-rt-gevent-p1.json
