@@ -201,7 +201,7 @@ Py_ssize_t runloom_sched_drain(runloom_sched_t *s)
 
     s->stopping = 0;
     runloom_pystate_snap(&sched_snap);
-    runloom_base_snap_register(&gc_base_node, &sched_snap);
+    runloom_base_snap_register(&gc_base_node, &sched_snap, RUNLOOM_BASE_SNAP_SCHED);
 
     while (!s->stopping && (!runloom_sched_ready_empty(s) ||
                             s->sleep_size > 0 ||

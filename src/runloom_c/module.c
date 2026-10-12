@@ -53,10 +53,17 @@
  *    store, and the free-threaded GC's thread-stack walk
  *    (gc_visit_thread_stacks_mark_alive) follows the stale ->previous chain
  *    into freed memory and spins forever.  Saving/restoring it keeps the
- *    coro's live frames off the caller's chain (the GC descends only via
- *    ->previous from current_frame, so a parked coro's frames become
- *    invisible while still resident in the coro's datastack, below, for a
- *    later resume).
+ *    coro's live frames off the caller's chain.
+ *    The coro's chain is linked to its resumer as a generator's is: each
+ *    resume points the coro's bottom frame at the resumer's frame, and each
+ *    yield cuts that link (runloom_coro_chain_cut/_link).  Left linked to
+ *    the frame that first resumed it, the chain dangled once that frame
+ *    returned: a later resume from elsewhere that raised, walked f_back, or
+ *    ran a collection followed it into freed datastack memory and SIGSEGVed.
+ *    A parked coro's frames are then on no thread's chain, so the GC frames
+ *    anchor visits them (`parked`, module_gcframes.c.inc); invisible, a
+ *    collection freed objects only their deferred references kept alive
+ *    (its function and code), and the resume ran freed bytecode.
  *  - the C-stack limits (3.14).  Every resume arms them at the coro's stack
  *    (runloom_coro_rearm_stackprot); unrestored, the caller ran on under
  *    them, and deep recursion or a deep free there crashed off the end of
@@ -90,6 +97,19 @@ typedef struct {
     PyObject **datastack_top;
     PyObject **datastack_limit;
     int initialised;
+    /* A coro's own snapshot only.  bottom_frame: the frame whose link to the
+     * resumer was cut at the last yield (NULL when no frame was live).
+     * bottom_fixed: the coro's callable is a Python function, so its one
+     * outermost eval call -- whose entry frame is bottom_frame -- lasts from
+     * the first resume until the coro finishes, and later yields cut there
+     * without walking the chain.  parked: 1 from a yield until the next
+     * resume while current_frame and c_stack_refs are the coro's alone; the
+     * GC frames anchor visits them then.  Set last at a yield and cleared
+     * first at a resume, with no safepoint between, like a fiber snap's
+     * `valid`. */
+    struct _PyInterpreterFrame *bottom_frame;
+    int bottom_fixed;
+    int parked;
 } RunloomTstateSnapshot;
 
 typedef struct {
@@ -101,7 +121,15 @@ typedef struct {
     int has_run;
     int executing;        /* 1 while inside runloom_coro_resume (re-entrancy guard) */
     RunloomTstateSnapshot tstate_snap;  /* captured at yield, restored at resume */
+    /* tstate_snap on the base-snap registry, for the GC frames anchor: linked
+     * at the first yield, unlinked when the coro finishes or is dropped. */
+    runloom_base_snap_node_t gc_node;
+    int gc_linked;
 } RunloomCoro;
+
+/* Parked coros the GC frames anchor has walked (stats()["gc_coros_walked"]).
+ * Bumped by the anchor under stop-the-world, so a plain counter. */
+static unsigned long long runloom_gcframes_walked_coros = 0;
 
 RUNLOOM_INLINE void runloom_tstate_save(RunloomTstateSnapshot *s)
 {
@@ -123,7 +151,9 @@ RUNLOOM_INLINE void runloom_tstate_save(RunloomTstateSnapshot *s)
  * so reusing the memory would turn a later read of that frame into a
  * use-after-free.  The scheduler leaves a destroyed parked fiber's chunks the
  * same way.  Its critical sections were unlocked when it parked, and its
- * c_stack_refs nodes die with its stack. */
+ * c_stack_refs nodes die with its stack.  The coro must be off the base-snap
+ * registry first (runloom_coro_gc_forget): its bottom frame is on the C stack
+ * the caller is about to free. */
 RUNLOOM_INLINE void runloom_tstate_snap_drop(RunloomTstateSnapshot *s)
 {
     if (s->initialised) {
@@ -132,7 +162,47 @@ RUNLOOM_INLINE void runloom_tstate_snap_drop(RunloomTstateSnapshot *s)
         s->critical_section = 0;
         s->c_stack_refs = NULL;
     }
+    s->bottom_frame = NULL;
+    s->parked = 0;
     s->initialised = 0;
+}
+
+/* At a yield, before the coro's state is saved: cut its frames off the
+ * resumer's, `caller` (runloom_iframe_chain_cut).  With no frame of its own
+ * live (a C callable that yielded outside any Python call) the saved chain is
+ * empty.  Returns 0, leaving the chain as it is, if `caller` is not on it,
+ * which no yield inside Coro.resume makes; the snapshot is then not shown to
+ * the GC.  The walk is the coro's frame depth; a bottom_fixed coro takes it
+ * at its first yield only. */
+RUNLOOM_INLINE int runloom_coro_chain_cut(RunloomTstateSnapshot *s,
+                                          struct _PyInterpreterFrame *caller)
+{
+    PyThreadState *ts = PyThreadState_GET();
+    if (s->bottom_fixed && s->bottom_frame != NULL) {
+        runloom_iframe_chain_link(s->bottom_frame, NULL);
+        return 1;
+    }
+    if (ts->current_frame == caller) {
+        ts->current_frame = NULL;
+        s->bottom_frame = NULL;
+        return 1;
+    }
+    s->bottom_frame = (struct _PyInterpreterFrame *)
+        runloom_iframe_chain_cut(ts->current_frame, caller);
+    return s->bottom_frame != NULL;
+}
+
+/* At a resume, before the coro's state is restored: hide it from the GC (its
+ * frames are about to be on the live chain) and link its chain to the new
+ * resumer's frame. */
+RUNLOOM_INLINE void runloom_coro_chain_link(RunloomTstateSnapshot *s,
+                                            struct _PyInterpreterFrame *caller)
+{
+    s->parked = 0;
+    if (s->bottom_frame != NULL)
+        runloom_iframe_chain_link(s->bottom_frame, caller);
+    else if (s->current_frame == NULL)
+        s->current_frame = caller;
 }
 
 /* A coro finished: every frame is popped (a frame object that outlives its

@@ -82,6 +82,29 @@ static int runloom_gcframes_visit_snap(runloom_pystate_snap_t *snap,
     return 0;
 }
 
+/* Visit a parked Coro's chains (module_coro.c.inc).  Only while `parked`: its
+ * yield cut the chain off its resumer's, so it holds the Coro's frames alone
+ * and nothing is visited twice.  Running, the chain is on the live tstate's;
+ * finished, it is gone. */
+static int runloom_gcframes_visit_coro(RunloomTstateSnapshot *s,
+                                       visitproc visit, void *arg, int subtract)
+{
+    int r;
+    if (!s->parked) {
+        return 0;
+    }
+    runloom_gcframes_walked_coros++;
+    if (s->current_frame != NULL) {
+        r = runloom_gcvisit_frame_chain((void *)s->current_frame, visit, arg, subtract);
+        if (r) return r;
+    }
+    if (s->c_stack_refs != NULL) {
+        r = runloom_gcvisit_cstack_chain(s->c_stack_refs, visit, arg, subtract);
+        if (r) return r;
+    }
+    return 0;
+}
+
 static int runloom_gcframes_traverse(PyObject *self, visitproc visit, void *arg)
 {
     runloom_g_t *g;
@@ -106,13 +129,17 @@ static int runloom_gcframes_traverse(PyObject *self, visitproc visit, void *arg)
     /* 2. Base snaps: the single-thread drain's sched_snap holds the run() caller's
      * frame chain while fibers run (ts->current_frame then points at the fiber).
      * (M:N hub snaps are frameless and the main tstate's caller frames stay
-     * reachable via its own current_frame, so only single-thread drains register.) */
+     * reachable via its own current_frame, so only single-thread drains register.)
+     * A parked stackweave_c.Coro's saved state is registered here too. */
     for (b = runloom_base_snap_head_for_gc(); b != NULL; b = b->next) {
         int r;
         if (b->snap == NULL) {
             continue;
         }
-        r = runloom_gcframes_visit_snap((runloom_pystate_snap_t *)b->snap, visit, arg, subtract);
+        if (b->kind == RUNLOOM_BASE_SNAP_CORO)
+            r = runloom_gcframes_visit_coro((RunloomTstateSnapshot *)b->snap, visit, arg, subtract);
+        else
+            r = runloom_gcframes_visit_snap((runloom_pystate_snap_t *)b->snap, visit, arg, subtract);
         if (r) return r;
     }
     return 0;

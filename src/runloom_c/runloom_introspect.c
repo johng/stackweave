@@ -275,15 +275,17 @@ runloom_g_t *runloom_greg_head_for_gc(void)
     return runloom_greg_head;
 }
 
-/* ---- base-snap registry (single-thread drain's caller frames) ----
+/* ---- base-snap registry (drain caller frames, parked Coros) ----
  * Shares runloom_greg_lock (both are cold: base-snap register/unregister happen
- * once per run() at drain entry/exit; the rank stays GREG so no new lock-order
- * edge is introduced).  The head is read lock-free by the anchor under STW.
+ * once per run() at drain entry/exit, and once per Coro that yields; the rank
+ * stays GREG so no new lock-order edge is introduced).  The head is read
+ * lock-free by the anchor under STW.
  * (runloom_base_snap_head is declared with the other registry statics above.) */
-void runloom_base_snap_register(runloom_base_snap_node_t *node, void *snap)
+void runloom_base_snap_register(runloom_base_snap_node_t *node, void *snap, int kind)
 {
     if (node == NULL || !runloom_greg_inited) return;
     node->snap = snap;
+    node->kind = kind;
     RUNLOOM_RLOCK(&runloom_greg_lock, RUNLOOM_RANK_GREG);
     node->prev = NULL;
     node->next = runloom_base_snap_head;

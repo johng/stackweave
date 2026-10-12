@@ -30,6 +30,30 @@ static void runloom_coro_python_entry(void *user)
     }
 }
 
+/* A yield cut the coro's chain off its resumer's: show its saved state to the
+ * GC frames anchor until the next resume.  The registry lock is a plain
+ * mutex, so no stop-the-world can land between the cut, this and the
+ * caller's restore. */
+static void runloom_coro_gc_park(RunloomCoro *self)
+{
+    if (!self->gc_linked) {
+        runloom_base_snap_register(&self->gc_node, &self->tstate_snap,
+                                   RUNLOOM_BASE_SNAP_CORO);
+        self->gc_linked = 1;
+    }
+    self->tstate_snap.parked = 1;   /* last */
+}
+
+/* The coro finished or is being dropped: off the registry. */
+static void runloom_coro_gc_forget(RunloomCoro *self)
+{
+    self->tstate_snap.parked = 0;
+    if (self->gc_linked) {
+        runloom_base_snap_unregister(&self->gc_node);
+        self->gc_linked = 0;
+    }
+}
+
 static int RunloomCoro_init(RunloomCoro *self, PyObject *args, PyObject *kw)
 {
     static char *kwlist[] = {"callable", "stack_size", NULL};
@@ -65,6 +89,7 @@ static int RunloomCoro_init(RunloomCoro *self, PyObject *args, PyObject *kw)
      * and -- the costly part -- the previous coro's guard-paged stack mmap.
      * On a fresh instance every field is NULL/zero (tp_alloc), so these are
      * no-ops the first time through. */
+    runloom_coro_gc_forget(self);
     if (self->coro != NULL) {
         runloom_coro_destroy(self->coro);
         self->coro = NULL;
@@ -76,6 +101,12 @@ static int RunloomCoro_init(RunloomCoro *self, PyObject *args, PyObject *kw)
 
     Py_INCREF(callable);
     self->callable = callable;
+    /* A Python function, plain or bound, runs in one eval call from the
+     * coro's first resume to its end, so its bottom frame never changes. */
+    self->tstate_snap.bottom_fixed =
+        PyFunction_Check(callable)
+        || (PyMethod_Check(callable)
+            && PyFunction_Check(PyMethod_GET_FUNCTION(callable)));
     self->has_run = 0;
     self->executing = 0;
     self->coro = runloom_coro_new(
@@ -91,6 +122,7 @@ static int RunloomCoro_init(RunloomCoro *self, PyObject *args, PyObject *kw)
 
 static void RunloomCoro_dealloc(RunloomCoro *self)
 {
+    runloom_coro_gc_forget(self);
     runloom_tstate_snap_drop(&self->tstate_snap);
     if (self->coro != NULL) {
         runloom_coro_destroy(self->coro);
@@ -140,9 +172,12 @@ static PyObject *RunloomCoro_resume(RunloomCoro *self, PyObject *unused)
      * counters into our snapshot and restore the caller's.  Without
      * this, each yield permanently decrements py_recursion_remaining
      * on the OS thread, so a sufficiently-long runloom.run() hits
-     * RecursionError. */
+     * RecursionError.  The coro's frames link to this resumer's for the
+     * duration (runloom_coro_chain_link); the first resume links them by
+     * pushing onto ts->current_frame, which still holds the resumer's. */
     runloom_tstate_save(&caller_snap);
     if (self->tstate_snap.initialised) {
+        runloom_coro_chain_link(&self->tstate_snap, caller_snap.current_frame);
         runloom_tstate_restore(&self->tstate_snap);
     } else {
         /* First resume: no datastack, so the first push gives the coro chunks
@@ -168,10 +203,19 @@ static PyObject *RunloomCoro_resume(RunloomCoro *self, PyObject *unused)
 
     /* Snapshot the coro's tstate at the yield/return point, then
      * restore the caller's counters.  A finished coro's frames are all
-     * popped: free its datastack chunks first. */
-    if (runloom_coro_done(self->coro))
+     * popped: free its datastack chunks first.  A parked one's chain is cut
+     * off this resumer's and shown to the GC until the next resume. */
+    if (runloom_coro_done(self->coro)) {
         runloom_coro_free_datastack();
-    runloom_tstate_save(&self->tstate_snap);
+        runloom_tstate_save(&self->tstate_snap);
+        runloom_coro_gc_forget(self);
+    } else {
+        int cut = runloom_coro_chain_cut(&self->tstate_snap,
+                                         caller_snap.current_frame);
+        runloom_tstate_save(&self->tstate_snap);
+        if (cut)
+            runloom_coro_gc_park(self);
+    }
     runloom_tstate_restore(&caller_snap);
     __atomic_store_n(&self->executing, 0, __ATOMIC_RELEASE);
 

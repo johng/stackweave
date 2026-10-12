@@ -489,6 +489,35 @@ int runloom_iframe_walk(void *top, int max, runloom_iframe_cb cb, void *ctx)
 #endif
 }
 
+/* See runloom_iframe.h.  The bottom of a Coro's chain is the entry frame its
+ * outermost _PyEval_EvalFrameDefault put on the Coro's C stack; whatever the
+ * Coro calls, the frames above it link to it, never to `caller`. */
+void *runloom_iframe_chain_cut(void *top, void *caller)
+{
+#if defined(RUNLOOM_IFRAME_HAVE)
+    _PyInterpreterFrame *f;
+    for (f = (_PyInterpreterFrame *)top; f != NULL; f = f->previous) {
+        if (f->previous == (_PyInterpreterFrame *)caller) {
+            f->previous = NULL;
+            return f;
+        }
+    }
+    return NULL;
+#else
+    (void)top; (void)caller;
+    return NULL;
+#endif
+}
+
+void runloom_iframe_chain_link(void *bottom, void *caller)
+{
+#if defined(RUNLOOM_IFRAME_HAVE)
+    ((_PyInterpreterFrame *)bottom)->previous = (_PyInterpreterFrame *)caller;
+#else
+    (void)bottom; (void)caller;
+#endif
+}
+
 /* Arm the live tstate's SP-based C-stack overflow check (3.14) at THIS fiber's
  * private mmap stack, with EXTRA reserved headroom above the hardware guard.
  *

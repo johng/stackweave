@@ -81,7 +81,7 @@ void runloom_greg_unlink(runloom_g_t *g);
  * active: every spawned g must be linked (see runloom_gcframes_init). */
 runloom_g_t *runloom_greg_head_for_gc(void);
 
-/* ---- base-snap registry (GC visibility for the run() caller's frames) ----
+/* ---- base-snap registry (GC visibility for frames outside any g) ----
  *
  * The single-thread scheduler saves the run() caller's Python frame chain into a
  * `sched_snap` local at drain entry and then runs fibers on the SAME tstate, so
@@ -90,18 +90,27 @@ runloom_g_t *runloom_greg_head_for_gc(void);
  * tstate walk, the same blind spot the GC frames anchor closes for fibers.
  * (M:N hub base snaps are frameless -- the hub tstate hosts only fibers -- and
  * the main tstate's caller frames stay reachable via its own current_frame, so
- * only the single-thread drain needs this.)
+ * only the single-thread drain needs this.)  A parked Coro is the other case:
+ * its frames live only in its saved state (module.c, RunloomTstateSnapshot).
  *
  * The drain supplies a stack-local node (its lifetime spans the whole run, and
  * it is registered at entry / unregistered at the single exit -- no allocation,
- * no heap lifetime to track).  The anchor walks the list under STW. */
+ * no heap lifetime to track).  A Coro's node is part of the Coro object: linked
+ * at its first yield, unlinked when it finishes or is dropped, and visited only
+ * while the Coro is parked.  The anchor walks the list under STW. */
+enum {
+    RUNLOOM_BASE_SNAP_SCHED = 0,           /* snap: runloom_pystate_snap_t* */
+    RUNLOOM_BASE_SNAP_CORO  = 1            /* snap: RunloomTstateSnapshot* (module.c) */
+};
+
 typedef struct runloom_base_snap_node {
-    void *snap;                            /* runloom_pystate_snap_t* (opaque here) */
+    void *snap;                            /* opaque here; its type is `kind` */
+    int kind;                              /* RUNLOOM_BASE_SNAP_* */
     struct runloom_base_snap_node *next;
     struct runloom_base_snap_node *prev;
 } runloom_base_snap_node_t;
 
-void runloom_base_snap_register(runloom_base_snap_node_t *node, void *snap);
+void runloom_base_snap_register(runloom_base_snap_node_t *node, void *snap, int kind);
 void runloom_base_snap_unregister(runloom_base_snap_node_t *node);
 /* STW-only, lock-free head read for the anchor (same contract as
  * runloom_greg_head_for_gc). */
