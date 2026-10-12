@@ -161,8 +161,10 @@ typedef enum runloom_delay_site {
     RUNLOOM_DLY_G_ENTRY,            /* a fiber starts running */
     RUNLOOM_DLY_G_COMPLETE,         /* a fiber completes */
     RUNLOOM_DLY_HUB_RESUME,         /* a hub picks a g to resume */
-    RUNLOOM_DLY_G_RESURRECT,        /* hub_submit try_incref -> in_sub_queue CAS
-                                     * (the g-resurrection ABA window, sched_qref) */
+    RUNLOOM_DLY_G_RESURRECT,        /* retired, no call site: hub_submit took a
+                                     * queue ref only for the removed per-hub
+                                     * wake path; kept so a seed picks the same
+                                     * sites */
     RUNLOOM_DLY_SPAWN_PUBLISH,      /* spawn_common: g is registry-linked but not
                                      * yet state_set(RUNNABLE) -- widens the window a
                                      * cross-hub fibers() reader must SKIP (the
@@ -212,17 +214,8 @@ void runloom_mn_trace_event(const char *action, int hub);
 void runloom_wake_trace_event(const char *action, unsigned long g, int cap);
 
 
-/* ---- M:N hub-submit wake trace (TLA+ trace conformance, RUNLOOM_MNWAKE_TRACE) ----
- * One ndjson line per M:N wake transition ({"a":<FOREIGN_WAKE|SIGNAL|HUB_DRAIN|
- * HUB_BLOCK|HUB_UNBLOCK|RESUME>,"g":<fiber-ptr token>,"cap":<0|1 bounded-poll,
- * HUB_BLOCK only>}); tools/mnwake_trace_conform.py replays it through
- * RunloomMNWake.tla.  Off (zero-cost -- one predictable-NULL load) unless set. */
-void runloom_mnwake_trace_event(const char *action, unsigned long g, int cap);
-int  runloom_mnwake_trace_active(void);   /* fp != NULL: gate advisory reads off in production */
-
-
 /* ---- io_uring CQE wake trace (TLA+ trace conformance, RUNLOOM_IOUWAKE_TRACE) ----
- * Sibling of the wake/mnwake emitters for the io_uring CQE drain route: one
+ * Sibling of the wake emitter for the io_uring CQE drain route: one
  * ndjson line per transition ({"a":<SUBMIT|DRAIN_FLUSH|DRAIN_CONSUME|RESUME|
  * DRAIN_BLOCK|DRAIN_UNBLOCK>,"g":<op-pointer token>,"cap":<0|1, DRAIN_BLOCK
  * only>}); tools/iouwake_trace_conform.py lowers it to RunloomIouringWake.tla's

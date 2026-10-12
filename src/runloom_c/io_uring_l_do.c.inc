@@ -34,10 +34,9 @@
  * found the right waiter, and the wake was silently a no-op.
  *
  * Waking an M:N parker from the main thread while its CQE lands concurrently is
- * safe: runloom_mn_wake_g dedups both ways -- PARKED->QUEUED once under the
- * per-g wake_state machine (per-g-tstate mode), and the in_sub_queue 0->1 CAS in
- * runloom_mn_hub_submit otherwise -- so the loser of the race drops its wake
- * rather than enqueuing the g twice. */
+ * safe: runloom_mn_wake_g dedups it -- PARKED->QUEUED happens once under the
+ * per-g wake_state machine -- so the loser of the race drops its wake rather
+ * than enqueuing the g twice. */
 typedef struct runloom_iou_sigwaiter {
     runloom_g_t                    *g;
     void                           *hub;     /* M:N hub parked on, NULL if single-thread */
@@ -296,9 +295,9 @@ static runloom_iouring_ssize_t runloom_iouring_do(struct io_uring_sqe sqe)
                 /* Committed to park: any drainer completing the op now
                  * observes PARKED and wakes us.  park_current marks the g
                  * off-queue (hub_main won't re-enqueue on yield-return);
-                 * the wake routes it back onto the hub sub-list, and the
-                 * in_sub_queue CAS in hub_submit dedups a wake that races
-                 * our coro_yield. */
+                 * the wake goes through mn_wake_g, whose wake_state machine
+                 * dedups a wake that races our coro_yield (RUNNING ->
+                 * RUNNING_WOKEN, enqueued once at release). */
                 /* Publish the op so a cross-thread task.cancel can target it
                  * with an ASYNC_CANCEL (runloom_iouring_cancel_g).  Set after the
                  * PARKED CAS so the canceller's wait==PARKED gate is consistent;
@@ -326,8 +325,7 @@ static runloom_iouring_ssize_t runloom_iouring_do(struct io_uring_sqe sqe)
                  * A drainer that completes while we are awake handling the
                  * signal wakes a RUNNING g; that is the ordinary spurious-wake
                  * case every park site in the scheduler already loops against,
-                 * and mn_wake_g dedups it (wake_state PARKED->QUEUED once, or
-                 * the in_sub_queue CAS in hub_submit). */
+                 * and mn_wake_g dedups it (wake_state PARKED->QUEUED once). */
                 {
                     runloom_iou_sigwaiter_t mn_sw;
                     int cancelled = 0;
@@ -831,8 +829,8 @@ runloom_iouring_ssize_t runloom_iouring_ms_recv(runloom_iouring_ms_t *h,
                  * holds h->lock continuously from the ready-queue check through
                  * linking the waiter, so a buffer either lands before our check
                  * (we consume it, never parking) or after we link (ms_on_cqe
-                 * wakes us).  The in_sub_queue CAS dedups a wake that races
-                 * our coro_yield. */
+                 * wakes us).  mn_wake_g's wake_state machine dedups a wake
+                 * that races our coro_yield. */
                 runloom_sched_park_current();
                 runloom_coro_yield();
             } else {

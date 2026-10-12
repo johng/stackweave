@@ -13,7 +13,7 @@
 (* park protocol with the multi-hub dispatcher.                            *)
 (*                                                                         *)
 (* The Spin models verify each primitive (wake_state, park_safe,           *)
-(* netpoll_commit, hub_submit) SEPARATELY.  The verify/ README is honest   *)
+(* netpoll_commit, hub_fanout) SEPARATELY.  The verify/ README is honest   *)
 (* that their COMPOSITION is only exercised by tests.  This spec checks the *)
 (* emergent end-to-end properties of the composed system that no per-       *)
 (* primitive model can: across N goroutines and M hubs, with the one-shot  *)

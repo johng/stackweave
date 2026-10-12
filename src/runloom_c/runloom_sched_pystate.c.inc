@@ -19,19 +19,18 @@ double runloom_sched_monotonic_seconds(void)
  * combined.  Each PY_VERSION_HEX gate matches greenlet's GREENLET_PY*
  * branches.
  */
-/* Per-fiber PyThreadState mode.  While the M:N
- * scheduler runs (always in this mode), each fiber owns its own PyThreadState,
- * so the per-g "snap" (which swaps execution-state fields in/out of a
- * shared per-hub tstate) is redundant and MUST NOT run -- snapping would
- * clear context/top_frame/exc out of the g's own live tstate.  Making
- * runloom_pystate_snap a no-op here (leaving snap->valid = 0) transparently
- * disables the snap at every park primitive that calls it; load and
- * snap_clear already no-op on !valid, so the whole snap machinery stands
- * down.  Set by runloom_mn_init, cleared at runloom_mn_fini.
- * Stays 0 for the single-thread scheduler path. */
-static int runloom_per_g_tstate_mode = 0;
-void runloom_set_per_g_tstate_mode(int on) { runloom_per_g_tstate_mode = on ? 1 : 0; }
-int  runloom_get_per_g_tstate_mode(void)   { return runloom_per_g_tstate_mode; }
+/* An M:N run is live: set by runloom_mn_init, cleared at runloom_mn_fini.
+ * Every M:N fiber owns its own PyThreadState, so for a fiber running on a hub
+ * the per-g "snap" (which swaps execution-state fields in/out of the one
+ * tstate a single-thread scheduler's fibers share) is redundant and MUST NOT
+ * run -- snapping would clear context/top_frame/exc out of the g's own live
+ * tstate.  runloom_pystate_snap no-ops for such a fiber (leaving snap->valid =
+ * 0), which disables the snap at every park primitive that calls it; load and
+ * snap_clear already no-op on !valid.  The flag only lets the single-thread
+ * path skip the out-of-line runloom_mn_current_sched() call when no M:N run
+ * exists; that call is what tells a hub fiber apart. */
+static int runloom_mn_live_flag = 0;
+void runloom_set_mn_live(int on) { runloom_mn_live_flag = on ? 1 : 0; }
 
 /* ---- DEBUG: exception-state object validator (RUNLOOM_DBG_EXCSTATE) ----
  *
@@ -81,11 +80,11 @@ void runloom_pystate_snap(runloom_pystate_snap_t *snap)
     PyThreadState *ts;
 
     /* Per-g tstate: nothing to swap out -- but only for a fiber that HAS one,
-     * i.e. one running on an M:N hub.  The mode flag is process-wide, and a
+     * i.e. one running on an M:N hub.  The live flag is process-wide, and a
      * single-thread scheduler on another OS thread (its fibers share that
      * thread's tstate) must still snap while an M:N run is live, or its
      * fibers share ContextVars and lose exc_info across a park. */
-    if (__builtin_expect(runloom_per_g_tstate_mode, 0) &&
+    if (__builtin_expect(runloom_mn_live_flag, 0) &&
         runloom_mn_current_sched() != NULL) {
         snap->valid = 0;   /* per-g tstate owns the state; nothing to swap out */
         return;
@@ -210,7 +209,7 @@ void runloom_pystate_snap(runloom_pystate_snap_t *snap)
             runloom_dbg_check_excobj(snap->exc_state.exc_value, "snap.exc_value");
         runloom_dbg_check_excobj(snap->current_exception, "snap.current_exception");
     }
-    /* Leave the SHARED per-hub tstate's exception CHAIN HEAD neutral after
+    /* Leave the SHARED tstate's exception CHAIN HEAD neutral after
      * saving (it is now safely in `snap`; load restores it for THIS fiber).
      *
      * Why: a fiber preempted mid-exception-handling can have ts->exc_info

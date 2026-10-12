@@ -1,27 +1,26 @@
-/* SOURCE-ANCHOR: runloom_cldeque_steal runloom_mn_hub_submit  (guards this hand-model vs src drift; tools/verify/model_source_drift.py) */
+/* SOURCE-ANCHOR: runloom_cldeque_steal runloom_mn_woken_enqueue  (guards this hand-model vs src drift; tools/verify/model_source_drift.py) */
 /*
  * sched_steal_cbmc.c -- CBMC model of the WORK-STEALING consume path's refcount
- * safety, the piece chase_lev_real.c (deque mechanics) + sched_qref_cbmc.c
- * (owner-consume ref protocol) do not span together.
+ * safety, the piece chase_lev_real.c (deque mechanics) does not cover.
  *
- * A fresh g drained from sub_head to a hub's Chase-Lev deque keeps its QUEUE REF
- * (in_sub_queue stays 1 through sub_head -> deque -> pop -> resume;
- * mn_sched_hub_main.c.inc:568-572).  The g can then be consumed by EITHER its
- * owner hub (deque take) OR a thief hub (runloom_cldeque_steal) -- and Chase-Lev
- * guarantees EXACTLY ONE of them wins.  Whoever wins clears in_sub_queue, resumes
- * the g, drops the queue ref, and (on completion) drops the spawn ref.
+ * A LOCALLY-WOKEN g sits on a hub's Chase-Lev deque in wake_state QUEUED,
+ * carrying the queue ref its waker took on PARKED->QUEUED
+ * (runloom_mn_woken_enqueue pushes it onto the waker's own deque).  The g can
+ * then be consumed by EITHER the deque's owner hub (deque take) OR a thief hub
+ * (runloom_cldeque_steal) -- and Chase-Lev guarantees EXACTLY ONE of them wins.
+ * Whoever wins flags it from_runq, claims it QUEUED->RUNNING, resumes it,
+ * drops the queue ref, and (on completion) drops the scheduler ref
+ * (mn_sched_hub_main.c.inc, the LOCAL WAKE check and the per-g resume block).
  *
  * The caller-level safety the steal path RELIES on, and this proves:
  *   NoUAF        : no read of g after it is freed.
  *   RefNonNeg    : refcount never goes negative (no double-decref of a ref).
  *   FreedOnce    : the g is released exactly once.
- * Under a stale wake re-submitting during the consume, the try_incref-before-CAS
- * guard (same as sched_qref) keeps the resurrection safe.
  *
  * Scope: this proves the piece UNIQUE to the steal path -- TWO potential
  * consumers (owner-take vs thief-steal) of one deque g, and that the queue ref
- * is dropped EXACTLY ONCE across them.  The stale-wake resurrection dimension is
- * already proven by sched_qref_cbmc.c (same ref protocol, one consumer); keeping
+ * is dropped EXACTLY ONCE across them.  That a wake enqueues a g at most once is
+ * the wake_state machine's job (wake_state.pml, wake_state_fsm_cbmc.c); keeping
  * the waker out here holds the thread count to 2 so CBMC stays tractable.
  *
  * Configs (run via run_steal_cbmc.sh):
@@ -36,8 +35,8 @@
 
 extern int nondet_int(void);
 
-static volatile int refcount;      /* spawn ref + queue ref */
-static volatile int in_sub_queue;  /* queue-membership flag; held 1 through the deque */
+static volatile int refcount;      /* scheduler ref + queue ref */
+static volatile int queued;        /* wake_state == QUEUED; held 1 on the deque */
 static volatile int claimed;       /* Chase-Lev exactly-once: 0 in deque, 1 taken */
 static volatile int freed;
 static volatile int uaf;
@@ -62,20 +61,20 @@ static void *consumer(void *a) {
                                      __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
         return 0;                   /* lost the race: the other hub got the g */
 #endif
-    /* consume: clear queue membership, resume, drop the queue ref. */
-    int had = (__atomic_exchange_n(&in_sub_queue, 0, __ATOMIC_ACQ_REL) == 1);
+    /* consume: claim QUEUED->RUNNING, resume, drop the queue ref. */
+    int had = (__atomic_exchange_n(&queued, 0, __ATOMIC_ACQ_REL) == 1);
     touch();                        /* resume reads g */
     if (had) g_decref();            /* drop the queue ref carried through the deque */
     if (nondet_int()) {             /* the g may run to completion here */
         touch();
-        g_decref();                 /* drop the spawn ref (frees on last) */
+        g_decref();                 /* drop the scheduler ref (frees on last) */
     }
     return 0;
 }
 
 int main(void) {
-    refcount = 2;        /* spawn ref + queue ref (in the deque) */
-    in_sub_queue = 1;    /* held 1 through the deque */
+    refcount = 2;        /* scheduler ref + queue ref (on the deque) */
+    queued = 1;          /* wake_state QUEUED while on the deque */
     claimed = 0;
     freed = 0;
     uaf = 0;

@@ -7,9 +7,9 @@ parker the FIRST close already woke-and-freed.  That is precisely the runtime
 invariant from CLAUDE.md:
 
     A freed `runloom_g` struct never returns to the OS.  `slab_free` retains it
-    (refcount 0, magic DEAD); a stale dup-wake reaches `hub_submit`, which reads
-    `g->refcount` via `try_incref` -- only sound while the struct is a valid g.
-    Freeing -> garbage refcount -> SIGSEGV (arm64).
+    (refcount 0, magic DEAD); a stale dup-wake reaches `runloom_mn_wake_g`, which
+    loads and CASes `g->wake_state` -- only sound while the struct is a valid g.
+    Freeing -> garbage state -> SIGSEGV (arm64).
 
 A double close()+shutdown() of the same fd is the most direct big_100-level
 generator of that stale-dup-wake-on-a-DEAD-slot: the first wave wakes-and-frees
@@ -36,15 +36,15 @@ the child returncode is >= 0 (NOT a crash signal -- a stale-wake UAF surfaces as
 are present (proving the child reached the close storm and the join then drained,
 not a hang).  A timeout => the join wedged on a lost/garbage wake -> H.fail.
 
-This is a regression SENTINEL for a fixed-but-fragile invariant (it has a CBMC
-guard, `tools/verify/cbmc/sched_qref_cbmc.c`), so a single green run is NOT
-evidence of absence -- it wants MANY child iterations.  Excellent TSan / M:N
-controlled-replay target: the refcount race on the freed g is reported before it
-becomes an intermittent arm64 SEGV.
+This is a regression SENTINEL for a fixed-but-fragile invariant (no model
+covers it since the per-hub wake path and its CBMC harness were retired), so a
+single green run is NOT evidence of absence -- it wants MANY child iterations.
+Excellent TSan target: the race on the freed g is reported before it becomes an
+intermittent arm64 SEGV.
 
 Stresses: re-entrant/idempotent teardown, double close + shutdown(SHUT_RDWR),
-stale dup-wake on a DEAD/freed parker at the join boundary, try_incref on a
-retained g, no SIGSEGV/SIGABRT/hang at shutdown.
+stale dup-wake on a DEAD/freed parker at the join boundary, a wake_state read
+on a retained g, no SIGSEGV/SIGABRT/hang at shutdown.
 """
 import os
 import subprocess

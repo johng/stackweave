@@ -1,10 +1,11 @@
 /*
  * hub_fanout.pml -- the SPANNING model of hub_submit's three-way waker-route
- * fanout (mn_sched_mn_api.c.inc:199-239).  The individual routes are modelled
- * elsewhere (hub_submit.pml = the wake_g dedup, netpoll_pump_kick.pml = the pump
- * Dekker), but NO model proved the COMPOSITION: that whichever wait state the
- * target hub is in, at least one route reaches it, so a cross-hub submit is
- * never lost.  This is that model.
+ * fanout (runloom_mn_hub_submit, mn_sched_mn_api.c.inc).  hub_submit publishes
+ * a fresh g (a spawn); a woken g goes through the wake_state machine instead
+ * (wake_state.pml).  The pump route alone is modelled in netpoll_pump_kick.pml
+ * (the pump Dekker), but NO model proved the COMPOSITION: that whichever wait
+ * state the target hub is in, at least one route reaches it, so a cross-hub
+ * submit is never lost.  This is that model.
  *
  * A submitted g is pushed to sub_head, then the submitter fans out:
  *   - ring_waiting hint set  -> write the io_uring loop wake eventfd;

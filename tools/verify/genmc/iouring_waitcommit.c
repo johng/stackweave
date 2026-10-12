@@ -147,7 +147,7 @@ static void *submitter(void *arg)
     if (did_park) {
         atomic_store_explicit(&parked, 1, memory_order_release);
         /* Real code: coro_yield; the g resumes ONLY after the drainer's wake
-         * (mn_wake_g -> hub_submit -> hub_main resume).  Model the resumed
+         * (mn_wake_g -> PARKED->QUEUED -> a hub resumes it).  Model the resumed
          * result read as ordered after observing the wake; if not yet woken in
          * this interleaving the g is still parked and reads nothing. */
         if (atomic_load_explicit(&woke,

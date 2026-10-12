@@ -415,6 +415,24 @@ def test_a_finished_fiber_whose_handle_outlives_its_owner_is_not_reported():
     assert "can no longer run" not in out, out
 
 
+def test_an_inner_fibers_stack_state_is_read_from_the_fiber():
+    # G.stack() asks the fiber whether it is an M:N fiber (its own thread
+    # state), not "is an M:N run live?".  Asked the second way, a fresh inner
+    # fiber read its never-set wake state and reported "parked".
+    out = _run("""
+        res = {}
+        def outer():
+            def main():
+                g = rc.fiber(lambda: None)
+                res["inner"] = g.stack()["state"]
+            stackweave.run(1, main)
+            res["outer"] = rc.current_g().stack()["state"]
+        under_mn(outer, busy_fibers=0)
+        print("STATES", res.get("inner"), res.get("outer"))
+    """)
+    assert "STATES fresh running" in out, out
+
+
 def test_set_stack_size_applies_to_an_mn_fibers_own_scheduler():
     out = _run("""
         sizes = []

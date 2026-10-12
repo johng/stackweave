@@ -182,26 +182,23 @@ static long long runloom_idle_backoff_ceiling_ns(void)
 static volatile int runloom_mn_nidle = 0;   /* # hubs with idle_parked=1 (hint) */
 
 /* True iff some hub holds stealable surplus a steal would find RIGHT NOW: the
- * global runq is non-empty, or some deque has >1 g (one for its owner to run, at
- * least one to steal).  Cheap, lock-free; scanned only at park-decision time. */
+ * global runq is non-empty, some deque is non-empty, or some yield queue has >1
+ * g.  Cheap, lock-free; scanned only at park-decision time. */
 static int runloom_mn_any_stealable_work(const runloom_hub_t *self)
 {
     int i;
-    long over;
     if (__atomic_load_n(&runloom_global_runq_unpinned_len, __ATOMIC_ACQUIRE) > 0)
         return 1;
     if (self != NULL &&
         __atomic_load_n(&self->runq_pinned_n, __ATOMIC_ACQUIRE) > 0) return 1;
-    /* Surplus threshold.  Default mode: >1 -- one for the owner, who is at its
-     * own drain and about to run it, at least one to steal.  Under migration a
-     * deque may also hold a LOCALLY-WOKEN g (runloom_mn_woken_enqueue) pushed
-     * mid-fiber by a BUSY owner that will not reach its pick step until that
-     * fiber parks, so a deque of ONE is surplus a parking hub must not sleep
-     * through.  The producer side kicks after every local push, so the Dekker
-     * pair stays exact; >0 can only cost an extra scan, never lose a wake. */
-    over = runloom_use_global_runq() ? 0 : 1;
     for (i = 0; i < runloom_hub_count; i++) {
-        if (runloom_cldeque_size(&runloom_hubs[i].deque) > over) return 1;
+        /* A deque of ONE is surplus: it may hold a LOCALLY-WOKEN g
+         * (runloom_mn_woken_enqueue) pushed mid-fiber by a BUSY owner that will
+         * not reach its pick step until that fiber parks, so a parking hub must
+         * not sleep through it.  The producer side kicks after every local
+         * push, so the Dekker pair stays exact; >0 can only cost an extra scan,
+         * never lose a wake. */
+        if (runloom_cldeque_size(&runloom_hubs[i].deque) > 0) return 1;
         /* A yield queue is pushed only by its owner at its own pick step, so
          * one g there is the one it is about to run: >1, as the push side's
          * wakep (runloom_mn_requeue_local). */
@@ -651,15 +648,13 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                 last_wseq  = sub->next_wseq;
 #endif
                 RUNLOOM_NEXT_SET(sub, NULL, 2);   /* drain clear */
-                /* Submitted gs go to the Chase-Lev deque, stealable by
-                 * other hubs.  (Woken gs never come through here: they
-                 * ride the global run-queue.)
+                /* Submitted (fresh) gs go to the Chase-Lev deque,
+                 * stealable by other hubs.  (Woken gs never come through
+                 * here: they ride a waker's deque or the global run-queue.)
                  *
                  * Note: in_sub_queue stays 1 throughout drain ->
                  * ready/deque -> pop -> resume.  hub_main clears it
-                 * just before the actual coro resume, gating duplicate
-                 * wake_gs against ANY queued state, not just the
-                 * sub list. */
+                 * just before the first resume. */
                 if (__atomic_load_n(&sub->pin_hub1,
                                       __ATOMIC_ACQUIRE) == h->id + 1) {
                     /* Pinned to THIS hub: local ready ring, never the
@@ -1287,13 +1282,7 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                          * the waiter woken (cross-hub via mn_wake_g).  Cheap no-op
                          * when the global ring is uninitialised or its CQ empty. */
                         runloom_iouring_drain();
-                        /* MNWAKE-TRACE: idle hub blocks in the netpoll pump, a
-                         * BOUNDED timed wait (pump_ns, ~1ms base) -- model
-                         * HubDrainEmpty->HubDecide->HubBlock; cap=1 witnesses the
-                         * bounded poll (the BoundedPoll arm). */
-                        runloom_mnwake_trace_event("HUB_BLOCK", 0, 1);
                         runloom_netpoll_pump(pump_ns);
-                        runloom_mnwake_trace_event("HUB_UNBLOCK", 0, 0);
                     } else {
                         int waited = 0;
                         int have_sub;
@@ -1408,13 +1397,8 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                              * stop-the-world sees this hub already stopped and
                              * the cond wait holds no tstate. */
                             saved = PyEval_SaveThread();
-                            /* MNWAKE-TRACE: idle hub blocks on its per-hub
-                             * idle_cond, a BOUNDED timed wait (idle_ns) -- model
-                             * HubDrainEmpty->HubDecide->HubBlock; cap=1 = bounded. */
-                            runloom_mnwake_trace_event("HUB_BLOCK", 0, 1);
                             runloom_cond_timedwait_ns(&h->idle_cond,
                                                       &h->idle_lock, idle_ns);
-                            runloom_mnwake_trace_event("HUB_UNBLOCK", 0, 0);
                             waited = 1;
                         }
                         __atomic_store_n(&h->idle_waiting, 0, __ATOMIC_RELEASE);
@@ -1433,18 +1417,16 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
             }
         }
 
-        /* LOCAL WAKE (migration mode): a woken g that a hub-thread waker
-         * pushed onto its own deque (runloom_mn_woken_enqueue) arrives here
-         * from the own-deque pop or a neighbour steal in wake_state QUEUED,
-         * carrying its queue ref -- exactly the state a global-runq pull
-         * delivers.  Flag it so the per-g resume block runs the same
-         * QUEUED->RUNNING claim and drops the queue ref at release.  The read
-         * is race-free: a QUEUED g has exactly ONE entry (at-most-one-entry)
-         * and we hold it, so nobody else moves it out of QUEUED; every other
-         * deque/ring source is RUNNING (fresh gs spawn RUNNING, a yield leaves
-         * RUNNING, a timer claim goes PARKED->RUNNING).  Default mode never
-         * reaches QUEUED, so this is inert there. */
-        if (!from_runq && runloom_use_global_runq() &&
+        /* LOCAL WAKE: a woken g that a hub-thread waker pushed onto its own
+         * deque (runloom_mn_woken_enqueue) arrives here from the own-deque pop
+         * or a neighbour steal in wake_state QUEUED, carrying its queue ref --
+         * exactly the state a global-runq pull delivers.  Flag it so the per-g
+         * resume block runs the same QUEUED->RUNNING claim and drops the queue
+         * ref at release.  The read is race-free: a QUEUED g has exactly ONE
+         * entry (at-most-one-entry) and we hold it, so nobody else moves it out
+         * of QUEUED; every other deque/ring source is RUNNING (fresh gs spawn
+         * RUNNING, a yield leaves RUNNING, a timer claim goes PARKED->RUNNING). */
+        if (!from_runq &&
             __atomic_load_n(&g->wake_state, __ATOMIC_ACQUIRE) == RUNLOOM_WS_QUEUED) {
             from_runq = 1;
         }

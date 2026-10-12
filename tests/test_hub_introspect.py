@@ -8,8 +8,9 @@ Covers the reliable contract:
     `detached` with a growing dwell, and `blocked_at` names the call site;
   * a quiescent / cooperative run reports no `blocked_at` (no false wedges).
 
-`blocked_at` is read from another hub's tstate; this is safe because the wedged
-hub's owner is the only thread that can mutate that tstate's frames (work-stealing
+`blocked_at` is read from the wedged fiber's own tstate (under the sysmon hazard
+pointer, so it cannot be freed mid-read); this is safe because the fiber's own
+thread is the only one that can mutate that tstate's frames (work-stealing
 only touches the deque).
 """
 import os
@@ -22,7 +23,6 @@ import stackweave
 import stackweave_c
 from stackweave import inspect as gi
 
-from known_gaps import MIGRATION_GAP
 
 HUB_KEYS = {"id", "state", "running_g", "dwell_ms", "pending", "blocked_at"}
 
@@ -57,8 +57,6 @@ class HubIntrospectTest(unittest.TestCase):
                           ("detached", "attached", "suspended", "unknown"))
             self.assertEqual(h["stack_cmd"], "py-spy dump --pid " + pid)
 
-    @MIGRATION_GAP("hubinfo blocked_at walks the hub's thread state, and a "
-                   "fiber's frames are on its own")
     def test_wedge_and_blocked_at(self):
         out = {}
 

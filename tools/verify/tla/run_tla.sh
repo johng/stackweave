@@ -196,9 +196,9 @@ else
     tlc_why wkbug; echo "FAIL -- no backstop should violate AllWoken (liveness)"; fail=$((fail+1))
 fi
 
-# ---- M:N hub-submit wake (route A, default mode): the SIBLING of RunloomWake for
-# an M:N hub.  A foreign waker appends g to the OWNER hub's per-hub sub_head and
-# fires TWO free-delivery kicks (idle_cond + wake-pump eventfd); an idle M:N hub
+# ---- M:N hub-submit (a spawn publishing a fresh fiber): the SIBLING of
+# RunloomWake for an M:N hub.  A spawner appends g to the target hub's sub_head
+# and fires free-delivery kicks (idle_cond + wake-pump eventfd); an idle M:N hub
 # never blocks unbounded -- it polls ~1ms and re-drains sub_head -- so even with
 # BOTH kicks lost the appended fiber self-heals.  Negative control: BoundedPoll=
 # FALSE (the unbounded-block regression) strands it -> the M:N lost-wakeup lasso.

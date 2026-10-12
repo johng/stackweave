@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # run_steal_cbmc.sh -- drive sched_steal_cbmc.c: the work-stealing consume path's
-# refcount safety (the piece chase_lev_real.c + sched_qref_cbmc.c did not span
-# together -- TWO potential consumers of one deque g, queue ref dropped once).
+# refcount safety for a locally-woken g on a deque (the piece chase_lev_real.c does
+# not cover -- TWO potential consumers of one deque g, queue ref dropped once).
 set -u
 H="$(dirname "$0")/sched_steal_cbmc.c"
 U="--unwind 3 --unwinding-assertions"

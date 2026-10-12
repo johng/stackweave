@@ -946,7 +946,6 @@ int runloom_netpoll_sweep_idle(void *hub_opaque, long long threshold_ns)
     runloom_parker_pool_t *pool = runloom_parker_pool_for_hub(hub_opaque);
     runloom_g_t *batch[RUNLOOM_SWEEP_BATCH];
     int n = 0, i, visited = 0;
-    int per_g = runloom_get_per_g_tstate_mode();
     long long now;
     if (pool == NULL ||
         __atomic_load_n(&pool->lock_inited, __ATOMIC_ACQUIRE) != 2) {
@@ -1024,12 +1023,10 @@ int runloom_netpoll_sweep_idle(void *hub_opaque, long long threshold_ns)
                 __atomic_load_n(&p->commit, __ATOMIC_ACQUIRE)
                     == RUNLOOM_PARK_PARKED &&
                 (now - p->park_ts) >= threshold_ns) {
-                /* Default mode: this hub is the g's sole resumer, so marking it
-                 * reclaimed and madvising below is race-free.  Per-g-tstate: a
-                 * woken g can be stolen by ANY hub, so claim it exclusively
+                /* A woken g can be resumed by ANY hub, so claim it exclusively
                  * (PARKED->SWEEPING) first; if the claim loses (the g is being
                  * woken/owned) skip it -- never madvise a resumable stack. */
-                if (!per_g || runloom_mn_sweep_try_claim(p->g)) {
+                if (runloom_mn_sweep_try_claim(p->g)) {
                     p->reclaimed = 1;
                     batch[n++] = p->g;
                 }
@@ -1049,15 +1046,13 @@ int runloom_netpoll_sweep_idle(void *hub_opaque, long long threshold_ns)
         runloom_coro_madvise_idle(batch[i]->coro);
         /* Companion reclaim: drop the parked Python g's idle datastack-
          * chunk tail too (the C-stack madvise above never touches it).
-         * Same owning-hub safety contract. */
+         * Same sweep-claim safety contract. */
         runloom_sched_madvise_datastack_idle(batch[i]);
-        /* Per-g-tstate: release the exclusive sweep claim now that this g's
-         * madvise has completed (SWEEPING->PARKED, or re-enqueue a wake that
-         * landed mid-madvise).  Per-g release bounds a woken g's extra latency
-         * to its own single madvise, not the whole batch. */
-        if (per_g) {
-            runloom_mn_sweep_claim_release(batch[i]);
-        }
+        /* Release the exclusive sweep claim now that this g's madvise has
+         * completed (SWEEPING->PARKED, or re-enqueue a wake that landed
+         * mid-madvise).  Per-g release bounds a woken g's extra latency to its
+         * own single madvise, not the whole batch. */
+        runloom_mn_sweep_claim_release(batch[i]);
     }
     return n;
 }

@@ -436,7 +436,7 @@ stackweave.run(4, main)
 
 
 def test_sched_single_thread_fibers_stay_isolated_while_mn_is_live():
-    """Was a gap (fixed: the per-g gates apply only inside an M:N hub (runloom_mn_current_sched)): runloom_per_g_tstate_mode is process-global, so while an M:N
+    """Was a gap (fixed: the per-g gates apply only inside an M:N hub (runloom_mn_current_sched)): the "M:N run is live" flag is process-global, so while an M:N
     run is live a single-thread scheduler on another OS thread skips the
     snap and context copy and its fibers share ContextVars and exc_info.
     """

@@ -43,20 +43,17 @@ RUNLOOM_INLINE void runloom_mn_pending_steal(runloom_hub_t *victim,
 
 /* ---- Global stealable run-queue ----
  *
- * Default mode routes a woken g back to its ORIGIN hub's owner-drained
- * submission list (runloom_mn_hub_submit).  That strands the g whenever the
- * origin hub is stuck in a non-yielding blocking C call (the classic one:
- * libc getaddrinfo): the hub never loops, never drains its sub list, so the
- * woken g never reaches a stealable deque and no idle hub can rescue it.
- * This is asyncio's signature failure -- one blocking task stalling a whole
- * fan-out -- reproduced in runloom's narrow blocking-C-call case.
+ * A woken g is never sent back to its ORIGIN hub only: that would strand it
+ * whenever the origin hub is stuck in a non-yielding blocking C call (the
+ * classic one: libc getaddrinfo), since the hub never loops to run it and no
+ * idle hub could rescue it -- asyncio's signature failure, one blocking task
+ * stalling a whole fan-out.
  *
- * A woken g carries its own migratable
- * PyThreadState, so it can resume on ANY hub.  We exploit that: wake_g
- * pushes the woken g onto this process-global queue instead of the origin
- * hub's sub list, and every idle hub drains it in hub_main's empty-local/
- * empty-deque path (alongside neighbour-steal).  An idle hub thus recovers a
- * stalled hub's woken work.  This is Go's per-P-local + global-runq model.
+ * A woken g carries its own migratable PyThreadState, so it can resume on ANY
+ * hub.  wake_g pushes it onto this process-global queue (or a hub's deque,
+ * below), and every idle hub drains it in hub_main's empty-local/empty-deque
+ * path (alongside neighbour-steal).  An idle hub thus recovers a stalled hub's
+ * woken work.  This is Go's per-P-local + global-runq model.
  *
  * LOCAL WAKE (the other half of Go's model).  A wake performed ON a hub thread
  * does not come here at all: runloom_mn_woken_enqueue pushes the g onto the
@@ -302,24 +299,6 @@ static void runloom_mn_global_runq_repin(runloom_g_t *g, int new_pin1)
             runloom_mn_wakep_one();
         }
     }
-}
-
-/* Cross-hub migration is always on: every fiber owns its own PyThreadState, so
- * a woken g is routed to the global stealable run-queue and resumes on ANY idle
- * hub.  The mode flag (runloom_get_per_g_tstate_mode) is set by mn_init and
- * cleared by mn_fini, so it doubles as "an M:N runtime is live": code shared
- * with the single-thread scheduler still reads it to pick its path.
- *
- * Soundness needs CPython built with BOTH optional patches in src/patches/ --
- * alloc-home (Py_TSTATE_ALLOC_HOME: a per-g tstate allocates on the hub now
- * running it, so no mimalloc heap migrates OS threads) and exec-home
- * (Py_TSTATE_EXEC_HOME: _PyThreadState_GET()/_Py_ThreadId() stay uncacheable
- * across a park/resume).  On a stock interpreter the scheduler migrates anyway
- * and can crash under churn at H>=2; it only warns (mn_init, and the import
- * check in stackweave/runtime.py). */
-static int runloom_use_global_runq(void)
-{
-    return runloom_get_per_g_tstate_mode();
 }
 
 /* ---- sysmon watchdog (stalled-hub detection) ----

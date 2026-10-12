@@ -66,9 +66,9 @@ uintptr_t runloom_critsec_suspend(void *tstate);
 void      runloom_critsec_restore(void *tstate, uintptr_t saved);
 
 /* Per-fiber privatisation of _PyThreadStateImpl.c_stack_refs (free-threaded
- * 3.14+).  The shared per-hub tstate's c_stack_refs list head points at
- * _PyCStackRef nodes living on the RUNNING fiber's C stack; a fiber must not
- * leave its nodes linked into the shared tstate when it parks, or a sibling
+ * 3.14+).  The single-thread scheduler's shared tstate's c_stack_refs list head
+ * points at _PyCStackRef nodes living on the RUNNING fiber's C stack; a fiber
+ * must not leave its nodes linked into the shared tstate when it parks, or a sibling
  * fiber's stack reuse corrupts the list and the free-threaded GC SIGSEGVs while
  * walking it (gc_visit_thread_stacks; the p77_weakref_storm crash).
  *   take(): return the current head and clear it (hand the next fiber a clean,

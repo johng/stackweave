@@ -8,39 +8,76 @@
  * configuration where it is safe by construction MINUS a documented, vanishing
  * residual:
  *
- *   - DEFAULT M:N mode only.  Under per-g-tstate the g runs on g->tstate (not
- *     the hub's bound tstate, which looks permanently DETACHED there), so the
- *     hub-tstate frame would be meaningless -- skip it.
- *   - the hub's bound tstate must be DETACHED and the resume must have overrun
- *     the wedge budget: a fiber that did Py_BEGIN_ALLOW_THREADS and is now
- *     parked in a blocking syscall.  The owner thread will NOT touch
- *     current_frame until END_ALLOW_THREADS re-attaches, so the frame chain is
- *     pinned for the duration of a genuine wedge, and the OWNER is the only
- *     thread that can mutate it (work-stealing only touches the deque, never the
- *     hub's bound tstate / its frame chain).
+ *   - the fiber the hub is running must have overrun the wedge budget with its
+ *     OWN tstate DETACHED: it did Py_BEGIN_ALLOW_THREADS and is now parked in a
+ *     blocking syscall.  Its thread will NOT touch current_frame until
+ *     END_ALLOW_THREADS re-attaches, so the frame chain is pinned for the
+ *     duration of a genuine wedge, and that thread is the only one that can
+ *     mutate it (a running fiber cannot be stolen; work-stealing only touches
+ *     queued gs).  The hub's own tstate is no help: it is detached for every
+ *     resume, and the fiber's frames are on the fiber's tstate.
+ *   - the fiber's tstate is read through h->resume_tstate under the sysmon
+ *     hazard pointer (runloom_sysmon_hub_attach_state), so a fiber that
+ *     completes meanwhile cannot free it under the read.
  *
- * Residual: the owner thread returning from its syscall mid-read re-attaches and
- * could overwrite the frame.  We re-confirm DETACHED immediately before the walk
+ * Residual: the fiber returning from its syscall mid-read re-attaches and could
+ * overwrite the frame.  We re-confirm DETACHED immediately before the walk
  * (shrinking the window to ~the walk itself) and read only the TOP frame.  For a
- * genuinely-stuck hub -- the use case -- the owner never returns, so the window
- * is zero.  This is opt-in best-effort; the always-safe full stack is
+ * genuinely-stuck fiber -- the use case -- it never returns, so the window is
+ * zero.  This is opt-in best-effort; the always-safe full stack is
  * `py-spy dump --pid` (the stack_cmd runloom.inspect.hubs() emits). */
 
-struct hubinfo_frame_ctx {
-    char  *buf;
-    size_t cap;
-    int    got;
+struct hubinfo_top_ctx {
+    PyCodeObject *code;   /* new reference, or NULL */
+    int           line;
 };
 
-/* runloom_iframe_walk callback: format the TOP frame as "qualname (base:line)"
- * into ctx->buf, then stop the walk.  Best-effort -- any failure leaves the
- * buffer untouched (empty). */
-static int hubinfo_frame_cb(PyCodeObject *code, int line, void *cv)
+/* runloom_iframe_walk callback: take the TOP frame's code object (a new
+ * reference) and line, then stop the walk.  Allocates nothing: it runs under
+ * the sysmon hazard (see hubinfo_top_code). */
+static int hubinfo_top_cb(PyCodeObject *code, int line, void *cv)
 {
-    struct hubinfo_frame_ctx *ctx = (struct hubinfo_frame_ctx *)cv;
+    struct hubinfo_top_ctx *ctx = (struct hubinfo_top_ctx *)cv;
+    Py_INCREF(code);
+    ctx->code = code;
+    ctx->line = line;
+    return 1;   /* top frame only */
+}
+
+/* The top Python frame of the fiber hub `h` is running, if that fiber's tstate
+ * is DETACHED: a new reference to its code object (NULL if none), and its line.
+ * Read under the hazard runloom_sysmon_hub_attach_state uses, so the tstate
+ * cannot be freed mid-read.  The deleter spins on the hazard without detaching,
+ * so nothing that could allocate (or wait for a stop-the-world) runs while it
+ * is held: the caller formats the code after this returns. */
+static PyCodeObject *hubinfo_top_code(runloom_hub_t *h, int *line_out)
+{
+    struct hubinfo_top_ctx ctx;
+    PyThreadState *ts =
+        (PyThreadState *)__atomic_load_n((void **)&h->resume_tstate, __ATOMIC_ACQUIRE);
+    ctx.code = NULL;
+    ctx.line = 0;
+    if (ts == NULL) return NULL;
+    runloom_mutex_lock(&runloom_sysmon_hazard_lock);
+    __atomic_store_n(&runloom_sysmon_hazard_ts, (void *)ts, __ATOMIC_RELEASE);
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    if (__atomic_load_n((void **)&h->resume_tstate, __ATOMIC_ACQUIRE) == (void *)ts &&
+        runloom_tstate_attach_state(ts) == RUNLOOM_TS_DETACHED) {
+        runloom_iframe_walk((void *)ts->current_frame, 1, hubinfo_top_cb, &ctx);
+    }
+    __atomic_store_n(&runloom_sysmon_hazard_ts, (void *)NULL, __ATOMIC_RELEASE);
+    runloom_mutex_unlock(&runloom_sysmon_hazard_lock);
+    *line_out = ctx.line;
+    return ctx.code;
+}
+
+/* Format a frame as "qualname (base:line)" into buf.  Best-effort -- any
+ * failure leaves "?" for the missing part. */
+static void hubinfo_format_frame(PyCodeObject *code, int line,
+                                 char *buf, size_t cap)
+{
     PyObject *qn = NULL, *fn = NULL;
     const char *qs = NULL, *fs = NULL, *base, *b1, *b2;
-    if (code == NULL) { ctx->got = 1; return 1; }
     qn = PyObject_GetAttrString((PyObject *)code, "co_qualname");
     if (qn == NULL) { PyErr_Clear();
         qn = PyObject_GetAttrString((PyObject *)code, "co_name"); }
@@ -54,18 +91,16 @@ static int hubinfo_frame_cb(PyCodeObject *code, int line, void *cv)
     b2 = strrchr(fs, '\\');
     base = (b1 > b2) ? b1 : b2;
     base = (base != NULL) ? base + 1 : fs;
-    snprintf(ctx->buf, ctx->cap, "%s (%s:%d)", qs, base, line);
+    snprintf(buf, cap, "%s (%s:%d)", qs, base, line);
     Py_XDECREF(qn);
     Py_XDECREF(fn);
     if (PyErr_Occurred()) PyErr_Clear();
-    ctx->got = 1;
-    return 1;   /* top frame only */
 }
 
 runloom_hub_info_t *runloom_mn_hub_snapshot(long *count_out)
 {
     runloom_hub_info_t *arr;
-    int n, i, per_g;
+    int n, i;
     long long now;
 
     if (count_out != NULL) *count_out = 0;
@@ -76,7 +111,6 @@ runloom_hub_info_t *runloom_mn_hub_snapshot(long *count_out)
     if (arr == NULL) return NULL;
 
     now        = runloom_monotonic_ns();
-    per_g      = runloom_get_per_g_tstate_mode();
 
     for (i = 0; i < n; i++) {
         runloom_hub_t *h = &runloom_hubs[i];
@@ -95,22 +129,17 @@ runloom_hub_info_t *runloom_mn_hub_snapshot(long *count_out)
                                ? (double)(now - start) / 1e6 : 0.0;
         o->running_g         = (start != 0 && rg != NULL) ? runloom_g_id(rg) : 0;
 
-        /* blocked_at: only for a DETACHED-wedged hub in default mode (see the
-         * safety note above).  Off the hot path entirely -- this whole block is
-         * skipped unless a hub has actually overrun the wedge budget. */
-        if (!per_g && start != 0 && (now - start) > runloom_sysmon_wedge_ns &&
-            tss == RUNLOOM_TS_DETACHED && hts != NULL) {
-            /* Re-confirm the owner is still parked in its block before
-             * chasing its frame pointer.  The owner is the only thread that can
-             * mutate this tstate's frames -- work-stealing only touches the
-             * deque -- so no cross-thread coordination is needed here. */
-            if (runloom_tstate_attach_state(hts) == RUNLOOM_TS_DETACHED) {
-                struct hubinfo_frame_ctx ctx;
-                ctx.buf = o->blocked_at;
-                ctx.cap = sizeof o->blocked_at;
-                ctx.got = 0;
-                runloom_iframe_walk((void *)hts->current_frame, 1,
-                                    hubinfo_frame_cb, &ctx);
+        /* blocked_at: only for a fiber wedged DETACHED past the wedge budget
+         * (see the safety note above).  Off the hot path entirely -- this whole
+         * block is skipped unless a hub has actually overrun the budget. */
+        if (start != 0 && (now - start) > runloom_sysmon_wedge_ns &&
+            tss == RUNLOOM_TS_DETACHED) {
+            int line = 0;
+            PyCodeObject *code = hubinfo_top_code(h, &line);
+            if (code != NULL) {
+                hubinfo_format_frame(code, line, o->blocked_at,
+                                     sizeof o->blocked_at);
+                Py_DECREF(code);
             }
         }
     }

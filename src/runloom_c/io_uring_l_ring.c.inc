@@ -429,8 +429,8 @@ static runloom_iouring_ssize_t runloom_iouring_ring_do(runloom_iouring_ring_t *r
      * from yield.  Commit to parking with the wait CAS so any drainer that
      * completes the op after this observes PARKED and wakes us; a drainer
      * that already completed it set wait=DONE, so the CAS fails and we
-     * don't park.  Wake routes via mn_wake_g -> hub sub-list; the
-     * in_sub_queue CAS dedups a wake that races our coro_yield. */
+     * don't park.  Wake routes via mn_wake_g, whose wake_state machine
+     * dedups a wake that races our coro_yield. */
     if (__atomic_load_n(&op.wait, __ATOMIC_ACQUIRE) != RUNLOOM_IOURING_WAIT_DONE) {
         int prev = RUNLOOM_IOURING_WAIT_INFLIGHT;
         if (__atomic_compare_exchange_n(&op.wait, &prev,
@@ -460,10 +460,10 @@ static runloom_iouring_ssize_t runloom_iouring_ring_do(runloom_iouring_ring_t *r
              * fires our wake; there is no INFLIGHT->PARKED CAS to redo.
              *
              * SINGLE_ISSUER holds for the cancel only while this fiber is on
-             * the ring's owning hub thread -- the default mode's guarantee.  In
-             * per-g-tstate mode a woken fiber resumes on any hub, so the cancel
-             * is routed through the owner's mailbox when not at home (and
-             * retracted below if the op completes first: `op` is this frame). */
+             * the ring's owning hub thread.  A woken fiber resumes on any hub,
+             * so the cancel is routed through the owner's mailbox when not at
+             * home (and retracted below if the op completes first: `op` is
+             * this frame). */
             {
                 runloom_iou_sigwaiter_t sw;
                 int cancelled = 0, deposited = 0;

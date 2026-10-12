@@ -103,9 +103,13 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
 
 ## Scheduler invariants
 - **A freed `runloom_g` struct never returns to the OS.** `slab_free` retains it
-  (refcount 0, magic DEAD); a stale dup-wake reaches `hub_submit`, which reads
-  `g->refcount` via `try_incref` — only sound while the struct is a valid g.
-  Freeing → garbage refcount → SIGSEGV (arm64). Guard: `tools/verify/cbmc/sched_qref_cbmc.c`.
+  (refcount 0, magic DEAD); a stale dup-wake reaches `runloom_mn_wake_g`, which
+  loads and CASes `g->wake_state`, and a cross-hub introspection reader calls
+  `try_incref` on it — only sound while the struct is a valid g (a completed g
+  keeps `wake_state` RUNNING, so a stale wake enqueues nothing). Freeing →
+  garbage state → SIGSEGV (arm64). No model covers the stale read since the
+  per-hub wake path went (with `sched_qref_cbmc.c`); `big_100/p305` is the
+  stress sentinel.
 - **Signals deliver INTO the parked goroutine, not via the scheduler.** A handler
   raising during a cooperative wait propagates out of *that call*; the idle
   scheduler carries one out of `run()` only when nothing is parked. Path:

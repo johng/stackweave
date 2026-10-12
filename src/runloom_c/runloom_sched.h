@@ -313,12 +313,9 @@ struct runloom_g {
      * -- saves ~5 us per task at fan-out time. */
     int wake_pending;
     /* MPSC sub-queue membership flag.  Set with CAS by runloom_mn_hub_submit
-     * before linking g into the hub's sub_head chain; cleared by
-     * hub_main when it drains g out of the sub chain.  Prevents the
-     * same g from being submitted twice (e.g., a spurious wake_g after
-     * the legitimate one) -- the second submit becomes a no-op so g
-     * isn't enqueued and later popped twice, which would resume a
-     * freed coro on the second pop. */
+     * before linking a FRESH g into the hub's sub_head chain; cleared by
+     * hub_main just before the g's first resume.  A second submit of the same
+     * g is a no-op.  Wakes never set it: they go through wake_state below. */
     int in_sub_queue;
     /* ---- global run-queue: per-g wake state machine ----
      * A single atomic that makes the woken-g global run-queue safe for ANY
@@ -460,7 +457,7 @@ struct runloom_g {
     unsigned char wait_reason;
     unsigned char wait_reason_hint;
 
-    /* Deep-surface migration oracle (RUNLOOM_DBG_MIGRATE; per-g-tstate only).  The
+    /* Deep-surface migration oracle (RUNLOOM_DBG_MIGRATE).  The
      * OS-thread id whose mimalloc heap / brc / QSBR the per-g PyThreadState is
      * currently bound to (0 = not yet bound).  Each per-g attach checks it against
      * the running hub's thread id: a mismatch means the tstate migrated hub->hub
@@ -959,11 +956,11 @@ void runloom_pystate_snap(runloom_pystate_snap_t *snap);
 void runloom_pystate_load(runloom_pystate_snap_t *snap);
 void runloom_pystate_snap_clear(runloom_pystate_snap_t *snap);
 
-/* Per-fiber-tstate mode (on for the life of M:N).  When on, runloom_pystate_snap
- * no-ops so each g's own tstate is never swapped out; mn_sched runs the
- * tstate-attach/detach path instead.  Set by mn_init, cleared by mn_fini. */
-void runloom_set_per_g_tstate_mode(int on);
-int  runloom_get_per_g_tstate_mode(void);
+/* An M:N run is live (set by mn_init, cleared by mn_fini).  runloom_pystate_snap
+ * reads it to skip runloom_mn_current_sched() when no hub exists; a hub fiber
+ * is the one with runloom_mn_current_sched() != NULL, and the snap no-ops for
+ * it, since its own tstate carries its state. */
+void runloom_set_mn_live(int on);
 
 /* The user's callable trampoline for a fiber; installs an initial
  * root cframe / current_frame on g's own stack, then runs g->callable.

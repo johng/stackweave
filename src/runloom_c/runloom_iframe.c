@@ -633,13 +633,14 @@ void runloom_critsec_restore(void *tstate_v, uintptr_t saved)
  * borrowed reference there).  The free-threaded GC walks this list per thread
  * state in gc_visit_thread_stacks() to count deferred references.
  *
- * In runloom's default mode many fibers share ONE per-hub PyThreadState but each
- * fiber has its OWN mmap'd C stack.  A fiber can park (cooperatively yield)
- * while a _PyCStackRef node it pushed is still live on its stack and linked into
- * the shared tstate's c_stack_refs.  The next fiber resumed on that same hub
- * then pushes/pops its own nodes (on ITS stack) onto the SAME list head, and its
- * stack activity overwrites the parked fiber's node bytes -- so the list's `next`
- * pointers come to thread across two unrelated C stacks, some since reused.  When
+ * On the single-thread scheduler many fibers share ONE PyThreadState (the
+ * calling thread's) but each fiber has its OWN mmap'd C stack.  A fiber can park
+ * (cooperatively yield) while a _PyCStackRef node it pushed is still live on its
+ * stack and linked into the shared tstate's c_stack_refs.  The next fiber
+ * resumed there then pushes/pops its own nodes (on ITS stack) onto the SAME list
+ * head, and its stack activity overwrites the parked fiber's node bytes -- so the
+ * list's `next` pointers come to thread across two unrelated C stacks, some since
+ * reused.  When
  * the GC (gc.collect()) later walks c_stack_refs it follows a `next` into stale
  * memory -> SIGSEGV (the p77_weakref_storm crash: gc_visit_thread_stacks faulting
  * with a node whose next pointed into the code segment).

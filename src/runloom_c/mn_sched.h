@@ -22,8 +22,10 @@
  *   Global fiber pool: thread-safe stack of fresh G structs so
  *   runloom_mn_fiber from outside any hub can place a g without contending.
  *
- *   Sleep heap: still per-hub.  Sleep duration includes a check for
- *   cross-hub wakeups (no -- gs cannot migrate; sleep is hub-local).
+ *   Sleep heap: per-hub, edited only by its own hub thread.  A sleep's timer
+ *   fires on the hub the g parked on, which re-queues it where an idle hub
+ *   can take it (runloom_mn_requeue_local), or, for a g pinned to another
+ *   hub, wakes it through the global run-queue.
  *
  *   Netpoll: one epoll_fd shared across hubs; each hub adds parks to
  *   it.  pump() runs in any hub when its local queue is empty and
@@ -220,7 +222,8 @@ unsigned long long runloom_mn_yield_steals_total(void);
  * for the safety argument). */
 /* sysmon hazard pointer (mn_sched_sysmon.c.inc).  A per-g tstate's deleter
  * calls retire_wait BEFORE PyThreadState_Clear so the watchdog never reads a
- * freed tstate; hub_attach_state is the watchdog's (and hubinfo's) safe read. */
+ * freed tstate; hub_attach_state is the watchdog's (and hubinfo's) safe read,
+ * and hubinfo's blocked_at frame walk takes the same hazard. */
 struct runloom_hub;                       /* defined in mn_sched.c */
 void runloom_sysmon_tstate_retire_wait(PyThreadState *ts);
 int  runloom_sysmon_hub_attach_state(struct runloom_hub *h, PyThreadState *hts);

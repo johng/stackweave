@@ -55,7 +55,6 @@ import pytest
 import stackweave_c as rc
 
 from adv_util import hang_guard, pollable_pipe, run_python
-from known_gaps import MIGRATION_GAP
 
 READ, WRITE = 1, 2
 
@@ -80,12 +79,12 @@ def _run_subprocess(script, env_extra, timeout=40):
 # mn_sched_hubinfo.c.inc -- the DETACHED-wedge blocked_at capture
 # ==========================================================================
 
-# A fiber does a REAL time.sleep (Py_BEGIN_ALLOW_THREADS -> the hub's bound
+# A fiber does a REAL time.sleep (Py_BEGIN_ALLOW_THREADS -> the fiber's own
 # tstate goes DETACHED) and holds the hub's resume clock for the whole sleep --
 # a textbook DETACHED wedge.  A SECOND fiber, on a DIFFERENT hub, samples
 # mn_hub_states() tightly during the wedge.  Each sample that returns a non-None
 # `blocked_at` for a 'detached' hub ran the blocked_at block: it re-confirmed
-# DETACHED and walked the wedged hub's top Python frame.
+# DETACHED and walked the wedged fiber's top Python frame.
 _HUBINFO_WEDGE = r'''
 import sys, time
 import stackweave
@@ -124,17 +123,15 @@ def _parse_hubinfo_ok(stdout):
     return None
 
 
-@MIGRATION_GAP("hubinfo blocked_at walks the hub's thread state, and a "
-              "fiber's frames are on its own")
 def test_hubinfo_blocked_at_for_detached_wedge():
     """Drives mn_sched_hubinfo.c.inc's `blocked_at` capture: a DETACHED wedge
-    yields the wedged hub's top Python frame.
+    yields the wedged fiber's top Python frame.
 
-    The wedger holds its hub's bound tstate DETACHED (a real time.sleep) past the
-    sysmon wedge budget; the snapshot re-confirms DETACHED and walks the top
-    frame.  The owner is the only thread that can mutate that frame chain
-    (work-stealing only touches the deque), so no cross-thread coordination is
-    needed -- the capture is plain.
+    The wedger holds its own tstate DETACHED (a real time.sleep) past the sysmon
+    wedge budget; the snapshot re-confirms DETACHED under the sysmon hazard
+    pointer and walks the top frame.  The fiber's own thread is the only one
+    that can mutate that frame chain (work-stealing only touches queued
+    fibers), so beyond the hazard no cross-thread coordination is needed.
 
     Adversarial property: the wedger's own frame is captured (not a spurious
     one), and the run still tears down cleanly."""
