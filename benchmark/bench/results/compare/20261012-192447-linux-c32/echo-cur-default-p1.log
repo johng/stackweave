@@ -1,0 +1,19 @@
+==============================================================================
+suite: echo
+python 3.14.4 CPython  gil=False  | stackweave fcontext-asm/epoll @ 80790bd6
+cpu: Intel(R) Xeon(R) Platinum 8280 CPU @ 2.70GHz  | 32 vCPU / 1 NUMA  | pinned=32 cpus [0..31]  aslr=2  load=4.50/3.12/2.83
+tlbc: on (gc_frames_active=1, PYTHON_TLBC=None)  | build: -  | env: -
+==============================================================================
+io path: epoll
+
+  c-echo @2h                           126782.8 ops/s      7887.5 ns/op  med= 252.400ms  rsd= 1.1%
+  py-echo @2h                          117213.8 ops/s      8531.4 ns/op  med= 273.005ms  rsd= 1.2%
+  c-echo @4h                           148615.8 ops/s      6728.8 ns/op  med= 215.320ms  rsd= 0.3%
+  py-echo @4h                          137569.8 ops/s      7269.0 ns/op  med= 232.609ms  rsd= 0.5%
+  c-echo @8h                           138412.6 ops/s      7224.8 ns/op  med= 231.193ms  rsd= 0.8%
+  py-echo @8h                          135436.8 ops/s      7383.5 ns/op  med= 236.273ms  rsd= 1.5%
+  c-echo @16h                          112403.4 ops/s      8896.5 ns/op  med= 284.689ms  rsd= 2.1%
+  py-echo @16h                         108678.0 ops/s      9201.5 ns/op  med= 294.448ms  rsd= 1.9%
+  (25.1s)
+
+wrote /root/sw/benchmark/bench/results/compare/20261012-192447/echo-cur-default-p1.json

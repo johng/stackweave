@@ -1,0 +1,59 @@
+{
+  "env": {
+    "aslr": "2",
+    "build_label": "",
+    "cpu_model": "Intel(R) Xeon(R) Platinum 8280 CPU @ 2.70GHz",
+    "cpu_perflevels": null,
+    "gc_frames_active": 1,
+    "gil_enabled": false,
+    "git_dirty": false,
+    "git_sha": "80790bd6",
+    "governor": "n/a (virtualized)",
+    "host": "stackweave-bench-c32",
+    "iouring_available": true,
+    "kernel": "7.0.0-38-generic",
+    "loadavg": [
+      "16.19",
+      "6.72",
+      "4.09"
+    ],
+    "nproc": 32,
+    "numa_nodes": 1,
+    "optimize": null,
+    "perf_event_paranoid": "4",
+    "pinned_cpus": null,
+    "py_cflags": "-fno-strict-overflow -Wsign-compare -Wunreachable-code -DNDEBUG -g -O3 -Wall",
+    "py_config_args": "'--prefix=/opt/py-mig' '--enable-optimizations' '--with-tail-call-interp' '--disable-gil' 'CPPFLAGS=-DPy_TSTATE_ALLOC_HOME -DPy_TSTATE_EXEC_HOME' 'CC=clang-19'",
+    "python": "3.14.4",
+    "python_build": "main Oct 12 2026 19:02:00",
+    "python_impl": "CPython",
+    "python_tlbc_env": null,
+    "runloom_backend": "fcontext-asm",
+    "runloom_netpoll": "epoll",
+    "runloom_so": "/root/sw/src/stackweave_c.cpython-314t-x86_64-linux-gnu.so",
+    "stackweave_env": {
+      "STACKWEAVE_TCPCONN_IOURING": "1"
+    },
+    "timestamp": "2026-10-12T20:06:55+00:00"
+  },
+  "memory": [
+    {
+      "bytes_per_unit": 26386.8416,
+      "name": "rss per parked unit @10k",
+      "note": "stackweave.fiber parked on Chan(0).recv",
+      "rss_after": 301371392,
+      "rss_before": 37502976,
+      "units": 10000
+    },
+    {
+      "bytes_per_unit": 25204.1216,
+      "name": "rss per parked unit @100k",
+      "note": "stackweave.fiber parked on Chan(0).recv",
+      "rss_after": 2980548608,
+      "rss_before": 460136448,
+      "units": 100000
+    }
+  ],
+  "results": [],
+  "suite": "memory"
+}

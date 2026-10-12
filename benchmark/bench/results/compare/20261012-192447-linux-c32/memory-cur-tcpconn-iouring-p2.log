@@ -1,0 +1,10 @@
+==============================================================================
+suite: memory
+python 3.14.4 CPython  gil=False  | stackweave fcontext-asm/epoll @ 80790bd6
+cpu: Intel(R) Xeon(R) Platinum 8280 CPU @ 2.70GHz  | 32 vCPU / 1 NUMA  | pinned=none  aslr=2  load=1.87/2.66/3.26
+tlbc: on (gc_frames_active=1, PYTHON_TLBC=None)  | build: -  | env: STACKWEAVE_TCPCONN_IOURING=1
+==============================================================================
+  rss per parked unit @10k              25.77 KB/unit  (10000 units, RSS 35.8 -> 287.4 MB)
+  rss per parked unit @100k             24.94 KB/unit  (100000 units, RSS 450.9 -> 2886.8 MB)
+
+wrote /root/sw/benchmark/bench/results/compare/20261012-192447/memory-cur-tcpconn-iouring-p2.json
