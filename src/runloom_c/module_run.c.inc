@@ -603,16 +603,34 @@ static PyObject *m_immortalize(PyObject *self, PyObject *op)
     return Py_NewRef(op);
 }
 
+/* The OS thread blocked in mn_run(), or 0 outside one.  It waits for every
+ * fiber, so no fiber can wait for an import it started
+ * (stackweave._importlock). */
+static unsigned long runloom_mn_run_thread = 0;
+
 static PyObject *m_mn_run(PyObject *self, PyObject *unused)
 {
     Py_ssize_t completed;
     (void)self; (void)unused;
+    __atomic_store_n(&runloom_mn_run_thread, PyThread_get_thread_ident(),
+                     __ATOMIC_RELEASE);
     completed = runloom_mn_run();
+    __atomic_store_n(&runloom_mn_run_thread, 0UL, __ATOMIC_RELEASE);
     /* mn_run returns -1 with an exception set when deadlock mode is raise and
      * the deadlock census fired -- propagate it instead of masking it as a
      * completed-count of -1. */
     if (PyErr_Occurred()) return NULL;
     return PyLong_FromSsize_t(completed);
+}
+
+/* _mn_run_thread(): the _thread.get_ident() of the thread blocked in mn_run(),
+ * or None outside one. */
+static PyObject *m_mn_run_thread(PyObject *self, PyObject *unused)
+{
+    unsigned long t = __atomic_load_n(&runloom_mn_run_thread, __ATOMIC_ACQUIRE);
+    (void)self; (void)unused;
+    if (t == 0) Py_RETURN_NONE;
+    return PyLong_FromUnsignedLong(t);
 }
 
 static PyObject *m_mn_fini(PyObject *self, PyObject *unused)

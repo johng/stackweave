@@ -20,8 +20,8 @@ correct answer, an exact-field mismatch is a genuine cache-tear, never
 documented-unsafe usage -- so this arm is GREEN on plain-threads-GIL-on and a RED
 there would be mis-calibrated.
 
-ARM 2 -- ZoneInfo COLD-IMPORT false-`_DeadlockError` (FINDINGS #9; a REAL,
-unfixed stackweave bug -- this arm is SUPPOSED to FAIL under M:N).  ``zoneinfo``
+ARM 2 -- ZoneInfo COLD-IMPORT false-`_DeadlockError` (FINDINGS #9; fixed by
+src/stackweave/_importlock.py, and this arm now guards the fix).  ``zoneinfo``
 loads its zone data LAZILY: the first ``ZoneInfo(region)`` for an area COLD-
 imports that area's data-backend submodule (``tzdata.zoneinfo.<Area>``), taking
 CPython's per-module import lock during the import.  CPython keys that lock by
@@ -34,7 +34,9 @@ SAME hub thread that also needs a cold area import corrupts importlib's
 and the deadlock detector trips a spurious ``importlib._bootstrap._DeadlockError``
 even though NO real deadlock exists.  This is the known import-lock false-
 deadlock class (FINDINGS #9): CPython's import lock assumes one-OS-thread-per-
-unit-of-concurrency, which M:N breaks.
+unit-of-concurrency, which M:N breaks.  stackweave now gives importlib a
+get_ident() that names the fiber (src/stackweave/_importlock.py), so sibling
+fibers on one hub are distinct importers and the arm passes.
 
 It is FLAKY to catch by accident because area backends warm up (become cached)
 after their first import, so a steady run almost never re-takes a cold module
@@ -44,7 +46,7 @@ purge the area backend submodules from ``sys.modules`` and re-construct
 ``ZoneInfo(region)`` over a SPREAD of distinct areas, so the import lock is
 re-taken COLD while sibling fibers on the same hub yield -> the false
 ``_DeadlockError`` fires.  The arm catches it and ``H.fail``s with a #9
-diagnostic -- it is DETECTING the real stackweave bug.
+diagnostic -- a regression of the fix.
 
 ATTRIBUTION (why this is runloom-specific, not a CPython-FT or import-pattern
 fault).  A standalone plain-OS-threads control doing the SAME cold area-backend
@@ -284,9 +286,11 @@ def parse_and_check(H, wid, state):
         try:
             z = zoneinfo.ZoneInfo(region)
         except _DeadlockError as exc:
-            # THE RUNLOOM BUG (FINDINGS #9).  A cold area-backend import tripped
-            # the OS-thread-keyed deadlock detector though no real deadlock exists.
-            H.fail("ZoneInfo COLD-IMPORT false-_DeadlockError (FINDINGS #9): "
+            # FINDINGS #9, fixed by src/stackweave/_importlock.py: a cold
+            # area-backend import tripped the OS-thread-keyed deadlock detector
+            # though no real deadlock exists.
+            H.fail("ZoneInfo COLD-IMPORT false-_DeadlockError (FINDINGS #9, "
+                   "fixed by stackweave/_importlock.py -- has it regressed?): "
                    "constructing ZoneInfo({0!r}) cold-imported its area backend "
                    "{1!r} and importlib raised {2!r} for wid={3} -- a SPURIOUS "
                    "deadlock.  CPython's per-module import lock is keyed by "
@@ -591,9 +595,8 @@ if __name__ == "__main__":
                  "input) pair UNIQUE to each (a per-wid literal token churns the "
                  "size-5 _regex_cache) and assert the parsed datetime fields "
                  "EXACTLY match their own encoded wid -- a wrong field means a "
-                 "torn cache returned a SIBLING's compiled regex.  ARM 2 (catches "
-                 "the REAL, unfixed FINDINGS #9 stackweave bug -> SUPPOSED to FAIL "
-                 "under M:N): each round purge the tzdata.zoneinfo.<Area> backend "
+                 "torn cache returned a SIBLING's compiled regex.  ARM 2 (guards "
+                 "the FINDINGS #9 fix, stackweave/_importlock.py): each round purge the tzdata.zoneinfo.<Area> backend "
                  "submodules and re-construct ZoneInfo(<region>) over a spread of "
                  "areas, so the OS-thread-keyed import lock is re-taken COLD while "
                  "sibling fibers on the same hub yield -> a spurious importlib "

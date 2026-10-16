@@ -151,6 +151,13 @@ from .sync import WaitGroup, Future, gather  # noqa: E402,F401  – fan-in primi
 from . import aio      # noqa: E402,F401  – run async/await on the scheduler
 from .stats import stats  # noqa: E402,F401  – R0 process-wide gauge surface
 
+# Module import locks: importlib keys each module's lock on the OS thread,
+# which every fiber on a hub shares and a migrating fiber changes.  Done here
+# once, at import, for ALL stackweave use; it changes what importlib alone
+# sees.  See stackweave/_importlock.py.
+from . import _importlock  # noqa: E402
+_importlock.install()
+
 __all__ = [
     # scheduler
     "fiber", "fiber_fast", "run", "sleep", "yield_now", "yield_", "blocking", "current",
