@@ -22,11 +22,13 @@ Each case here runs in its own process:
     nested run(1) or Coro) gets the module as far as it has run, as a
     circular import does, instead of hanging.
 """
+import sys
 import textwrap
 
 import pytest
 
 from adv_util import run_python
+from known_gaps import KNOWN_GAP
 
 
 PRELUDE = textwrap.dedent("""
@@ -213,22 +215,45 @@ def test_plain_threads_run_a_module_once():
     """)
 
 
-def test_a_child_forked_from_a_fiber_can_import():
-    run("""
-    import warnings
-    warnings.simplefilter("ignore", DeprecationWarning)   # fork with threads
-    module("in_child", "Y = 3\\n")
-    rcs = []
-    def main():
-        pid = os.fork()
-        if pid == 0:
-            import in_child
-            os._exit(0 if in_child.Y == 3 else 1)
-        rcs.append(os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1]))
-    stackweave.run(2, main)
-    assert rcs == [0], rcs
-    print("PASS")
-    """)
+# A child forked from a fiber on an M:N hub segfaults on Linux 3.14 (hosted CI,
+# 3.14.4) inside os.fork(), in threading's own after-fork hook (_after_fork ->
+# _enumerate), before it gets to import anything.  macOS and 3.15 are fine.
+_FORK_FROM_A_HUB_SEGFAULTS = (sys.platform.startswith("linux")
+                              and sys.version_info[:2] == (3, 14))
+
+
+@pytest.mark.parametrize("hubs", [
+    1,
+    pytest.param(2, marks=KNOWN_GAP(
+        "a child forked from a fiber on an M:N hub segfaults in threading's "
+        "after-fork hook (_after_fork -> _enumerate) on Linux 3.14, before it "
+        "imports anything", raises=AssertionError)
+        if _FORK_FROM_A_HUB_SEGFAULTS else ()),
+])
+def test_a_child_forked_from_a_fiber_can_import(hubs):
+    try:
+        run("""
+        import signal, warnings
+        warnings.simplefilter("ignore", DeprecationWarning)   # fork with threads
+        module("in_child", "Y = 3\\n")
+        rcs = []
+        def main():
+            pid = os.fork()
+            if pid == 0:
+                import in_child
+                os._exit(0 if in_child.Y == 3 else 1)
+            rcs.append(os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1]))
+        stackweave.run(%d, main)
+        if rcs == [-signal.SIGSEGV]:
+            print("CHILD SEGFAULTED")
+        assert rcs == [0], rcs
+        print("PASS")
+        """ % hubs)
+    except AssertionError as e:
+        # Only the child's segfault is the known gap; anything else fails.
+        if "CHILD SEGFAULTED" not in str(e):
+            pytest.fail(str(e))
+        raise
 
 
 @pytest.mark.parametrize("hubs", [1, 2])
