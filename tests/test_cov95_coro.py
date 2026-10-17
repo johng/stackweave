@@ -215,7 +215,7 @@ def cbody():
         log.append(i)
         rc.yield_()
     log.append("end")
-c = rc.Coro(cbody, 65536)
+c = rc._Coro(cbody, 65536)
 for _ in range(6):
     c.resume()
     if c.done:

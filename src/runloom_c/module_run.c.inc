@@ -408,6 +408,9 @@ static PyObject *m_stats(PyObject *self, PyObject *unused)
     }
     RUNLOOM_STATS_SET("coro_stack_live",   runloom_coro_stack_live());
     RUNLOOM_STATS_SET("coro_depot_pooled", runloom_coro_depot_pooled());
+    /* Parked Coros the GC frames anchor has walked, summed over collections. */
+    RUNLOOM_STATS_SET("gc_coros_walked",
+                      (Py_ssize_t)runloom_gcframes_walked_coros);
     RUNLOOM_STATS_SET("blockpool_inflight",runloom_blockpool_inflight());
     RUNLOOM_STATS_SET("iouring_inflight",  runloom_iouring_inflight());
     RUNLOOM_STATS_SET("iouring_loop_waits",

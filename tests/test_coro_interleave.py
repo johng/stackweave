@@ -47,7 +47,7 @@ def crec(n):
         return n
     return list(map(lambda k: crec(k), [n + 1]))[0]
 got = []
-coros = [stackweave_c.Coro(lambda: got.append(crec(0))) for _ in range(N)]
+coros = [stackweave_c._Coro(lambda: got.append(crec(0))) for _ in range(N)]
 take_turns(coros)
 print("RESULTS", got)
 """ % (n, depth))
@@ -64,7 +64,7 @@ def r(n, i):
     stackweave_c.yield_()
     return i if n == DEPTH else r(n + 1, i)
 got = []
-coros = [stackweave_c.Coro(lambda i=i: got.append(r(0, i))) for i in range(N)]
+coros = [stackweave_c._Coro(lambda i=i: got.append(r(0, i))) for i in range(N)]
 take_turns(coros)
 print("RESULTS", sorted(got))
 """ % (n, depth))
@@ -81,7 +81,7 @@ def test_a_parked_coro_does_not_hold_its_critical_section():
     rc, out, err = _run(TAKE_TURNS + """
 import threading, time
 shared = [0, 1, 2]
-c = stackweave_c.Coro(lambda: shared.extend(map(lambda x: (stackweave_c.yield_(), x)[1], [7, 8])))
+c = stackweave_c._Coro(lambda: shared.extend(map(lambda x: (stackweave_c.yield_(), x)[1], [7, 8])))
 c.resume()                       # parked inside shared.extend
 done = []
 t = threading.Thread(target=lambda: (shared.append(99), done.append(1)))
@@ -109,12 +109,12 @@ def r(n):
     if n:
         r(n - 1)
 for _ in range(200):
-    cs = [stackweave_c.Coro(lambda: r(30)) for _ in range(4)]
+    cs = [stackweave_c._Coro(lambda: r(30)) for _ in range(4)]
     for c in cs:
         for _ in range(10):
             c.resume()
     del cs, c
-coros = [stackweave_c.Coro(lambda: r(30)) for _ in range(4)]
+coros = [stackweave_c._Coro(lambda: r(30)) for _ in range(4)]
 take_turns(coros)
 print("OK", sum(range(1000)))
 """)

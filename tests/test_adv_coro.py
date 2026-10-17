@@ -23,13 +23,21 @@ _DEVNULL = os.open(os.devnull, os.O_WRONLY)
 # --------------------------------------------------------------------------
 # Coro primitive
 # --------------------------------------------------------------------------
+def test_coro_is_private():
+    # Nothing in stackweave uses it, so it is stackweave_c._Coro only; the old
+    # public names (stackweave.Coro, stackweave_c.Coro) are gone, not aliased.
+    assert rc._Coro.__name__ == "_Coro"
+    assert not hasattr(rc, "Coro")
+    assert not hasattr(stackweave, "Coro") and "Coro" not in stackweave.__all__
+
+
 def test_coro_resume_yield_chain():
     log = []
     def body():
         log.append("a"); rc.yield_()
         log.append("b"); rc.yield_()
         log.append("c"); return "done"
-    c = rc.Coro(body)
+    c = rc._Coro(body)
     c.resume(); assert log == ["a"] and not c.done
     c.resume(); assert log == ["a", "b"] and not c.done
     c.resume(); assert log == ["a", "b", "c"] and c.done
@@ -37,14 +45,14 @@ def test_coro_resume_yield_chain():
 
 
 def test_coro_exception_propagates_on_resume():
-    c = rc.Coro(lambda: (_ for _ in ()).throw(ValueError("boom")))
+    c = rc._Coro(lambda: (_ for _ in ()).throw(ValueError("boom")))
     with pytest.raises(ValueError):
         c.resume()
     assert c.done
 
 
 def test_coro_resume_after_done_is_idempotent():
-    c = rc.Coro(lambda: 42)
+    c = rc._Coro(lambda: 42)
     c.resume()
     assert c.done and c.result == 42
     c.resume()                       # resuming a finished coro must not crash
@@ -56,7 +64,7 @@ def test_yield_outside_coro_is_noop():
 
 
 def test_coro_tiny_positive_stack_runs():
-    c = rc.Coro(lambda: sum(range(100)), 4096)
+    c = rc._Coro(lambda: sum(range(100)), 4096)
     c.resume()
     assert c.done and c.result == 4950
 
@@ -66,14 +74,14 @@ def test_coro_negative_stack_raises_not_segfaults():
     # the guard-page arithmetic to an undersized mapping, and SIGSEGV'd.  It now
     # validates the argument like fiber() / set_stack_size().
     with pytest.raises(ValueError):
-        rc.Coro(lambda: 1, -1)
+        rc._Coro(lambda: 1, -1)
     with pytest.raises(ValueError):
-        rc.Coro(lambda: 1, -1 << 40)
+        rc._Coro(lambda: 1, -1 << 40)
 
 
 def test_coro_absurd_stack_raises_memoryerror_not_crash():
     with pytest.raises((MemoryError, OverflowError)):
-        c = rc.Coro(lambda: 1, (1 << 62))
+        c = rc._Coro(lambda: 1, (1 << 62))
         c.resume()
 
 

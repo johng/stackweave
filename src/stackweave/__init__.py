@@ -89,7 +89,6 @@ mn_hub_states = _core.mn_hub_states   # per-hub diagnostic snapshot (see inspect
 # directly for normal use.  (The raw module stays available as `stackweave_c` for
 # deep internals: sched_*, park_self, the get_/set_ tuning knobs, etc.)
 TCPConn = _core.TCPConn                # C-level TCP connection (Go-parity perf)
-Coro = _core.Coro                      # raw stackful coroutine handle
 G = _core.G                            # fiber handle type
 wait_fd = _core.wait_fd                # park the current fiber on fd readiness
 WAIT_FD_CANCELLED = _core.WAIT_FD_CANCELLED
@@ -173,7 +172,7 @@ __all__ = [
     "mn_init", "mn_fiber", "mn_run", "mn_fini", "mn_hub_count", "mn_hub_states",
     "hubs",
     # low-level I/O primitives
-    "TCPConn", "Coro", "G", "wait_fd", "WAIT_FD_CANCELLED",
+    "TCPConn", "G", "wait_fd", "WAIT_FD_CANCELLED",
     "tcp_recv", "tcp_send", "iouring_available",
     # introspection
     "backend", "netpoll_backend", "fibers", "dump", "inspect", "stats",

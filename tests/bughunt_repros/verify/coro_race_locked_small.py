@@ -6,7 +6,7 @@ def body():
     for _ in range(N):
         stackweave_c.yield_()
 
-c = stackweave_c.Coro(body)
+c = stackweave_c._Coro(body)
 lk = threading.Lock()
 
 def spin():

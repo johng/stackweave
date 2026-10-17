@@ -33,6 +33,18 @@ typedef int (*runloom_iframe_cb)(PyCodeObject *code, int line, void *ctx);
  * top is NULL or the platform has no internal frame layout. */
 int runloom_iframe_walk(void *top, int max, runloom_iframe_cb cb, void *ctx);
 
+/* A Coro's frames link to whoever resumes it, as a generator's do
+ * (module_coro.c.inc).  cut(), at a yield: walk down from `top`, the Coro's
+ * top frame, to its bottom frame -- the one whose `previous` is `caller`, the
+ * resumer's frame -- set that link to NULL and return the bottom frame, so the
+ * parked chain holds the Coro's frames only.  Returns NULL, changing nothing,
+ * when `caller` is not on the chain (or when built with RUNLOOM_NO_IFRAME).
+ * link(), at the next resume: point `bottom`'s `previous` at the new
+ * resumer's frame.  Frames are void* (struct _PyInterpreterFrame*) to keep the
+ * core/non-core ABI boundary clean. */
+void *runloom_iframe_chain_cut(void *top, void *caller);
+void  runloom_iframe_chain_link(void *bottom, void *caller);
+
 /* offsetof(PyGenObject, gi_exc_state); see runloom_iframe.c. */
 size_t runloom_gen_exc_state_offset(void);
 
