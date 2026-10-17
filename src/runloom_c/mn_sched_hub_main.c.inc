@@ -1484,6 +1484,12 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                 }
                 continue;
             }
+            /* Claimed and alive: this hub now runs g.  G_POP names the hub
+             * that took it, so a ring dump shows where a queued g went: match
+             * p1 against the G_SUBMIT that queued it, maybe on another
+             * thread's ring.  aux = from_runq, 1 for a woken g taken off a run
+             * queue (tests/test_cov95_diag.py checks the label is emitted). */
+            RUNLOOM_EVT(RUNLOOM_EVT_G_POP, g, h, from_runq);
             hub_ts = PyEval_SaveThread();        /* detach hub tstate */
             /* Borrow the running hub's allocator BEFORE attaching g's tstate.
              * The per-g tstate then allocates on whichever hub runs it, so its
