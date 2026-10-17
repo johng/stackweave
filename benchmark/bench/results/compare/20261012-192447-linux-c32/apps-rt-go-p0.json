@@ -1,0 +1,95 @@
+{
+  "env": {
+    "go": "go1.26.6",
+    "gomaxprocs": 4,
+    "host": "stackweave-bench-c32",
+    "loadavg": [
+      "1.65",
+      "2.58",
+      "2.43"
+    ],
+    "nproc": 32,
+    "runtime": "go",
+    "timestamp": "2026-10-12T19:44:44Z"
+  },
+  "latency": [],
+  "memory": [],
+  "results": [
+    {
+      "inner": 12800,
+      "mad_s": 0.0011993284999999992,
+      "mean_s": 0.17929077610000002,
+      "median_s": 0.17982406950000002,
+      "min_s": 0.176397393,
+      "name": "http json api 64 conns",
+      "note": "net/http server + 64 client goroutines, keep-alive",
+      "ops_per_s": 71180.6825170309,
+      "per_op_ns": 14048.755429687502,
+      "per_op_s": 0.000014048755429687502,
+      "rsd_pct": 0.868931681500297,
+      "samples": 10,
+      "stdev_s": 0.001557914355540663
+    },
+    {
+      "inner": 2000,
+      "mad_s": 0.0005716015000000012,
+      "mean_s": 0.0347656068,
+      "median_s": 0.0354392355,
+      "min_s": 0.030945627,
+      "name": "api gateway fan-out 8 x 1ms",
+      "note": "goroutine per backend call + WaitGroup",
+      "ops_per_s": 56434.625967030246,
+      "per_op_ns": 17719.617749999998,
+      "per_op_s": 0.00001771961775,
+      "rsd_pct": 4.92577526316194,
+      "samples": 10,
+      "stdev_s": 0.0017124756598425452
+    },
+    {
+      "inner": 20000,
+      "mad_s": 0.00011414199999999937,
+      "mean_s": 0.028917764699999998,
+      "median_s": 0.028866175,
+      "min_s": 0.028716717,
+      "name": "parse+hash pipeline 4 workers",
+      "note": "chan(256) -\u003e 4 worker goroutines",
+      "ops_per_s": 692852.4475445742,
+      "per_op_ns": 1443.30875,
+      "per_op_s": 0.00000144330875,
+      "rsd_pct": 0.47906760623704464,
+      "samples": 10,
+      "stdev_s": 0.00013853564312555107
+    },
+    {
+      "inner": 128000,
+      "mad_s": 0.00047522950000000036,
+      "mean_s": 0.0299838612,
+      "median_s": 0.0298857805,
+      "min_s": 0.029084091,
+      "name": "pub/sub broadcast 256 subs",
+      "note": "a goroutine + chan(16) per subscriber",
+      "ops_per_s": 4282973.302303415,
+      "per_op_ns": 233.48266015625,
+      "per_op_s": 2.3348266015625e-7,
+      "rsd_pct": 2.0914158883200256,
+      "samples": 10,
+      "stdev_s": 0.0006270872370686234
+    },
+    {
+      "inner": 30000,
+      "mad_s": 0.00042634049999999875,
+      "mean_s": 0.0186271168,
+      "median_s": 0.018370544500000002,
+      "min_s": 0.017610245,
+      "name": "crawler 10k concurrent x 3 fetches",
+      "note": "a goroutine per task",
+      "ops_per_s": 1633049.0367337777,
+      "per_op_ns": 612.3514833333335,
+      "per_op_s": 6.123514833333334e-7,
+      "rsd_pct": 4.8545952673595405,
+      "samples": 10,
+      "stdev_s": 0.0009042711306183339
+    }
+  ],
+  "suite": "go"
+}

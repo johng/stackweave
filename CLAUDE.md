@@ -230,6 +230,30 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   (a patched `Lock` in an mp.Queue `_feed` thread) must detect no-goroutine (TLS
   peek NULL) and block on the real OS — never park a non-existent g, never lazily
   alloc sched state (`peek_current`, never `sched_get`).
+- **importlib's module locks key on the fiber, not the OS thread.**
+  `import stackweave` rebinds `importlib._bootstrap._ModuleLock` to
+  `_FiberModuleLock` (`src/stackweave/_importlock.py`): `_ModuleLock`'s own
+  methods, run against importlib's globals with `_thread` swapped for one whose
+  `get_ident()` is the running fiber (`current_g()`; the OS thread outside
+  fibers) and whose `RLock`/`allocate_lock` are CoRLock/CoLock. Keyed on the OS
+  thread, a second fiber on the importer's hub took the lock as its holder and
+  got the half-built module, and an importer that migrated mid-body could not
+  release it, so every later importer hung (big_100 p527; p458's false
+  `_DeadlockError`). The locks must be cooperative too: a waiter blocking its
+  hub's OS thread on a real lock never lets an importer parked on that hub
+  finish. Never swap `_bootstrap._thread` itself: a lock taken before the swap
+  is released after it as a different identity (the first `import stackweave`,
+  made in a fiber, raised "cannot release un-acquired lock"); each lock must
+  keep the identity it was made with. `has_deadlock` also fires when the holder
+  cannot run until the waiter returns: the thread under a run(1) drain, the
+  thread in `mn_run` (`stackweave_c._mn_run_thread`), the hub fiber under a
+  nested run(1) or Coro (`_nest_owner`). Such an import gets the module so far
+  (`import x`) or `_DeadlockError` (`importlib.import_module`), as between two
+  threads, instead of hanging. Raw `stackweave_c` use without `import
+  stackweave` gets none of this. Still open: importlib's global `_imp` lock
+  keys on the OS thread, and a preemption inside `_get_module_lock` lets a
+  same-hub fiber re-enter it. Guards: `tests/test_import_lock.py`,
+  `tests/test_cross_hub_migration.py -k import`.
 - **Parked-fiber frames are made GC-visible by the frames anchor.** The
   free-threaded collector credits PEP-703 deferred stackrefs (code objects,
   functions, deferred locals) only on LIVE tstate `current_frame` chains; a parked

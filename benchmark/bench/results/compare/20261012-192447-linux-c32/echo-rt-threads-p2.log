@@ -1,0 +1,5 @@
+runtime: threads  python 3.14.4  gil=False
+
+  py-echo @4h                          593658.6 ops/s      1684.5 ns/op  med=  53.903ms  rsd= 4.2%
+
+wrote /root/sw/benchmark/bench/results/compare/20261012-192447/echo-rt-threads-p2.json

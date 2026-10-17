@@ -159,6 +159,10 @@ static PyMethodDef module_methods[] = {
      "if called outside one.  Used together with park_self/G.wake to "
      "implement lightweight per-task wake primitives without the "
      "overhead of a Chan."},
+    {"_nest_owner", m_nest_owner,  METH_NOARGS,
+     "_nest_owner() -> G | None: the hub fiber whose stack the caller runs "
+     "on inside a run(1) drain or Coro nested on it, else None.  That fiber "
+     "is suspended until the nest returns (stackweave._importlock)."},
     {"in_fiber",    m_in_fiber,    METH_NOARGS,
      "in_fiber() -> bool: whether the caller is a running fiber (M:N hub "
      "or single-thread scheduler) -- current_g() is not None, without "
@@ -289,6 +293,9 @@ static PyMethodDef module_methods[] = {
      "objects that live the whole run -- immortal objects are never freed."},
     {"mn_run",      m_mn_run,      METH_NOARGS,
      "mn_run(): wait for all gs to complete.  Returns total completed."},
+    {"_mn_run_thread", m_mn_run_thread, METH_NOARGS,
+     "_mn_run_thread() -> int | None: the _thread.get_ident() of the thread "
+     "blocked in mn_run(), or None outside one (stackweave._importlock)."},
     {"mn_fini",     m_mn_fini,     METH_NOARGS,
      "mn_fini(): tear down the hub pool."},
     {"mn_hub_count", m_mn_hub_count, METH_NOARGS,

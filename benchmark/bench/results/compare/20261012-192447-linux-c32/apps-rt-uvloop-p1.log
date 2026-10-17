@@ -1,0 +1,9 @@
+runtime: uvloop  python 3.14.4  gil=False
+
+  http json api 64 conns                25411.4 ops/s     39352.4 ns/op  med= 503.711ms  rsd= 0.4%
+  api gateway fan-out 8 x 1ms           15229.0 ops/s     65664.4 ns/op  med= 131.329ms  rsd= 3.3%
+  parse+hash pipeline 4 workers        137118.1 ops/s      7293.0 ns/op  med= 145.860ms  rsd= 1.1%
+  pub/sub broadcast 256 subs          1121673.6 ops/s       891.5 ns/op  med= 114.115ms  rsd= 0.9%
+  crawler 10k concurrent x 3 fetches   192273.6 ops/s      5200.9 ns/op  med= 156.028ms  rsd= 2.4%
+
+wrote /root/sw/benchmark/bench/results/compare/20261012-192447/apps-rt-uvloop-p1.json

@@ -80,8 +80,11 @@ Headlines, as recorded at the time:
   (the C recursion budget isn't reset for the goroutine).
 - **#7:** `contextvars` / `threading.local` leak between goroutines (hub-local,
   not goroutine-local).
-- **#8/#9/#10:** greenlet can't interleave with goroutine switches; concurrent
-  same-module imports false-deadlock; a cooperative lock in `__del__` aborts.
+- **#8/#10:** greenlet can't interleave with goroutine switches; a cooperative
+  lock in `__del__` aborts.
+- **#9 (fixed):** concurrent same-module imports false-deadlocked (importlib's
+  module locks keyed on the hub's OS thread). They now key on the fiber:
+  `src/stackweave/_importlock.py`.
 
 Several of these share one root cause: M:N parallelism breaks CPython's
 one-thread-per-unit-of-concurrency assumption. The bug-reproducing knobs that

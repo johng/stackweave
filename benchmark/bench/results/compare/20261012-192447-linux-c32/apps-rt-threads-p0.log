@@ -1,0 +1,9 @@
+runtime: threads  python 3.14.4  gil=False
+
+  http json api 64 conns               265310.1 ops/s      3769.2 ns/op  med=  48.245ms  rsd= 2.6%
+  api gateway fan-out 8 x 1ms            4477.7 ops/s    223327.8 ns/op  med= 446.656ms  rsd= 1.5%
+  parse+hash pipeline 4 workers        174274.9 ops/s      5738.1 ns/op  med= 114.761ms  rsd=15.1%
+  pub/sub broadcast 256 subs           163632.8 ops/s      6111.2 ns/op  med= 782.239ms  rsd= 4.9%
+  crawler 10k concurrent x 3 fetches    15894.5 ops/s     62914.7 ns/op  med=1887.440ms  rsd= 2.2%
+
+wrote /root/sw/benchmark/bench/results/compare/20261012-192447/apps-rt-threads-p0.json

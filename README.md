@@ -41,30 +41,30 @@ interleaved passes. Higher is better unless marked.
 
 | workload | stackweave | best Python runtime | Go |
 | --- | ---: | ---: | ---: |
-| ping-pong, one unbuffered pair (round-trips/s) | 867 k | 196 k (uvloop, GIL build) | 2.62 M |
-| 64 ping-pong pairs (round-trips/s) | 2.94 M | 265 k (uvloop, GIL build) | 4.21 M |
-| yield, 1000 fibers (switches/s) | **6.47 M** | 1.64 M (threads) | 2.66 M |
-| fan-out 1→32 over a buffered channel (items/s) | 1.03 M | 493 k (uvloop, GIL build) | 3.54 M |
-| spawn a no-op fiber (/s) | 57–81 k | 400 k (uvloop, GIL build) | 2.93 M |
-| TCP echo, Python handler, 16 hubs, io_uring loop (round-trips/s) | 315 k | 583 k (thread per conn, 64 conns) | 900 k |
-| HTTP/1.1 JSON API, 64 keep-alive conns (req/s) | 70 k (90 k on the io_uring loop) | 244 k (thread per conn, all 32 cores) | 71 k (net/http) |
-| API gateway: 8 × 1 ms backend calls per request (req/s) | 6.6 k | 19 k (uvloop, GIL build) | 67 k |
-| JSON parse + sha256 pipeline, 4 workers (records/s) | 386 k | 172 k (threads) | 685 k |
-| pub/sub broadcast to 256 subscribers (deliveries/s) | 3.80 M | 1.29 M (gevent) | 4.29 M |
-| crawler: 10k concurrent tasks × 3 slow fetches (fetches/s) | 57 k | 198 k (uvloop, GIL build) | 1.64 M |
+| ping-pong, one unbuffered pair (round-trips/s) | 833 k | 206 k (uvloop, GIL build) | 2.69 M |
+| 64 ping-pong pairs (round-trips/s) | 2.87 M | 272 k (uvloop, GIL build) | 4.15 M |
+| yield, 1000 fibers (switches/s) | **8.97 M** | 1.72 M (threads) | 2.74 M |
+| fan-out 1→32 over a buffered channel (items/s) | 1.04 M | 514 k (uvloop, GIL build) | 3.68 M |
+| spawn a no-op fiber (/s) | 79–173 k | 406 k (uvloop, GIL build) | 2.94 M |
+| TCP echo, Python handler, 16 hubs, io_uring loop (round-trips/s) | 339 k | 599 k (thread per conn, 64 conns) | 928 k |
+| HTTP/1.1 JSON API, 64 keep-alive conns (req/s) | 71 k (91 k on the io_uring loop) | 263 k (thread per conn, all 32 cores) | 71 k (net/http) |
+| API gateway: 8 × 1 ms backend calls per request (req/s) | 14.6 k | 19.8 k (uvloop, GIL build) | 58 k |
+| JSON parse + sha256 pipeline, 4 workers (records/s) | 380 k | 173 k (threads) | 692 k |
+| pub/sub broadcast to 256 subscribers (deliveries/s) | 3.89 M | 1.30 M (gevent) | 4.23 M |
+| crawler: 10k concurrent tasks × 3 slow fetches (fetches/s) | 70 k | 222 k (uvloop, GIL build) | 1.63 M |
 | memory per parked fiber at 100k (lower is better) | 23 KB | 1.0 KB (asyncio task) | 2.4 KB |
-| foreign thread → fiber wake, p50 (lower is better) | **10 µs** | 13 µs (threads) | — |
-| 1 ms timer lateness, p50, io_uring loop (lower is better) | **8 µs** | 62 µs (threads) | 399 µs |
+| foreign thread → fiber wake, p50 (lower is better) | **10 µs** | 14 µs (threads) | — |
+| 1 ms timer lateness, p50, io_uring loop (lower is better) | **7 µs** | 61 µs (threads) | 379 µs |
 
-The short story: stackweave runs message-passing workloads 3–15× faster than
-any Python event loop, scales CPU-bound pipelines across cores where they
-can't, out-yields Go, and has the tightest wakes and timers here. It matches Go
-on a 4-hub HTTP API, but Go is still 1.1–3.4× ahead on channel hand-offs and
-far ahead on spawn and on timer-heavy fan-out (the gateway and crawler rows,
-where the event loops also win). The honest gaps are memory -- a parked fiber
-carries a C stack and a thread state, ~10× a goroutine -- and spawn / sleep
-cost at 10k+ fibers. Every row and caveat:
-**[latest comparison](benchmark/bench/results/compare/20261009-070019-linux-c32/summary.md)**.
+The short story: stackweave runs message-passing workloads 2–11× faster than
+the fastest Python event loop, scales CPU-bound pipelines across cores where
+they can't, out-yields Go, and has the tightest wakes and timers here. It
+matches Go on a 4-hub HTTP API, but Go is still 1.1–3.5× ahead on channel
+hand-offs and far ahead on spawn and on timer-heavy fan-out (the gateway and
+crawler rows, where the event loops also win). The honest gaps are memory -- a
+parked fiber carries a C stack and a thread state, ~10× a goroutine -- and
+spawn / sleep cost at 10k+ fibers. Every row and caveat:
+**[latest comparison](benchmark/bench/results/compare/20261012-192447-linux-c32/summary.md)**.
 
 ```python
 stackweave.optimize("throughput")   # stackweave.fiber -> max spawn rate (fiber_fast)
