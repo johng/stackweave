@@ -32,9 +32,8 @@ Crash-prone cases run in a SUBPROCESS so a SIGSEGV is contained and observed as
 a negative returncode; hang-prone cases use hang_guard / finite deadlock budgets;
 slow-return cases use assert_faster_than to prove cooperative overlap held.
 
-Known gaps are known_gaps xfails that assert the correct behaviour: the bulk
-fiber_n path (GON_BULK_GAP) and the seeded controlled barrier
-(SEEDED_MN_TODO).  Every other test passes.
+The one known gap is the seeded controlled barrier, a SEEDED_MN_TODO xfail
+that asserts the correct behaviour.  Every other test passes.
 """
 import errno
 import sys
@@ -45,7 +44,7 @@ import stackweave
 import stackweave_c as rc
 
 from adv_util import hang_guard, assert_faster_than, raw_thread, run_python
-from known_gaps import GON_BULK_GAP, SEEDED_MN_TODO
+from known_gaps import SEEDED_MN_TODO
 
 
 # --------------------------------------------------------------------------
@@ -58,11 +57,8 @@ def _run_script(script, env_extra=None, timeout=60):
     return run_python(script, timeout=timeout, env=env)
 
 
-# fiber_n's bulk-arena path (STACKWEAVE_GON_BULK=1) is a known migration gap: the
-# bulk builder allocates no per-g tstate, so GON_BULK is ignored and fiber_n
-# always loops (tests/test_spawn_bulk_lifecycle.py states it).  Tests that need
-# the bulk path are GON_BULK_GAP xfails (tests/known_gaps.py) and prove the
-# path ran via STACKWEAVE_GON_TIMING's "[GON_TIMING]" line.
+# Tests of fiber_n's bulk-arena path (STACKWEAVE_GON_BULK=1) prove the path ran
+# via STACKWEAVE_GON_TIMING's "[GON_TIMING]" line, one per batch built.
 
 
 def _assert_no_crash(p, label):
@@ -1230,7 +1226,7 @@ def test_mn_spawn_g_fault_under_fiber_n_bulk_no_crash():
     # corrupt the shared arena (which would crash other hubs).  (With
     # always:12 the fault already fails mn_fiber(main), so fiber_n is never
     # reached -- this asserts GON_BULK=1 plus a spawn fault stays clean, not
-    # the bulk path itself; that is a known migration gap, see GON_BULK_GAP.)
+    # the bulk path itself; test_spawn_bulk_lifecycle.py drives that.)
     script = r'''
 import sys
 import stackweave_c as rc
@@ -1367,7 +1363,6 @@ def test_fiber_n_non_int_n_raises_typeerror():
         rc.mn_fini()
 
 
-@GON_BULK_GAP
 def test_fiber_n_bulk_path_indexed_integrity():
     # STACKWEAVE_GON_BULK=1 is the arena fast-path -- a different spawn path than
     # the default per-g fiber_n.  Every index must run exactly once (set-equality
@@ -1715,7 +1710,7 @@ stackweave.run(8, main)
 '''
 
 
-@pytest.mark.parametrize("bulk", ["0", pytest.param("1", marks=GON_BULK_GAP)])
+@pytest.mark.parametrize("bulk", ["0", "1"])
 def test_large_fiber_n_set_equality_at_scale(bulk):
     # Run the 20k-index fiber_n on BOTH the per-g path (GON_BULK=0) and the bulk
     # arena path (GON_BULK=1); every index must run exactly once on both.

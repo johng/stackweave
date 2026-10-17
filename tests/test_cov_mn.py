@@ -2,7 +2,7 @@
 and its mn_sched_*.c.inc fragments).
 
 Some of the M:N scheduler's paths sit behind env knobs the normal corpus never
-sets: fiber_n bulk spawn (ignored under migration, so this drives the guard), the
+sets: STACKWEAVE_GON_BULK (set, though the workload calls no fiber_n), the
 sysmon stalled-hub detector, a 1 ms stack-park idle sweep, the io_uring-as-loop
 backend, a short deadlock-census interval, a tight ready-ring starvation bound,
 and the migration debug oracle.  Each `test_mn_scheduler_mode[...]` runs the
@@ -33,8 +33,8 @@ _DEVNULL = os.open(os.devnull, os.O_WRONLY)
 # (label, extra-env) -- each drives a distinct gated path through mn_sched.c.
 MODES = [
     ("default",      {}),
-    # GON_BULK is ignored under migration (the bulk builder allocates no per-g
-    # tstate): this mode exercises the guard -- the workload must still finish.
+    # The workload calls no fiber_n, so this mode never builds a bulk batch;
+    # tests/test_spawn_bulk_lifecycle.py drives the bulk builder.
     ("gon_bulk",     {"STACKWEAVE_GON_BULK": "1"}),
     ("sysmon",      {"STACKWEAVE_SYSMON": "1", "STACKWEAVE_SYSMON_QUIET": "1",
                       "STACKWEAVE_SYSMON_MS": "8", "STACKWEAVE_COV_CPU": "40000000"}),

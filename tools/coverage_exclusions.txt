@@ -22,18 +22,14 @@
 # init_fini 742-744, or the io_uring wake CAS path under-counted by a contended
 # measure -- are deliberately NOT listed here.)
 #
-# The fiber_n bulk-arena spawn path (STACKWEAVE_GON_BULK) is compiled but
-# unreachable under migration -- runloom_fibern_bulk_enabled ignores the flag, a
-# known gap with strict xfails (tests/test_spawn_bulk_lifecycle.py).  Its lines
-# are deliberately NOT excluded: the uncovered bulk path should show as a gap.
+# The fiber_n bulk-arena spawn path (STACKWEAVE_GON_BULK) runs under migration
+# (tests/test_spawn_bulk_lifecycle.py); its lines are not excluded.
 #
 # STALE LINE RANGES: the migration-only simplification removed the per-hub-tstate
 # M:N path and most feature toggles.  Entries for deleted code (including the old
 # MIGRATION category -- the per-g-tstate path is now the only M:N path, so it is
 # coverable) were dropped, but the ranges of the entries that remain were NOT
-# re-anchored in the fragments those removals edited.  The bulk fiber_n spawn
-# path is kept but ignored in every M:N run (broken under migration), so its
-# lines are not coverable until it is made migration-safe.  The io_uring loop
+# re-anchored in the fragments those removals edited.  The io_uring loop
 # backend runs under migration since 2026-09-28; its io_uring_l_loop.c.inc
 # entries were re-anchored then (by source line, not re-measured).  Re-measure with
 # tools/cov_measure.sh and re-anchor before trusting a per-TU number.

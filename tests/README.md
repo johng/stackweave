@@ -56,7 +56,7 @@ Subdirectories are not collected by `run_isolated.py` unless named with `--suite
 
 ## Conventions
 
-- **Known gaps are xfail, never skip.** Mark one with a `known_gaps.py` helper: `KNOWN_GAP`, `MIGRATION_GAP`, `INTERMITTENT`, `SEEDED_MN_TODO` or `GON_BULK_GAP`. Never use a bare `pytest.mark.xfail`; conftest rejects it. Each one asserts the correct behaviour and is strict, so a closed gap XPASSes and fails the run until the marker comes off. `pytest -m known_gap` lists them.
+- **Known gaps are xfail, never skip.** Mark one with a `known_gaps.py` helper: `KNOWN_GAP`, `MIGRATION_GAP`, `INTERMITTENT` or `SEEDED_MN_TODO`. Never use a bare `pytest.mark.xfail`; conftest rejects it. Each one asserts the correct behaviour and is strict, so a closed gap XPASSes and fails the run until the marker comes off. `pytest -m known_gap` lists them.
 - **A skip means the platform lacks something** (Linux-only, epoll, io_uring, strace, x86-64, a tool that isn't built, an optional package) or the test is opt-in by env var. It never stands in for a bug.
 - **A child interpreter goes through `run_python()`** (or `child_env()` when the test needs Popen, bytes or another cwd). The child gets the GIL off and `src/` on PYTHONPATH. A hang fails the test with the child's output; it is never a skip.
 - **A test that crashes or hangs on purpose** runs in a child interpreter, so the crash or hang stays contained.

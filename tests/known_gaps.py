@@ -18,8 +18,6 @@ lists them all.
   SEEDED_MN_TODO          drives the seeded M:N scheduler, which is disabled
                           until it is re-implemented: mn_init refuses a seeded
                           run.
-  GON_BULK_GAP            needs STACKWEAVE_GON_BULK's bulk spawn, which is
-                          ignored under migration.
   INTERMITTENT(reason)    an open failure that does not happen on every run.
                           It is not strict, because an XPASS does not mean the
                           gap has closed.
@@ -58,8 +56,3 @@ SEEDED_MN_TODO = _xfail(
     "the seeded baton does not order (TODO(migration) in "
     "src/runloom_c/mn_sched_hub_resume_preempt.c.inc)",
     True, None)
-
-GON_BULK_GAP = MIGRATION_GAP(
-    "STACKWEAVE_GON_BULK is ignored: the bulk fiber_n builder allocates no "
-    "per-g thread state, so hub_main would skip every bulk fiber as dead "
-    "(tests/test_spawn_bulk_lifecycle.py)")

@@ -448,12 +448,6 @@ void runloom_mn_fini(void)
     }
     /* controlled-mode baton: all hubs joined, nobody can acquire/release now */
     runloom_mn_ctrl_fini();
-    /* Free the retired bulk-arena g-struct arenas.  Every hub thread is joined,
-     * so no wake_g can be in flight and no stale wake can read a garena g -- the
-     * grace period that makes returning these structs to the OS sound.  The
-     * helper is defined with the bulk-arena path below (after the batch struct).
-     * See runloom_garena_quar / runloom_fibern_batch_finish_one. */
-    runloom_garena_quar_drain();
     /* Drain leftover gs BEFORE tearing down per-hub tstates: g->snap
      * may reference per-tstate state (exc_info, datastack chunks) that
      * pystate_snap_clear needs to release while the tstate is still
@@ -575,6 +569,14 @@ void runloom_mn_fini(void)
      * into a chunk we are about to reclaim -- the GC frames anchor is safe across
      * teardown (any post-run gc.collect walks an empty/clean registry). */
     runloom_g_slab_reclaim();
+    /* Free the retired bulk-arena g-struct arenas, on the same grace period as
+     * the slab just above: every hub is joined, so no wake_g is in flight, and
+     * the blockpool has quiesced, so no late wake_safe writes a garena g.  It
+     * runs after the leftover drains and timer releases, which can drop a bulk
+     * batch's last g and quarantine it; drained before them, such a batch was
+     * never freed.  The drain unlinks each arena from the fiber registry first.
+     * See runloom_garena_quar / runloom_fibern_batch_finish_one. */
+    runloom_garena_quar_drain();
     /* Free the datastack-chunk graveyard the hubs spliced their TLS chunk caches
      * into at exit.  Every hub is joined, so no foreign sys._current_frames reader
      * can still be inside a chunk's grace window -- returning them to the OS is
@@ -896,40 +898,24 @@ PyObject *runloom_mn_fiber_pinned(PyObject *callable, size_t stack_size,
  * Python error set if a spawn fails partway (the already-created fibers are
  * live and will run; the caller decides whether to treat a partial as fatal).
  * Must be called from inside the M:N runtime (root or a fiber). */
-/* Read RUNLOOM_GON_BULK once: 1 = fiber_n uses the bulk-arena fast path.
+/* Read STACKWEAVE_GON_BULK once: 1 = fiber_n uses the bulk-arena fast path.
  *
- * BROKEN UNDER MIGRATION, so IGNORED (known gap, strict xfail
- * tests/test_spawn_bulk_lifecycle.py::test_gon_bulk_takes_bulk_path_under_migration):
- * the bulk builder memcpy's a template g per arena slot from parallel builder
- * threads that hold no PyThreadState, so it cannot call PyThreadState_New --
- * and every M:N fiber needs its own tstate before hub_main will run it (a g
- * with tstate == NULL is skipped as dead, so a bulk batch never ran; with this
- * guard lifted, fiber_n(fn, 2000) on 4 hubs builds the batch and mn_run never
- * returns -- the census reports a STALL with 2000 live fibers and an empty
- * fiber dump, since bulk gs are not in the registry either).  So fiber_n
- * always takes the per-fiber loop and says so once on stderr.  The bulk path
- * below stays
- * compiled for the day the batch grows a per-g tstate pass; drop the guard
- * then and the xfail turns into an XPASS.  That fix must also register each
- * bulk g with runloom_greg_link: the builder skips the fiber registry, and the
- * parked-frame GC anchor (module_gcframes.c.inc) sees only registered fibers. */
+ * Under migration every M:N fiber needs its own PyThreadState (hub_main skips a
+ * g with tstate == NULL as dead) and a fiber-registry link (introspection, the
+ * crash dump and the parked-frame GC anchor walk only registered gs).  The
+ * builder's parallel threads hold no tstate, so runloom_mn_fiber_n_bulk makes
+ * each g's tstate and links the whole arena on the calling thread, after the
+ * build passes and before it publishes the batch.  Guards:
+ * tests/test_spawn_bulk_lifecycle.py (a "[GON_TIMING]" line per batch proves
+ * the bulk path ran) and test_bulk_fibers_are_registered_while_parked. */
 static int runloom_fibern_bulk_enabled(void)
 {
     static int v = -1;
-    static int noted = 0;
     int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
     if (cur < 0) {
         const char *e = getenv("STACKWEAVE_GON_BULK");
         cur = (e != NULL && *e != '0' && *e != '\0') ? 1 : 0;
         __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
-    }
-    if (cur) {
-        if (__atomic_exchange_n(&noted, 1, __ATOMIC_RELAXED) == 0)
-            fprintf(stderr, "[stackweave] STACKWEAVE_GON_BULK ignored: the bulk "
-                            "fiber_n builder allocates no per-g tstate, so it "
-                            "does not work under migration; fiber_n spawns "
-                            "one fiber at a time\n");
-        return 0;
     }
     return cur;
 }
@@ -987,6 +973,10 @@ void runloom_garena_quar_drain(void)
     runloom_garena_quar = NULL;
     while (q != NULL) {
         struct runloom_fibern_batch *next = q->quar_next;
+        /* Out of the fiber registry before the structs go back to the OS:
+         * registry walkers (fibers(), the crash dump, the GC anchor) would
+         * otherwise follow links into freed memory. */
+        runloom_greg_unlink_arena(q->garena, sizeof(runloom_g_t), q->nslots);
         free(q->garena);
         free(q);
         q = next;
@@ -1109,7 +1099,7 @@ static int runloom_mn_fiber_n_bulk(PyObject *callable, long n, size_t stack_size
     long i;
     long long goid_base;
     int tmg = runloom_create_timing_on();
-    long long t0 = 0, t1 = 0, t2 = 0, t3 = 0;
+    long long t0 = 0, t1 = 0, t2 = 0, tts = 0, t3 = 0;
     struct runloom_fibern_batch *batch = NULL;       /* arena lifecycle, real path only */
     size_t start_slot = 0;                         /* this batch's stack-arena block start */
     int    batch_node = 0;                         /* NUMA node the block was carved on */
@@ -1236,6 +1226,39 @@ static int runloom_mn_fiber_n_bulk(PyObject *callable, long n, size_t stack_size
         if (nofields || nosub) { free(garena); free(carena); free(batch); return 0; }
     }
 
+    /* Per-g thread states, made here on the calling thread as
+     * runloom_mn_fiber_core makes a single spawn's: the builder threads above
+     * hold no tstate and cannot make one, and hub_main skips a g without one
+     * as dead.  Nothing outside this function has seen a bulk g yet, so a
+     * failure unwinds the whole batch. */
+    if (runloom_mn_interp != NULL) {
+        for (i = 0; i < n; i++) {
+            runloom_g_t *g = (runloom_g_t *)(garena + (size_t)i * gsz);
+            /* STACKWEAVE_FAULT_SPAWN_TSTATE (test-only; nth:N fails the Nth
+             * tstate of a batch) drives the unwind below. */
+            g->tstate = RUNLOOM_SPAWN_FINJ(RUNLOOM_FAULT_SPAWN_TSTATE)
+                            ? NULL : PyThreadState_New(runloom_mn_interp);
+            if (g->tstate == NULL) {
+                while (--i >= 0) {
+                    runloom_g_t *dg = (runloom_g_t *)(garena + (size_t)i * gsz);
+                    runloom_iframe_clear_fiber_tstate(dg->tstate);
+                    PyThreadState_Delete(dg->tstate);
+                    dg->tstate = NULL;
+                }
+                free(carena);
+                runloom_coro_arena_release(start_slot, n, hub_stack, batch_node);
+                free(garena);
+                free(batch);
+                PyErr_NoMemory();
+                return -1;
+            }
+        }
+    }
+    /* Register every g before any hub can run it, as the slab's cold path does
+     * for a single spawn; runloom_garena_quar_drain unlinks the arena. */
+    runloom_greg_link_arena(garena, gsz, n);
+    if (tmg) tts = runloom_create_now_ns();  /* pass T (tstates + registry) done */
+
     /* Hand the arenas + reserved stack block to the batch; arm its live count.
      * From here, each fiber's final decref calls runloom_fibern_batch_finish_one,
      * and the Nth reclaims all three allocations. */
@@ -1258,8 +1281,8 @@ static int runloom_mn_fiber_n_bulk(PyObject *callable, long n, size_t stack_size
     if (tmg) {
         t3 = runloom_create_now_ns();            /* pass C (Py_INCREF loop) done */
         fprintf(stderr, "[GON_TIMING] n=%ld  A(g-template)=%.3fms  B(coro_bulk)=%.3fms  "
-                "C(incref)=%.3fms  create=%.3fms (%.0f/s)\n", n,
-                (t1 - t0) / 1e6, (t2 - t1) / 1e6, (t3 - t2) / 1e6,
+                "T(tstate)=%.3fms  C(incref)=%.3fms  create=%.3fms (%.0f/s)\n", n,
+                (t1 - t0) / 1e6, (t2 - t1) / 1e6, (tts - t2) / 1e6, (t3 - tts) / 1e6,
                 (t3 - t0) / 1e6, n / ((t3 - t0) / 1e9));
     }
 

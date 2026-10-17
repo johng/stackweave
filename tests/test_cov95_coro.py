@@ -30,8 +30,6 @@ Regions driven (uncovered coro.c line -> how):
             STACKWEAVE_GON_FRESH=1 + STACKWEAVE_STACK_ARENA=1: bulk_init skips the
             per-g asm_make_ctx and marks each coro `fresh`; the first
             runloom_coro_resume on the owning hub materializes the frame.
-            UNREACHABLE under migration (GON_BULK is ignored: the bulk builder
-            allocates no per-g tstate), so that test is a strict xfail.
   L181,1507,1510  invariant sanitizer -> STACKWEAVE_DEBUG_DIAG=invariants arms
             RUNLOOM_DBG_INVARIANTS, so coro_resume sets/clears c->dbg_running
             (1507/1510) and assert_idle reads it on destroy (181).  Oracle: a
@@ -69,7 +67,6 @@ import pytest
 import stackweave_c as rc
 
 from adv_util import needs_rlimit_nproc_thread_cap, run_python
-from known_gaps import GON_BULK_GAP
 
 # coro.c's POSIX stack pool / arena / madvise / grow all live behind
 # RUNLOOM_HAVE_FCONTEXT|UCONTEXT (the guard-page backends).
@@ -158,7 +155,6 @@ def test_stack_arena_carve_and_release_churn():
 # --------------------------------------------------------------------------
 # L1500-1502 : fiber_n fresh-flag DEFERRED materialize at first resume.
 # --------------------------------------------------------------------------
-@GON_BULK_GAP
 def test_fiber_n_fresh_flag_deferred_materialize():
     """STACKWEAVE_GON_BULK=1 takes fiber_n's bulk-arena fast path; STACKWEAVE_GON_FRESH=1
     makes runloom_coro_bulk_init SKIP the per-g asm_make_ctx (the scattered

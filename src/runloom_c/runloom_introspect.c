@@ -206,13 +206,11 @@ void runloom_greg_link(runloom_g_t *g)
     RUNLOOM_RUNLOCK(&runloom_greg_lock, RUNLOOM_RANK_GREG);
 }
 
-void runloom_greg_unlink(runloom_g_t *g)
+/* Unlink g; the caller holds runloom_greg_lock.  Defensive: only unlink a g
+ * that is actually linked.  A g whose reg_next/reg_prev are both NULL AND is
+ * not the head was never linked (e.g. allocated before init); skip it. */
+static void runloom_greg_unlink_locked(runloom_g_t *g)
 {
-    if (g == NULL || !runloom_greg_inited) return;
-    RUNLOOM_RLOCK(&runloom_greg_lock, RUNLOOM_RANK_GREG);
-    /* Defensive: only unlink a g that is actually linked.  A g whose
-     * reg_next/reg_prev are both NULL AND is not the head was never
-     * linked (e.g. allocated before init); skip it. */
     if (runloom_greg_head == g || g->reg_prev != NULL || g->reg_next != NULL) {
         if (g->reg_prev != NULL) g->reg_prev->reg_next = g->reg_next;
         else if (runloom_greg_head == g) runloom_greg_head = g->reg_next;
@@ -221,6 +219,44 @@ void runloom_greg_unlink(runloom_g_t *g)
         g->reg_next = NULL;
         __atomic_sub_fetch(&runloom_greg_total, 1L, __ATOMIC_RELAXED);
     }
+}
+
+void runloom_greg_unlink(runloom_g_t *g)
+{
+    if (g == NULL || !runloom_greg_inited) return;
+    RUNLOOM_RLOCK(&runloom_greg_lock, RUNLOOM_RANK_GREG);
+    runloom_greg_unlink_locked(g);
+    RUNLOOM_RUNLOCK(&runloom_greg_lock, RUNLOOM_RANK_GREG);
+}
+
+/* fiber_n's bulk batch: link / unlink the n g structs of one contiguous arena
+ * (stride bytes apart) under ONE hold of the registry lock.  A bulk g is linked
+ * before it is published and stays linked until mn_fini frees its arena, the
+ * same lifetime a slab g's link has (runloom_g_slab_alloc's cold path). */
+void runloom_greg_link_arena(void *base, size_t stride, long n)
+{
+    long i;
+    if (base == NULL || n <= 0 || !runloom_greg_inited) return;
+    RUNLOOM_RLOCK(&runloom_greg_lock, RUNLOOM_RANK_GREG);
+    for (i = 0; i < n; i++) {
+        runloom_g_t *g = (runloom_g_t *)((char *)base + (size_t)i * stride);
+        g->reg_prev = NULL;
+        g->reg_next = runloom_greg_head;
+        if (runloom_greg_head != NULL) runloom_greg_head->reg_prev = g;
+        runloom_greg_head = g;
+    }
+    __atomic_add_fetch(&runloom_greg_total, n, __ATOMIC_RELAXED);
+    RUNLOOM_RUNLOCK(&runloom_greg_lock, RUNLOOM_RANK_GREG);
+}
+
+void runloom_greg_unlink_arena(void *base, size_t stride, long n)
+{
+    long i;
+    if (base == NULL || n <= 0 || !runloom_greg_inited) return;
+    RUNLOOM_RLOCK(&runloom_greg_lock, RUNLOOM_RANK_GREG);
+    for (i = 0; i < n; i++)
+        runloom_greg_unlink_locked(
+            (runloom_g_t *)((char *)base + (size_t)i * stride));
     RUNLOOM_RUNLOCK(&runloom_greg_lock, RUNLOOM_RANK_GREG);
 }
 

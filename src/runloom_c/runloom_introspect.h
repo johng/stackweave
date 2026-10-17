@@ -70,6 +70,8 @@ void runloom_introspect_reset_after_fork(void);
  * from the hot reuse path. */
 void runloom_greg_link(runloom_g_t *g);
 void runloom_greg_unlink(runloom_g_t *g);
+void runloom_greg_link_arena(void *base, size_t stride, long n);
+void runloom_greg_unlink_arena(void *base, size_t stride, long n);
 
 /* STOP-THE-WORLD-ONLY, lock-free read of the registry head.  Used only by the
  * GC frames anchor's tp_traverse (module_gcframes.c.inc), which runs under STW

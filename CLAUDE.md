@@ -7,17 +7,16 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   vars that chose the old per-hub-tstate scheduler or only turned a default off
   are gone (numeric knobs and debug/fault/sim hooks remain). A few opt-in
   features keep their env var: `STACKWEAVE_TCPCONN_IOURING`,
-  `STACKWEAVE_IOURING_LOOP` (+ `IOURING_MS`) and `STACKWEAVE_STACK_ARENA*` work
-  under migration; `STACKWEAVE_GON_BULK` (+ `GON_*`) is **broken under
-  migration** and ignored in every M:N run with a one-time stderr note.
+  `STACKWEAVE_IOURING_LOOP` (+ `IOURING_MS`), `STACKWEAVE_STACK_ARENA*` and
+  `STACKWEAVE_GON_BULK` (+ `GON_*`) all work under migration.
 - **Broken features are kept, not deleted.** A feature that does not work under
   migration keeps its code and env var, is guarded off with a one-time stderr
-  note, and has strict xfails that assert it actually ran (`[GON_TIMING]` for
-  bulk spawn), after the test's own correctness checks. Known gaps are xfail,
-  never skip, and every one is marked at its test with a `tests/known_gaps.py`
-  helper (`KNOWN_GAP`, `MIGRATION_GAP`, `INTERMITTENT`, `SEEDED_MN_TODO`,
-  `GON_BULK_GAP`; conftest rejects a bare xfail, and `pytest -m known_gap`
-  lists them). Fixing one turns its xfails into XPASSes;
+  note, and has strict xfails that assert it actually ran (the way a
+  `[GON_TIMING]` line proves bulk spawn ran), after the test's own correctness
+  checks. Known gaps are xfail, never skip, and every one is marked at its test
+  with a `tests/known_gaps.py` helper (`KNOWN_GAP`, `MIGRATION_GAP`,
+  `INTERMITTENT`, `SEEDED_MN_TODO`; conftest rejects a bare xfail, and
+  `pytest -m known_gap` lists them). Fixing one turns its xfails into XPASSes;
   then drop the xfails and keep a positive it-ran check (the loop backend's
   `assert_iouring_loop_ran` in `tests/adv_util.py` reads the hub ring-wait
   count).
