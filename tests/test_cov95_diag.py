@@ -94,7 +94,7 @@ import pytest
 import stackweave_c as rc
 
 from adv_util import hang_guard, run_python
-from known_gaps import KNOWN_GAP, SEEDED_MN_TODO
+from known_gaps import SEEDED_MN_TODO
 
 _TIMEOUT = 220
 
@@ -235,10 +235,12 @@ sys.stdout.write("RING_OPS_OK\n")
 """
 
 
-@KNOWN_GAP("nothing emits RUNLOOM_EVT_G_POP: the hub resume path's emit went "
-           "away with the per-hub-tstate scheduler in #23 (4ab7cc3b), so the "
-           "dump never carries G_POP")
 def test_ring_dump_covers_every_reachable_op_name_arm():
+    """G_POP is emitted by the hub resume path (mn_sched_hub_main.c.inc), once
+    a hub has claimed a g and is about to resume it.  The emit went away with
+    the per-hub-tstate scheduler in #23 (4ab7cc3b) and the dump carried no
+    G_POP until it was put back at the claim site; the child's EXPECT set is
+    the positive check that it ran."""
     env = _child_env(STACKWEAVE_DEBUG_DIAG="ring")
     p = _run_child(_RING_OPS_CHILD, env)
     assert p.returncode == 0, "ring-ops child rc=%d\n%s" % (p.returncode, p.stderr[-2000:])

@@ -72,7 +72,7 @@ typedef enum runloom_evt_op {
     RUNLOOM_EVT_PARKER_FORCE      = 6,   /* netpoll_force_unlink_g_parker */
     RUNLOOM_EVT_G_TRANSITION      = 7,   /* aux = (from << 8) | to */
     RUNLOOM_EVT_G_SUBMIT          = 8,
-    RUNLOOM_EVT_G_POP             = 9,
+    RUNLOOM_EVT_G_POP             = 9,   /* p1=g p2=hub aux=from_runq */
     RUNLOOM_EVT_G_DECREF          = 10,
     RUNLOOM_EVT_G_COMPLETE        = 11,
     RUNLOOM_EVT_CHAN_PARK         = 12,
