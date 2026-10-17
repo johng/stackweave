@@ -2,10 +2,12 @@
 from collections.abc import Callable
 from typing import Any, Literal, overload
 
-# ---- Coroutine handle (raw, no scheduler) -----------------------------
+# ---- Coroutine handle (raw, no scheduler; private) ---------------------
 
-class Coro:
-    """A raw stackful coroutine.  Most users want fiber()/run() instead.
+class _Coro:
+    """A raw stackful coroutine, resumed by hand.  Private: nothing in
+    stackweave uses it and it has no compatibility promise; it is kept for the
+    tests of the stack switch.  Use fiber()/run() instead.
 
     Resumed from an M:N fiber, the body runs on that fiber's stack but is not
     itself a fiber: the hub is hidden from it, so current_g() is None,

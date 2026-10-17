@@ -53,7 +53,7 @@ def op_chan_construct():
 
 
 def op_coro_construct():
-    c = stackweave_c.Coro(lambda: None, 0)
+    c = stackweave_c._Coro(lambda: None, 0)
     del c
 
 

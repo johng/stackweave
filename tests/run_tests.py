@@ -6,7 +6,7 @@ only swaps recursion counters (the C scheduler in `stackweave_c.fiber`
 does the full Phase B snap).  Multi-fiber tests therefore go
 through `stackweave_c.*` directly so the production path is exercised.
 
-The two single-coro Coro tests still use `stackweave_c.Coro` + the raw
+The two single-coro Coro tests still use `stackweave_c._Coro` + the raw
 `stackweave_c.yield_` since those primitives are the building blocks
 under both schedulers.
 """
@@ -41,7 +41,7 @@ def test_yield_resume_chain():
         stackweave_c.yield_()
         log.append("c")
         return "done"
-    c = stackweave_c.Coro(child)
+    c = stackweave_c._Coro(child)
     c.resume(); eq(log, ["a"], "after resume 1")
     c.resume(); eq(log, ["a", "b"], "after resume 2")
     c.resume(); eq(log, ["a", "b", "c"], "after resume 3")
@@ -53,7 +53,7 @@ def test_yield_resume_chain():
 def test_exception_propagates():
     def child():
         raise ValueError("boom")
-    c = stackweave_c.Coro(child)
+    c = stackweave_c._Coro(child)
     try:
         c.resume()
     except ValueError as e:

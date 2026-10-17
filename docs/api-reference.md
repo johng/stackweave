@@ -326,11 +326,6 @@ Goroutine handle.  Attributes:
 - `stack()` -- a small state dict, `{'state': ..., 'has_snap': bool}`;
   for the Python frames use `fiber_stack(id)`.
 
-#### `Coro`
-
-Lower-level coroutine handle.  Most users won't construct these
-directly; `G` wraps a `Coro` plus scheduler metadata.
-
 ---
 
 ## `stackweave`

@@ -75,7 +75,7 @@ CASES = {
     # critical-section chain), not what this tests.
     "Coro, 1 MB": PRELUDE + """
 for j in range(PADS):
-    c = stackweave_c.Coro(lambda j=j: down(j, stackweave_c.yield_), stack_size=1 << 20)
+    c = stackweave_c._Coro(lambda j=j: down(j, stackweave_c.yield_), stack_size=1 << 20)
     while not c.done:
         c.resume()
 report()

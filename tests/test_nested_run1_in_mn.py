@@ -188,7 +188,7 @@ def test_a_long_coro_body_in_an_mn_fiber_is_not_preempted_out_of():
                 while time.monotonic() < end:
                     n += 1
                 return n
-            c = rc.Coro(body)
+            c = rc._Coro(body)
             c.resume()
             res["done"] = c.done
             rc.sched_sleep(0.01)
@@ -214,7 +214,7 @@ def test_a_coro_body_that_calls_python_is_not_preempted_out_of():
                 while time.monotonic() < end:
                     n = step(n)
                 return n
-            c = rc.Coro(body)
+            c = rc._Coro(body)
             c.resume()
             res["done"] = c.done
         under_mn(outer, busy_fibers=8)
@@ -249,10 +249,10 @@ def test_spawns_stay_in_a_nested_run1_and_go_to_the_hubs_outside_it():
             res["outside"] = rc.mn_spawns_to_hubs()
             def main():
                 res["inside"] = rc.mn_spawns_to_hubs()
-                c = rc.Coro(lambda: res.setdefault("coro in run(1)", rc.mn_spawns_to_hubs()))
+                c = rc._Coro(lambda: res.setdefault("coro in run(1)", rc.mn_spawns_to_hubs()))
                 c.resume()
             stackweave.run(1, main)
-            c = rc.Coro(lambda: res.setdefault("coro", rc.mn_spawns_to_hubs()))
+            c = rc._Coro(lambda: res.setdefault("coro", rc.mn_spawns_to_hubs()))
             c.resume()
             res["after"] = rc.mn_spawns_to_hubs()
         under_mn(outer, busy_fibers=0)

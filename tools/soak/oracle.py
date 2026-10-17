@@ -104,7 +104,7 @@ RATCHETS = {"g_structs_total", "coro_stack_live", "coro_depot_pooled",
 # test (a soak WANTS these climbing; they confirm work is happening).
 ODOMETERS = {
     "progress", "mn_completed_total", "stale_arm_heals", "completed",
-    "stack_completed",
+    "stack_completed", "gc_coros_walked",
 }
 
 # Constant/context columns with no leak meaning.

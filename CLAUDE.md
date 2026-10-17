@@ -149,7 +149,7 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   state first attaches), and a freed per-g state has its trashcan list
   destroyed first (`runloom_iframe_drain_trashcan`) -- an undeallocated
   memoryview once pinned its array there; (2) the single-thread drain and
-  `Coro.resume` run fibers on the CALLER's own state, so they save its limits
+  `_Coro.resume` run fibers on the CALLER's own state, so they save its limits
   before each resume and restore them as soon as it returns
   (`runloom_drain_resume`, `RunloomTstateSnapshot`) -- unrestored, `run(1)`'s
   caller kept the last fiber's limits and a deep `repr()` segfaulted. New code
@@ -173,7 +173,7 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   `tests/test_cross_hub_migration.py::test_cross_hub_drops_drain_before_the_hub_heads_the_bucket`
   (`stats()["brc_release_merges_hub_first"]` must stay 0).
 - **A run(1) drain or Coro nested on a hub's fiber is its own world.** The
-  single-thread drain (`run(1)`, stackweave's asyncio loop) and `Coro.resume`
+  single-thread drain (`run(1)`, stackweave's asyncio loop) and `_Coro.resume`
   run other fibers on the calling fiber's stack and thread state.
   `runloom_mn_nested_enter`/`_exit` bracket both, and three things hold inside:
   (1) **The hub is hidden.** `runloom_tls_hub`/`runloom_tls_current_g` still name
@@ -268,7 +268,19 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   spawn path that bypasses `runloom_greg_link` reopens the blind spot; (2) the
   single-thread drain's caller frames must stay registered via the base-snap
   registry (`runloom_base_snap_register`, one node per drain, paired at the single
-  exit); (3) the snap seam ordering L1–L5 (frozen in `runloom_sched_pystate.c.inc`
+  exit), and so must a parked `stackweave_c._Coro`'s saved state (its own node,
+  linked at its first yield, unlinked when it finishes or is dropped, visited
+  only while `parked`). A Coro's frames link to whoever resumes it, as a
+  generator's do: each yield cuts its bottom frame's `previous` off the
+  resumer's frame and each resume re-links it (`runloom_iframe_chain_cut/_link`),
+  so a parked chain holds the Coro's frames alone and the anchor never reaches a
+  frame twice -- a twice-visited counted ref is subtracted twice. The cut walks
+  the Coro's chain at every yield, except for a Python-function callable
+  (`bottom_fixed`), whose one eval call spans its life, so the bottom frame
+  found at its first yield is reused; a callable that can return to C between
+  yields (a C callable, `partial`) must keep walking, or a cut lands on a dead
+  frame. Guard:
+  `tests/test_coro_frames.py` (`stats()["gc_coros_walked"]`); (3) the snap seam ordering L1–L5 (frozen in `runloom_sched_pystate.c.inc`
   comments — `valid=1` last & safepoint-free on snap; `current_frame`/`c_stack_refs`
   restored before `valid=0` on load; `valid=0` last on snap_clear) must not be
   reordered; (4) the anchor is never immortal and its traverse never allocates;

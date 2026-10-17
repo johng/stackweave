@@ -26,7 +26,7 @@ class TestCoroPrimitive(unittest.TestCase):
             log.append("c")
             return "done"
 
-        c = stackweave_c.Coro(child)
+        c = stackweave_c._Coro(child)
         self.assertFalse(c.done)
         c.resume(); self.assertEqual(log, ["a"]); self.assertFalse(c.done)
         c.resume(); self.assertEqual(log, ["a", "b"]); self.assertFalse(c.done)
@@ -36,7 +36,7 @@ class TestCoroPrimitive(unittest.TestCase):
     def test_exception_propagates_on_resume(self):
         def child():
             raise ValueError("boom")
-        c = stackweave_c.Coro(child)
+        c = stackweave_c._Coro(child)
         with self.assertRaises(ValueError):
             c.resume()
         self.assertTrue(c.done)
@@ -48,11 +48,11 @@ class TestCoroPrimitive(unittest.TestCase):
                 inner_log.append("inner-1")
                 stackweave_c.yield_()
                 inner_log.append("inner-2")
-            c = stackweave_c.Coro(inner)
+            c = stackweave_c._Coro(inner)
             c.resume(); c.resume()
             return inner_log
 
-        c = stackweave_c.Coro(outer)
+        c = stackweave_c._Coro(outer)
         c.resume()
         self.assertTrue(c.done)
         self.assertEqual(c.result, ["inner-1", "inner-2"])

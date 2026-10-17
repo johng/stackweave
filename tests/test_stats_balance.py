@@ -35,7 +35,7 @@ stackweave.monkey.patch()
 _ODOMETERS = {
     "mn_completed_total", "stale_arm_heals", "completed", "stack_completed",
     "running", "stack_calibrated", "stack_painting", "ready_capacity",
-    "stack_size_default", "hubs_live", "py_offload_workers",
+    "stack_size_default", "hubs_live", "py_offload_workers", "gc_coros_walked",
 }
 # Per-gauge slack above 0.  Pools/high-waters and the diagnostics call itself
 # allocate a little; a genuine per-iteration leak dwarfs these.
