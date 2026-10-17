@@ -1,4 +1,4 @@
-"""A stackweave_c.Coro's Python frames: their chain and the GC.
+"""A stackweave_c._Coro's Python frames: their chain and the GC.
 
   * A Coro's frames link to whoever resumes it, as a generator's do: each
     resume points its bottom frame at the resumer's frame, and each yield cuts
@@ -86,7 +86,7 @@ def second_resumer(c):
         return
     print("RESULT", c.result, flush=True)
 
-c = stackweave_c.Coro(body)
+c = stackweave_c._Coro(body)
 if FIRST_FROM_MODULE:
     c.resume()
 else:
@@ -147,14 +147,14 @@ def inner():
         Y()
     return "inner"
 
-b = stackweave_c.Coro(inner)
+b = stackweave_c._Coro(inner)
 
 def outer():
     b.resume()          # b's first resumer is a frame of Coro a ...
     Y()                 # ... which then parks
     return "outer"
 
-a = stackweave_c.Coro(outer)
+a = stackweave_c._Coro(outer)
 
 def first():
     a.resume()
@@ -190,7 +190,7 @@ import stackweave_c
 Y = stackweave_c.yield_
 
 # No Python frame of its own is live when this one yields.
-c = stackweave_c.Coro(Y)
+c = stackweave_c._Coro(Y)
 c.resume(); gc.collect(); c.resume()
 print("BARE", c.done, flush=True)
 
@@ -199,7 +199,7 @@ def gen():
     for i in range(3):
         Y()
         yield i
-c = stackweave_c.Coro(functools.partial(list, gen()))
+c = stackweave_c._Coro(functools.partial(list, gen()))
 def resumer():
     c.resume()
 while not c.done:
@@ -235,7 +235,7 @@ def outer():
 '''
 ns = {}
 exec(compile(SRC, "<parked>", "exec"), ns)
-c = stackweave_c.Coro(ns["outer"])
+c = stackweave_c._Coro(ns["outer"])
 c.resume()
 # inner() is parked: once its name is gone, its frame's deferred stackrefs are
 # the only references to the function and its code object.

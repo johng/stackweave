@@ -1,7 +1,7 @@
 /* module.c -- Python bindings for runloom_c.
  *
  * Exposes:
- *   runloom_c.Coro(callable, stack_size=131072) -> coro object
+ *   stackweave_c._Coro(callable, stack_size=131072) -> coro object
  *      .resume()         switch into the coroutine
  *      .done             True if entry returned
  *   runloom_c.yield_()   yield from inside a coroutine

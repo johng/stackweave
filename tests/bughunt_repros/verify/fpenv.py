@@ -10,12 +10,12 @@ one=float(1.0); tiny=2.0**-53; big=float(1e308)
 # (1) rounding-mode leak -> wrong arithmetic
 def child_round():
     libc.fesetround(FE_UPWARD); stackweave_c.yield_()
-c=stackweave_c.Coro(child_round); c.resume()
+c=stackweave_c._Coro(child_round); c.resume()
 print('after fiber yield 1+2**-53 =', repr(one+tiny))   # -> 1.0000000000000002 (bug)
 
 # (2) exception-mask leak -> whole-process SIGFPE crash
 def child_crash():
     libc.feenableexcept(FE_OVERFLOW); stackweave_c.yield_()
-c2=stackweave_c.Coro(child_crash); c2.resume()
+c2=stackweave_c._Coro(child_crash); c2.resume()
 print('about to overflow...'); sys.stdout.flush()
 print(big*big)   # process dies with SIGFPE here

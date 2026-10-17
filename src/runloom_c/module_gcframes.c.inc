@@ -130,7 +130,7 @@ static int runloom_gcframes_traverse(PyObject *self, visitproc visit, void *arg)
      * frame chain while fibers run (ts->current_frame then points at the fiber).
      * (M:N hub snaps are frameless and the main tstate's caller frames stay
      * reachable via its own current_frame, so only single-thread drains register.)
-     * A parked stackweave_c.Coro's saved state is registered here too. */
+     * A parked stackweave_c._Coro's saved state is registered here too. */
     for (b = runloom_base_snap_head_for_gc(); b != NULL; b = b->next) {
         int r;
         if (b->snap == NULL) {

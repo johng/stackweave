@@ -514,7 +514,7 @@ PyMODINIT_FUNC PyInit_stackweave_c(void)
         Py_DECREF(m);
         return NULL;
     }
-    if (PyModule_AddObject(m, "Coro", (PyObject *)&RunloomCoroType) < 0) {
+    if (PyModule_AddObject(m, "_Coro", (PyObject *)&RunloomCoroType) < 0) {
         Py_DECREF(&RunloomCoroType);
         Py_DECREF(m);
         return NULL;

@@ -8,7 +8,7 @@ def vmsize_kb():
             if line.startswith('VmSize:'):
                 return int(line.split()[1])
 
-c = stackweave_c.Coro(f)
+c = stackweave_c._Coro(f)
 before = vmsize_kb()
 for _ in range(1000):
     c.__init__(f)

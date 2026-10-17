@@ -5,7 +5,7 @@ depot, scrub, paint, HWM scan, prewarm/warmup), fcontext.c (the asm context
 make/swap), runloom_stackadvice.c (per-kind autosize learning).
 
 Python-visible surface:
-  stackweave_c.Coro                       -- bare stackful coroutine (resume/done/result)
+  stackweave_c._Coro                       -- bare stackful coroutine (resume/done/result)
   stackweave_c.MachineCode                -- W^X native blob, callable 0..6 args
   set_stack_size/get_stack_size        -- program-wide default fiber stack
   set_stack_scrub/get_stack_scrub      -- zero-on-recycle toggle
@@ -96,7 +96,7 @@ def test_coro_result_only_visible_when_done():
         rc.yield_()
         log.append("post")
         return 7
-    c = rc.Coro(body)
+    c = rc._Coro(body)
     c.resume()
     assert not c.done and c.result is None and log == ["pre"]
     assert c.resume() == 7
@@ -104,7 +104,7 @@ def test_coro_result_only_visible_when_done():
 
 
 def test_coro_resume_after_done_repeatedly_idempotent():
-    c = rc.Coro(lambda: 99)
+    c = rc._Coro(lambda: 99)
     assert c.resume() == 99
     # Many extra resumes after done must be harmless no-ops returning None,
     # never re-running the body or faulting on the spent asm context.
@@ -114,7 +114,7 @@ def test_coro_resume_after_done_repeatedly_idempotent():
 
 
 def test_coro_exception_stops_and_is_replayable():
-    c = rc.Coro(lambda: (_ for _ in ()).throw(ValueError("boom")))
+    c = rc._Coro(lambda: (_ for _ in ()).throw(ValueError("boom")))
     with pytest.raises(ValueError):
         c.resume()
     assert c.done
@@ -130,7 +130,7 @@ def test_coro_exception_after_yield():
     def body():
         rc.yield_()
         raise KeyError("late")
-    c = rc.Coro(body)
+    c = rc._Coro(body)
     c.resume()             # yields cleanly
     assert not c.done
     with pytest.raises(KeyError):
@@ -146,14 +146,14 @@ def test_coro_nested_three_deep():
         return "leaf"
 
     def mid():
-        c = rc.Coro(leaf)
+        c = rc._Coro(leaf)
         c.resume()
         return c.resume() + "+mid"
 
     def top():
-        c = rc.Coro(mid)
+        c = rc._Coro(mid)
         return c.resume() + "+top"
-    top_c = rc.Coro(top)
+    top_c = rc._Coro(top)
     assert top_c.resume() == "leaf+mid+top"
     assert top_c.done
 
@@ -171,7 +171,7 @@ def test_coro_many_alternating_yields_no_recursion_error():
                 n[0] += 1
                 rc.yield_()
             return n[0]
-        c = rc.Coro(body)
+        c = rc._Coro(body)
         while not c.done:
             r = c.resume()
         total += r
@@ -187,9 +187,9 @@ def test_yield_outside_coro_is_noop():
 
 def test_coro_non_callable_rejected():
     with pytest.raises(TypeError):
-        rc.Coro(42)
+        rc._Coro(42)
     with pytest.raises(TypeError):
-        rc.Coro(None)
+        rc._Coro(None)
 
 
 # ----- Coro stack-size argument validation ------------------------------
@@ -199,19 +199,19 @@ def test_coro_negative_stack_raises_not_segfaults():
     # must validate like set_stack_size().
     for bad in (-1, -4096, -(1 << 30), -(1 << 50)):
         with pytest.raises(ValueError):
-            rc.Coro(lambda: 1, bad)
+            rc._Coro(lambda: 1, bad)
 
 
 def test_coro_zero_stack_floored_runs():
     # 0 is non-negative so it passes validation; runloom_coro_new floors sub-4 KiB
     # to 4 KiB.  Must run, not divide-by-zero / map a zero-length region.
-    c = rc.Coro(lambda: sum(range(50)), 0)
+    c = rc._Coro(lambda: sum(range(50)), 0)
     assert c.resume() == sum(range(50))
     assert c.done
 
 
 def test_coro_tiny_positive_stack_runs():
-    c = rc.Coro(lambda: sum(range(100)), 4096)
+    c = rc._Coro(lambda: sum(range(100)), 4096)
     assert c.resume() == 4950
     assert c.done
 
@@ -230,7 +230,7 @@ def test_coro_huge_stack_raises_memoryerror_not_crash():
     # still fail on both.
     for sz in (1 << 46, 1 << 55, 1 << 62):
         try:
-            c = rc.Coro(lambda: 1, sz)
+            c = rc._Coro(lambda: 1, sz)
         except MemoryError:
             continue                       # un-mmap-able outcome (Linux; macOS past AS)
         # Overcommitted (macOS, size that fits the address space): the mapping must be
@@ -245,7 +245,7 @@ def test_coro_leaked_unfinished_is_collected_cleanly():
     # "released while executing" or leaking the mapping into a crash later.
     import gc
     for _ in range(200):
-        c = rc.Coro(lambda: (rc.yield_(), rc.yield_()))
+        c = rc._Coro(lambda: (rc.yield_(), rc.yield_()))
         c.resume()            # parks it mid-body on its own stack
         del c
     gc.collect()
@@ -1007,7 +1007,7 @@ def test_coro_reentrant_self_resume_does_not_silently_corrupt():
         except RuntimeError as e:
             box["err"] = str(e)
         return 7
-    c = rc.Coro(body)
+    c = rc._Coro(body)
     box["c"] = c
     rv = c.resume()
     assert box.get("err") and "executing" in box["err"], (
@@ -1024,7 +1024,7 @@ def test_coro_resume_takes_no_arguments():
     # Coro.resume() is METH_NOARGS -- a caller used to a generator's .send()
     # passing a value in must get a clean TypeError, never a silent ignore or a
     # crash reading a non-existent slot.
-    c = rc.Coro(lambda: 1)
+    c = rc._Coro(lambda: 1)
     with pytest.raises(TypeError):
         c.resume(42)
     # the spurious call must not have advanced / corrupted it
@@ -1038,7 +1038,7 @@ def test_coro_never_resumed_dropped_is_clean():
     # swapped into.  Churn many so a leak/double-free would show in self_check.
     import gc
     for _ in range(2000):
-        c = rc.Coro(lambda: 1)
+        c = rc._Coro(lambda: 1)
         del c
     gc.collect()
     assert rc._self_check(0) == 0
@@ -1059,7 +1059,7 @@ def test_coro_nested_yield_threads_through_intermediate():
         return "I"
 
     def outer():
-        c = rc.Coro(inner)
+        c = rc._Coro(inner)
         log.append("o1")
         r1 = c.resume()                 # inner -> its yield, control back here
         log.append(("mid", r1, c.done))
@@ -1067,7 +1067,7 @@ def test_coro_nested_yield_threads_through_intermediate():
         log.append(("fin", r2, c.done))
         return "O:" + r2
 
-    oc = rc.Coro(outer)
+    oc = rc._Coro(outer)
     assert oc.resume() == "O:I" and oc.done
     assert log == ["o1", "i1", ("mid", None, False), "i2", ("fin", "I", True)]
 
@@ -1080,7 +1080,7 @@ def test_coro_exception_object_is_the_one_raised_then_consumed():
 
     def body():
         raise sentinel
-    c = rc.Coro(body)
+    c = rc._Coro(body)
     with pytest.raises(RuntimeError) as ei:
         c.resume()
     assert ei.value.args == ("unique-marker-9173",)

@@ -2,7 +2,7 @@ import sys, stackweave_c
 
 def f(): pass
 
-c = stackweave_c.Coro(f)
+c = stackweave_c._Coro(f)
 r0 = sys.getrefcount(f)
 for _ in range(100):
     c.__init__(f)
@@ -14,7 +14,7 @@ class Obj: pass
 o = Obj()
 def g():
     return o
-c2 = stackweave_c.Coro(g)
+c2 = stackweave_c._Coro(g)
 c2.resume()
 before = sys.getrefcount(o)
 c2.__init__(g)

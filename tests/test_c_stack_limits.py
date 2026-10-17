@@ -64,7 +64,7 @@ def test_a_fiber_gets_its_limits_back_from_a_nested_run1_and_coro(n):
         seen["outer"] = limits()
         stackweave.run(1, lambda: seen.setdefault("inner", limits()))
         seen["after run(1)"] = limits()
-        c = stackweave_c.Coro(coro_body)
+        c = stackweave_c._Coro(coro_body)
         c.resume()                  # parks at yield_
         seen["after a parked resume"] = limits()
         c.resume()                  # finishes
@@ -91,7 +91,7 @@ def test_coro_resume_hands_the_caller_its_limits_back():
         seen.append(limits())
 
     before = limits()
-    c = stackweave_c.Coro(body)
+    c = stackweave_c._Coro(body)
     c.resume()                      # parks at yield_
     assert limits() == before
     c.resume()                      # finishes
@@ -109,7 +109,7 @@ def deep(n):
 
 AFTER = {
     "run(1)": "stackweave.run(1, lambda: None)",
-    "Coro.resume": "stackweave_c.Coro(lambda: None).resume()",
+    "Coro.resume": "stackweave_c._Coro(lambda: None).resume()",
     "a run(1) nested in a fiber": None,
 }
 

@@ -267,7 +267,7 @@ static PyGetSetDef RunloomCoro_getset[] = {
 
 static PyTypeObject RunloomCoroType = {
     PyVarObject_HEAD_INIT(NULL, 0)
-    "stackweave_c.Coro",          /* tp_name */
+    "stackweave_c._Coro",         /* tp_name */
     sizeof(RunloomCoro),          /* tp_basicsize */
     0,                         /* tp_itemsize */
     (destructor)RunloomCoro_dealloc, /* tp_dealloc */

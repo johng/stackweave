@@ -1,4 +1,4 @@
-"""Known gaps of the low-level stackweave_c.Coro API.
+"""Known gaps of the low-level stackweave_c._Coro API.
 
 Each test states what must hold for a Coro and is a strict xfail until its gap
 is closed; then it XPASSes, which fails the run and forces the marker off.
@@ -55,7 +55,7 @@ ran = []
 
 def work():
     for _ in range(8):
-        c = stackweave_c.Coro(lambda: (stackweave_c.yield_(), 1)[1])
+        c = stackweave_c._Coro(lambda: (stackweave_c.yield_(), 1)[1])
         c.resume()
         c.resume()
         ran.append(c.result)
@@ -117,7 +117,7 @@ def main():
             stackweave.sleep(0.01)
             return "slept"
         return ch.recv()[0]
-    c = stackweave_c.Coro(body)
+    c = stackweave_c._Coro(body)
     try:
         c.resume()
         while not c.done:

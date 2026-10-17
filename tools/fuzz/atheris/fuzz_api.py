@@ -53,7 +53,7 @@ def one_input(data):
                 # the historical Coro(stack_size=-1) SIGSEGV class. Band the size so a
                 # huge value yields a clean MemoryError, not a real giant mmap.
                 ss = fdp.ConsumeIntInRange(-(1 << 40), 1 << 40)
-                c = stackweave_c.Coro(_noop, ss)
+                c = stackweave_c._Coro(_noop, ss)
                 del c
             elif op == 2:
                 stackweave.optimize(fdp.ConsumeUnicodeNoSurrogates(16))
@@ -71,7 +71,7 @@ def one_input(data):
                 # optimize with a fuzzed non-str (TypeError path)
                 stackweave.optimize(fdp.ConsumeInt(2))
             elif op == 7:
-                stackweave_c.Coro(fdp.ConsumeInt(1), fdp.ConsumeIntInRange(0, 1 << 18))
+                stackweave_c._Coro(fdp.ConsumeInt(1), fdp.ConsumeIntInRange(0, 1 << 18))
             else:
                 stackweave_c.Chan(fdp.ConsumeIntInRange(0, 4096))
         except Exception:

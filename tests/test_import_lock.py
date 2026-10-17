@@ -296,7 +296,7 @@ RUNS_IN_BODY = {
     "run4": ("stackweave.run(4, f)\n", "importlib.import_module('runs')"),
     "nested_run1": ("stackweave.run(1, f)\n",
                     "stackweave.run(4, lambda: importlib.import_module('runs'))"),
-    "coro": ("stackweave_c.Coro(f).resume()\n",
+    "coro": ("stackweave_c._Coro(f).resume()\n",
              "stackweave.run(4, lambda: importlib.import_module('runs'))"),
 }
 
