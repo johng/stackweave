@@ -112,13 +112,6 @@ struct runloom_coro {
     size_t stack_size;
     int grown;             /* 1 if copy-grow enlarged this stack */
     int grow_declined;     /* 1 once a grow trigger found copy-grow off */
-    /* Bulk fresh-flag (fiber_n): 1 if the initial fcontext frame has NOT yet been
-     * written to the stack top.  bulk_init can defer that write (the per-g page
-     * fault) off the single spawner thread; runloom_coro_resume materializes it
-     * lazily on the OWNING hub at first resume, then clears the flag.  Moves the
-     * 1M scattered stack faults onto the H hubs, in parallel, overlapped with the
-     * run.  0 for every non-bulk coro (eager asm_make_ctx). */
-    int fresh;
 #elif defined(RUNLOOM_HAVE_UCONTEXT)
     ucontext_t ctx;
     ucontext_t caller_ctx;
@@ -592,10 +585,10 @@ static int runloom_arena_class_for_locked(size_t slot, int node)
 }
 
 /* Reserve n contiguous slots in the class for `slot`; 0 + *start_out + *base_out
- * (the class mapping base) on success, -1 on exhaustion / no class.  LOCKED, but
- * called once per fiber_n / per single carve -- NEVER per fiber -- so off the hot
- * path.  Each class's bump cursor rewinds on free (full reset when it drains to
- * empty), so spawn->drain->spawn cycles reuse the same address space. */
+ * (the class mapping base) on success, -1 on exhaustion / no class.  LOCKED;
+ * called once per arena-carved stack.  Each class's bump cursor rewinds on free
+ * (full reset when it drains to empty), so spawn->drain->spawn cycles reuse the
+ * same address space. */
 static int runloom_arena_alloc(long n, size_t slot, size_t *start_out, char **base_out,
                                int *node_out)
 {
@@ -1497,7 +1490,6 @@ runloom_coro_t *runloom_coro_new(size_t stack_size,
         c->entry = entry;
         c->user = user;
         c->done = 0;
-        c->fresh = 0;
         c->grow_declined = 0;
         c->asm_coro.entry = runloom_fcontext_entry;
         c->asm_coro.user = c;
@@ -1524,261 +1516,6 @@ runloom_coro_t *runloom_coro_new(size_t stack_size,
     runloom_asm_make_ctx(&c->asm_coro, stack_top);
 
     return c;
-}
-
-/* ---- bulk/arena fast path (fiber_n) ---------------------------------------- *
- * Placement coro: initialise a coroutine in CALLER-PROVIDED memory `mem`
- * (>= runloom_coro_struct_size() bytes) on a CALLER-PROVIDED `stack` (lowest
- * usable byte, `stack_size` usable bytes).  No malloc, no stack-acquire, no
- * pool, no lock -- a straight-line set of stores + asm_make_ctx.  Used by the
- * bulk-spawn path where g-structs, coro-structs and stacks all come from
- * pre-allocated arenas.  The caller owns `mem` and `stack`; do NOT call
- * runloom_coro_destroy on a placement coro (it would pool/free arena memory)
- * -- the arena is reclaimed wholesale. */
-runloom_coro_t *runloom_coro_init_at(void *mem, size_t stack_size, void *stack,
-                                     runloom_entry_fn entry, void *user)
-{
-    runloom_coro_t *c = (runloom_coro_t *)mem;
-    size_t rounded;
-    if (stack_size < 4096) stack_size = 4096;
-    rounded = runloom_round_to_page(stack_size);
-    c->entry = entry;
-    c->user = user;
-    c->done = 0;
-    c->dbg_running = 0;
-    c->pool_next = NULL;
-    c->stack = stack;
-    c->stack_size = rounded;
-    c->grown = 0;
-    c->grow_declined = 0;
-    c->fresh = 0;
-    c->asm_coro.entry = runloom_fcontext_entry;
-    c->asm_coro.user = c;
-    c->asm_coro.done = 0;
-    runloom_fibersan_zero(&c->asm_coro);   /* caller-provided mem: not calloc'd */
-    runloom_asm_make_ctx(&c->asm_coro, (void *)((uintptr_t)stack + rounded));
-    return c;
-}
-
-/* Bytes a placement coro needs. */
-size_t runloom_coro_struct_size(void) { return sizeof(runloom_coro_t); }
-
-/* EXPERIMENT (docs/dev/spawn_above_1m.md, lever parallelize_passB): the coro-fill
- * loop (Pass B of bulk create) is cold-write bound like Pass A and is serial; split
- * it across builder threads over disjoint [lo,hi) slices to lift create further (run
- * then stays the binding constraint).  RUNLOOM_GON_PCREATE_B=P; off by default. */
-typedef struct {
-    char *coro_arena; size_t coro_stride;
-    char *g_arena; size_t g_stride, g_coro_off;
-    char *sbase; size_t slot, rounded;
-    runloom_entry_fn entry; int defer;
-    long lo, hi;
-} runloom_bulkfill_arg_t;
-
-static void runloom_bulkfill_range(const runloom_bulkfill_arg_t *a)
-{
-    long i;
-    for (i = a->lo; i < a->hi; i++) {
-        runloom_coro_t *c = (runloom_coro_t *)(a->coro_arena + (size_t)i * a->coro_stride);
-        char *g = a->g_arena + (size_t)i * a->g_stride;
-        char *stk = a->sbase + (size_t)i * a->slot;
-        c->entry = a->entry;
-        c->user = g;
-        c->done = 0;
-        c->dbg_running = 0;
-        c->pool_next = NULL;
-        c->stack = stk;
-        c->stack_size = a->rounded;
-        c->grown = 0;
-        c->grow_declined = 0;
-        c->asm_coro.entry = runloom_fcontext_entry;
-        c->asm_coro.user = c;
-        c->asm_coro.done = 0;
-        runloom_fibersan_zero(&c->asm_coro);   /* arena mem: not calloc'd */
-        c->fresh = a->defer;
-        if (!a->defer)
-            runloom_asm_make_ctx(&c->asm_coro, (void *)((uintptr_t)stk + a->rounded));
-        *(void **)(g + a->g_coro_off) = c;          /* g->coro = c (disjoint slice) */
-    }
-}
-static void *runloom_bulkfill_worker(void *p)
-{
-    runloom_bulkfill_range((const runloom_bulkfill_arg_t *)p);
-    return NULL;
-}
-extern int runloom_mn_hub_count(void); /* mn_sched.c accessor; for PCREATE_B="auto" */
-static int runloom_pcreate_b_threads(void)
-{
-    static int mode = -2;              /* -2 unread; -1 auto; >=0 fixed */
-    int m = __atomic_load_n(&mode, __ATOMIC_RELAXED);
-    if (m == -2) {
-        const char *e = getenv("STACKWEAVE_GON_PCREATE_B");
-        if (e == NULL || !*e || e[0] == '0') m = 0;
-        else if (strcmp(e, "auto") == 0)     m = -1;
-        else { m = atoi(e); if (m < 0) m = 0; if (m > 64) m = 64; }
-        __atomic_store_n(&mode, m, __ATOMIC_RELAXED);
-    }
-    if (m == -1) {                     /* auto: one builder per hub, bandwidth-capped */
-        int p = runloom_mn_hub_count();
-        if (p > 16) p = 16;
-        if (p < 1)  p = 1;
-        return p;
-    }
-    return m;
-}
-
-/* Bulk coro init: fill an ENTIRE coro arena (n structs) inline, each on its own
- * stack carved from one reserved arena block, and write each g's coro pointer.
- * ONE call for all N -- the per-coro work (field stores + asm_make_ctx) is
- * inlined here (same TU), so the caller's spawn loop makes ZERO per-g function
- * calls into the coro layer.  The only irreducible per-g cost left is the
- * asm_make_ctx stack write (the page fault).  g_arena/g_stride/g_coro_off
- * locate each g and its `coro` field so we can set g->coro = &coro_arena[i].
- * Returns 0, or -1 if the stack arena is off/exhausted/size-mismatched (caller
- * falls back to the per-g path).  fcontext backend only. */
-int runloom_coro_bulk_init(void *coro_arena, size_t coro_stride,
-                           void *g_arena, size_t g_stride, size_t g_coro_off,
-                           size_t stack_size, long n, runloom_entry_fn entry,
-                           size_t *start_slot_out, int *node_out)
-{
-    size_t guard, rounded, slot, start;
-    char *sbase;
-    long i;
-    /* Fresh-flag deferral gate (RUNLOOM_GON_FRESH=1): skip the per-g
-     * asm_make_ctx stack write here and mark each coro `fresh`, so the owning
-     * hub materializes the frame at first resume (faults move off the spawner,
-     * onto the H hubs in parallel).  Read once, cached. */
-    static int fresh_defer = -1;
-    int defer = __atomic_load_n(&fresh_defer, __ATOMIC_RELAXED);
-    if (defer < 0) {
-        const char *e = getenv("STACKWEAVE_GON_FRESH");
-        defer = (e != NULL && *e == '1') ? 1 : 0;
-        __atomic_store_n(&fresh_defer, defer, __ATOMIC_RELAXED);
-    }
-    if (stack_size < 4096) stack_size = 4096;
-    rounded = runloom_round_to_page(stack_size);
-    guard = runloom_stack_guard();
-    slot = guard + rounded;
-    /* Reserve a contiguous block of n slots via the locked allocator (lazy-inits
-     * the arena, reuses freed space).  Report the start slot so the caller's
-     * batch teardown can MADV + return the whole block when the last g finishes. */
-    {
-        char *abase;
-        int anode = 0;
-        if (runloom_arena_alloc(n, slot, &start, &abase, &anode) != 0)
-            return -1;                              /* off/exhausted -> fallback */
-        sbase = abase + start * slot + guard;       /* usable base of slot 0 */
-        if (node_out) *node_out = anode;            /* batch teardown frees on this node */
-    }
-    if (start_slot_out) *start_slot_out = start;
-    {
-        runloom_bulkfill_arg_t base;
-        int P = runloom_pcreate_b_threads();
-        int did_parallel = 0;
-        base.coro_arena = (char *)coro_arena; base.coro_stride = coro_stride;
-        base.g_arena = (char *)g_arena; base.g_stride = g_stride; base.g_coro_off = g_coro_off;
-        base.sbase = sbase; base.slot = slot; base.rounded = rounded;
-        base.entry = entry; base.defer = defer;
-        if (P > 1 && n >= 4096) {               /* parallel Pass B over disjoint slices */
-            runloom_bulkfill_arg_t *args =
-                (runloom_bulkfill_arg_t *)malloc((size_t)P * sizeof *args);
-            pthread_t th[64];
-            int b, started = 0;
-            if (args != NULL) {
-                for (b = 0; b < P; b++) {
-                    args[b] = base;
-                    args[b].lo = (long)((long long)b * n / P);
-                    args[b].hi = (long)((long long)(b + 1) * n / P);
-                    if (pthread_create(&th[b], NULL, runloom_bulkfill_worker, &args[b]) != 0)
-                        break;
-                    started++;
-                }
-                for (b = 0; b < started; b++) pthread_join(th[b], NULL);
-                if (started == P) did_parallel = 1;
-                free(args);
-            }
-        }
-        if (!did_parallel) {                    /* serial (default / fallback) */
-            base.lo = 0; base.hi = n;
-            runloom_bulkfill_range(&base);
-        }
-    }
-    /* EXPERIMENT (Exp B): RUNLOOM_GON_POPULATE=1 pre-faults the TOP page of every
-     * slot here on the spawner, in one contiguous pass, instead of letting each
-     * hub fault it at first resume.  The whole batch is one contiguous block, so
-     * this is the closest analogue to MAP_POPULATE over exactly the used pages.
-     * (Full-slot pre-fault is pathological -- n*512KB of untouched stack -- so we
-     * touch only the page resume will land on.) */
-    {
-        static int populate = -1;
-        if (__atomic_load_n(&populate, __ATOMIC_RELAXED) < 0) {
-            const char *e = getenv("STACKWEAVE_GON_POPULATE");
-            __atomic_store_n(&populate, (e && *e == '1') ? 1 : 0, __ATOMIC_RELAXED);
-        }
-        if (__atomic_load_n(&populate, __ATOMIC_RELAXED) == 1) {
-            long ps = sysconf(_SC_PAGESIZE);
-            size_t page = (ps > 0) ? (size_t)ps : 4096;
-            for (i = 0; i < n; i++) {
-                volatile char *top = (volatile char *)(sbase + (size_t)i * slot + rounded - 1);
-                *top = 0;                            /* fault in the resume page */
-                (void)page;
-            }
-        }
-    }
-    return 0;
-}
-
-/* Release a bulk stack block (n slots from start_slot): drop its physical pages
- * back to the OS (MADV_DONTNEED -- the virtual reservation stays) AND return the
- * slots to the allocator for reuse.  Called by the fiber_n batch teardown when the
- * last fiber in a batch finishes.  The block stays PROT_READ|WRITE; the next
- * fault into it gets a fresh zero page -- exactly what the fresh-flag path wants
- * (a zero stack reads back as a not-yet-materialised frame). */
-void runloom_coro_arena_release(size_t start_slot, long n, size_t stack_size, int node)
-{
-    /* (stack_size, node) identify the CLASS this batch was carved from (per-size,
-     * per-NUMA-node arenas).  slot = guard + rounded, matching coro_bulk_init's carve. */
-    size_t guard = runloom_stack_guard();
-    size_t slot;
-    if (n <= 0) return;
-    if (stack_size < 4096) stack_size = 4096;
-    slot = guard + runloom_round_to_page(stack_size);
-#if defined(MADV_DONTNEED)
-    /* MADV is OPT-IN (RUNLOOM_GON_TRIM=1).  By default we KEEP the pages warm:
-     * the fresh-flag WRITES each stack frame at resume (never reads-as-zero), so
-     * zeroing buys no correctness, and since reset-when-empty reuses the SAME
-     * address range, the next batch would just re-fault every page we dropped --
-     * pure waste (madvise of a 1M-slot block is a ~2s page-table walk).  RSS is
-     * already bounded by the live working set via the cursor reset.  Trim is for
-     * the spawn-a-burst-then-go-idle case where returning RSS matters more. */
-    static int trim = -1;
-    if (trim < 0) {
-        const char *e = getenv("STACKWEAVE_GON_TRIM");
-        __atomic_store_n(&trim, (e && *e == '1') ? 1 : 0, __ATOMIC_RELAXED);
-    }
-    if (trim) {
-        int i;
-        for (i = 0; i < RUNLOOM_ARENA_TABLE; i++) {
-            char *base = __atomic_load_n(&runloom_arena_cls[i].base, __ATOMIC_ACQUIRE);
-            if (base != NULL && runloom_arena_cls[i].slot == slot &&
-                runloom_arena_cls[i].node == node) {
-                madvise(base + start_slot * slot, (size_t)n * slot, MADV_DONTNEED);
-                break;
-            }
-        }
-    }
-#endif
-    runloom_arena_free(start_slot, n, slot, node);
-}
-
-/* Carve one stack (lowest usable byte) from the bulk arena, NULL if the arena
- * is off/exhausted/size-mismatched.  Rounds like coro_new so sizes match. */
-void *runloom_coro_arena_stack(size_t stack_size)
-{
-    size_t rounded;
-    if (stack_size < 4096) stack_size = 4096;
-    rounded = runloom_round_to_page(stack_size);
-    return runloom_stack_arena_carve(rounded);
 }
 
 void runloom_coro_destroy(runloom_coro_t *c)
@@ -1886,7 +1623,7 @@ static int runloom_coro_grow(runloom_coro_t *c, size_t new_usable)
         c->stack_size = new_usable;
         c->grown      = 1;
         /* Drop the old stack.  When it is a slice of the shared arena mapping
-         * (RUNLOOM_STACK_ARENA / RUNLOOM_GON_BULK) it MUST be returned to its
+         * (STACKWEAVE_STACK_ARENA) it MUST be returned to its
          * class via arena_free: munmapping it (as we used to, unconditionally)
          * punches an unmapped hole out of the middle of the one big
          * MAP_NORESERVE arena and leaks the slot -- its class `live` count
@@ -2021,19 +1758,6 @@ static int runloom_coro_maybe_grow(runloom_coro_t *c)
 void runloom_coro_resume(runloom_coro_t *c)
 {
     runloom_coro_t *prev = runloom_tls_current;
-    if (c->fresh) {
-        /* Deferred bulk init (fiber_n fresh-flag): bulk_init skipped the initial
-         * fcontext frame write at spawn to keep the 1M scattered stack-top page
-         * faults OFF the single spawner thread.  Materialize it now, on the
-         * OWNING hub, just before the first swap -- so those faults land on the
-         * H hubs in parallel, overlapped with the run.  First resume only; the
-         * flag self-clears.  asm_make_ctx (re)sets self.sp/caller.sp/done; the
-         * calloc'd arena left them zero, which maybe_grow below treats as
-         * "no headroom info" (no-op) -- but we run before it anyway. */
-        runloom_asm_make_ctx(&c->asm_coro,
-                             (void *)((uintptr_t)c->stack + c->stack_size));
-        c->fresh = 0;
-    }
     runloom_coro_maybe_grow(c);     /* Path-A copy-grow at the resume boundary */
     if (runloom_coro_pre_swap != NULL) runloom_coro_pre_swap(c);  /* re-arm C-stack limit (3.14) */
     runloom_tls_current = c;
@@ -2068,31 +1792,6 @@ int runloom_coro_done(const runloom_coro_t *c)
 #endif  /* RUNLOOM_HAVE_FCONTEXT */
 
 #if !defined(RUNLOOM_HAVE_FCONTEXT)
-/* Bulk coro arena (placement-init N coro structs in one allocation, carve every
- * stack from one mmap'd block) is an fcontext-backend optimization.  On the
- * generic ucontext backend it is unavailable, so report
- * "arena off" (-1): runloom_mn_fiber_n_bulk then falls back to the per-g spawn path.
- * The bulk path is opt-in via RUNLOOM_GON_BULK; the default fiber_n loop never calls
- * these.  Stubs keep the symbols that mn_sched references regardless of backend. */
-size_t runloom_coro_struct_size(void) { return sizeof(runloom_coro_t); }
-
-int runloom_coro_bulk_init(void *coro_arena, size_t coro_stride,
-                           void *g_arena, size_t g_stride, size_t g_coro_off,
-                           size_t stack_size, long n, runloom_entry_fn entry,
-                           size_t *start_slot_out, int *node_out)
-{
-    (void)coro_arena; (void)coro_stride; (void)g_arena; (void)g_stride;
-    (void)g_coro_off; (void)stack_size; (void)n; (void)entry;
-    if (start_slot_out != NULL) *start_slot_out = 0;
-    if (node_out != NULL) *node_out = 0;
-    return -1;   /* arena unavailable -> caller uses the per-g path */
-}
-
-void runloom_coro_arena_release(size_t start_slot, long n, size_t stack_size, int node)
-{
-    (void)start_slot; (void)n; (void)stack_size; (void)node;
-}
-
 /* No copy-grow on the ucontext backend: nothing to count. */
 unsigned long long runloom_coro_copy_grows(void) { return 0; }
 unsigned long long runloom_coro_copy_grows_declined(void) { return 0; }

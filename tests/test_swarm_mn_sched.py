@@ -32,9 +32,8 @@ Crash-prone cases run in a SUBPROCESS so a SIGSEGV is contained and observed as
 a negative returncode; hang-prone cases use hang_guard / finite deadlock budgets;
 slow-return cases use assert_faster_than to prove cooperative overlap held.
 
-Known gaps are known_gaps xfails that assert the correct behaviour: the bulk
-fiber_n path (GON_BULK_GAP) and the seeded controlled barrier
-(SEEDED_MN_TODO).  Every other test passes.
+The one known gap is the seeded controlled barrier, a SEEDED_MN_TODO xfail
+that asserts the correct behaviour.  Every other test passes.
 """
 import errno
 import sys
@@ -45,7 +44,7 @@ import stackweave
 import stackweave_c as rc
 
 from adv_util import hang_guard, assert_faster_than, raw_thread, run_python
-from known_gaps import GON_BULK_GAP, SEEDED_MN_TODO
+from known_gaps import SEEDED_MN_TODO
 
 
 # --------------------------------------------------------------------------
@@ -58,11 +57,6 @@ def _run_script(script, env_extra=None, timeout=60):
     return run_python(script, timeout=timeout, env=env)
 
 
-# fiber_n's bulk-arena path (STACKWEAVE_GON_BULK=1) is a known migration gap: the
-# bulk builder allocates no per-g tstate, so GON_BULK is ignored and fiber_n
-# always loops (tests/test_spawn_bulk_lifecycle.py states it).  Tests that need
-# the bulk path are GON_BULK_GAP xfails (tests/known_gaps.py) and prove the
-# path ran via STACKWEAVE_GON_TIMING's "[GON_TIMING]" line.
 
 
 def _assert_no_crash(p, label):
@@ -1060,7 +1054,7 @@ def test_raw_thread_observes_run_completes_in_process():
 
 
 # ==========================================================================
-# 14. fiber_n BULK SPAWN INTEGRITY (indexed + non-indexed) under M:N
+# 14. fiber_n SPAWN INTEGRITY (indexed + non-indexed) under M:N
 # ==========================================================================
 def test_fiber_n_bulk_indexed_every_index_runs_exactly_once():
     seen = bytearray(512)
@@ -1224,39 +1218,6 @@ sys.stdout.write("GON_FAULT_OK err=%r completed=%d hubs=%d\n"
     assert "hubs=0" in p.stdout, "fiber_n fault leaked a hub:\n%s" % p.stdout
 
 
-def test_mn_spawn_g_fault_under_fiber_n_bulk_no_crash():
-    # fiber_n's BULK arena path (STACKWEAVE_GON_BULK=1) is a DISTINCT spawn path; an
-    # alloc fault during a bulk spawn must fall back / error cleanly, never
-    # corrupt the shared arena (which would crash other hubs).  (With
-    # always:12 the fault already fails mn_fiber(main), so fiber_n is never
-    # reached -- this asserts GON_BULK=1 plus a spawn fault stays clean, not
-    # the bulk path itself; that is a known migration gap, see GON_BULK_GAP.)
-    script = r'''
-import sys
-import stackweave_c as rc
-rc.mn_init(4)
-err = None
-try:
-    def main():
-        rc.fiber_n(lambda: None, 200, 0, False)
-    rc.mn_fiber(main)
-    n = rc.mn_run()
-except (MemoryError, RuntimeError) as e:
-    err = type(e).__name__
-    n = -1
-rc.mn_fini()
-sys.stdout.write("GON_BULK_FAULT_OK err=%r completed=%d hubs=%d\n"
-                 % (err, n, rc.mn_hub_count()))
-'''
-    p = _run_script(script, {"STACKWEAVE_GON_BULK": "1",
-                             "STACKWEAVE_FAULT_SPAWN_G": "always:12"}, timeout=40)
-    _assert_no_crash(p, "SPAWN_G under fiber_n bulk")
-    assert "GON_BULK_FAULT_OK" in p.stdout, (
-        "SPAWN_G fault under fiber_n bulk crashed/hung:\n%s\n%s"
-        % (p.stdout, p.stderr[-1200:]))
-    assert "hubs=0" in p.stdout, "fiber_n-bulk fault leaked a hub:\n%s" % p.stdout
-
-
 # ==========================================================================
 # 17. max_fibers ADMISSION GATE under M:N (held-live fibers trip the cap;
 #     completion RELEASES the slot -- the conservation ledger the FV models)
@@ -1336,7 +1297,7 @@ def test_max_fibers_slot_released_on_completion_no_ratchet():
 
 
 # ==========================================================================
-# 19. fiber_n EDGE VALUES + bulk-path integrity (n=0/negative no-op; bulk indexed)
+# 19. fiber_n EDGE VALUES (n=0/negative is a no-op)
 # ==========================================================================
 def test_fiber_n_zero_and_negative_is_noop_not_hang_or_crash():
     # fiber_n(fn, 0) and fiber_n(fn, -5) spawn nothing; mn_run must still terminate
@@ -1365,41 +1326,6 @@ def test_fiber_n_non_int_n_raises_typeerror():
     finally:
         rc.mn_run()
         rc.mn_fini()
-
-
-@GON_BULK_GAP
-def test_fiber_n_bulk_path_indexed_integrity():
-    # STACKWEAVE_GON_BULK=1 is the arena fast-path -- a different spawn path than
-    # the default per-g fiber_n.  Every index must run exactly once (set-equality
-    # over the index, not a count), proving the bulk arena assigns each slot a
-    # unique, correct index across hubs.
-    script = r'''
-import sys
-import stackweave, stackweave_c as rc
-from stackweave.sync import WaitGroup
-def main():
-    N = 1000
-    seen = bytearray(N)
-    wg = WaitGroup(); wg.add(N)
-    def w(i):
-        if 0 <= i < N:
-            seen[i] = 1
-        wg.done()
-    rc.fiber_n(w, N, 0, True)        # indexed bulk spawn
-    wg.wait()
-    miss = N - sum(seen)
-    sys.stdout.write("GON_BULK_IDX_OK\n" if miss == 0 else
-                     "GON_BULK_IDX_LOST miss=%d\n" % miss)
-stackweave.run(6, main)
-'''
-    p = _run_script(script, {"STACKWEAVE_GON_BULK": "1", "STACKWEAVE_STACK_ARENA": "1",
-                             "STACKWEAVE_GON_TIMING": "1"}, timeout=40)
-    _assert_no_crash(p, "fiber_n bulk indexed integrity")
-    assert "GON_BULK_IDX_OK" in p.stdout, (
-        "fiber_n bulk path lost/duplicated an index:\n%s\n%s"
-        % (p.stdout, p.stderr[-800:]))
-    assert "[GON_TIMING]" in p.stderr, (
-        "fiber_n did not take the bulk path:\n%s" % p.stderr[-800:])
 
 
 # ==========================================================================
@@ -1715,21 +1641,13 @@ stackweave.run(8, main)
 '''
 
 
-@pytest.mark.parametrize("bulk", ["0", pytest.param("1", marks=GON_BULK_GAP)])
-def test_large_fiber_n_set_equality_at_scale(bulk):
-    # Run the 20k-index fiber_n on BOTH the per-g path (GON_BULK=0) and the bulk
-    # arena path (GON_BULK=1); every index must run exactly once on both.
-    env = {"STACKWEAVE_GON_BULK": bulk}
-    if bulk == "1":
-        env.update(STACKWEAVE_STACK_ARENA="1", STACKWEAVE_GON_TIMING="1")
-    p = _run_script(_BIG_GON, env, timeout=90)
-    _assert_no_crash(p, "big fiber_n (bulk=%s)" % bulk)
+def test_large_fiber_n_set_equality_at_scale():
+    # Run the 20k-index fiber_n; every index must run exactly once.
+    p = _run_script(_BIG_GON, None, timeout=90)
+    _assert_no_crash(p, "big fiber_n")
     assert "BIG_GON_OK" in p.stdout, (
-        "fiber_n at scale (bulk=%s) lost/dup'd an index:\n%s\n%s"
-        % (bulk, p.stdout, p.stderr[-1000:]))
-    if bulk == "1":
-        assert "[GON_TIMING]" in p.stderr, (
-            "fiber_n did not take the bulk path:\n%s" % p.stderr[-800:])
+        "fiber_n at scale lost/dup'd an index:\n%s\n%s"
+        % (p.stdout, p.stderr[-1000:]))
 
 
 # ==========================================================================

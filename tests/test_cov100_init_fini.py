@@ -1,13 +1,13 @@
 """Adversarial coverage suite for src/runloom_c/mn_sched_init_fini.c.inc.
 
-This fragment is the M:N scheduler's init / fini / spawn-core / fiber_n-bulk /
-deadlock-census code.  Most of its UNCOVERED lines live behind error-cleanup,
-teardown-drain, and bulk-arena-fallback branches the normal corpus never trips.
+This fragment is the M:N scheduler's init / fini / spawn-core / fiber_n /
+deadlock-census code.  Most of its UNCOVERED lines live behind error-cleanup
+and teardown-drain branches the normal corpus never trips.
 Each test below drives ONE such dark region with a real adverse condition and
 asserts the behaviour that line implements -- not just that it executed.
 
 Almost every test runs in a SUBPROCESS, because:
-  * env-gated modes (STACKWEAVE_GON_BULK, STACKWEAVE_STACK_ARENA_N, the SPAWN_G fault,
+  * env-gated modes (the SPAWN_G fault,
     STACKWEAVE_GILSTATE_DELETE_ON_MAIN) are read once at import / first-run, so the
     parent pytest's already-imported stackweave_c has them fixed; and
   * the error/teardown paths call mn_init/mn_fini directly and/or shrink process
@@ -29,19 +29,8 @@ Regions driven (uncovered line -> how):
   L480-491  runloom_mn_fiber_core coro==NULL cleanup -> RLIMIT_AS capped just above
             VmSize + an 8 MiB explicit stack so coro_new's mmap fails; asserts
             the admission slot was RELEASED (set_max_fibers -> limit_counted).
-  L694-698  fiber_n bulk-arena coro_init FAILURE fallback -> STACKWEAVE_GON_BULK=1 +
-            STACKWEAVE_STACK_ARENA_N=1 (1-slot arena) so the bulk path falls back
-            to the per-g mn_fiber_core loop; asserts all (indexed) fibers still ran.
-  L742-744  fiber_n bulk splice signalling an IDLE hub's cond -> GON_BULK + let the
-            hubs idle, then a bulk fiber_n.
   L764      fiber_n loop spawn-failure return -1 -> STACKWEAVE_FAULT_SPAWN_G
             forces the first slab alloc to fail; fiber_n raises.
-
-The two GON_BULK regions are unreachable under migration (always on): the bulk
-builder allocates no per-g tstate, so runloom_fibern_bulk_enabled ignores
-STACKWEAVE_GON_BULK and fiber_n always loops.  Their tests are GON_BULK_GAP
-xfails (tests/known_gaps.py) that assert the bulk path was entered; the gap
-itself is stated in tests/test_spawn_bulk_lifecycle.py.
 
 See the module docstring's `unreachable` notes in the structured report for the
 OOM-only / lost-wakeup lines that have no SAFE trigger.
@@ -53,7 +42,6 @@ import textwrap
 import pytest
 
 from adv_util import needs_rlimit_nproc_thread_cap, run_python
-from known_gaps import GON_BULK_GAP
 
 
 # The thread-spawn-failure and coro-alloc-failure coverage drivers below inject
@@ -79,9 +67,6 @@ def _run_worker(body, env_extra=None, timeout=60):
     """
     src = "import sys\nimport stackweave_c as rc\n" + textwrap.dedent(body)
     return run_python(src, timeout=timeout, env=env_extra)
-
-
-_BULK_IGNORED = "STACKWEAVE_GON_BULK ignored"
 
 
 def _assert_clean(p, marker):
@@ -314,81 +299,6 @@ def test_fiber_n_loop_spawn_failure_returns_error():
     """
     p = _run_worker(body, env_extra={"STACKWEAVE_FAULT_SPAWN_G": "always:12"})
     _assert_clean(p, "GON_LOOP_FAIL_OK")
-
-
-# --------------------------------------------------------------------------
-# L694-698 : fiber_n bulk-arena path falls back to the per-g loop on arena failure
-# --------------------------------------------------------------------------
-@GON_BULK_GAP
-def test_fiber_n_bulk_arena_failure_falls_back_to_per_g_loop():
-    """STACKWEAVE_GON_BULK=1 takes the bulk-arena spawn path; STACKWEAVE_STACK_ARENA_N=1
-    makes the stack arena hold a single slot, so runloom_arena_alloc(n>1) fails
-    and runloom_coro_bulk_init returns -1.  go_n_bulk then frees its arenas and
-    FALLS BACK to the per-g mn_fiber_core loop (L694-698), re-spawning each fiber
-    with its index.  We assert every indexed fiber still ran with the CORRECT
-    index (the fallback passes `indexed ? i : -1`), and that the bulk path was
-    entered at all (no "ignored" note) -- which under migration it is not."""
-    body = """
-        from stackweave.sync import WaitGroup
-        N = 8
-        seen = bytearray(N)
-        def main():
-            wg = WaitGroup(); wg.add(N)
-            def w(i):
-                if 0 <= i < N:
-                    seen[i] = 1
-                wg.done()
-            rc.fiber_n(lambda i: w(i), N, 0, True)   # bulk -> arena fail -> per-g fallback
-            wg.wait()
-        rc.mn_init(3); rc.mn_fiber(main); rc.mn_run(); rc.mn_fini()
-        assert sum(seen) == N, ("only %d/%d fibers ran via the fallback" % (sum(seen), N))
-        print("GON_BULK_FALLBACK_OK")
-    """
-    p = _run_worker(body, env_extra={"STACKWEAVE_GON_BULK": "1",
-                                     "STACKWEAVE_STACK_ARENA_N": "1"})
-    _assert_clean(p, "GON_BULK_FALLBACK_OK")
-    assert _BULK_IGNORED not in p.stderr, p.stderr[-800:]
-
-
-# --------------------------------------------------------------------------
-# L742-744 : fiber_n bulk splice signals an IDLE hub's condvar
-# --------------------------------------------------------------------------
-@GON_BULK_GAP
-def test_fiber_n_bulk_wakes_idle_hubs():
-    """STACKWEAVE_GON_BULK=1 with a real (large) arena -> the bulk path SUCCEEDS and
-    splices each hub's whole batch under one lock.  We first let the hubs settle
-    into their idle condvar wait, then issue the bulk fiber_n; the per-hub splice
-    finds idle_waiting set and signals idle_cond (L741-744) to drain the batch
-    promptly.  Asserts every fiber ran within a generous bound (a missed wake
-    would strand the batch until idle_ns expiry / hang), and that the bulk
-    builder actually built the batch (its GON_TIMING line)."""
-    body = """
-        import time
-        from stackweave.sync import WaitGroup
-        N = 32
-        seen = bytearray(N)
-        def main():
-            rc.sched_sleep(0.06)     # let the OTHER hubs reach their idle condvar wait
-            wg = WaitGroup(); wg.add(N)
-            def w(i):
-                if 0 <= i < N:
-                    seen[i] = 1
-                wg.done()
-            t0 = time.monotonic()
-            rc.fiber_n(lambda i: w(i), N, 0, True)   # bulk splice across now-idle hubs
-            wg.wait()
-            # The whole batch should drain quickly via the idle-cond signal.
-            assert time.monotonic() - t0 < 5.0, "bulk batch was slow to wake"
-        rc.mn_init(4); rc.mn_fiber(main); rc.mn_run(); rc.mn_fini()
-        assert sum(seen) == N, ("only %d/%d bulk fibers ran" % (sum(seen), N))
-        print("GON_BULK_IDLEWAKE_OK")
-    """
-    p = _run_worker(body, env_extra={"STACKWEAVE_GON_BULK": "1",
-                                     "STACKWEAVE_STACK_ARENA": "1",
-                                     "STACKWEAVE_GON_TIMING": "1"})
-    _assert_clean(p, "GON_BULK_IDLEWAKE_OK")
-    assert "[GON_TIMING]" in p.stderr, (
-        "fiber_n did not take the bulk path:\n%s" % p.stderr[-800:])
 
 
 # --------------------------------------------------------------------------

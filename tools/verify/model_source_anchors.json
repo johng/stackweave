@@ -11,7 +11,7 @@
   "runloom_fiber_release": "027d72c0f10990fc"
  },
  "tools/verify/cbmc/g_slab_recycle_cbmc.c": {
-  "runloom_g_slab_alloc": "a0a8819471671b7f",
+  "runloom_g_slab_alloc": "8d4288887504a8ab",
   "runloom_g_slab_free": "f14de014afcb6732"
  },
  "tools/verify/cbmc/preempt_defer_cbmc.c": {
