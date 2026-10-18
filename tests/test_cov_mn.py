@@ -2,13 +2,12 @@
 and its mn_sched_*.c.inc fragments).
 
 Some of the M:N scheduler's paths sit behind env knobs the normal corpus never
-sets: fiber_n bulk spawn (ignored under migration, so this drives the guard), the
-sysmon stalled-hub detector, a 1 ms stack-park idle sweep, the io_uring-as-loop
+sets: the sysmon stalled-hub detector, a 1 ms stack-park idle sweep, the io_uring-as-loop
 backend, a short deadlock-census interval, a tight ready-ring starvation bound,
 and the migration debug oracle.  Each `test_mn_scheduler_mode[...]` runs the
 shared diverse workload (tests/cov_workload.py) in a subprocess with that mode's
 env set, driving its C paths; the in-process tests cover the default-scheduler
-surfaces (varied hub counts, fiber_n bulk, serve(), deadlock-raise, and the
+surfaces (varied hub counts, fiber_n, serve(), deadlock-raise, and the
 hubinfo/diag introspection).
 
 The subprocess assertion is "the mode ran the workload to completion (exit 0,
@@ -33,9 +32,6 @@ _DEVNULL = os.open(os.devnull, os.O_WRONLY)
 # (label, extra-env) -- each drives a distinct gated path through mn_sched.c.
 MODES = [
     ("default",      {}),
-    # GON_BULK is ignored under migration (the bulk builder allocates no per-g
-    # tstate): this mode exercises the guard -- the workload must still finish.
-    ("gon_bulk",     {"STACKWEAVE_GON_BULK": "1"}),
     ("sysmon",      {"STACKWEAVE_SYSMON": "1", "STACKWEAVE_SYSMON_QUIET": "1",
                       "STACKWEAVE_SYSMON_MS": "8", "STACKWEAVE_COV_CPU": "40000000"}),
     ("stack_park_sweep", {"STACKWEAVE_STACK_PARK_SWEEP_MS": "1"}),
@@ -86,7 +82,7 @@ def test_mn_varied_hub_counts(hubs):
 
 
 def test_mn_fiber_n_bulk_indexed():
-    # fiber_n is the bulk/arena spawn path (mn_sched_init_fini.c.inc).
+    # fiber_n loops the spawn core in C (mn_sched_init_fini.c.inc).
     seen = bytearray(256)
     def worker(i):
         if 0 <= i < 256:

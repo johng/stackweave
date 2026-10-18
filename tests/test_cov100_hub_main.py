@@ -110,16 +110,16 @@ def test_deque_overflow_fallback_no_drop():
 
 
 # --------------------------------------------------------------------------
-# L388 (trigger 2/3) -- fiber_n bulk-spawn route.
+# L388 (trigger 2/3) -- fiber_n spawn route.
 #
-# fiber_n is the arena/bulk spawn path; at hub_count==1 its `hub = i % H` is also
-# always 0, so its N fresh gs all land on hub 0 and overflow the deque on the
+# fiber_n loops the spawn core in C; at hub_count==1 every spawn is placed on
+# hub 0, so its N fresh gs all land on hub 0 and overflow the deque on the
 # single drain.  A DISTINCT code path into the SAME fragment line: a regression
 # that only breaks one spawn route still shows here.  Indexed fiber_n(fn,N,0,True)
 # calls fn(index), giving a per-g exactly-once slot for the same no-drop oracle.
 # --------------------------------------------------------------------------
 def test_deque_overflow_fallback_fiber_n_bulk():
-    N = DEQUE_CAP + 800           # 4896 fresh gs via the bulk path
+    N = DEQUE_CAP + 800           # 4896 fresh gs via fiber_n
     ran = bytearray(N)
 
     def worker(i):
@@ -127,7 +127,7 @@ def test_deque_overflow_fallback_fiber_n_bulk():
             ran[i] = 1
 
     def main():
-        rc.fiber_n(worker, N, 0, True)   # bulk-spawn N indexed fresh gs onto hub 0
+        rc.fiber_n(worker, N, 0, True)   # spawn N indexed fresh gs onto hub 0
 
     with hang_guard(90, "deque overflow via fiber_n"):
         rc.mn_init(1)

@@ -85,8 +85,6 @@ ALLOWED = {
     # credit fix inside) or delete it.  The stale claim that it was a live
     # park_safe consumer has been removed from runloom_sched_parkwake.c.inc.
     "runloom_park_until":           "TRIAGE: migration paused, zero adopters since 6a733b74",
-    "runloom_coro_init_at":         "TRIAGE: uncalled; placement-new coro ctor",
-    "runloom_coro_arena_stack":     "TRIAGE: uncalled; arena stack allocator",
 }
 
 # A non-static definition: a line at column 0 that is not a declaration (no

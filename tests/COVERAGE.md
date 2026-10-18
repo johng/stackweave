@@ -17,10 +17,8 @@ Gate: **every C file ≥ 95%**; highest-bug files (netpoll, mn_sched, sched) →
 > These figures predate the migration-only tree. That work deleted the
 > per-hub-tstate M:N path and most feature toggles, and made the per-g-tstate
 > path (formerly excluded as MIGRATION) the only M:N path. The bulk `fiber_n`
-> spawn path (`STACKWEAVE_GON_BULK`) is kept but ignored in every M:N run
-> because it is broken under migration, so its lines are not coverable until it
-> is fixed; strict xfails track it. The io_uring loop backend
-> (`STACKWEAVE_IOURING_LOOP`) runs under migration again and its exclusions
+> spawn path (`STACKWEAVE_GON_BULK`) has since been removed. The io_uring loop
+> backend (`STACKWEAVE_IOURING_LOOP`) runs under migration again and its exclusions
 > were re-anchored. The exclusion manifest has dropped the entries for deleted
 > code, but its other line ranges have not been re-anchored. Re-run
 > `tools/cov_measure.sh` before quoting a number.

@@ -26,7 +26,7 @@ sudo -n prlimit --pid $$ --nofile=8388608:8388608 2>/dev/null
 PY="$HOME/.pyenv/versions/3.14.4t/bin/python3"
 FUNCS="${BIG100_FUNCS:-1000000}"
 TMO="${BIG100_TMO:-300}"
-GON="STACKWEAVE_HARNESS_GON=1 STACKWEAVE_GON_BULK=1 STACKWEAVE_GON_FRESH=1 STACKWEAVE_STACK_ARENA_N=1300000"
+GON="STACKWEAVE_HARNESS_GON=1 STACKWEAVE_STACK_ARENA_N=1300000"
 # TLBC now stays ON: the GC frames anchor makes parked-fiber frames visible to
 # the free-threaded collector, so the p565/p524 crash is fixed at the source and
 # the soak should run TLBC-on (matching production).  Export PYTHON_TLBC=0 to

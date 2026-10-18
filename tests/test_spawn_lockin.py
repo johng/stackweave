@@ -5,8 +5,8 @@ completion count: resident-memset stack scrub is the DEFAULT (secure + fast); th
 get/set contract.
 
 The fiber_n spawn/drain *lifecycle* at scale is exercised separately in
-tests/test_fiber_n_lifecycle.py and, for the stack arena + bulk batch path,
-tests/test_spawn_bulk_lifecycle.py (own subprocesses), and scrub-under-churn
+tests/test_fiber_n_lifecycle.py and, for the stack arena,
+tests/test_stack_arena_fiber_n.py (own subprocesses), and scrub-under-churn
 correctness is covered by the existing swarm/coro/stack tests now running the
 resident-scrub default.
 """

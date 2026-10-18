@@ -1,14 +1,7 @@
-"""1M-coroutine spawn + RUN to completion: correctness + where the moved cost lands.
+"""1M-fiber spawn + RUN to completion on 8 hubs: time and correctness.
 
 fiber_n(noop, N) then mn_run() (drains all N on the hubs).  mn_run returns the
-completed count -- assert == N proves the deferred-stack path actually runs.
-Compare STACKWEAVE_GON_FRESH=0 (frames written at spawn) vs =1 (frames written
-lazily on the owning hub at first resume, in parallel across 8 hubs).
-
-Run with: STACKWEAVE_GON_BULK=1 [STACKWEAVE_GON_FRESH=0|1]   (NO nosubmit here)
-
-BROKEN UNDER MIGRATION: STACKWEAVE_GON_BULK is ignored (the bulk builder allocates
-no per-g tstate; see tests/test_spawn_bulk_lifecycle.py), so fiber_n loops.
+completed count, so == N proves every fiber ran.  SPAWN_N sets N.
 """
 import os
 import sys
@@ -26,9 +19,7 @@ def noop():
 
 def main():
     stackweave_c.mn_init(8)
-    fresh = os.environ.get("STACKWEAVE_GON_FRESH", "0")
-    bulk = os.environ.get("STACKWEAVE_GON_BULK", "0")
-    print("N={0} bulk={1} fresh={2} hubs=8  (spawn + run to completion)".format(N, bulk, fresh))
+    print("N={0} hubs=8  (spawn + run to completion)".format(N))
 
     t0 = time.monotonic()
     stackweave_c.fiber_n(noop, N)

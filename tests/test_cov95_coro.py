@@ -2,8 +2,7 @@
 
 coro.c is the portable stackful-coroutine backend (fcontext on x86_64 here):
 the guarded-stack map/unmap, the per-thread + global stack depot, the stack
-ARENA, the bulk/fiber_n placement-init + fresh-flag deferred-materialize fast
-path, the prewarm one-shot + daemon, the copy-on-grow path, and the invariant
+ARENA, the prewarm one-shot + daemon, the copy-on-grow path, and the invariant
 sanitizer.
 
 Almost every uncovered region lives behind an env-gated MODE or an error
@@ -26,12 +25,6 @@ Regions driven (uncovered coro.c line -> how):
   L608-618  ARENA stack release path -> the same fibers COMPLETE, so their
             arena slices are returned to the bump allocator; churn rounds force
             the cursor-reset-on-empty reuse.
-  L1500-1502 fiber_n fresh-flag DEFERRED materialize -> STACKWEAVE_GON_BULK=1 +
-            STACKWEAVE_GON_FRESH=1 + STACKWEAVE_STACK_ARENA=1: bulk_init skips the
-            per-g asm_make_ctx and marks each coro `fresh`; the first
-            runloom_coro_resume on the owning hub materializes the frame.
-            UNREACHABLE under migration (GON_BULK is ignored: the bulk builder
-            allocates no per-g tstate), so that test is a strict xfail.
   L181,1507,1510  invariant sanitizer -> STACKWEAVE_DEBUG_DIAG=invariants arms
             RUNLOOM_DBG_INVARIANTS, so coro_resume sets/clears c->dbg_running
             (1507/1510) and assert_idle reads it on destroy (181).  Oracle: a
@@ -57,9 +50,6 @@ Lines with NO safe Python trigger are classified in the structured report:
   * hwm-scan batch continuation (L773): needs >512 contiguous resident pages
     (>2 MiB of live C stack) from the top, which exceeds CPython's own C
     recursion guard -- unreachable before RecursionError.
-  * runloom_coro_init_at (L1227-1247) and runloom_coro_arena_stack (L1347-1352):
-    declared in coro.h but have NO caller anywhere in the extension (dead API;
-    the live bulk path is runloom_coro_bulk_init).
 """
 import sys
 import textwrap
@@ -69,7 +59,6 @@ import pytest
 import stackweave_c as rc
 
 from adv_util import needs_rlimit_nproc_thread_cap, run_python
-from known_gaps import GON_BULK_GAP
 
 # coro.c's POSIX stack pool / arena / madvise / grow all live behind
 # RUNLOOM_HAVE_FCONTEXT|UCONTEXT (the guard-page backends).
@@ -153,43 +142,6 @@ def test_stack_arena_carve_and_release_churn():
     p = _run_worker(body, {"STACKWEAVE_STACK_ARENA": "1",
                            "STACKWEAVE_STACK_ARENA_N": "8192"})
     _assert_clean(p, "ARENA_OK 1000")
-
-
-# --------------------------------------------------------------------------
-# L1500-1502 : fiber_n fresh-flag DEFERRED materialize at first resume.
-# --------------------------------------------------------------------------
-@GON_BULK_GAP
-def test_fiber_n_fresh_flag_deferred_materialize():
-    """STACKWEAVE_GON_BULK=1 takes fiber_n's bulk-arena fast path; STACKWEAVE_GON_FRESH=1
-    makes runloom_coro_bulk_init SKIP the per-g asm_make_ctx (the scattered
-    stack-top page fault) and mark each coro `fresh`, leaving self.sp/caller.sp
-    zero.  The first runloom_coro_resume on the OWNING hub then materializes the
-    fcontext frame just before the swap (coro.c L1491-1502) and clears the flag.
-    STACKWEAVE_STACK_ARENA=1 supplies the arena the bulk path needs.  Oracle: all N
-    indexed fibers run their body exactly once -> the deferred frame write lands
-    correctly on every hub (a wrong sp would crash or skip the body), and the
-    bulk builder actually built the batch (its GON_TIMING line)."""
-    body = r'''
-import stackweave
-N = 600
-ran = bytearray(N)            # one writer per slot -> race-free under M:N
-def main():
-    # fiber_n(fn, n, stack_size, indexed=True) -> fn(i) per fiber
-    rc.fiber_n(lambda i: ran.__setitem__(i, 1), N, 0, True)
-    for _ in range(150):
-        rc.sched_yield()      # let every hub resume its bulk fibers
-stackweave.run(2, main)
-assert sum(ran) == N, "only %d/%d fresh-deferred fibers ran" % (sum(ran), N)
-print("FRESH_OK %d" % sum(ran))
-'''
-    p = _run_worker(body, {"STACKWEAVE_GON_BULK": "1",
-                           "STACKWEAVE_GON_FRESH": "1",
-                           "STACKWEAVE_GON_TIMING": "1",
-                           "STACKWEAVE_STACK_ARENA": "1",
-                           "STACKWEAVE_STACK_ARENA_N": "8192"})
-    _assert_clean(p, "FRESH_OK 600")
-    assert "[GON_TIMING]" in p.stderr, (
-        "fiber_n did not take the bulk path:\n%s" % p.stderr[-800:])
 
 
 # --------------------------------------------------------------------------

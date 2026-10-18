@@ -459,19 +459,13 @@ class Harness(object):
         self.funcs = self.args.funcs
         self._max_funcs = None   # set by harness.main(max_funcs=) to cap H.funcs
 
-        # Fast bulk spawn via stackweave_c.fiber_n(indexed=True): one C call builds the
-        # whole worker pool (arena g/coro/stacks + deferred stack frames) instead
-        # of N Python-level stackweave.fiber() calls.  Opt-in (STACKWEAVE_HARNESS_GON=1)
-        # AND requires the bulk gates (STACKWEAVE_GON_BULK=1, usually +GON_FRESH=1).
-        # The deferred stack frames materialize on the hubs in parallel, so it
-        # NEEDS hubs >= 8 -- with fewer, 1M goroutines funnel through too few
-        # threads (materialization + cooperative I/O serialize) and it degrades
-        # badly.  Below 8 we refuse the fast path and fall back to per-g spawn.
-        # BROKEN UNDER MIGRATION: the runtime ignores STACKWEAVE_GON_BULK (the bulk
-        # builder allocates no per-g tstate; tests/test_spawn_bulk_lifecycle.py),
-        # so this "fast path" is fiber_n's per-fiber loop until that is fixed.
-        self._use_gon = (os.environ.get("STACKWEAVE_HARNESS_GON") == "1"
-                         and os.environ.get("STACKWEAVE_GON_BULK") == "1")
+        # Spawn the worker pool with ONE stackweave_c.fiber_n(indexed=True) call
+        # (its C loop skips N Python-level stackweave.fiber() calls).  Opt-in
+        # (STACKWEAVE_HARNESS_GON=1), and only at hubs >= 8: the threshold came
+        # from the removed bulk spawn path (its deferred stack frames needed the
+        # hubs to materialize them in parallel) and was not re-measured for the
+        # loop, so below 8 hubs the pool still spawns per-g.
+        self._use_gon = os.environ.get("STACKWEAVE_HARNESS_GON") == "1"
 
         # Global concurrent-goroutine cap per run_pool call.
         # Programs with hard resource limits may override with a lower value
@@ -860,10 +854,8 @@ class Harness(object):
         actual = n if (max_concurrent is None or max_concurrent >= n) else max_concurrent
         self.expected += actual
 
-        # Fast path: build the whole pool with ONE stackweave_c.fiber_n(indexed=True).
-        # Needs hubs >= 8 (deferred stack frames materialize across hubs in
-        # parallel); below that, fall back to per-g spawn so we never run the
-        # bulk path in a regime where it degrades.
+        # Fast path: build the whole pool with ONE stackweave_c.fiber_n(indexed=True)
+        # (hubs >= 8 only; see _use_gon).
         if self._use_gon and self.hubs >= 8:
             name = worker_fn.__name__
             captured = extra
