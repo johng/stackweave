@@ -129,17 +129,23 @@ static int runloom_gcframes_traverse(PyObject *self, visitproc visit, void *arg)
     /* 2. Base snaps: the single-thread drain's sched_snap holds the run() caller's
      * frame chain while fibers run (ts->current_frame then points at the fiber).
      * (M:N hub snaps are frameless and the main tstate's caller frames stay
-     * reachable via its own current_frame, so only single-thread drains register.)
-     * A parked stackweave_c._Coro's saved state is registered here too. */
-    for (b = runloom_base_snap_head_for_gc(); b != NULL; b = b->next) {
+     * reachable via its own current_frame, so only single-thread drains register.) */
+    for (b = runloom_base_snap_head_for_gc(RUNLOOM_BASE_SNAP_SCHED); b != NULL; b = b->next) {
         int r;
         if (b->snap == NULL) {
             continue;
         }
-        if (b->kind == RUNLOOM_BASE_SNAP_CORO)
-            r = runloom_gcframes_visit_coro((RunloomTstateSnapshot *)b->snap, visit, arg, subtract);
-        else
-            r = runloom_gcframes_visit_snap((runloom_pystate_snap_t *)b->snap, visit, arg, subtract);
+        r = runloom_gcframes_visit_snap((runloom_pystate_snap_t *)b->snap, visit, arg, subtract);
+        if (r) return r;
+    }
+    /* 3. Parked stackweave_c._Coro objects: their saved state, on a list of
+     * their own (a forked child keeps it, and drops the drains'). */
+    for (b = runloom_base_snap_head_for_gc(RUNLOOM_BASE_SNAP_CORO); b != NULL; b = b->next) {
+        int r;
+        if (b->snap == NULL) {
+            continue;
+        }
+        r = runloom_gcframes_visit_coro((RunloomTstateSnapshot *)b->snap, visit, arg, subtract);
         if (r) return r;
     }
     return 0;

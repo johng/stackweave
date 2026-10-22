@@ -97,10 +97,15 @@ runloom_g_t *runloom_greg_head_for_gc(void);
  * it is registered at entry / unregistered at the single exit -- no allocation,
  * no heap lifetime to track).  A Coro's node is part of the Coro object: linked
  * at its first yield, unlinked when it finishes or is dropped, and visited only
- * while the Coro is parked.  The anchor walks the list under STW. */
+ * while the Coro is parked.  Each kind has its own list, because a forked child
+ * keeps one and drops the other (runloom_introspect_reset_after_fork): the
+ * Coro objects are on the heap and survive the fork, while the drains' nodes
+ * are on stacks of threads the child does not have.  The anchor walks both
+ * lists under STW. */
 enum {
     RUNLOOM_BASE_SNAP_SCHED = 0,           /* snap: runloom_pystate_snap_t* */
-    RUNLOOM_BASE_SNAP_CORO  = 1            /* snap: RunloomTstateSnapshot* (module.c) */
+    RUNLOOM_BASE_SNAP_CORO  = 1,           /* snap: RunloomTstateSnapshot* (module.c) */
+    RUNLOOM_BASE_SNAP_KINDS = 2
 };
 
 typedef struct runloom_base_snap_node {
@@ -112,9 +117,9 @@ typedef struct runloom_base_snap_node {
 
 void runloom_base_snap_register(runloom_base_snap_node_t *node, void *snap, int kind);
 void runloom_base_snap_unregister(runloom_base_snap_node_t *node);
-/* STW-only, lock-free head read for the anchor (same contract as
- * runloom_greg_head_for_gc). */
-runloom_base_snap_node_t *runloom_base_snap_head_for_gc(void);
+/* STW-only, lock-free head read of one kind's list for the anchor (same
+ * contract as runloom_greg_head_for_gc). */
+runloom_base_snap_node_t *runloom_base_snap_head_for_gc(int kind);
 
 /* Per-incarnation fiber id, Go's goid analogue.  Contention-free:
  * a per-thread counter ORed with a per-thread base, so spawning on many
