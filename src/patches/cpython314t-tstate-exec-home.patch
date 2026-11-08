@@ -22,8 +22,8 @@
 # Plus the waits on locks held across Python code, which a fiber runtime may
 # redirect so a lock's waiter parks the FIBER instead of its OS thread (see
 # ALSO below):
-#   _thread.lock / RLock waits
-#                         -> _Py_fiber_park hooks  (parking_lot.c,
+#   _thread.lock / RLock, _PyRecursiveMutex waits
+#                         -> _Py_fiber_park hooks  (parking_lot.c, lock.c,
 #                            _threadmodule.c, pycore_semaphore.h)
 #
 # WHY: compilers treat thread identity as loop-invariant and hoist/CSE it.  That
@@ -147,10 +147,11 @@
 # thread state (_PyRecursiveMutex_SelfIdent(): tstate->id, tagged odd so it
 # never equals an OS thread id).  And a waiter must not block an OS thread a
 # parked holder may need: the parking lot asks _Py_fiber_park (installed by
-# the fiber runtime) to park the waiting FIBER for the _thread lock objects'
-# waits.  Everything else blocks the thread as before.  Full story,
-# measurements and guards: src/patches/README.md, "A lock owned by the OS
-# thread, waited for by the OS thread".
+# the fiber runtime) to park the waiting FIBER for the waits that are held
+# across Python code -- the _thread lock objects and every _PyRecursiveMutex
+# (import, warnings).  Everything else blocks the thread as before.  Full
+# story, measurements and guards: src/patches/README.md, "A lock owned by the
+# OS thread, waited for by the OS thread".
 #
 # ZERO IMPACT BY DEFAULT: with the flag undefined every site macro-expands back
 # to stock.  No public ABI change: the fields it adds are internal
@@ -582,12 +583,10 @@
          if (ret == Py_PARK_OK) {
              if (entry.handed_off) {
                  // We own the lock now.
-@@ -360,18 +371,47 @@
- recursive_mutex_is_owned_by(_PyRecursiveMutex *m, PyThread_ident_t tid)
- {
+@@ -362,21 +373,59 @@
      return _Py_atomic_load_ullong_relaxed(&m->thread) == tid;
-+}
-+
+ }
+ 
 +#ifdef Py_TSTATE_EXEC_HOME
 +/* Py_TSTATE_EXEC_HOME: a FIBER's recursive mutex is owned by its THREAD
 +   STATE, not by an OS thread.  A stackful fiber (runloom-style) runs on a
@@ -611,12 +610,12 @@
 +        return ((PyThread_ident_t)tstate->id << 1) | 1;
 +    }
 +    return PyThread_get_thread_ident_ex();
- }
++}
 +#define recursive_mutex_self() _PyRecursiveMutex_SelfIdent()
 +#else
 +#define recursive_mutex_self() PyThread_get_thread_ident_ex()
 +#endif
- 
++
  int
  _PyRecursiveMutex_IsLockedByCurrentThread(_PyRecursiveMutex *m)
  {
@@ -632,7 +631,21 @@
      if (recursive_mutex_is_owned_by(m, thread)) {
          m->level++;
          return;
-@@ -384,7 +424,7 @@
+     }
++#ifdef Py_TSTATE_EXEC_HOME
++    // Py_TSTATE_EXEC_HOME: CPython's own recursive mutexes (the import lock,
++    // the warnings lock) are held across Python code -- a finder's
++    // find_spec(), a showwarning() -- which may park a fiber, so a contender
++    // parks its fiber too (pycore_semaphore.h) instead of blocking an OS
++    // thread the holder may need to run on.
++    (void)_PyMutex_LockTimed(&m->mutex, -1, _PY_LOCK_DETACH | _PY_LOCK_FIBER);
++#else
+     PyMutex_Lock(&m->mutex);
++#endif
+     _Py_atomic_store_ullong_relaxed(&m->thread, thread);
+     assert(m->level == 0);
+ }
+@@ -384,7 +433,7 @@
  PyLockStatus
  _PyRecursiveMutex_LockTimed(_PyRecursiveMutex *m, PyTime_t timeout, _PyLockFlags flags)
  {
@@ -641,7 +654,7 @@
      if (recursive_mutex_is_owned_by(m, thread)) {
          m->level++;
          return PY_LOCK_ACQUIRED;
-@@ -409,7 +449,7 @@
+@@ -409,7 +458,7 @@
  int
  _PyRecursiveMutex_TryUnlock(_PyRecursiveMutex *m)
  {

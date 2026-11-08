@@ -125,18 +125,19 @@ stackweave.run(H, main)
 ''')
 
 
-@MIGRATION_GAP(
-    "C do_warn holds the interpreter's warnings _PyRecursiveMutex across "
-    "showwarning; owned by the thread state (exec-home lock.c hunk) it is "
-    "released after a migration, but a warn that has to wait blocks its hub's "
-    "OS thread, so with a waiter on every hub the parked showwarning never "
-    "resumes",
-    raises=AssertionError)
 def test_identity_warnings_lock_released_after_a_migrating_showwarning():
     """A showwarning hook that does I/O (logging.captureWarnings with a
     network handler, say) parks and resumes on another hub, then parks again
     while a fiber on every hub warns.  Every warning returns, and the waiters
-    parked (stats()["fiber_lock_parks"]) instead of blocking their hubs."""
+    parked (stats()["fiber_lock_parks"]) instead of blocking their hubs.
+
+    Was a gap, twice over: C do_warn holds the interpreter's warnings lock (a
+    _PyRecursiveMutex) across showwarning.  Owned by the OS thread, it could
+    not be released after the move and every later warn hung; the exec-home
+    lock.c hunk owns it by the thread state.  And a warn that had to wait
+    blocked its hub's OS thread, so with a waiter on every hub nothing could
+    resume the holder; _PyRecursiveMutex_Lock now waits with _PY_LOCK_FIBER,
+    which parks the fiber."""
     run_gap(r'''
 import warnings
 _watchdog(20)
@@ -182,19 +183,21 @@ stackweave.run(H, main)
 ''')
 
 
-@MIGRATION_GAP(
-    "importlib runs every finder.find_spec() under the global import lock "
-    "(_imp, a _PyRecursiveMutex); owned by the thread state (exec-home lock.c "
-    "hunk) it is released after a migration, but an import that has to wait "
-    "blocks its hub's OS thread, so with a waiter on every hub the parked "
-    "finder never resumes",
-    raises=AssertionError)
 def test_identity_import_lock_released_after_a_migrating_finder():
     """A meta-path finder that does I/O (setuptools' editable finder calls
     Path.exists) parks and resumes on another hub, then parks again while a
     fiber on every hub imports.  The import fails with ModuleNotFoundError,
     the imports on every hub work, and their waits parked
-    (stats()["fiber_lock_parks"]) instead of blocking their hubs."""
+    (stats()["fiber_lock_parks"]) instead of blocking their hubs.
+
+    Was a gap, twice over: importlib runs every find_spec() under the global
+    import lock (_imp, a _PyRecursiveMutex).  Owned by the OS thread, the
+    finder got 'not holding the import lock' after the move and the lock
+    leaked, so every later import hung; the exec-home lock.c hunk owns it by
+    the thread state.  And an import that had to wait blocked its hub's OS
+    thread, so with a waiter on every hub nothing could resume the finder;
+    _PyRecursiveMutex_Lock now waits with _PY_LOCK_FIBER, which parks the
+    fiber."""
     run_gap(r'''
 import importlib, importlib.abc
 _watchdog(20)

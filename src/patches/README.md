@@ -7,7 +7,7 @@ one OS thread in two separate ways — and either alone still corrupts:
 | half | flag | what it decouples |
 |---|---|---|
 | **allocation** | `Py_TSTATE_ALLOC_HOME` | which heap a migrated fiber allocates on |
-| **execution** | `Py_TSTATE_EXEC_HOME` | whether the compiler may cache *which OS thread we are* (plus memoryview's and array.array's buffer-export counts, which a migrated fiber's deallocs race, and `_thread.RLock` and the import and warnings locks: owned by the thread state rather than the OS thread, and the `_thread` locks' waits can park a fiber, see below) |
+| **execution** | `Py_TSTATE_EXEC_HOME` | whether the compiler may cache *which OS thread we are* (plus memoryview's and array.array's buffer-export counts, which a migrated fiber's deallocs race, and the locks CPython holds across Python code -- `_thread` locks, the import and warnings locks: owned by the thread state rather than the OS thread, and their waits can park a fiber, see below) |
 
 Each half ships as a **version-specific** patch (stackweave supports only
 free-threaded CPython 3.14+), and they are **not** interchangeable across
@@ -379,14 +379,17 @@ wait.
 The lot keeps its queue, handoff and timeout-vs-unpark bookkeeping; only the
 sleep is delegated, and only for a wait flagged `_Py_PARK_FIBER`, which the
 lock objects pass as `_PY_LOCK_FIBER` from `acquire()` and RLock's
-`_acquire_restore` (`_threadmodule.c` hunk; every other `PyMutex` wait, such
-as a critical section's, blocks the thread as before). stackweave's
-`runloom_fiberlock.c` installs them at import and parks through
-`runloom_park_generic` (foreign-wakeable), so the hub runs other fibers and
-the same six-fiber run finishes in 0.1 s. A waiter on the hub of a holder
-that was PREEMPTED inside the lock hung that hub on its own: a preempted
-fiber waits on its hub's ready ring, which nothing steals.
-`prepare()` names a fiber only while that
+`_acquire_restore` (`_threadmodule.c` hunk), and `_PyRecursiveMutex_Lock`
+passes for CPython's own recursive mutexes (`lock.c` hunk), which are held
+across Python code by design: `importlib` runs every `find_spec()` under the
+import lock, and `do_warn` runs `showwarning()` under the warnings lock. Every
+other `PyMutex` wait, such as a critical section's, blocks the thread as
+before. stackweave's `runloom_fiberlock.c` installs them at import and parks
+through `runloom_park_generic` (foreign-wakeable), so the hub runs other
+fibers and the same six-fiber run finishes in 0.1 s. With identity only, a
+`showwarning` or a meta-path finder that parked while a fiber on every hub
+warned or imported hung the process: each waiter blocked its hub, and the
+holder had nowhere to resume. `prepare()` names a fiber only while that
 fiber's own thread state is attached: a fiber inside a subinterpreter call
 (`_interpreters.exec`) waits with the subinterpreter's state attached, and
 parking there handed the hub or the `run(1)` drain a foreign state (`run(1)`
@@ -395,8 +398,8 @@ flag test. `_testinternalcapi/test_lock.c`'s whitebox owner assert follows
 the identity. Witness: `_Py_FIBER_PARK_HOOKS` (`stackweave_c.fiber_lock_hooks`;
 `fiber_locks_installed` says the hooks are in -- nothing at run time
 leaves them out). Guards: `tests/test_fiber_locks.py`,
-`tests/test_cross_hub_migration.py -k stock_rlock`,
-`tests/test_cpython_thread_keyed_locks.py -k preempt_lock_holder`
+`tests/test_cross_hub_migration.py -k stock_rlock`, and the warnings and
+import tests in `tests/test_cpython_thread_keyed_locks.py`
 (`stats()["fiber_lock_parks"]`).
 
 One behaviour changes for plain threads too: a thread state is the owner, so

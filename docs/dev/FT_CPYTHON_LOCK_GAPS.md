@@ -152,6 +152,15 @@ and a lost handshake fails the scenario instead of hanging it. Before the fix: 3
 
 ### 3. warnings lock (B, process-wide hang)
 
+**Status: FIXED.** The exec-home lock.c hunk owns a fiber's `_PyRecursiveMutex`
+by its thread state, so `do_warn` releases after the move; and
+`_PyRecursiveMutex_Lock` waits with `_PY_LOCK_FIBER`, so a warn that has to
+wait parks its fiber instead of blocking its hub. Identity alone still hung
+when a fiber on every hub warned while `showwarning` was parked (each waiter
+blocked its hub). Test:
+`test_identity_warnings_lock_released_after_a_migrating_showwarning` (a waiter
+on every hub after the move, `fiber_lock_parks >= 4`).
+
 `WMODE=showwarning p16_warnings_lock.py 4`: watchdog. C `do_warn`
 (`Python/_warnings.c:1170`) holds the interpreter's warnings
 `_PyRecursiveMutex` across `warn_explicit` -> `showwarning` (and message
@@ -166,6 +175,12 @@ monkey.patch) did not migrate in 6 tries (`WMODE=stat`), so that trigger is
 possible but not shown.
 
 ### 4. Global import lock (B, process-wide hang; known gap, new trigger and outcome)
+
+**Status: FIXED** by the same two changes as 3: `_imp.release_lock` finds the
+finder's own thread state after the move, and an import that waits for the
+lock parks its fiber. Test:
+`test_identity_import_lock_released_after_a_migrating_finder` (a waiter on
+every hub after the move).
 
 `p17_import_lock_finder.py`: the first import raises
 `RuntimeError('not holding the import lock')`, then imports on every hub hang.

@@ -271,36 +271,38 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   peek NULL) and block on the real OS — never park a non-existent g, never lazily
   alloc sched state (`peek_current`, never `sched_get`).
 - **CPython's locks that are held across Python code are owned by the thread
-  state, and the `_thread` locks' waits park the fiber, through exec-home
-  hunks whose hooks the library installs.** (1) Ownership: `Python/lock.c`
-  keys `_PyRecursiveMutex` (so `threading.RLock`, and CPython's import and
-  warnings locks) on the attached `tstate->id`, the fiber's own for its whole
-  life; `Python/import.c`'s after-fork reinit uses the same identity. Keyed on
-  the OS thread, a fiber that migrated inside the lock could not release it
+  state, and their waits park the fiber, through exec-home hunks whose hooks
+  the library installs.** (1) Ownership: `Python/lock.c` keys
+  `_PyRecursiveMutex` (so `threading.RLock`, and CPython's import and warnings
+  locks) on the attached `tstate->id`, the fiber's own for its whole life;
+  `Python/import.c`'s after-fork reinit uses the same identity. Keyed on the
+  OS thread, a fiber that migrated inside the lock could not release it
   (wedged for good: an import or warnings lock hung every later import or
   warn), and a second fiber on the holder's hub re-entered it (two in the
   critical section). (2) Waiting: `Python/parking_lot.c` lets a wait flagged
-  `_PY_LOCK_FIBER` (the lock objects' acquire, and RLock's `_acquire_restore`)
-  ask `_Py_fiber_park` first; `runloom_fiberlock.c` installs those hooks at
-  import (`STACKWEAVE_FIBER_LOCKS=0` leaves them out) and parks the fiber
-  through `runloom_park_generic`, so its hub runs other fibers and the release
-  wakes it from any thread. Without (2), a waiter blocked its hub's OS thread
-  in the parking lot, and with as many waiters as hubs on a lock held across a
-  park nothing could run the holder: a hard hang the deadlock detector cannot
-  see (hubs busy, not idle); a waiter on the hub of a PREEMPTED holder hung
-  that hub on its own, since nothing steals from a ready ring. `fl_prepare`
-  names a fiber only while its own state is attached (M:N: `g->tstate`;
-  `run(1)`: stackweave's interpreter): inside a subinterpreter call a fiber
-  parked with a foreign state attached (`run(1)` crashed). A plain thread, the
-  hub's own stack and a nested `run(1)`'s fibers keep the platform semaphore;
-  nested fibers share the outer fiber's state, so they still re-enter its
-  RLocks. `stackweave_c.rlock_tstate_owned` / `fiber_lock_hooks` say whether
-  the interpreter has the lock.c and parking_lot.c hunks,
-  `fiber_locks_installed` whether the hooks are in, and
-  `stats()["fiber_lock_parks"]` counts waits that parked. Guards:
-  `tests/test_fiber_locks.py`, `tests/test_cross_hub_migration.py -k
-  stock_rlock`, `tests/test_cpython_thread_keyed_locks.py -k
-  preempt_lock_holder`.
+  `_PY_LOCK_FIBER` (the lock objects' acquire, RLock's `_acquire_restore`,
+  every `_PyRecursiveMutex_Lock`) ask `_Py_fiber_park` first;
+  `runloom_fiberlock.c` installs those hooks at import
+  (`STACKWEAVE_FIBER_LOCKS=0` leaves them out) and parks the fiber through
+  `runloom_park_generic`, so its hub runs other fibers and the release wakes
+  it from any thread. Without (2), a waiter blocked its hub's OS thread in the
+  parking lot, and with as many waiters as hubs on a lock held across a park
+  (a `showwarning` or meta-path finder doing I/O) nothing could run the
+  holder: a hard hang the deadlock detector cannot see (hubs busy, not idle);
+  a waiter on the hub of a PREEMPTED holder hung that hub on its own, since
+  nothing steals from a ready ring. `fl_prepare` names a fiber only while its
+  own state is attached (M:N: `g->tstate`; `run(1)`: stackweave's
+  interpreter): inside a subinterpreter call a fiber parked with a foreign
+  state attached (`run(1)` crashed). A plain thread, the hub's own stack and a
+  nested `run(1)`'s fibers keep the platform semaphore; nested fibers share
+  the outer fiber's state, so they still re-enter its RLocks.
+  `stackweave_c.rlock_tstate_owned` / `fiber_lock_hooks` say whether the
+  interpreter has the lock.c and parking_lot.c hunks, `fiber_locks_installed`
+  whether the hooks are in, and `stats()["fiber_lock_parks"]` counts waits
+  that parked. Guards: `tests/test_fiber_locks.py`,
+  `tests/test_cross_hub_migration.py -k stock_rlock`,
+  `tests/test_cpython_thread_keyed_locks.py -k "warnings or import_lock or
+  preempt_lock_holder"`.
 - **importlib's module locks key on the fiber, not the OS thread.**
   `import stackweave` rebinds `importlib._bootstrap._ModuleLock` to
   `_FiberModuleLock` (`src/stackweave/_importlock.py`): `_ModuleLock`'s own
