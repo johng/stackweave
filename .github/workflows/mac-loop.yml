@@ -46,8 +46,8 @@ on:
         description: "Pinned CPython (3.13.13 or 3.14.4)."
         default: "3.14.4"
       runner:
-        description: "Runner image (macos-14, macos-15, macos-latest). Both open bugs are in the kqueue path, so the OS version is a variable worth controlling."
-        default: "macos-14"
+        description: "Runner image (macos-15, macos-latest; GitHub retired macos-14 in Nov 2026). Both open bugs are in the kqueue path, so the OS version is a variable worth controlling."
+        default: "macos-15"
 
 permissions:
   contents: read

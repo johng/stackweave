@@ -54,7 +54,7 @@ permissions:
 jobs:
   debug:
     name: "macos-debug ${{ inputs.version }} x${{ inputs.iterations }}"
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 120
     env:
       RL_CI_TEST_TIMEOUT: "1200"
