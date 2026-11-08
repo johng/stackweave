@@ -192,6 +192,14 @@ it. Also reached by `_ModuleLock` weakref callbacks and `os.fork()`.
 
 ### 5. `multiprocessing.Value`'s lock self-deadlocks after a migration (A)
 
+**Status: FIXED for ownership.** The exec-home semaphore.c hunk keys a
+recursive SemLock's `last_tid` on a fiber's thread state
+(`_PyRecursiveMutex_SelfIdent`), so the holder re-enters after a move and a
+fiber on the holder's hub is not its owner (the test checks `_is_mine()` both
+ways). Not fixed: a CONTENDED SemLock still waits in `sem_wait` (a
+cross-process semaphore, outside the parking lot) and blocks its hub;
+monkey.patch does not cover it either.
+
 `p14_mp_semlock.py [patch]`: watchdog, with or without monkey.patch.
 `with v.get_lock(): <park, migrate>; v.value += 1` -- the property re-acquires
 the same recursive SemLock, whose `ISMINE` compares the OS thread

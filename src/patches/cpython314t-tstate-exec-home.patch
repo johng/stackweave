@@ -14,15 +14,16 @@
 #   _PyManagedBufferObject.exports -> atomic ++/--  (memoryobject.c)
 #   PyMemoryViewObject.exports     -> atomic in hex()/hash() too (3.14 backport)
 #   arrayobject.ob_exports         -> atomic ++/--  (arraymodule.c)
-# Plus two lock owners, which a migration changes and fibers on one OS thread
-# share (see ALSO below):
+# Plus three lock owners, which a migration changes and fibers on one OS
+# thread share (see ALSO below):
 #   _PyRecursiveMutex.thread (_thread.RLock, the import and warnings locks)
-#                         -> the attached thread state's id, not the OS thread
-#                                                         (lock.c, import.c)
+#                         -> a fiber's thread state's id, not the OS thread
+#                            (other states: the OS thread)  (lock.c, import.c)
 #   _io.Buffered* owner   -> the same identity            (_io/bufferedio.c)
-# Plus the waits on locks held across Python code, which a fiber runtime may
-# redirect so a lock's waiter parks the FIBER instead of its OS thread (see
-# ALSO below):
+#   SemLock.last_tid (multiprocessing RLock, mp.Value's lock)
+#                         -> the same identity  (_multiprocessing/semaphore.c)
+# Plus the waits on them, which a fiber runtime may redirect so a lock's
+# waiter parks the FIBER instead of its OS thread (see ALSO below):
 #   _thread.lock / RLock, _PyRecursiveMutex, _io.Buffered* waits
 #                         -> _Py_fiber_park hooks  (parking_lot.c, lock.c,
 #                            _threadmodule.c, bufferedio.c, pycore_semaphore.h)
@@ -142,23 +143,26 @@
 # installed either; its witness is _Py_ARRAY_EXPORTS_ATOMIC in object.h.
 #
 # ALSO -- a lock owned by the OS thread, waited for by the OS thread (lock.c,
-# parking_lot.c, _threadmodule.c, import.c, bufferedio.c).  A fiber that parks
-# inside a lock and resumes on another OS thread must still own it, and the
-# other fibers on its old OS thread must not: so the owner of a
-# _PyRecursiveMutex and of a buffered stream's lock is the attached thread
-# state (_PyRecursiveMutex_SelfIdent(): tstate->id, tagged odd so it never
-# equals an OS thread id).  And a waiter must not block an OS thread a parked
-# holder may need: the parking lot asks _Py_fiber_park (installed by the fiber
-# runtime) to park the waiting FIBER for the waits that are held across
-# Python code -- the _thread lock objects, every _PyRecursiveMutex (import,
-# warnings), a buffered stream's lock (now a PyMutex).  Everything else
-# blocks the thread as before.  Full story, measurements and guards:
-# src/patches/README.md, "A lock owned by the OS thread, waited for by the OS
-# thread".
+# parking_lot.c, _threadmodule.c, import.c, bufferedio.c, semaphore.c).  A
+# fiber that parks inside a lock and resumes on another OS thread must still
+# own it, and the other fibers on its old OS thread must not: so the owner of
+# a _PyRecursiveMutex, of a buffered stream's lock and of a recursive SemLock
+# is a fiber's thread state (_PyRecursiveMutex_SelfIdent(): tstate->id,
+# tagged odd so it never equals an OS thread id; every state the runtime did
+# not mark as a fiber's keeps the OS thread, as stock).  And a waiter must not
+# block an OS thread a parked holder may need: the parking lot asks
+# _Py_fiber_park (installed by the fiber runtime) to park the waiting FIBER
+# for the waits that are held across Python code -- the _thread lock objects,
+# every _PyRecursiveMutex (import, warnings), a buffered stream's lock (now a
+# PyMutex).  Everything else blocks the thread as before.  A multiprocessing
+# SemLock's wait is a cross-process semaphore and still blocks the thread.
+# Full story, measurements and guards: src/patches/README.md, "A lock owned by
+# the OS thread, waited for by the OS thread".
 #
 # ZERO IMPACT BY DEFAULT: with the flag undefined every site macro-expands back
 # to stock.  No public ABI change: the fields it adds or retypes are internal
-# (_PySemaphore) or private to one module (buffered).
+# (_PySemaphore, _PyThreadStateImpl) or private to one module (buffered,
+# SemLockObject).
 #
 # CAVEATS
 #   * Do NOT build with --with-lto (or -flto): LTO inlines pystate.c's direct
@@ -187,6 +191,7 @@
 #         grep _Py_FIBER_PARK_HOOKS Include/object.h
 #         grep _Py_fiber_park Python/parking_lot.c
 #         grep BUFFERED_SELF Modules/_io/bufferedio.c
+#         grep SEMLOCK_SELF Modules/_multiprocessing/semaphore.c
 #   * MSVC thread-id reads are intrinsics, not asm, and are left untouched.
 #   * Same class, not covered (not read by a fiber across a park in any path
 #     exercised so far): import.c's `pkgcontext`, mimalloc's _mi_heap_default.
@@ -208,7 +213,7 @@
 #         Include/internal/pycore_lock.h, Python/import.c, Python/parking_lot.c,
 #         Include/internal/pycore_semaphore.h, Include/internal/pycore_parking_lot.h,
 #         Modules/_threadmodule.c, Modules/_testinternalcapi/test_lock.c,
-#         Modules/_io/bufferedio.c
+#         Modules/_io/bufferedio.c, Modules/_multiprocessing/semaphore.c
 #
 --- a/Include/object.h
 +++ b/Include/object.h
@@ -1046,3 +1051,75 @@
      self->owner = 0;
      /* Find out whether buffer_size is a power of 2 */
      /* XXX is this optimization useful? */
+--- a/Modules/_multiprocessing/semaphore.c
++++ b/Modules/_multiprocessing/semaphore.c
+@@ -8,6 +8,9 @@
+  */
+ 
+ #include "multiprocessing.h"
++#ifdef Py_TSTATE_EXEC_HOME
++#  include "pycore_lock.h"        // _PyRecursiveMutex_SelfIdent()
++#endif
+ 
+ #ifdef HAVE_SYS_TIME_H
+ #  include <sys/time.h>           // gettimeofday()
+@@ -21,7 +24,11 @@
+ typedef struct {
+     PyObject_HEAD
+     SEM_HANDLE handle;
++#ifdef Py_TSTATE_EXEC_HOME
++    unsigned long long last_tid;
++#else
+     unsigned long last_tid;
++#endif
+     int count;
+     int maxvalue;
+     int kind;
+@@ -46,7 +53,19 @@
+ 
+ #include "clinic/semaphore.c.h"
+ 
+-#define ISMINE(o) (o->count > 0 && PyThread_get_thread_ident() == o->last_tid)
++#ifdef Py_TSTATE_EXEC_HOME
++/* Py_TSTATE_EXEC_HOME: a recursive SemLock (mp.Lock's RLock kind, mp.Value's
++   lock) is "mine" when the same FIBER's thread state took it, as for a
++   _PyRecursiveMutex (pycore_lock.h): a fiber that parked holding it and
++   resumed on another OS thread still owns it, and another fiber on the
++   holder's OS thread does not. */
++#  define SEMLOCK_SELF() _PyRecursiveMutex_SelfIdent()
++#  define SEMLOCK_SELF_WIN32() _PyRecursiveMutex_SelfIdent()
++#else
++#  define SEMLOCK_SELF() PyThread_get_thread_ident()
++#  define SEMLOCK_SELF_WIN32() GetCurrentThreadId()
++#endif
++#define ISMINE(o) (o->count > 0 && SEMLOCK_SELF() == o->last_tid)
+ 
+ 
+ #ifdef MS_WINDOWS
+@@ -130,7 +149,7 @@
+ 
+     /* check whether we can acquire without releasing the GIL and blocking */
+     if (WaitForSingleObjectEx(self->handle, 0, FALSE) == WAIT_OBJECT_0) {
+-        self->last_tid = GetCurrentThreadId();
++        self->last_tid = SEMLOCK_SELF_WIN32();
+         ++self->count;
+         Py_RETURN_TRUE;
+     }
+@@ -159,7 +178,7 @@
+     case WAIT_TIMEOUT:
+         Py_RETURN_FALSE;
+     case WAIT_OBJECT_0 + 0:
+-        self->last_tid = GetCurrentThreadId();
++        self->last_tid = SEMLOCK_SELF_WIN32();
+         ++self->count;
+         Py_RETURN_TRUE;
+     case WAIT_OBJECT_0 + 1:
+@@ -382,7 +401,7 @@
+     }
+ 
+     ++self->count;
+-    self->last_tid = PyThread_get_thread_ident();
++    self->last_tid = SEMLOCK_SELF();
+ 
+     Py_RETURN_TRUE;
+ }

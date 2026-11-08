@@ -8,8 +8,9 @@
 #                interchangeable (the 3.14 patch rejects on 3.15).
 #
 # Same feature, flag, _Py_TID_ASM witness and lock hunks (lock.c, parking_lot.c,
-# _threadmodule.c, import.c, bufferedio.c: locks owned by the attached thread
-# state, and their waits able to park a fiber) as the 3.14 patch -- see
+# _threadmodule.c, import.c, bufferedio.c, semaphore.c: locks owned by a
+# fiber's thread state, and their waits able to park a fiber) as the 3.14
+# patch -- see
 # cpython314t-tstate-exec-home.patch for the full WHAT/WHY, codegen evidence,
 # measured cost, and caveats (no LTO -- PGO alone is fine; do not annotate
 # _PyThreadState_GetCurrent() pure/const; MSVC intrinsics not covered).  All of
@@ -71,8 +72,9 @@
 # `grep recursive_mutex_self Python/lock.c`,
 # `grep _Py_TSTATE_FIBER_FLAG Include/internal/pycore_tstate.h`,
 # `grep _Py_FIBER_PARK_HOOKS Include/cpython/object.h` and
-# `grep _Py_fiber_park Python/parking_lot.c` and
-# `grep BUFFERED_SELF Modules/_io/bufferedio.c`.
+# `grep _Py_fiber_park Python/parking_lot.c`,
+# `grep BUFFERED_SELF Modules/_io/bufferedio.c` and
+# `grep SEMLOCK_SELF Modules/_multiprocessing/semaphore.c`.
 #
 # APPLY:  from the CPython source root:  patch -p1 -F0 < this-file
 # SCOPE:  Include/cpython/object.h, Include/internal/pycore_pystate.h, Python/pystate.c,
@@ -81,7 +83,7 @@
 #         Include/internal/pycore_lock.h, Python/import.c, Python/parking_lot.c,
 #         Include/internal/pycore_semaphore.h, Include/internal/pycore_parking_lot.h,
 #         Modules/_threadmodule.c, Modules/_testinternalcapi/test_lock.c,
-#         Modules/_io/bufferedio.c
+#         Modules/_io/bufferedio.c, Modules/_multiprocessing/semaphore.c
 #
 --- a/Include/cpython/object.h
 +++ b/Include/cpython/object.h
@@ -894,3 +896,75 @@
      self->owner = 0;
      /* Find out whether buffer_size is a power of 2 */
      /* XXX is this optimization useful? */
+--- a/Modules/_multiprocessing/semaphore.c
++++ b/Modules/_multiprocessing/semaphore.c
+@@ -9,6 +9,9 @@
+ 
+ #include "multiprocessing.h"
+ #include "pycore_object.h"        // _PyObject_VisitType()
++#ifdef Py_TSTATE_EXEC_HOME
++#  include "pycore_lock.h"        // _PyRecursiveMutex_SelfIdent()
++#endif
+ 
+ #ifdef HAVE_SYS_TIME_H
+ #  include <sys/time.h>           // gettimeofday()
+@@ -22,7 +25,11 @@
+ typedef struct {
+     PyObject_HEAD
+     SEM_HANDLE handle;
++#ifdef Py_TSTATE_EXEC_HOME
++    unsigned long long last_tid;
++#else
+     unsigned long last_tid;
++#endif
+     int count;
+     int maxvalue;
+     int kind;
+@@ -47,7 +54,19 @@
+ 
+ #include "clinic/semaphore.c.h"
+ 
+-#define ISMINE(o) (o->count > 0 && PyThread_get_thread_ident() == o->last_tid)
++#ifdef Py_TSTATE_EXEC_HOME
++/* Py_TSTATE_EXEC_HOME: a recursive SemLock (mp.Lock's RLock kind, mp.Value's
++   lock) is "mine" when the same FIBER's thread state took it, as for a
++   _PyRecursiveMutex (pycore_lock.h): a fiber that parked holding it and
++   resumed on another OS thread still owns it, and another fiber on the
++   holder's OS thread does not. */
++#  define SEMLOCK_SELF() _PyRecursiveMutex_SelfIdent()
++#  define SEMLOCK_SELF_WIN32() _PyRecursiveMutex_SelfIdent()
++#else
++#  define SEMLOCK_SELF() PyThread_get_thread_ident()
++#  define SEMLOCK_SELF_WIN32() GetCurrentThreadId()
++#endif
++#define ISMINE(o) (o->count > 0 && SEMLOCK_SELF() == o->last_tid)
+ 
+ 
+ #ifdef MS_WINDOWS
+@@ -131,7 +150,7 @@
+ 
+     /* check whether we can acquire without releasing the GIL and blocking */
+     if (WaitForSingleObjectEx(self->handle, 0, FALSE) == WAIT_OBJECT_0) {
+-        self->last_tid = GetCurrentThreadId();
++        self->last_tid = SEMLOCK_SELF_WIN32();
+         ++self->count;
+         Py_RETURN_TRUE;
+     }
+@@ -160,7 +179,7 @@
+     case WAIT_TIMEOUT:
+         Py_RETURN_FALSE;
+     case WAIT_OBJECT_0 + 0:
+-        self->last_tid = GetCurrentThreadId();
++        self->last_tid = SEMLOCK_SELF_WIN32();
+         ++self->count;
+         Py_RETURN_TRUE;
+     case WAIT_OBJECT_0 + 1:
+@@ -383,7 +402,7 @@
+     }
+ 
+     ++self->count;
+-    self->last_tid = PyThread_get_thread_ident();
++    self->last_tid = SEMLOCK_SELF();
+ 
+     Py_RETURN_TRUE;
+ }

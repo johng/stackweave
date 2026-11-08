@@ -250,37 +250,50 @@ stackweave.run(H, main)
 ''')
 
 
-@pytest.mark.parametrize("patched", [
-    pytest.param(False, id="stock", marks=MIGRATION_GAP(
-        "a recursive multiprocessing SemLock (mp.Value's lock) decides 'mine' "
-        "by the OS thread (semaphore.c ISMINE); after a migration the holder's "
-        "re-acquire waits on itself in sem_wait (monkey.patch closes it: "
-        "executors._CoRecursiveSemLock)",
-        raises=AssertionError)),
-    pytest.param(True, id="monkey"),
-])
+@pytest.mark.parametrize("patched", [False, True], ids=["stock", "monkey"])
 def test_identity_mp_value_lock_reenters_after_a_migration(patched):
     """`with v.get_lock(): <park, migrate>; v.value += 1` -- the property
-    re-acquires the same recursive lock, which must still count as held, and
-    the release after the migration must free it.  multiprocessing is imported
-    after monkey.patch(), the usual order."""
+    re-acquires the same recursive lock, which must still count as held, a
+    fiber on the holder's hub must not count as its owner, and the release
+    after the migration must free it.  multiprocessing is imported after
+    monkey.patch(), the usual order.
+
+    Was a gap: a recursive SemLock decided 'mine' by the OS thread
+    (semaphore.c ISMINE), so after a migration the holder's re-acquire waited
+    on itself in sem_wait, with or without monkey.patch.  Stock: the
+    exec-home semaphore.c hunk keys it on the thread state, as lock.c does.
+    Under monkey.patch: executors._CoRecursiveSemLock keeps owner and depth
+    per fiber."""
     run_gap(r'''
 _watchdog(25)
 if PATCHED:
     import stackweave.monkey as monkey; monkey.patch()
 import multiprocessing as mp
+assert stackweave_c.rlock_tstate_owned
 def main():
     v = mp.Value("i", 0)
+    sem = v.get_lock()._semlock
     if PATCHED:
         # the fiber-keyed recursive lock is the one in use
-        assert type(v.get_lock()._semlock).__name__ == "_CoRecursiveSemLock"
+        assert type(sem).__name__ == "_CoRecursiveSemLock", type(sem)
+    seen = {}
     with v.get_lock():
+        before = threading.get_ident()
+        ch = stackweave.Chan(1)
+        def peer():                        # another fiber on the holder's hub
+            ch.send((threading.get_ident(), sem._is_mine()))
+        stackweave_c.mn_fiber(peer, hub=stackweave_c.mn_current_hub())
+        (tid, seen["peer"]), _ = ch.recv()
+        assert tid == before, "the peer ran on another OS thread"
         before = threading.get_ident()
         force_migrate(rounds=20)
         if threading.get_ident() != before:
             print("REACHED: moved to another hub holding the lock", flush=True)
+        seen["holder"] = sem._is_mine()
         v.value += 1
-        assert v.get_lock()._semlock._count() == 1
+        assert sem._count() == 1
+    print("is_mine:", seen, flush=True)
+    assert seen == {"peer": False, "holder": True}, seen
     assert v.get_lock().acquire(timeout=2)
     v.get_lock().release()
     # released for real: a plain OS thread can take it now
