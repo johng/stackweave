@@ -513,3 +513,14 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   custom awaitable-iterator takes the `.send()` branch on a non-None value and
   raises. Guard: `tests/test_differential_asyncio.py` (sc_send_none_protocol).
 
+## monkey invariants (src/stackweave/monkey/)
+- **The cooperative os.read/os.write family never changes an fd's
+  O_NONBLOCK.** The flag lives on the open file description, shared by dups,
+  child processes and every user of a terminal. A blocking fd is routed instead:
+  socket -> `MSG_DONTWAIT` per call (recv; send off macOS, where it blocks);
+  pipe/char device -> a zero-timeout level probe under the inode's stripe
+  mutex, then the plain call (pipe writes in PIPE_BUF pieces); tty writes and
+  unwatchable fds -> the pool. Never probe with `wait_fd` alone: it is
+  edge-triggered, and a pipe still holding bytes from a consumed edge never
+  fires again. Only `set_blocking` an fd stackweave created. Guard:
+  `tests/test_cpython_thread_keyed_locks.py::test_identity_patched_os_read_leaves_the_fd_mode_alone`.

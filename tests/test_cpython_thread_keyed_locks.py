@@ -427,24 +427,62 @@ stackweave.run(2, main)
 ''')
 
 
-@KNOWN_GAP(
-    "monkey.patch's os.read/os.write set O_NONBLOCK on a pollable fd and never "
-    "clear it; the flag lives on the open file description, which dups, "
-    "std streams and child processes share",
-    raises=AssertionError)
 def test_identity_patched_os_read_leaves_the_fd_mode_alone():
-    """A cooperative os.read from a fiber leaves the fd blocking, as it found
-    it, for whatever else shares the file description."""
+    """Cooperative os.read/os.write/readv/writev/readinto from fibers leave a
+    blocking fd blocking, as they found it, for whatever else shares the file
+    description (a pipe, a pty, a socketpair) -- and still park the fiber, not
+    the hub: a reader and a writer pinned to ONE hub both finish, which they
+    could not if the read blocked that hub's OS thread."""
     run_gap(r'''
+import socket, select
 import stackweave.monkey as monkey; monkey.patch()
+_watchdog(40)
 def main():
     r, w = os.pipe()
-    os.write(w, b"x")
-    assert os.get_blocking(r)
-    assert os.read(r, 1) == b"x"
-    print("REACHED: patched os.read ran in a fiber", flush=True)
-    print("blocking after:", os.get_blocking(r), flush=True)
-    assert os.get_blocking(r)
+    m, s = os.openpty()
+    a, b = socket.socketpair()
+    fa, fb = a.detach(), b.detach()
+    fds = (r, w, m, s, fa, fb)
+    assert all(os.get_blocking(fd) for fd in fds)
+    big = os.urandom(3 * select.PIPE_BUF + 1)
+    got, wrote = [], []
+    done = stackweave.Chan(2)
+    def reader():               # parks on the empty blocking pipe first
+        buf = b""
+        while len(buf) < len(big) + 1:
+            buf += os.read(r, 1 << 16)
+        got.append(buf)
+        done.send(1)
+    def writer():
+        stackweave.sleep(0.05)
+        wrote.append(os.write(w, big))       # the whole buffer, as blocking
+        wrote.append(os.write(w, b"!"))
+        done.send(1)
+    stackweave_c.mn_fiber(reader, hub=0)
+    stackweave_c.mn_fiber(writer, hub=0)
+    done.recv(); done.recv()
+    assert wrote == [len(big), 1], wrote
+    assert got == [big + b"!"], "pipe data mismatch"
+    print("REACHED: patched os.read/os.write parked a fiber on one hub", flush=True)
+    assert os.writev(w, [b"ab", b"cd"]) == 4
+    ba = bytearray(3)
+    assert os.readinto(r, ba) == 3 and ba == b"abc"
+    bb = bytearray(1)
+    assert os.readv(r, [bb]) == 1 and bb == b"d"
+    assert os.write(m, b"line\n") == 5 and os.read(s, 64) == b"line\n"
+    assert os.write(s, b"back") == 4 and os.read(m, 64).endswith(b"back")
+    def sock_writer():
+        wrote.append(os.write(fa, b"x" * 100000))
+        done.send(1)
+    stackweave.fiber(sock_writer)
+    n = 0
+    while n < 100000:
+        n += len(os.read(fb, 1 << 16))
+    done.recv()
+    assert wrote[-1] == 100000, wrote
+    modes = {fd: os.get_blocking(fd) for fd in fds}
+    print("blocking after:", modes, flush=True)
+    assert all(modes.values()), modes
     print("PASS", flush=True)
 stackweave.run(2, main)
 ''')

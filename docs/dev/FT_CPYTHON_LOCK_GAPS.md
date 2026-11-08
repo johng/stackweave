@@ -384,6 +384,26 @@ never restores it. O_NONBLOCK lives on the open file description, which dups,
 EAGAIN (`BlockingIOError`, or `None` from a buffered reader, i.e. a short
 read). Popen's own pipes survived because the subprocess patch covers them.
 
+**Status: FIXED.** The patches no longer
+touch the mode. An fd already non-blocking keeps the try/park loop; a blocking
+socket uses `MSG_DONTWAIT` per call (recv everywhere; send off macOS, whose
+send blocks with it); a blocking pipe or char device waits for a
+zero-timeout, level-triggered probe (select, or poll above FD_SETSIZE) under a
+per-inode stripe mutex and then makes the plain call, pipe writes in PIPE_BUF
+pieces so each fits and the whole buffer is written; a tty write, and any fd
+the probe or netpoll cannot watch, goes to the pool. Residual: a reader or
+writer outside this process's fibers that drains or fills the pipe between
+probe and call blocks the hub until the pipe has data or room; a raw tty read
+with VMIN and VTIME both set can wait up to VTIME. Cost: a large blocking-pipe
+write from a fiber is ~400 MB/s on macOS (PIPE_BUF 512) against ~3 GB/s for the
+old O_NONBLOCK path; small pipe round trips got ~4.5x faster (raw fstat instead
+of a pool-offloaded one). The old path also returned short writes from fds the
+caller had left blocking; a write now returns its full length, as a blocking
+write does. The socket-object patches still force O_NONBLOCK on
+every socket they touch (`_make_nonblocking`, by design, gevent-style); a
+socket shared with a child process or a `dup` sees it. The other
+`set_blocking` calls in monkey/ and aio/ are on fds stackweave created.
+
 ### 14. Fibers that pin themselves onto a busy hub wait ~64 time slices
 
 `p06_pin_starve.py`: a fiber doing `g.pin(0); sleep(0)` while hub 0 runs a
