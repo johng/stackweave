@@ -202,6 +202,40 @@ only replaces `tempfile._once_lock`; logging handlers' RLocks created before
 
 ### 7. sqlite busy timeout blocks the hub for its full length (C)
 
+**Status: FIXED under monkey.patch** (commit "monkey: wait for a locked
+sqlite database outside sqlite3_step"). A new `sqlite` category
+(`src/stackweave/monkey/sqlite.py`, `src/runloom_c/module_sqlite.c.inc`)
+replaces each connection's busy handler with one that gives up at once where
+sqlite would have waited, but only for the calls sqlite says may be retried
+after SQLITE_BUSY, made on a fiber: a statement (`Cursor.execute` /
+`Connection.execute`) run while the connection is in autocommit, and a commit
+(`commit()`, `with con:`, a COMMIT statement). The statement is reset, the
+transaction Python's implicit BEGIN opened for it (if any) is rolled back, and
+the call sleeps cooperatively on sqlite's own backoff up to the connection's
+timeout, then runs again. Waiting outside `sqlite3_step`, not parking inside
+the handler: inside it the statement is suspended and sqlite's busy handler is
+not reentrant, while serialized mode's recursive mutex would let another fiber
+of the hub into the same connection. For the same reason a call made while a
+foreign C caller is on the stack (SQL run from another connection's user
+function, inside that one's `sqlite3_step`) is never armed. A BUSY sqlite
+returns without consulting the handler (the read-to-write deadlock) is raised
+unchanged. An armed statement whose cache spill asks for the exclusive lock
+gets no wait for it: the spill fails and sqlite grows the page cache instead.
+A connection with `check_same_thread=True` sleeps held on its hub
+(`runloom_mn_hold_here`), as sqlite's own wait never left the OS thread.
+Unchanged, so still blocking: unpatched sqlite (any blocking C call blocks its
+hub), a statement inside an open transaction (retrying it there is not
+sound), calls under a foreign C caller, `executemany` / `executescript` /
+fetches / `backup` / blobs (no safe whole-call retry), connections opened
+before `patch()` or through `sqlite3.Connection(...)`, and a connection after
+`PRAGMA busy_timeout`. The
+`sqlite3 *` is read from the Connection object (first field, checked on 3.14
+and 3.15, cross-checked against autocommit and total changes), because
+`sqlite3_auto_extension` returns SQLITE_MISUSE in macOS's system library.
+`p13_sqlite_busy.py 2 patch`: PASS (B waits ~57 ms). Guards:
+`test_preempt_sqlite_writer_waits_for_a_same_hub_transaction` (now patches),
+`tests/test_monkey_sqlite.py`.
+
 `p13_sqlite_busy.py 2`: FAIL, writer waited 2.095 s then
 `OperationalError('database is locked')`; threads succeed in ~50 ms. One
 connection per fiber on one database file: fiber A holds the write lock across

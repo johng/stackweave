@@ -377,9 +377,10 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   pybind11) may hold a lock owned by the OS thread across the call: sqlite's
   serialized-mode connection mutex aborted on macOS when a callback resumed on
   another hub. While the fiber's state has `gilstate_counter > 1`
-  (`PyThreadState_New` gives 1), every switch-out holds it on its hub
-  (`runloom_mn_hold_for_c_caller`, in hub_main's release BEFORE anything can
-  route a wake): `pin_hub1` is derived as `cpin_hub1` if set, else
+  (`PyThreadState_New` gives 1), or Python asked for it
+  (`runloom_mn_hold_here`, `g->hold_depth`), every switch-out holds it on its
+  hub (`runloom_mn_hold_for_c_caller`, in hub_main's release BEFORE anything
+  can route a wake): `pin_hub1` is derived as `cpin_hub1` if set, else
   `user_pin1` (spawn / `G.pin`), and only `runloom_mn_global_runq_set_pins`
   writes the three, under the runq lock. So its wakes take the global
   run-queue to this hub, and its timer and yields stay on the ready ring; a
@@ -389,6 +390,20 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   `tests/test_cross_hub_migration.py::test_identity_c_callback_keeps_its_os_thread_until_it_returns`,
   `tests/test_cpython_thread_keyed_locks.py::test_identity_sqlite_callback_keeps_its_os_thread_across_a_park`
   (`stats()["mn_c_caller_holds"]`).
+- **monkey's sqlite busy wait never parks inside sqlite3_step.** The
+  statement is suspended there, sqlite's busy handler is not reentrant, and
+  serialized mode's recursive mutex lets another fiber of the hub into the
+  same connection. The handler (`module_sqlite.c.inc`) only gives the wait
+  back (SQLITE_BUSY) to an armed whole-call retry (`g->sqlite_coop`,
+  `monkey/sqlite.py`), which sleeps outside sqlite -- held on its hub for a
+  `check_same_thread` connection -- and otherwise sleeps as sqlite's default
+  does. Only calls sqlite says may be retried are armed: a statement run in
+  autocommit, or a commit; never a statement inside an open transaction, and
+  never while a foreign C caller is on the stack (`gilstate_counter > 1`,
+  checked both when arming and in the handler): SQL run from a user function
+  is inside the outer connection's `sqlite3_step`, so it must not park
+  either. Guards: `tests/test_monkey_sqlite.py`,
+  `tests/test_cpython_thread_keyed_locks.py::test_preempt_sqlite_writer_waits_for_a_same_hub_transaction`.
 - **A sysmon preemption request names the resume it is for.** sysmon asks two
   ways at once, a flag the eval-frame wrapper reads at the next call and a
   pending call run at the next backward jump; `h->preempt_seq` holds the

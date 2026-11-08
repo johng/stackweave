@@ -350,13 +350,17 @@ static void runloom_mn_requeue_local(runloom_hub_t *h, runloom_g_t *g)
  * meanwhile is kept in user_pin1 and takes effect at the first switch-out
  * after the callback has returned, which drops the hold.  Runs before any
  * wake can route the g (the PARKED publish, the RUNNING_WOKEN re-queue, the
- * yield re-queue), on the hub that owns it, so the g is on no queue here. */
+ * yield re-queue), on the hub that owns it, so the g is on no queue here.
+ * Python code that must stay on its OS thread across a park of its own (a
+ * sqlite connection that checks its thread, waiting out a lock:
+ * monkey/sqlite.py) takes the same hold through runloom_mn_hold_here. */
 static unsigned long long runloom_mn_c_caller_holds_total = 0;
 
 static void runloom_mn_hold_for_c_caller(runloom_hub_t *h, runloom_g_t *g)
 {
-    int want = g->tstate->gilstate_counter > 1 ? h->id + 1 : 0;
-    if (want != 0)
+    int c_caller = g->tstate->gilstate_counter > 1;
+    int want = (c_caller || g->hold_depth > 0) ? h->id + 1 : 0;
+    if (c_caller)
         __atomic_add_fetch(&runloom_mn_c_caller_holds_total, 1, __ATOMIC_RELAXED);
     if (want != g->cpin_hub1)
         runloom_mn_global_runq_set_pins(g, -1, want);

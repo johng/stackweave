@@ -164,6 +164,16 @@ static PyMethodDef module_methods[] = {
      "_nest_owner() -> G | None: the hub fiber whose stack the caller runs "
      "on inside a run(1) drain or Coro nested on it, else None.  That fiber "
      "is suspended until the nest returns (stackweave._importlock)."},
+    {"_sqlite_busy_handler", m_sqlite_busy_handler, METH_NOARGS,
+     "_sqlite_busy_handler() -> int: address of the sqlite3 busy handler "
+     "monkey.patch(sqlite=True) installs (0 if unsupported).  Internal."},
+    {"_hold_hub", m_hold_hub, METH_O,
+     "_hold_hub(delta) -> int: add delta to the running M:N fiber's hold "
+     "depth; while > 0 it is not moved to another hub (-1 off an M:N "
+     "fiber).  Internal."},
+    {"_sqlite_coop", m_sqlite_coop, METH_O,
+     "_sqlite_coop(word) -> int: set the running fiber's sqlite busy-wait arm "
+     "word, returning the old one (-1 off a fiber).  Internal."},
     {"in_fiber",    m_in_fiber,    METH_NOARGS,
      "in_fiber() -> bool: whether the caller is a running fiber (M:N hub "
      "or single-thread scheduler) -- current_g() is not None, without "

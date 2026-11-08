@@ -412,6 +412,15 @@ struct runloom_g {
      * by the hub that switches the g out (runloom_mn_hold_for_c_caller); it
      * overrides user_pin1 until then.  Written under the global runq lock. */
     int cpin_hub1;
+    /* Explicit holds (runloom_mn_hold_here): while > 0 the g is held on its
+     * hub at every switch-out, as for a foreign C caller.  Touched only by the
+     * thread running this g. */
+    int hold_depth;
+    /* sqlite busy-wait arm word (module_sqlite.c.inc): the id of the sqlite
+     * connection whose busy waits this fiber retries cooperatively, << 1, and
+     * bit 0 once the busy handler gave up for it.  Touched only by the thread
+     * running this g. */
+    uint64_t sqlite_coop;
     /* A hub's current fiber can host a run(1) drain or a Coro, which run other
      * fibers on its stack and thread state.  nest_depth > 0 while either runs
      * hides the hub from the code running there (runloom_mn_nested_here);

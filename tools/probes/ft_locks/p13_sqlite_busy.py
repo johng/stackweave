@@ -2,7 +2,11 @@
 # across a park; fiber Wr on the SAME hub writes and hits sqlite's busy handler,
 # which sleeps inside sqlite3_step on the hub's OS thread.  Threads: Wr waits
 # ~50 ms and succeeds.
+# `patch` (2nd arg): monkey.patch() first, whose sqlite category moves the wait
+# out of sqlite3_step (monkey/sqlite.py).
 from prelude import *
+if len(sys.argv) > 2 and sys.argv[2] == "patch":
+    import stackweave.monkey as monkey; monkey.patch()
 import sqlite3, tempfile, time as _t
 H = int(sys.argv[1]) if len(sys.argv) > 1 else 2
 _watchdog(30)

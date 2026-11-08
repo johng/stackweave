@@ -19,7 +19,7 @@ FAIL, or hangs into its watchdog (rc 3).
 | p10_sqlite_udf_migrate.py | `park\|migrate [serialized]` | [1] sqlite callback + second fiber |
 | p11_sqlite_udf_min.py | `multithread\|serialized` | [1] sqlite callback migrate abort |
 | p12_brc_wrong_thread_merge.py | `H rounds` | [2] wrong-thread refcount merge (fixed) |
-| p13_sqlite_busy.py | `H` (H>=2) | [7] busy handler blocks the hub |
+| p13_sqlite_busy.py | `H [patch]` (H>=2) | [7] busy handler blocks the hub (`patch`: fixed) |
 | p14_mp_semlock.py | `[patch]` | [5] mp.Value lock self-deadlock |
 | p15_osread_nonblock.py | | [13] fd left non-blocking |
 | p16_warnings_lock.py | `H [quiet]`, env `WMODE=showwarning\|stat` | [3] warnings lock leak |

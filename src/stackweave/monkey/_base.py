@@ -894,7 +894,8 @@ def offload(fn, *args, **kwargs):
 
         data = stackweave.monkey.offload(f.read, 65536)
 
-    sqlite3 is NOT auto-patched: a Connection is thread-affine (it raises
+    sqlite3 calls are not offloaded (the `sqlite` category only moves a busy
+    wait out of sqlite3_step): a Connection is thread-affine (it raises
     "SQLite objects created in a thread can only be used in that same thread"),
     and the pool runs the call on a worker thread.  To offload sqlite, open the
     connection with ``check_same_thread=False`` and keep your own access to it

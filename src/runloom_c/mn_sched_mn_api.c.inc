@@ -140,6 +140,15 @@ runloom_g_t *runloom_mn_tls_current_g(void)
     return runloom_mn_nested_here() ? NULL : runloom_tls_current_g;
 }
 
+int runloom_mn_hold_here(int delta)
+{
+    runloom_g_t *g = runloom_mn_tls_current_g();
+    if (g == NULL) return -1;
+    g->hold_depth += delta;
+    if (g->hold_depth < 0) g->hold_depth = 0;
+    return g->hold_depth;
+}
+
 void runloom_mn_tls_mark_parked(void)
 {
     runloom_tls_self_queued = 1;

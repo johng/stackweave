@@ -71,6 +71,13 @@ Categories (all default True):
                  (pbkdf2_hmac/scrypt) always.  A tight C loop has no yield point
                  and can't be preempted, so the only fix is to relocate it to
                  the pool; the size gate keeps small calls inline (zero cost).
+    sqlite       sqlite3.connect: a fiber waiting for a locked database
+                 (Cursor.execute / Connection.execute / commit / `with con:`)
+                 sleeps cooperatively on sqlite's own backoff and timeout
+                 instead of inside sqlite3_step, which blocked its hub -- and
+                 a fiber of that hub holding the lock -- for the whole
+                 timeout.  executemany / executescript / fetches keep
+                 sqlite's blocking wait.  See monkey/sqlite.py.
     dns          pure-async UDP resolver (Go-netgo-style): parses
                  /etc/resolv.conf + /etc/hosts, sends queries via
                  cooperatively-patched UDP sockets, parallel A/AAAA,
@@ -144,16 +151,19 @@ from .executors import (_patch_futures, _unpatch_futures,
 from .dns import _patch_dns, _unpatch_dns
 from .heavy import (_patch_heavy, _unpatch_heavy,
                     _patch_compile, _unpatch_compile)
+from .sqlite import _patch_sqlite, _unpatch_sqlite
 
 # Section modules, kept as objects so any internal name a caller reads for
 # (stackweave.monkey._orig_recv, _dns_result_cache, _patched_send, ...) resolves
 # *live* through __getattr__ below -- this module used to be one flat file and
 # tools/tests read its internals directly.
 from . import (_base, timers, sockets, osio, files, polling, tls, subproc,
-               signals, locks, events, queues, executors, dns, dns_proto, heavy)
+               signals, locks, events, queues, executors, dns, dns_proto, heavy,
+               sqlite)
 
 _SECTIONS = (_base, timers, sockets, osio, files, polling, tls, subproc,
-             signals, locks, events, queues, executors, dns, dns_proto, heavy)
+             signals, locks, events, queues, executors, dns, dns_proto, heavy,
+             sqlite)
 
 
 def __getattr__(name):
@@ -183,7 +193,7 @@ def __getattr__(name):
 _DEFAULTS = ("socket", "time", "os", "select", "selectors", "stdio", "getpass",
              "ssl", "subprocess", "process", "threading", "queue", "futures",
              "multiprocessing", "file", "syscalls", "fcntl", "signal",
-             "heavy", "compile", "dns")
+             "heavy", "compile", "sqlite", "dns")
 
 _PATCHERS = {
     "socket":     (_patch_socket,     _unpatch_socket),
@@ -206,6 +216,7 @@ _PATCHERS = {
     "signal":     (_patch_signal,     _unpatch_signal),
     "heavy":      (_patch_heavy,      _unpatch_heavy),
     "compile":    (_patch_compile,    _unpatch_compile),
+    "sqlite":     (_patch_sqlite,     _unpatch_sqlite),
     "dns":        (_patch_dns,        _unpatch_dns),
 }
 
@@ -263,7 +274,7 @@ def patch(**flags):
 
     Categories: socket, time, os, select, selectors, stdio, ssl,
     subprocess, process, threading, queue, futures, multiprocessing, file,
-    syscalls, fcntl, signal, dns.  See module docstring.
+    syscalls, fcntl, signal, sqlite, dns.  See module docstring.
     """
     unknown = set(flags) - set(_PATCHERS)
     if unknown:

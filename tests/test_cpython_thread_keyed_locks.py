@@ -586,17 +586,19 @@ stackweave.run(2, main)
 '''.replace("LOCKNAME", lock))
 
 
-@KNOWN_GAP(
-    "sqlite's busy handler sleeps inside sqlite3_step on the hub's OS thread, "
-    "so a fiber holding the write lock across a park cannot run (its wake "
-    "timer is on that hub) until the waiter's timeout expires",
-    raises=AssertionError)
 def test_preempt_sqlite_writer_waits_for_a_same_hub_transaction():
-    """One connection per fiber on one database file.  A holds the write lock
-    across a short park; B on the same hub writes.  B waits for A's commit
-    (~50 ms) and succeeds, as a thread would."""
+    """Was a gap (fixed under monkey.patch: monkey/sqlite.py moves the wait
+    out of sqlite3_step): sqlite's busy handler slept inside sqlite3_step on
+    the hub's OS thread, so a fiber holding the write lock across a park
+    could not run (its wake timer is on that hub) until the waiter's timeout
+    expired.  One connection per fiber on one database file, both fibers
+    pinned to one hub.  A holds the write lock across a short park; B writes.
+    B waits for A's commit (~50 ms) and succeeds, as a thread would.  Without
+    monkey.patch the wait still blocks the hub, as any blocking C call does."""
     run_gap(r'''
+import stackweave.monkey as monkey; monkey.patch()
 import sqlite3, tempfile, time as _t
+from stackweave.monkey import sqlite as sw_sqlite
 _watchdog(30)
 path = tempfile.mktemp(suffix=".db")
 c0 = sqlite3.connect(path); c0.execute("create table t(x)"); c0.commit(); c0.close()
@@ -620,12 +622,17 @@ def main():
         except Exception as e:
             out["B"] = repr(e)
         out["B_waited"] = round(_t.monotonic() - t0, 3); b.close(); wg.done()
+    waits = sw_sqlite.cooperative_waits
     stackweave_c.mn_fiber(holder, hub=0)
     stackweave.sleep(0.01)
     stackweave_c.mn_fiber(writer, hub=0)
     wg.wait()
-    print(out, flush=True)
+    out["coop_waits"] = sw_sqlite.cooperative_waits - waits
+    rows = sqlite3.connect(path).execute("select x from t order by x").fetchall()
+    print(out, rows, flush=True)
     assert out["B"] == "ok" and out["B_waited"] < 1.0, out
+    assert out["coop_waits"] > 0, "B never took the cooperative busy wait"
+    assert rows == [(1,), (2,)], rows
     print("PASS", flush=True)
 stackweave.run(2, main)
 ''')

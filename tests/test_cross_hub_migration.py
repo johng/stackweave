@@ -48,12 +48,13 @@ tests already cover when run with migration on (hub introspection, sysmon
 classification, the stack pool, the seeded scheduler) are not duplicated
 here.
 
-Four tests pass today and are here to pin down what was verified to work:
+Five tests pass today and are here to pin down what was verified to work:
 that migration is actually observable through this harness, that
 ``PyGILState_Ensure`` callbacks (ctypes, sqlite UDFs, OpenSSL) run on the
-fiber's own thread state after it has moved, that ``G.pin`` keeps a fiber
-on one OS thread, and that signal delivery into a migrating io-sleeper
-neither crashes nor cuts the fiber's next sleep short.
+fiber's own thread state after it has moved, and that a fiber does not move
+while such a callback is on its stack, that ``G.pin`` keeps a fiber on one
+OS thread, and that signal delivery into a migrating io-sleeper neither
+crashes nor cuts the fiber's next sleep short.
 """
 import ast
 import os

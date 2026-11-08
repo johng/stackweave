@@ -220,6 +220,12 @@ unsigned long long runloom_mn_preempt_turns(void);
 /* Switch-outs that held a fiber on its hub because a foreign C caller
  * (PyGILState_Ensure) was on its stack (odometer). */
 unsigned long long runloom_mn_c_caller_holds(void);
+/* Add `delta` to the running M:N fiber's hold depth: while it is > 0 every
+ * switch-out keeps the fiber on the hub it is on, as a foreign C caller on its
+ * stack does (runloom_mn_hold_for_c_caller); a G.pin() made meanwhile waits.
+ * Returns the new depth, or -1 (no change) off an M:N fiber, where nothing
+ * migrates.  Only the running fiber's own thread calls it. */
+int runloom_mn_hold_here(int delta);
 
 /* ---- per-hub diagnostic snapshot (runloom.inspect.hubs()) ----
  * A point-in-time view of every hub's scheduler state, for answering
