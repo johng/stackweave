@@ -399,6 +399,14 @@ check still fires.
 `Thread.__init__` copies `daemon` from `current_thread()`, the hub's
 `_DummyThread` (daemon), so interpreter exit does not join it.
 
+**Status: FIXED, no monkey.patch
+needed.** `stackweave.runtime` swaps `threading._DummyThread` (read only by
+`current_thread()`) for a subclass whose instances made in a fiber or on a hub
+thread take the daemon flag of the thread that called `run()`. A dummy has no
+handle in threading's shutdown list, so exit still never waits for hub
+threads, and it still leaves `_active` with its tstate. The per-fiber
+`Dummy-N` churn (candidate list below) is unchanged.
+
 ## Confirmed: in stackweave itself
 
 ### 13. Patched `os.read` / `os.write` leave the fd non-blocking

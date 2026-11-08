@@ -442,22 +442,26 @@ stackweave.run(4, main)
 ''')
 
 
-@KNOWN_GAP(
-    "Thread.__init__ copies daemon from current_thread(), which in an M:N "
-    "fiber is the hub's daemon _DummyThread, so exit does not join it",
-    raises=AssertionError)
 def test_identity_thread_started_in_a_fiber_is_joined_at_exit():
     """A threading.Thread started from a fiber is non-daemon, as one started
-    from the main thread is, so the interpreter waits for it at exit."""
+    from the main thread is, so the interpreter waits for it at exit
+    (stackweave.runtime gives a fiber's dummy thread the daemon flag of the
+    thread that called run()).  An explicit daemon=True still wins."""
     run_gap(r'''
 import time as _t
 def main():
+    cur = threading.current_thread()
+    assert type(cur).__name__ == "_DummyThread" and cur._stackweave_fiber_dummy, cur
+    assert cur.daemon is False, cur
     def work():
         _t.sleep(0.3)
         print("PASS", flush=True)
     t = threading.Thread(target=work)
     t.start()
+    d = threading.Thread(target=_t.sleep, args=(60,), daemon=True)
+    d.start()                 # would hold up exit for 60 s if it were joined
     print("REACHED: thread started from a fiber, daemon=%s" % t.daemon, flush=True)
+    assert t.daemon is False and d.daemon is True
 stackweave.run(2, main)
 ''')
 
