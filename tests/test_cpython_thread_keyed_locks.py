@@ -211,15 +211,20 @@ stackweave.run(H, main)
 ''')
 
 
-@pytest.mark.parametrize("patched", [False, True], ids=["stock", "monkey"])
-@MIGRATION_GAP(
-    "a recursive multiprocessing SemLock (mp.Value's lock) decides 'mine' by "
-    "the OS thread (semaphore.c ISMINE); after a migration the holder's "
-    "re-acquire waits on itself in sem_wait, with or without monkey.patch",
-    raises=AssertionError)
+@pytest.mark.parametrize("patched", [
+    pytest.param(False, id="stock", marks=MIGRATION_GAP(
+        "a recursive multiprocessing SemLock (mp.Value's lock) decides 'mine' "
+        "by the OS thread (semaphore.c ISMINE); after a migration the holder's "
+        "re-acquire waits on itself in sem_wait (monkey.patch closes it: "
+        "executors._CoRecursiveSemLock)",
+        raises=AssertionError)),
+    pytest.param(True, id="monkey"),
+])
 def test_identity_mp_value_lock_reenters_after_a_migration(patched):
     """`with v.get_lock(): <park, migrate>; v.value += 1` -- the property
-    re-acquires the same recursive lock, which must still count as held."""
+    re-acquires the same recursive lock, which must still count as held, and
+    the release after the migration must free it.  multiprocessing is imported
+    after monkey.patch(), the usual order."""
     run_gap(r'''
 _watchdog(25)
 if PATCHED:
@@ -227,14 +232,26 @@ if PATCHED:
 import multiprocessing as mp
 def main():
     v = mp.Value("i", 0)
+    if PATCHED:
+        # the fiber-keyed recursive lock is the one in use
+        assert type(v.get_lock()._semlock).__name__ == "_CoRecursiveSemLock"
     with v.get_lock():
         before = threading.get_ident()
         force_migrate(rounds=20)
         if threading.get_ident() != before:
             print("REACHED: moved to another hub holding the lock", flush=True)
         v.value += 1
+        assert v.get_lock()._semlock._count() == 1
     assert v.get_lock().acquire(timeout=2)
     v.get_lock().release()
+    # released for real: a plain OS thread can take it now
+    got = []
+    def plain_thread():
+        got.append(v.get_lock().acquire(timeout=2))
+        v.get_lock().release()
+    t = threading.Thread(target=plain_thread)
+    t.start(); t.join()
+    assert got == [True], got
     print("value", v.value, flush=True)
     print("PASS", flush=True)
 stackweave.run(2, main)

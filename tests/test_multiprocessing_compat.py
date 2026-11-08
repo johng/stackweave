@@ -258,6 +258,160 @@ class TestSyncPrimitives(unittest.TestCase):
             return got
         self.assertEqual(_drive(body), [True, True, False])
 
+    def test_with_lock_parks_instead_of_blocking_the_thread(self):
+        """`with lock:` used to call the C SemLock.__enter__ directly -- a
+        blocking sem_wait that froze the one scheduler thread while another
+        fiber held the lock, so this deadlocked."""
+        # Fail fast rather than deadlock if the routing ever goes away.
+        self.assertEqual(type(multiprocessing.Lock()).__enter__.__qualname__,
+                         "_semlock_enter")
+
+        def body():
+            lock = multiprocessing.Lock()
+            order = []
+
+            def holder():
+                with lock:
+                    order.append("A-in")
+                    stackweave.sleep(0.02)
+                    order.append("A-out")
+
+            def waiter():
+                stackweave.sleep(0.005)
+                with lock:
+                    order.append("B-in")
+
+            stackweave_c.fiber(holder)
+            stackweave_c.fiber(waiter)
+            import time
+            t0 = time.monotonic()
+            while "B-in" not in order and time.monotonic() - t0 < 5:
+                stackweave.sleep(0.005)
+            return order
+        self.assertEqual(_drive(body), ["A-in", "A-out", "B-in"])
+
+    def test_rlock_recursion_is_per_fiber(self):
+        """mp.RLock under the patch: owner and depth keyed by the fiber, and
+        the C object's _is_mine()/_count() views agree with them."""
+        def body():
+            rl = multiprocessing.RLock()
+            seen = []
+            with rl:
+                with rl:
+                    seen.append((rl._semlock._is_mine(), rl._semlock._count()))
+                    other = []
+
+                    def sibling():          # same OS thread, other fiber
+                        other.append(rl.acquire(False))
+                        other.append(rl._semlock._is_mine())
+                    stackweave_c.fiber(sibling)
+                    stackweave.sleep(0.01)
+                    seen.append(tuple(other))
+                seen.append(rl._semlock._count())
+            seen.append((rl._semlock._is_mine(), rl._semlock._count()))
+            seen.append(rl.acquire(False))
+            rl.release()
+            return seen
+        self.assertEqual(_drive(body),
+                         [(True, 2), (False, False), 1, (False, 0), True])
+
+    def test_condition_wait_releases_a_nested_hold(self):
+        """mp.Condition.wait releases its lock _count() times; with the
+        lock held twice the notifier must still get in."""
+        def body():
+            cond = multiprocessing.Condition()
+            out = []
+
+            def waiter():
+                with cond:
+                    with cond:
+                        out.append(cond.wait(timeout=5))
+                        out.append(cond._lock._semlock._count())
+
+            def notifier():
+                stackweave.sleep(0.02)
+                with cond:
+                    cond.notify()
+                out.append("notified")
+
+            stackweave_c.fiber(waiter)
+            stackweave_c.fiber(notifier)
+            import time
+            t0 = time.monotonic()
+            while len(out) < 3 and time.monotonic() - t0 < 6:
+                stackweave.sleep(0.005)
+            return sorted(map(str, out))
+        self.assertEqual(_drive(body), ["2", "True", "notified"])
+
+
+def test_semlock_patched_when_multiprocessing_is_imported_after_patch():
+    """The usual order -- monkey.patch(), then import multiprocessing -- used
+    to leave every SemLock stock (the patch only looked at sys.modules), so a
+    contended `with mp.Lock():` blocked the hub.  The import hook patches
+    multiprocessing.synchronize as it loads."""
+    from adv_util import run_python
+    p = run_python(r'''
+import sys
+import stackweave, stackweave.monkey as monkey, stackweave_c
+monkey.patch()
+assert "multiprocessing.synchronize" not in sys.modules
+import multiprocessing as mp
+lock = mp.Lock()
+assert "_co_semlock_acquire" in lock.acquire.__qualname__, lock.acquire
+assert type(mp.RLock()._semlock).__name__ == "_CoRecursiveSemLock"
+order = []
+def holder():
+    with lock:
+        order.append("A-in"); stackweave.sleep(0.02); order.append("A-out")
+def waiter():
+    stackweave.sleep(0.005)
+    with lock:
+        order.append("B-in")
+stackweave_c.fiber(holder); stackweave_c.fiber(waiter); stackweave_c.run()
+assert order == ["A-in", "A-out", "B-in"], order
+monkey.unpatch()
+assert not any(type(f).__name__ == "_SynchronizeImportHook" for f in sys.meta_path)
+assert mp.synchronize.SemLock.__enter__.__module__ == "multiprocessing.synchronize"
+print("OK")
+''', timeout=60)
+    assert p.returncode == 0 and "OK" in p.stdout, (p.stdout, p.stderr[-3000:])
+
+
+
+def test_semlock_patched_again_when_synchronize_is_reloaded_or_reimported():
+    """A reload, or a re-import after multiprocessing.synchronize leaves
+    sys.modules, makes a new SemLock class.  The hook stays in sys.meta_path
+    until unpatch() and patches each class once, so the new one is patched
+    too; unpatch() restores every class it patched."""
+    from adv_util import run_python
+    p = run_python(r'''
+import importlib, sys
+import stackweave.monkey as monkey
+monkey.patch()
+import multiprocessing.synchronize as s1
+first = s1.SemLock
+assert first.__enter__.__qualname__ == "_semlock_enter"
+s2 = importlib.reload(s1)
+reloaded = s2.SemLock
+assert reloaded is not first and reloaded.__enter__.__qualname__ == "_semlock_enter"
+del sys.modules["multiprocessing.synchronize"]
+import multiprocessing.synchronize as s3
+again = s3.SemLock
+assert again not in (first, reloaded) and again.__enter__.__qualname__ == "_semlock_enter"
+import multiprocessing
+ctx = multiprocessing.get_context()
+assert "_co_semlock_acquire" in s3.Lock(ctx=ctx).acquire.__qualname__
+assert type(s3.RLock(ctx=ctx)._semlock).__name__ == "_CoRecursiveSemLock"
+monkey.patch()                    # idempotent: nothing patched twice
+lk = s3.Lock(ctx=ctx); assert lk.acquire(); lk.release()
+monkey.unpatch()
+for cls in (first, reloaded, again):
+    assert cls.__enter__.__module__ == "multiprocessing.synchronize", cls
+    assert "_stackweave_orig_make_methods" not in cls.__dict__, cls
+assert not any(type(f).__name__ == "_SynchronizeImportHook" for f in sys.meta_path)
+print("OK")
+''', timeout=60)
+    assert p.returncode == 0 and "OK" in p.stdout, (p.stdout, p.stderr[-3000:])
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__] + sys.argv[1:]))

@@ -184,6 +184,23 @@ the same recursive SemLock, whose `ISMINE` compares the OS thread
 stranger and waits on itself in `sem_wait`, blocking its hub's OS thread.
 `mp.Condition` and `mp.RLock` are the same kind.
 
+**Status: FIXED under monkey.patch;
+the stock case stays a migration gap.** Two holes let a fiber reach the C
+recursive object: `SemLock.__enter__`/`__exit__` called it directly (so
+`with lock:` was a blocking `sem_wait` and a hold the cooperative release never
+saw), and the cooperative path still used it for the outermost acquire and the
+final release (so the release after a migration raised "not owned by thread").
+Now `_CoRecursiveSemLock` replaces `SemLock._semlock` for recursive locks: owner
+and depth are per fiber, and the cross-process gate is a SEMAPHORE-kind twin of
+the same kernel semaphore (`_rebuild` with the name, or a shared handle kept
+for the process's life when the name is already unlinked), which has no owner
+check. `_is_mine()`/`_count()` answer from the fiber state, so
+`mp.Condition.wait` releases a nested hold. `__enter__`/`__exit__` route
+through the instance's acquire/release. The SemLock patch also used to apply
+only when multiprocessing was imported before `patch()`; a `sys.meta_path`
+hook now patches `multiprocessing.synchronize` as it loads. Without
+monkey.patch, nothing in stackweave can intercept the C object.
+
 ## Confirmed: a hub stalls or deadlocks (no migration needed)
 
 ### 6. A preempted lock holder deadlocks its hub (C)

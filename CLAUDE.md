@@ -524,3 +524,11 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   edge-triggered, and a pipe still holding bytes from a consumed edge never
   fires again. Only `set_blocking` an fd stackweave created. Guard:
   `tests/test_cpython_thread_keyed_locks.py::test_identity_patched_os_read_leaves_the_fd_mode_alone`.
+- **A fiber never calls a recursive multiprocessing SemLock's C object.** Its
+  owner and recursion are keyed on the OS thread (ISMINE), so a migrated fiber
+  waits on itself and cannot release. `_CoRecursiveSemLock` (the patched
+  `SemLock._semlock`) keeps owner/depth per fiber and gates on a SEMAPHORE-kind
+  twin of the same kernel semaphore; `SemLock.__enter__`/`__exit__` go through
+  the instance's acquire/release. Guards:
+  `tests/test_cpython_thread_keyed_locks.py::test_identity_mp_value_lock_reenters_after_a_migration[monkey]`,
+  `tests/test_multiprocessing_compat.py`.
