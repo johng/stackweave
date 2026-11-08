@@ -82,6 +82,10 @@ Categories (all default True):
                  /etc/resolv.conf + /etc/hosts, sends queries via
                  cooperatively-patched UDP sockets, parallel A/AAAA,
                  60s result cache.  No threads.
+    asyncio      a stock asyncio loop (BaseEventLoop) started in a fiber keys
+                 its debug-mode thread check (_check_thread) on that fiber, so
+                 call_soon keeps working after the fiber changes hub.
+                 stackweave.aio's loop is not touched.
     compile      builtins.compile offloaded to the pool when called inside a
                  fiber (covers ast.parse + source imports too).  compile's
                  ~1.5 KB/level recursion on nested source overflows a 32 KB
@@ -152,6 +156,7 @@ from .dns import _patch_dns, _unpatch_dns
 from .heavy import (_patch_heavy, _unpatch_heavy,
                     _patch_compile, _unpatch_compile)
 from .sqlite import _patch_sqlite, _unpatch_sqlite
+from .aioloop import _patch_asyncio, _unpatch_asyncio
 
 # Section modules, kept as objects so any internal name a caller reads for
 # (stackweave.monkey._orig_recv, _dns_result_cache, _patched_send, ...) resolves
@@ -159,11 +164,11 @@ from .sqlite import _patch_sqlite, _unpatch_sqlite
 # tools/tests read its internals directly.
 from . import (_base, timers, sockets, osio, files, polling, tls, subproc,
                signals, locks, events, queues, executors, dns, dns_proto, heavy,
-               sqlite)
+               sqlite, aioloop)
 
 _SECTIONS = (_base, timers, sockets, osio, files, polling, tls, subproc,
              signals, locks, events, queues, executors, dns, dns_proto, heavy,
-             sqlite)
+             sqlite, aioloop)
 
 
 def __getattr__(name):
@@ -193,7 +198,7 @@ def __getattr__(name):
 _DEFAULTS = ("socket", "time", "os", "select", "selectors", "stdio", "getpass",
              "ssl", "subprocess", "process", "threading", "queue", "futures",
              "multiprocessing", "file", "syscalls", "fcntl", "signal",
-             "heavy", "compile", "sqlite", "dns")
+             "heavy", "compile", "sqlite", "dns", "asyncio")
 
 _PATCHERS = {
     "socket":     (_patch_socket,     _unpatch_socket),
@@ -218,6 +223,7 @@ _PATCHERS = {
     "compile":    (_patch_compile,    _unpatch_compile),
     "sqlite":     (_patch_sqlite,     _unpatch_sqlite),
     "dns":        (_patch_dns,        _unpatch_dns),
+    "asyncio":    (_patch_asyncio,    _unpatch_asyncio),
 }
 
 _applied = set()
@@ -274,7 +280,7 @@ def patch(**flags):
 
     Categories: socket, time, os, select, selectors, stdio, ssl,
     subprocess, process, threading, queue, futures, multiprocessing, file,
-    syscalls, fcntl, signal, sqlite, dns.  See module docstring.
+    syscalls, fcntl, signal, sqlite, dns, asyncio.  See module docstring.
     """
     unknown = set(flags) - set(_PATCHERS)
     if unknown:

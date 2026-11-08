@@ -384,6 +384,15 @@ compares `get_ident()` (debug only: `-X dev`, `PYTHONASYNCIODEBUG`,
 patched selector and resumes elsewhere. `stackweave.aio` (nested run(1)) does
 not migrate.
 
+**Status: FIXED under monkey.patch.** A
+new monkey category, `asyncio` (`monkey/aioloop.py`), records the fiber that
+starts a `BaseEventLoop` (`_run_forever_setup`) and makes `_check_thread`
+compare fibers; a loop started off a fiber keeps the stock check, another
+fiber is still refused, and `_thread_id` is left as stock sets it. Nothing else
+in asyncio keys on the OS thread (the running loop and current task are per
+tstate; `call_soon_threadsafe` checks nothing). Without monkey.patch the stock
+check still fires.
+
 ### 12. A thread started from a fiber is a daemon, so exit drops its work (E)
 
 `p20_thread_daemon.py`: `daemon: True`, and the thread's work never finished.

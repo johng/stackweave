@@ -377,19 +377,23 @@ stackweave.run(2, main)
 ''')
 
 
-@MIGRATION_GAP(
-    "asyncio's debug-mode _check_thread compares threading.get_ident() with "
-    "the loop's thread; a stock loop run in an M:N fiber parks in its patched "
-    "selector, resumes on another hub, and call_soon raises",
-    raises=AssertionError)
 def test_identity_asyncio_debug_loop_keeps_working_after_a_migration():
     """asyncio.run(debug=True) (as -X dev and IsolatedAsyncioTestCase use)
-    inside a fiber whose loop moves between hubs keeps scheduling callbacks."""
+    inside a fiber whose loop moves between hubs keeps scheduling callbacks:
+    under monkey.patch the loop's debug thread check compares the fiber that
+    runs it (monkey/aioloop.py), and a different fiber is still refused."""
     run_gap(r'''
 import stackweave.monkey as monkey; monkey.patch()
 import asyncio, logging
 logging.getLogger("asyncio").setLevel(logging.CRITICAL)   # slow-callback noise
 _watchdog(20)
+from stackweave.monkey import aioloop
+checks = [0]
+_orig_check = asyncio.base_events.BaseEventLoop._check_thread
+def counting_check(self):
+    checks[0] += 1
+    return _orig_check(self)
+asyncio.base_events.BaseEventLoop._check_thread = counting_check
 def main():
     res = {}
     def on_error(loop, context):
@@ -402,11 +406,23 @@ def main():
     def runner():
         async def co():
             asyncio.get_running_loop().set_exception_handler(on_error)
+            loop = asyncio.get_running_loop()
+            assert loop._stackweave_fiber is not None, "loop not keyed by fiber"
             seen = set()
             for _ in range(300):
                 await asyncio.sleep(0.001)
                 seen.add(threading.get_ident())
-                asyncio.get_running_loop().call_soon(lambda: None)
+                loop.call_soon(lambda: None)
+            # another fiber is another thread of control: still refused
+            refused = stackweave.Chan(1)
+            def intruder():
+                try:
+                    loop.call_soon(lambda: None)
+                    refused.send(False)
+                except RuntimeError:
+                    refused.send(True)
+            stackweave.fiber(intruder)
+            res["intruder_refused"] = refused.recv()[0]   # (value, ok)
             return len(seen)
         try:
             res["os_threads"] = asyncio.run(co(), debug=True)
@@ -415,10 +431,12 @@ def main():
     done = stackweave.Chan(1)
     stackweave.fiber(lambda: (runner(), done.send(1)))
     done.recv()
-    print(res, flush=True)
+    print(res, "checks", checks[0], flush=True)
     if res.get("os_threads", 0) > 1 or "other than the current one" in res.get("error", ""):
         print("REACHED: the loop's fiber ran on more than one hub", flush=True)
     assert "error" not in res, res["error"]
+    assert checks[0] >= 300, checks      # the debug check ran on every call_soon
+    assert res["intruder_refused"] is True, res
     print("PASS", flush=True)
 stackweave.run(4, main)
 ''')
