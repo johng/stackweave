@@ -482,6 +482,15 @@ Py_ssize_t runloom_sched_drain(runloom_sched_t *s)
              * test_select_interrupt_exc 5 runs out of 5.  NEVER FETCH A SIGNAL
              * YOU CANNOT DELIVER is the invariant; ready_empty keeps the
              * no-parker case behaving exactly as it does today. */
+            /* A fiber of ours waiting for a stock lock on the main thread
+             * would, as a thread, have returned from its wait to run the
+             * handler itself (Ctrl-C interrupts lock.acquire()).  Wake it with
+             * a mark instead of running the handler here: its wait returns
+             * Py_PARK_INTR and CPython runs the handler in the fiber
+             * (runloom_fiberlock.c).  Checked first, while the signal is
+             * still pending; the probe below would consume it. */
+            if (runloom_fiberlock_signal_wake(s))
+                continue;
             if ((__atomic_load_n(&s->netpoll_parked, __ATOMIC_ACQUIRE) > 0 ||
                  runloom_iouring_has_sigwaiter() ||
                  runloom_sched_has_sleep_io_waiter(s) ||

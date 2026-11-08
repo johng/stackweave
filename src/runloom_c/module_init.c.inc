@@ -164,6 +164,16 @@ static PyMethodDef module_methods[] = {
      "_nest_owner() -> G | None: the hub fiber whose stack the caller runs "
      "on inside a run(1) drain or Coro nested on it, else None.  That fiber "
      "is suspended until the nest returns (stackweave._importlock)."},
+    {"_sqlite_busy_handler", m_sqlite_busy_handler, METH_NOARGS,
+     "_sqlite_busy_handler() -> int: address of the sqlite3 busy handler "
+     "monkey.patch(sqlite=True) installs (0 if unsupported).  Internal."},
+    {"_hold_hub", m_hold_hub, METH_O,
+     "_hold_hub(delta) -> int: add delta to the running M:N fiber's hold "
+     "depth; while > 0 it is not moved to another hub (-1 off an M:N "
+     "fiber).  Internal."},
+    {"_sqlite_coop", m_sqlite_coop, METH_O,
+     "_sqlite_coop(word) -> int: set the running fiber's sqlite busy-wait arm "
+     "word, returning the old one (-1 off a fiber).  Internal."},
     {"in_fiber",    m_in_fiber,    METH_NOARGS,
      "in_fiber() -> bool: whether the caller is a running fiber (M:N hub "
      "or single-thread scheduler) -- current_g() is not None, without "
@@ -192,10 +202,27 @@ static PyMethodDef module_methods[] = {
      "until fd is ready.  events is a bitmask: 1=read, 2=write."},
     {"netpoll_backend", m_netpoll_backend, METH_NOARGS,
      "Return active netpoll backend name (\"epoll\", \"kqueue\", \"select\")."},
+    {"_tstate_in_destruction", m_tstate_in_destruction, METH_NOARGS,
+     "_tstate_in_destruction() -> bool: the calling thread state is inside "
+     "CPython object destruction (trashcan unwind / biased-refcount merge).  "
+     "Test-only."},
+    {"_c_thread_call_each", m_c_thread_call_each, METH_O,
+     "_c_thread_call_each(callables) -> list: call each on one new OS thread, "
+     "each in its own PyGILState_Ensure/Release (a fresh thread state per "
+     "call, as a C library's callbacks get).  Test-only."},
     {"_c_stack_limits", m_c_stack_limits, METH_NOARGS,
      "_c_stack_limits() -> (top, soft_limit, hard_limit): the calling thread "
      "state's C-stack window, which RecursionError and the trashcan measure "
      "the stack pointer against.  Test-only."},
+    {"_alloc_home_is_own", m_alloc_home_is_own, METH_NOARGS,
+     "_alloc_home_is_own() -> bool | None: whether the calling thread state "
+     "allocates from its own heaps rather than borrowing its hub's (None "
+     "without the alloc-home patch).  Test-only."},
+    {"_main_thread_state", m_main_thread_state, METH_NOARGS,
+     "_main_thread_state() -> (main_tstate_is_mine, main_thread_is_mine, "
+     "main_tstate_is_initial): whether CPython's main thread state and main "
+     "thread are the caller's, and whether the main state is the "
+     "interpreter's embedded initial one (None where unknown).  Test-only."},
     {"_logical_ns", m_logical_ns, METH_NOARGS,
      "Read the single-thread LOGICAL clock in ns (STACKWEAVE_LOGICAL_CLOCK/STACKWEAVE_SIM); "
      "0 off the logical clock.  Diagnostic (sim determinism witness)."},
@@ -496,6 +523,7 @@ PyMODINIT_FUNC PyInit_stackweave_c(void)
     PyObject *m;
     runloom_diag_init();          /* parses RUNLOOM_DEBUG once; cheap; idempotent */
     runloom_introspect_init();    /* fiber registry lock */
+    runloom_mn_atfork_init();     /* main thread state in a fork child */
     runloom_coro_pre_swap = runloom_coro_rearm_stackprot;  /* 3.14: re-arm fiber C-stack limit on every resume */
     if (PyType_Ready(&RunloomCoroType) < 0) return NULL;
     /* Set by hand rather than in the positional initializer, whose long run
@@ -597,9 +625,40 @@ PyMODINIT_FUNC PyInit_stackweave_c(void)
         Py_DECREF(m);
         return NULL;
     }
+    /* `tlbc_follow`: the running interpreter was built with
+     * Py_TSTATE_TLBC_FOLLOW (it exports _PyEval_TLBCFollow).  `tlbc_shared`:
+     * M:N fibers run on their hub's bytecode copies rather than each on its
+     * own -- tlbc_follow, and TLBC on (runloom_iframe.h). */
+    if (PyModule_AddIntConstant(m, "tlbc_follow",
+                                runloom_iframe_tlbc_follow()) < 0 ||
+        PyModule_AddIntConstant(m, "tlbc_shared",
+                                runloom_iframe_tlbc_shared()) < 0) {
+        Py_DECREF(m);
+        return NULL;
+    }
     /* Whether this build has both migration patches (mn_sched.h). */
     if (PyModule_AddIntConstant(m, "migration_patched",
                                 RUNLOOM_MIGRATION_PATCHED) < 0) {
+        Py_DECREF(m);
+        return NULL;
+    }
+    /* Whether a fiber's _thread.RLock is owned by its thread state (mn_sched.h):
+     * the lock.c hunk and the fiber mark it keys on. */
+    if (PyModule_AddIntConstant(m, "rlock_tstate_owned",
+                                RUNLOOM_RLOCK_TSTATE_OWNED &&
+                                runloom_iframe_fiber_tstate_flag()) < 0) {
+        Py_DECREF(m);
+        return NULL;
+    }
+    /* Whether a lock's wait can park the fiber (mn_sched.h), and whether the
+     * hooks were installed in this process (STACKWEAVE_FIBER_LOCKS). */
+    if (PyModule_AddIntConstant(m, "fiber_lock_hooks",
+                                RUNLOOM_FIBER_LOCK_HOOKS) < 0) {
+        Py_DECREF(m);
+        return NULL;
+    }
+    if (PyModule_AddIntConstant(m, "fiber_locks_installed",
+                                runloom_fiberlock_install()) < 0) {
         Py_DECREF(m);
         return NULL;
     }

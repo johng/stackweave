@@ -22,6 +22,51 @@ import stackweave_c
 _prewarmed = False
 
 
+# --- threads started from a fiber are not daemons ---------------------------
+#
+# Thread.__init__ copies `daemon` from current_thread().  In an M:N fiber that
+# is the _DummyThread threading builds for the hub's OS thread, and dummies are
+# daemons, so a Thread a fiber started without daemon= was a daemon: the
+# interpreter did not wait for it at exit and its work was cut off
+# (docs/dev/FT_CPYTHON_LOCK_GAPS.md, finding 12).  A fiber stands in for the
+# code that called run(), so a dummy made in a fiber or on a hub thread takes
+# that caller's daemon flag (False from the main thread, as there).  Only the
+# flag changes: a dummy still has no handle in threading's shutdown list, so
+# exit never waits for the hub threads themselves, and it still leaves
+# threading._active with the thread state that made it.  threading reads the
+# class through the module global in current_thread() and nowhere else.
+_hub_thread_daemon = False      # daemon flag of the thread that called run(n>1)
+
+
+def _on_fiber_or_hub():
+    try:
+        return (stackweave_c.in_fiber() or
+                stackweave_c.mn_current_hub() is not None)
+    except Exception:
+        return False
+
+
+def _install_fiber_dummy_thread():
+    base = threading._DummyThread
+    if getattr(base, "_stackweave_fiber_dummy", False):
+        return
+
+    class _DummyThread(base):
+        _stackweave_fiber_dummy = True
+
+        def __init__(self):
+            base.__init__(self)
+            if _on_fiber_or_hub():
+                self._daemonic = _hub_thread_daemon
+
+    _DummyThread.__module__ = base.__module__
+    _DummyThread.__qualname__ = base.__qualname__
+    threading._DummyThread = _DummyThread
+
+
+_install_fiber_dummy_thread()
+
+
 # --- function-bound stack grow-down (auto-size-down), opt-in, M:N only -------
 #
 # Every fiber reserves a C stack.  A fixed default (512 KiB) is safe but
@@ -594,6 +639,8 @@ def run(n, main_fn=None):
                 "multi-core parallelism with n>1."
                 .format(n))
         prewarm_stdlib()
+        global _hub_thread_daemon
+        _hub_thread_daemon = threading.current_thread().daemon
         stackweave_c.mn_init(n)
         try:
             if main_fn is not None:

@@ -252,5 +252,90 @@ print("PASS")
 """.replace("SPIN", spin), timeout=25)
 
 
+def test_preemption_takes_turns_between_fibers_pinned_onto_one_hub():
+    """As above, but each fiber moves itself onto hub 0 (`G.pin(0)` and a
+    `sleep(0)`), so at least one arrives through the global run-queue.  A
+    preempted fiber goes back on its hub's ready ring, which was picked
+    before that queue, so the first fiber ran its 300 ms to the end before
+    the second got a turn (AB).  A preemption now gives the queue a turn
+    first (stats()["mn_preempt_turns"])."""
+    assert_pass(r"""
+import time
+seq = []
+def step(end):
+    return time.perf_counter() < end
+def hog(name):
+    stackweave_c.current_g().pin(0)
+    stackweave_c.sched_sleep(0)
+    for _ in range(30):
+        end = time.perf_counter() + 0.01
+        while step(end): pass
+        if not seq or seq[-1] != name:
+            seq.append(name)
+turns = stackweave_c.stats()["mn_preempt_turns"]
+stackweave_c.mn_init(2)
+stackweave_c.mn_fiber(lambda: hog("A"), hub=0)
+stackweave_c.mn_fiber(lambda: hog("B"), hub=1)
+stackweave_c.mn_run()
+stackweave_c.mn_fini()
+turns = stackweave_c.stats()["mn_preempt_turns"] - turns
+print("turns", "".join(seq), "preempt turns", turns)
+assert len(seq) >= 4, "the two fibers did not take turns: %s" % "".join(seq)
+assert turns > 0, "no preemption gave the global run-queue a turn"
+print("PASS")
+""", timeout=25)
+
+
+def test_preempted_fiber_runs_while_fresh_cpu_bound_fibers_keep_arriving():
+    """A CPU-bound fiber on a one-hub runtime spawns eight fresh CPU-bound
+    fibers and keeps running: it must get turns while they are still
+    getting their first.  A preemption gives the deque a turn before the
+    preempted fiber resumes; when every preemption did, each fresh fiber,
+    preempted in its turn, forced the next one, so the first fiber ran again
+    only after all eight had started.  Only a preempted ring turn forces one
+    now, so ring and fresh fibers alternate.  Counted in turn order, not
+    time: every fiber records itself when the hub switches to it, and a
+    slower slice changes only how long the run takes."""
+    assert_pass(r"""
+import time
+K = 8
+seq = []          # who ran, in order (one hub: no two fibers run at once)
+started = []
+stop = []
+def step(end):
+    return time.perf_counter() < end
+def run_as(name):
+    deadline = time.perf_counter() + 20.0
+    while not stop and time.perf_counter() < deadline:
+        end = time.perf_counter() + 0.002
+        while step(end): pass
+        if not seq or seq[-1] != name:
+            seq.append(name)
+def fresh(i):
+    started.append(i)
+    if len(started) == K:          # the last one's first turn: done
+        seq.append(i)
+        stop.append(1)
+        return
+    run_as(i)
+def first():
+    for i in range(K):
+        stackweave_c.mn_fiber(lambda i=i: fresh(i))
+    run_as("A")
+stackweave_c.mn_init(1)
+stackweave_c.mn_fiber(first)
+stackweave_c.mn_run()
+stackweave_c.mn_fini()
+print("turns", " ".join(map(str, seq)))
+assert len(started) == K and stop, started
+first_fresh = next(k for k, x in enumerate(seq) if x != "A")
+last_start = seq.index(started[-1])
+a_turns = seq[first_fresh:last_start].count("A")
+print("first fiber's turns while fresh fibers started:", a_turns)
+assert a_turns >= 2, "the preempted fiber waited for every fresh fiber"
+print("PASS")
+""", timeout=60)
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__] + sys.argv[1:]))

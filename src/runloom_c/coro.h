@@ -49,6 +49,11 @@ extern void (*runloom_coro_pre_swap)(runloom_coro_t *c);
  * coroutine is undefined. */
 void runloom_coro_yield(void);
 
+/* The coroutine running on this OS thread right now, or NULL on a thread's
+ * own stack.  A fiber that resumed a nested coroutine (a _Coro) is not the
+ * one running while that coroutine's body runs. */
+runloom_coro_t *runloom_coro_current(void);
+
 /* Predicates. */
 int runloom_coro_done(const runloom_coro_t *c);
 

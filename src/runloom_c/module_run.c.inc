@@ -397,6 +397,33 @@ static PyObject *m_stats(PyObject *self, PyObject *unused)
     RUNLOOM_STATS_SET("mn_deque_depth",    runloom_mn_deque_depth_total());
     RUNLOOM_STATS_SET("mn_yield_steals",
                       (Py_ssize_t)runloom_mn_yield_steals_total());
+    RUNLOOM_STATS_SET("mn_preempt_turns",
+                      (Py_ssize_t)runloom_mn_preempt_turns());
+    RUNLOOM_STATS_SET("mn_c_caller_holds",
+                      (Py_ssize_t)runloom_mn_c_caller_holds());
+    /* Python-level lock waits that parked a fiber instead of its hub's OS
+     * thread, and the wakeups delivered to such a wait (runloom_fiberlock.c). */
+    RUNLOOM_STATS_SET("fiber_lock_parks",
+                      (Py_ssize_t)runloom_fiberlock_parks_total());
+    RUNLOOM_STATS_SET("fiber_lock_wakes",
+                      (Py_ssize_t)runloom_fiberlock_wakes_total());
+    /* Wakes dropped because the waiter's M:N session was over (an abnormal
+     * run() end), timer entries armed for timed waits, and waits interrupted
+     * for a signal (runloom_fiberlock.c). */
+    RUNLOOM_STATS_SET("fiber_lock_stale_wakes",
+                      (Py_ssize_t)runloom_fiberlock_stale_wakes_total());
+    RUNLOOM_STATS_SET("fiber_lock_timer_arms",
+                      (Py_ssize_t)runloom_fiberlock_timer_arms_total());
+    RUNLOOM_STATS_SET("fiber_lock_signal_wakes",
+                      (Py_ssize_t)runloom_fiberlock_signal_wakes_total());
+    /* Pending timer-heap entries (timed parks), on the hubs and on the
+     * caller's own scheduler. */
+    {
+        runloom_sched_t *own = runloom_sched_peek_here();
+        RUNLOOM_STATS_SET("timer_entries",
+                          (Py_ssize_t)(runloom_mn_timer_entries_total() +
+                                       (own != NULL ? own->timer_size : 0)));
+    }
     /* M:N fibers' first frame-stack chunks: from a hub's pool, or mapped by
      * CPython because the pool was empty.  Summed as each hub exits, so
      * complete once run() returns. */
@@ -437,6 +464,10 @@ static PyObject *m_stats(PyObject *self, PyObject *unused)
                       (Py_ssize_t)runloom_iframe_brc_release_merges_off_stack());
     RUNLOOM_STATS_SET("brc_release_merges_hub_first",
                       (Py_ssize_t)runloom_iframe_brc_release_merges_hub_first());
+    RUNLOOM_STATS_SET("brc_release_local_drains",
+                      (Py_ssize_t)runloom_iframe_brc_release_local_drains());
+    RUNLOOM_STATS_SET("tlbc_switches",
+                      (Py_ssize_t)runloom_iframe_tlbc_switches());
     RUNLOOM_STATS_SET("fiber_trash_drained",
                       (Py_ssize_t)runloom_iframe_fiber_trash_drained());
     RUNLOOM_STATS_SET("copy_grows", (Py_ssize_t)runloom_coro_copy_grows());

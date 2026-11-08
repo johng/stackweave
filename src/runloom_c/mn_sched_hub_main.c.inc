@@ -314,6 +314,9 @@ static void runloom_mn_park_exit(runloom_hub_t *h)
  * time slice ran out -- perhaps holding a lock that keys on the OS thread
  * (threading.RLock, an import's _ModuleLock), which a move would orphan. */
 static unsigned long long runloom_mn_yieldq_steals_total = 0;
+/* Forced turns taken right after a preemption that found a g in the global
+ * run-queue or the deque (an odometer; see the pick block in hub_main). */
+static unsigned long long runloom_mn_preempt_turns_total = 0;
 
 static void runloom_mn_requeue_local(runloom_hub_t *h, runloom_g_t *g)
 {
@@ -328,6 +331,39 @@ static void runloom_mn_requeue_local(runloom_hub_t *h, runloom_g_t *g)
         return;
     }
     runloom_sched_ready_push(&h->sched, g);
+}
+
+/* ---- Foreign C callers hold a fiber on its hub ---------------------------
+ * A C library that calls back into Python -- sqlite3's user functions,
+ * aggregates, collations, authorizer, progress and trace handlers; ctypes and
+ * cffi callbacks; Cython `with gil`; pybind11 -- enters through
+ * PyGILState_Ensure (pybind11 bumps the same counter itself), and may hold a
+ * lock owned by this OS thread across the call: sqlite's serialized-mode
+ * connection mutex is a pthread / os_unfair_lock mutex.  A callback that parks
+ * and resumes on another hub returns into that library on the wrong OS thread,
+ * whose unlock then aborts (macOS os_unfair_lock) or fails and strands the
+ * lock (glibc EPERM).  So while the fiber's own thread state has a nested
+ * Ensure -- gilstate_counter above the 1 PyThreadState_New gives it -- every
+ * switch-out holds it on the hub it is on, through the pin machinery: its
+ * wakes go to the global run-queue for this hub only, its timer re-queues it
+ * on this hub's ready ring, and a yield stays there too.  G.pin() made
+ * meanwhile is kept in user_pin1 and takes effect at the first switch-out
+ * after the callback has returned, which drops the hold.  Runs before any
+ * wake can route the g (the PARKED publish, the RUNNING_WOKEN re-queue, the
+ * yield re-queue), on the hub that owns it, so the g is on no queue here.
+ * Python code that must stay on its OS thread across a park of its own (a
+ * sqlite connection that checks its thread, waiting out a lock:
+ * monkey/sqlite.py) takes the same hold through runloom_mn_hold_here. */
+static unsigned long long runloom_mn_c_caller_holds_total = 0;
+
+static void runloom_mn_hold_for_c_caller(runloom_hub_t *h, runloom_g_t *g)
+{
+    int c_caller = g->tstate->gilstate_counter > 1;
+    int want = (c_caller || g->hold_depth > 0) ? h->id + 1 : 0;
+    if (c_caller)
+        __atomic_add_fetch(&runloom_mn_c_caller_holds_total, 1, __ATOMIC_RELAXED);
+    if (want != g->cpin_hub1)
+        runloom_mn_global_runq_set_pins(g, -1, want);
 }
 
 /* The owner's take: the TOP, as a thief takes it.  A steal that loses its CAS
@@ -489,6 +525,11 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
     unsigned int self_pump_ctr = 0;
     unsigned int forced_turns = 0;     /* alternates the forced turn's source (per-g mode) */
     unsigned int local_turns = 0;      /* alternates ready ring / yield queue */
+    /* Set when the last resume ended in a preemption of a g picked from the
+     * ready ring or yield queue: the next pick is a forced turn (see the pick
+     * block), so the g that used up its slice goes behind work waiting in the
+     * global run-queue or the deque. */
+    int preempt_turn = 0;
     (void)self_pump_ctr;
     /* Consecutive idle-pump iterations with no resumed g; drives the adaptive
      * idle-pump backoff (reset to 0 at the resume site below).  Thread-local to
@@ -559,6 +600,9 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
          * steal are single-owner by construction (already RUNNING) and skip
          * both. */
         int from_runq = 0;
+        /* Set when g came from the ready ring or the yield queue (a ring
+         * turn): only its preemption forces the next pick (preempt_turn). */
+        int from_local = 0;
 #ifdef RUNLOOM_DBG_BADCORO
         int gsrc = 0, gvic = -1;   /* source-hunt: which queue delivered g */
 #endif
@@ -817,9 +861,27 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
          * the moment both drain naturally, so workloads that aren't
          * monopolizing never trip it; a sustained yielder pays only a 1-in-
          * starve_bound interleave.  All hub-local + single-consumer; the deque
-         * is touched via its normal owner-pop, never re-ordered internally. */
+         * is touched via its normal owner-pop, never re-ordered internally.
+         *
+         * A preemption forces the same turn at once.  The preempted g goes
+         * back on the ready ring (it may hold a lock keyed on this OS thread,
+         * so it must not move), and the ring is picked first, so a CPU-bound
+         * g refilled it every slice and everything waiting in the global
+         * run-queue -- a g pinned to this hub, above all, which nothing else
+         * may take -- waited starve_bound slices (64 x 50 ms) per turn, and
+         * pinned gs moved here never took turns with each other.  As Go puts
+         * a preempted g behind the global queue, a used-up slice now lets the
+         * work waiting there or on the deque run first; with neither, the
+         * pick falls through to the ring, so preempted gs still alternate.
+         * Only a ring turn's preemption does so: a g taken by a forced turn
+         * hands the next pick back to the ring when its slice runs out, or a
+         * stream of fresh CPU-bound gs, each preempted in turn, would keep
+         * the ring from ever running (the deque pops LIFO, so each new one
+         * went ahead of it).  Ring and waiting work alternate instead. */
         g = NULL;
-        if (sbound && ready_streak >= (unsigned)sbound) {
+        if ((sbound && ready_streak >= (unsigned)sbound) || preempt_turn) {
+            int after_preempt = preempt_turn;
+            preempt_turn = 0;
             ready_streak = 0;
             /* A woken g lands on the GLOBAL run-queue, which the normal order
              * below only pulls once ready ring AND deque are empty -- a
@@ -855,6 +917,9 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
 #endif
                 }
             }
+            if (after_preempt && g != NULL)
+                __atomic_add_fetch(&runloom_mn_preempt_turns_total, 1,
+                                   __ATOMIC_RELAXED);
         }
         if (g == NULL) {
             /* The two local FIFOs -- the ready ring (pinned and preempted gs)
@@ -870,6 +935,7 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
             }
             if (g != NULL) {
                 ready_streak++;
+                from_local = 1;
 #ifdef RUNLOOM_DBG_BADCORO
                 gsrc = 2;      /* ready ring or own yield queue */
 #endif
@@ -1511,6 +1577,19 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
             /* Drops of this hub's objects now land on the FIBER's tstate,
              * whose eval loop merges them as it runs (runloom_iframe_brc_adopt). */
             runloom_iframe_brc_adopt(g->tstate, hub_ts);
+            /* Run on this hub's bytecode copies, not the fiber's own: swap
+             * the two states' TLBC indices until the detach below (a no-op
+             * unless the interpreter re-points frames at the new copy; see
+             * runloom_iframe_tlbc_lend).  Attached, so no stop-the-world
+             * reader sees the swap half done. */
+            {
+                int lent = runloom_iframe_tlbc_lend(g->tstate, hub_ts);
+                if (lent >= 0 && g->tlbc_lent != lent + 1) {
+                    if (g->tlbc_lent != 0)
+                        runloom_iframe_tlbc_note_switch();
+                    g->tlbc_lent = lent + 1;
+                }
+            }
             /* Deep-surface migration oracle (RUNLOOM_DBG_MIGRATE; zero-cost
              * otherwise).  The per-g tstate's mimalloc heap / brc / QSBR are
              * bound to the OS thread that first used them; running it on a
@@ -1578,12 +1657,18 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
              * bucket mutex and the merge need an attached tstate, and the
              * fiber's is the owner of what it holds. */
             runloom_iframe_brc_release(g->tstate, hub_ts);
+            /* Each state takes its own TLBC index back, still attached: a
+             * parked fiber holds its own, the hub runs on the hub's. */
+            runloom_iframe_tlbc_unlend(g->tstate, hub_ts);
             PyEval_SaveThread();                  /* detach g's tstate */
             PyEval_RestoreThread(hub_ts);          /* reattach hub tstate */
             /* Free what other hubs dropped on us while the fiber ran: the
              * brc merge queue is keyed to THIS hub's thread state, which
              * never runs bytecode (see runloom_iframe_service_merge_queue). */
             runloom_iframe_service_merge_queue(hub_ts);
+            /* Hold g on this hub while a foreign C caller is on its stack,
+             * before anything below can route a wake. */
+            if (!runloom_coro_done(g->coro)) runloom_mn_hold_for_c_caller(h, g);
             if (runloom_coro_done(g->coro)) {
                 /* Done: the g did not park this resume (a resume ends in a
                  * park OR completion, never both), so no parker is live and
@@ -1648,6 +1733,7 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                                  __ATOMIC_RELEASE);
                 if (from_runq) runloom_g_decref(g);       /* old queue ref */
                 if (!self_queued) runloom_mn_requeue_local(h, g);
+                else preempt_turn = from_local;   /* a ring turn ran out: others next */
             }
         }
     }

@@ -18,6 +18,9 @@
 
 #include "runloom_iframe.h"
 #include "coro.h"    /* runloom_coro_stack_base/size (fiber C-stack geometry) */
+#if !defined(_WIN32)
+#  include <dlfcn.h> /* dlsym: runloom_iframe_tlbc_shared */
+#endif
 
 #if !defined(RUNLOOM_NO_IFRAME)
 #  include "internal/pycore_frame.h"
@@ -280,6 +283,9 @@ void runloom_iframe_brc_adopt(PyThreadState *fiber, PyThreadState *hub)
 static unsigned long long runloom_brc_release_merges_total = 0;
 static unsigned long long runloom_brc_release_merges_off_stack_total = 0;
 static unsigned long long runloom_brc_release_merges_hub_first_total = 0;
+/* Releases that found the fiber parked part-way through its own merge drain:
+ * local_objects_to_merge non-empty (stats()["brc_release_local_drains"]). */
+static unsigned long long runloom_brc_release_local_drains_total = 0;
 
 unsigned long long runloom_iframe_brc_release_merges(void)
 {
@@ -295,6 +301,12 @@ unsigned long long runloom_iframe_brc_release_merges_off_stack(void)
 unsigned long long runloom_iframe_brc_release_merges_hub_first(void)
 {
     return __atomic_load_n(&runloom_brc_release_merges_hub_first_total,
+                           __ATOMIC_RELAXED);
+}
+
+unsigned long long runloom_iframe_brc_release_local_drains(void)
+{
+    return __atomic_load_n(&runloom_brc_release_local_drains_total,
                            __ATOMIC_RELAXED);
 }
 
@@ -390,11 +402,35 @@ void runloom_iframe_brc_release(PyThreadState *fiber, PyThreadState *hub)
      * took the lock.  Bounded: past RUNLOOM_BRC_RELEASE_ROUNDS (a dropper
      * refilling the queue faster than we drain), fall back to the old order --
      * hub at the head, one last drain -- rather than stall the hub; that drain
-     * counts in brc_release_merges_hub_first. */
+     * counts in brc_release_merges_hub_first.
+     *
+     * "Queued" includes the fiber's PRIVATE stack, local_objects_to_merge.
+     * _Py_brc_merge_refcounts moves the shared queue there and pops it,
+     * deallocating as it goes; a __del__ in that loop that parks (or yields)
+     * switches the fiber out with the rest of the stack still on it.  Left
+     * there, the fiber would merge it wherever it resumes -- another hub's OS
+     * thread -- and _Py_ExplicitMergeRefcount's non-atomic read-and-zero of
+     * ob_ref_local would race this thread, the objects' owner, still bumping
+     * it.  The drain below (_Py_HandlePending -> _Py_brc_merge_refcounts)
+     * empties both stacks here, on the owner thread.  The fiber's suspended
+     * loop then finds its stack empty when it resumes and returns: it keeps
+     * no pointer into the stack across _Py_Dealloc (each _PyObjectStack_Pop
+     * re-reads stack->head, and frees a chunk as it empties it), the object it
+     * was deallocating was already merged (ob_tid 0, owned by nobody), and the
+     * same thing happens without fibers whenever a __del__ reaches an
+     * eval-breaker check (a nested merge) or another thread's GC merges a
+     * thread blocked in a __del__ (gc_free_threading.c merge_queued_objects,
+     * under stop-the-world).  The stack itself is touched only by its own
+     * state on its owner thread (or under stop-the-world), so reading it here
+     * needs no lock. */
     for (rounds = 0; ; rounds++) {
         int pending, hub_first;
+        if (rounds == 0 && f->brc.local_objects_to_merge.head != NULL)
+            __atomic_add_fetch(&runloom_brc_release_local_drains_total, 1,
+                               __ATOMIC_RELAXED);
         PyMutex_Lock(&b->mutex);
-        pending = (f->brc.objects_to_merge.head != NULL);
+        pending = (f->brc.objects_to_merge.head != NULL ||
+                   f->brc.local_objects_to_merge.head != NULL);
         if (!pending || rounds == RUNLOOM_BRC_RELEASE_ROUNDS) {
             runloom_brc_move_to_front(b, &h->brc.bucket_node);
             PyMutex_Unlock(&b->mutex);
@@ -424,6 +460,197 @@ void runloom_iframe_drain_trashcan(PyThreadState *ts)
     _PyTrash_thread_destroy_chain(ts);
 }
 
+/* _PyRuntime.main_tstate in a fork child.  PyOS_AfterFork_Child makes the
+ * forking OS thread the main thread (_PyRuntime.main_thread) and deletes
+ * every other thread state, but leaves main_tstate where it was: at startup
+ * the old main thread's state, the interpreter's embedded initial state,
+ * which the fork resets and keeps for the next new state to reuse.  A signal
+ * sets its pending bit on main_tstate (_PyEval_SignalReceived), as does a
+ * main-thread-only pending call, so in a child forked from a fiber -- a
+ * per-g state on a hub thread -- the fiber that goes on running bytecode
+ * never saw the bit, and a Python handler ran only when a syscall's EINTR
+ * called PyErr_CheckSignals.
+ *
+ * Called from a pthread_atfork child handler, inside fork() and so before
+ * CPython's after-fork code, with the child single-threaded.  fiber_ts is the
+ * forking fiber's state, or NULL for a fork made anywhere else:
+ *   - a fiber's fork: its state becomes main.  It is the state the thread
+ *     CPython is about to call main runs, so _Py_IsMainThread() and
+ *     main_tstate agree; the fork keeps it (it is current), and the caller
+ *     holds a ref on its g so stackweave never clears it in this child.
+ *   - any other fork: if main_tstate names a state this fork is about to
+ *     delete (a fiber state an earlier generation adopted, now forked from
+ *     another thread), CPython would free it under main_tstate, and every
+ *     later signal would write into freed memory.  Put back CPython's own
+ *     value, the embedded initial state, which a fork resets and never frees
+ *     (as upstream: a fork from a plain non-main thread still delivers
+ *     signals only at EINTR).
+ * Doing it here, not in the os.register_at_fork hook, leaves no window in
+ * which main_tstate names a freed state; and a signal before
+ * _PySignal_AfterFork is discarded by CPython anyway, so no pending bit needs
+ * carrying over. */
+void runloom_iframe_fork_child_main_tstate(PyThreadState *fiber_ts)
+{
+#if defined(RUNLOOM_DESTRUCT_HAVE)
+    PyInterpreterState *interp = _PyRuntime.interpreters.main;
+    PyThreadState *initial;
+    if (interp == NULL) return;
+    initial = (PyThreadState *)&interp->_initial_thread;
+    if (fiber_ts != NULL && fiber_ts->interp == interp)
+        _PyRuntime.main_tstate = fiber_ts;
+    else if (_PyRuntime.main_tstate != PyThreadState_GetUnchecked() &&
+             _PyRuntime.main_tstate != initial)
+        _PyRuntime.main_tstate = initial;
+#else
+    (void)fiber_ts;
+#endif
+}
+
+/* The forking fiber's allocator in a fork child.  A fiber's state borrows the
+ * allocator of the hub running it (alloc-home): its objects come from the
+ * hub state's mimalloc heaps, and its pages awaiting QSBR sit on that state's
+ * page list.  CPython's after-fork code deletes every state but the forking
+ * one, the hub's included -- its heaps abandoned, the state itself freed --
+ * so the fiber that goes on running in the child kept allocating through a
+ * freed state: a use-after-free in mimalloc (llist_remove on a page's QSBR
+ * node in _PyMem_mi_page_clear_qsbr) that Linux 3.14 hit at once, in
+ * threading's own after-fork hook.  Point the alloc home back at the fiber's
+ * own state, the one left in the child, as CPython's forking thread has its
+ * own; and stamp its heaps, which never held a page (every allocation went to
+ * the alloc home), with this thread's id rather than the spawner's, as
+ * mimalloc's _mi_heap_init would.  Called from the pthread_atfork child
+ * handler, before CPython's after-fork code. */
+void runloom_iframe_fork_child_own_heap(PyThreadState *ts)
+{
+#if defined(RUNLOOM_DESTRUCT_HAVE)
+    struct _mimalloc_thread_state *m;
+    int i;
+    if (ts == NULL) return;
+    runloom_iframe_borrow_alloc_home(ts, ts);
+    m = &((_PyThreadStateImpl *)ts)->mimalloc;
+    for (i = 0; i < _Py_MIMALLOC_HEAP_COUNT; i++)
+        m->heaps[i].thread_id = (mi_threadid_t)_Py_ThreadId();
+#else
+    (void)ts;
+#endif
+}
+
+/* For the tests: does the calling thread state allocate from its own heaps
+ * (no alloc home borrowed)?  -1 where the build has no alloc home. */
+int runloom_iframe_alloc_home_is_own(void)
+{
+#if defined(Py_TSTATE_ALLOC_HOME)
+    PyThreadState *ts = PyThreadState_GetUnchecked();
+    if (ts == NULL) return -1;
+    return ((_PyThreadStateImpl *)ts)->_alloc_home == NULL;
+#else
+    return -1;
+#endif
+}
+
+/* For the tests: does the runtime's main thread state name the calling thread
+ * state, does its main thread name the calling OS thread, and is the main
+ * state the interpreter's embedded initial one?  Each is -1 where unknown. */
+void runloom_iframe_main_state_check(int *tstate_is_current,
+                                     int *thread_is_current,
+                                     int *tstate_is_initial)
+{
+#if defined(RUNLOOM_DESTRUCT_HAVE)
+    PyThreadState *ts = PyThreadState_GetUnchecked();
+    PyInterpreterState *interp = _PyRuntime.interpreters.main;
+    *tstate_is_current = (ts != NULL && _PyRuntime.main_tstate == ts);
+    *thread_is_current = (_PyRuntime.main_thread == PyThread_get_thread_ident());
+    *tstate_is_initial = (interp != NULL &&
+        _PyRuntime.main_tstate == (PyThreadState *)&interp->_initial_thread);
+#else
+    *tstate_is_current = -1;
+    *thread_is_current = -1;
+    *tstate_is_initial = -1;
+#endif
+}
+
+/* See runloom_iframe.h.  Decided once, before any hub runs, and never changed
+ * afterwards: lend() and unlend() must agree for the life of the process. */
+static int runloom_tlbc_shared = -1;
+static unsigned long long runloom_tlbc_switches_total = 0;
+
+int runloom_iframe_tlbc_follow(void)
+{
+#if !defined(_WIN32)
+    /* The interpreter re-points a frame at its state's copy only when built
+     * with Py_TSTATE_TLBC_FOLLOW (the exec-home patch's TLBC hunk), which
+     * exports _PyEval_TLBCFollow.  A header can't tell (the extension may be
+     * built against other headers than the binary it loads into), so look the
+     * symbol up. */
+    return dlsym(RTLD_DEFAULT, "_PyEval_TLBCFollow") != NULL;
+#else
+    return 0;
+#endif
+}
+
+int runloom_iframe_tlbc_shared(void)
+{
+    int on = __atomic_load_n(&runloom_tlbc_shared, __ATOMIC_ACQUIRE);
+    if (on >= 0) return on;
+    on = 0;
+#if defined(RUNLOOM_DESTRUCT_HAVE)
+    if (PyInterpreterState_Get()->config.tlbc_enabled
+            && runloom_iframe_tlbc_follow())
+        on = 1;
+#endif
+    {
+        int expected = -1;
+        if (!__atomic_compare_exchange_n(&runloom_tlbc_shared, &expected, on, 0,
+                                         __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+            on = expected;
+    }
+    return on;
+}
+
+int runloom_iframe_tlbc_lend(PyThreadState *fiber, PyThreadState *hub)
+{
+#if defined(RUNLOOM_DESTRUCT_HAVE)
+    _PyThreadStateImpl *f = (_PyThreadStateImpl *)fiber;
+    _PyThreadStateImpl *h = (_PyThreadStateImpl *)hub;
+    int32_t lent;
+    if (__atomic_load_n(&runloom_tlbc_shared, __ATOMIC_RELAXED) != 1)
+        return -1;
+    lent = h->tlbc_index;
+    h->tlbc_index = f->tlbc_index;
+    f->tlbc_index = lent;
+    return (int)lent;
+#else
+    (void)fiber; (void)hub;
+    return -1;
+#endif
+}
+
+void runloom_iframe_tlbc_unlend(PyThreadState *fiber, PyThreadState *hub)
+{
+#if defined(RUNLOOM_DESTRUCT_HAVE)
+    _PyThreadStateImpl *f = (_PyThreadStateImpl *)fiber;
+    _PyThreadStateImpl *h = (_PyThreadStateImpl *)hub;
+    int32_t own;
+    if (__atomic_load_n(&runloom_tlbc_shared, __ATOMIC_RELAXED) != 1)
+        return;
+    own = h->tlbc_index;
+    h->tlbc_index = f->tlbc_index;
+    f->tlbc_index = own;
+#else
+    (void)fiber; (void)hub;
+#endif
+}
+
+void runloom_iframe_tlbc_note_switch(void)
+{
+    __atomic_add_fetch(&runloom_tlbc_switches_total, 1, __ATOMIC_RELAXED);
+}
+
+unsigned long long runloom_iframe_tlbc_switches(void)
+{
+    return __atomic_load_n(&runloom_tlbc_switches_total, __ATOMIC_RELAXED);
+}
+
 int runloom_tstate_in_destruction(PyThreadState *ts)
 {
 #if defined(RUNLOOM_DESTRUCT_HAVE)
@@ -449,6 +676,39 @@ int runloom_tstate_in_destruction(PyThreadState *ts)
     return 0;
 #else
     (void)ts;
+    return 0;
+#endif
+}
+
+/* See runloom_iframe.h. */
+void runloom_iframe_mark_fiber_tstate(PyThreadState *ts)
+{
+#if defined(RUNLOOM_DESTRUCT_HAVE) && defined(_Py_TSTATE_FIBER_FLAG)
+    if (ts != NULL)
+        ((_PyThreadStateImpl *)ts)->_fiber = 1;
+#else
+    (void)ts;
+#endif
+}
+
+int runloom_iframe_fiber_tstate_flag(void)
+{
+#if defined(RUNLOOM_DESTRUCT_HAVE) && defined(_Py_TSTATE_FIBER_FLAG)
+    return 1;
+#else
+    return 0;
+#endif
+}
+
+int runloom_iframe_main_signals_pending(void)
+{
+#if defined(RUNLOOM_DESTRUCT_HAVE)
+    PyThreadState *mt;
+    if (PyThread_get_thread_ident() != _PyRuntime.main_thread)
+        return 0;                      /* _Py_IsMainThread is not exported */
+    mt = _PyRuntime.main_tstate;
+    return mt != NULL && _Py_eval_breaker_bit_is_set(mt, _PY_SIGNALS_PENDING_BIT);
+#else
     return 0;
 #endif
 }

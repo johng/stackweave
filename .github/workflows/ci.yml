@@ -356,7 +356,7 @@ jobs:
             exit 0
           fi
           NOTES="Free-threaded CPython patched with stackweave's cross-hub migration
-          features (Py_TSTATE_ALLOC_HOME + Py_TSTATE_EXEC_HOME), generated from
+          features (Py_TSTATE_ALLOC_HOME + Py_TSTATE_EXEC_HOME + Py_TSTATE_TLBC_FOLLOW), generated from
           commit ${{ github.sha }}. Each .json records the exact upstream release,
           patch content hashes, and build prefix.
 

@@ -715,6 +715,7 @@ void runloom_after_fork_child(void)
     runloom_mn_reset_after_fork();           /* abandon dead hubs, unhang mn_run */
     runloom_netpoll_reset_after_fork();      /* own poll fd, drop stale parkers */
     runloom_blockpool_reset_after_fork();    /* dead offload workers -> re-create */
+    runloom_fiberlock_reset_after_fork();    /* stock-lock waiters: retry or drop */
     runloom_diag_reset_after_fork();         /* diag ring lock */
     runloom_crash_reset_after_fork();        /* clear crash latch (keep altstack) */
     runloom_advice_reset_after_fork();       /* stack-advice table lock */

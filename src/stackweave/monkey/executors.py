@@ -39,7 +39,7 @@ _co_tpe_cls = None
 
 # Real (never-patched) lock for the executor's O(1) bookkeeping; captured at
 # import time -- before patch() rebinds _thread.allocate_lock to the cooperative
-# CoLock -- so it stays a real OS mutex (same idiom as _raw_get_ident below).
+# CoLock -- so it stays a real OS mutex.
 # Held only for set/flag updates, never across a park.
 _raw_allocate_lock = _thread.allocate_lock
 
@@ -248,25 +248,35 @@ def _unpatch_futures():
 _orig_mp_recv_defaults  = None
 _orig_mp_send_defaults  = None
 _orig_mp_close_defaults = None
-_orig_semlock_make_methods = None
+# Every SemLock class patched, with what it had before:
+# [(cls, _make_methods, __enter__ or None, __exit__ or None)].  More than one
+# when multiprocessing.synchronize is reloaded or re-imported after patch().
+_patched_semlock_classes = []
 
 # multiprocessing.synchronize.RECURSIVE_MUTEX -- the SemLock.kind of an RLock
 # (Value/Array.get_lock()); SEMAPHORE (1) is Lock/Semaphore/Event/Condition.
 _SEMLOCK_RECURSIVE = 0
-
-# Raw OS-thread id, for tracking recursion ownership on a non-fiber (real OS
-# thread) caller -- captured pre-patch, same as locks.CoRLock uses.
-_raw_get_ident = _thread.get_ident
+_SEMLOCK_SEMAPHORE = 1
 
 
-def _co_recursion_owner():
-    """Identity that OWNS a recursive cooperative SemLock: the current fiber
-    when one is running, else the OS-thread id.  A G handle (fiber) and an int
-    (thread) never compare equal, so the two domains can't be confused -- the
-    same scheme locks.CoRLock uses.  This replaces the C SemLock's OS-thread
-    `_is_mine()` ownership, which is WRONG under M:N: many fibers share one hub
-    OS thread, so the C check would treat fiber B's re-entry as fiber A's."""
-    return stackweave.current() if _in_fiber() else _raw_get_ident()
+def _semlock_backoff_acquire(try_acquire, timeout):
+    """Poll try_acquire() with a cooperative backoff park until it returns True
+    or `timeout` (None = forever) runs out.  POSIX semaphores have no readiness
+    fd, so this is a backoff poll -- same shape as the fcntl shim."""
+    deadline = None if timeout is None else time.monotonic() + max(0.0, timeout)
+    step = 0.0005
+    while True:
+        if try_acquire():
+            return True
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            _co_sleep(min(step, remaining))
+        else:
+            _co_sleep(step)
+        if step < 0.02:
+            step *= 2
 
 
 def _co_semlock_acquire(semlock):
@@ -274,121 +284,153 @@ def _co_semlock_acquire(semlock):
     non-blocking sem_trywait + _co_sleep backoff instead of sem_wait, so a
     contended cross-process Lock/Semaphore/Event/Condition/Barrier doesn't
     freeze the scheduler thread.  Real threads and explicit non-blocking
-    acquires fall straight through to the C call.  (POSIX semaphores have no
-    readiness fd, so this is a backoff poll -- same shape as the fcntl shim.)"""
+    acquires fall straight through to the C call."""
     def acquire(block=True, timeout=None):
         if not block or not _in_fiber():
             return semlock.acquire(block, timeout)
-        deadline = None if timeout is None else time.monotonic() + timeout
-        step = 0.0005
-        while True:
-            if semlock.acquire(False):          # sem_trywait
-                return True
-            if deadline is not None:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    return False
-                _co_sleep(min(step, remaining))
-            else:
-                _co_sleep(step)
-            if step < 0.02:
-                step *= 2
+        return _semlock_backoff_acquire(lambda: semlock.acquire(False), timeout)
     return acquire
 
 
-def _co_recursive_semlock_methods(semlock):
-    """Cooperative acquire/release for a RECURSIVE_MUTEX SemLock (an RLock, e.g.
-    Value/Array.get_lock()).  The C semlock_acquire tracks re-entrancy by OS
-    thread id (`_is_mine()`); under M:N that is broken, because many fibers
-    share ONE hub OS thread, so the C code would let fiber B re-enter a critical
-    section fiber A still holds (a double-entered lock -> a torn RMW / lost
-    increment).  We instead track recursion ownership + count by the CURRENT
-    FIBER and only touch the C semlock on the OUTERMOST acquire/release, so the
-    kernel sem is the cross-process gate and Python is the per-fiber re-entrancy.
-    A fiber that does NOT already own it never calls the C acquire while another
-    fiber holds it, so the C `_is_mine()` shortcut is unreachable across fibers.
+# Twins (below) that share the HANDLE of an unnamed recursive SemLock -- the
+# "fork" start method unlinks the name at creation, so there is nothing to
+# sem_open again.  Kept for the life of the process: a C SemLock's dealloc
+# sem_close()s its handle, here the original's.  One small object per unnamed
+# recursive lock made after patch().
+_shared_handle_twins = []
 
-    `state` = [owner, count]; mutated only by the owning fiber (set under the
-    held lock, cleared on the final release), so a non-owner only ever READS
-    owner to compare against itself -- a benign stale read at worst costs one
-    extra backoff spin.  Real-thread / non-blocking callers fall through to the
-    raw C path unchanged (a real thread's OS id never collides with a fiber G)."""
-    state = [None, 0]                           # [owner identity, recursion count]
 
-    def acquire(block=True, timeout=None):
+def _semlock_twin(c):
+    """A SEMAPHORE-kind (maxvalue 1) C SemLock on the same kernel semaphore as
+    the recursive C SemLock `c`: sem_trywait / sem_post with no owner check."""
+    import _multiprocessing
+    if c.name is not None:
+        try:
+            # Its own sem_open of the name: an independent handle that it may
+            # close (glibc refcounts the mapping; macOS returns a new handle).
+            return _multiprocessing.SemLock._rebuild(
+                c.handle, _SEMLOCK_SEMAPHORE, 1, c.name)
+        except OSError:
+            pass                        # unlinked meanwhile: share the handle
+    twin = _multiprocessing.SemLock._rebuild(
+        c.handle, _SEMLOCK_SEMAPHORE, 1, None)
+    _shared_handle_twins.append(twin)
+    return twin
+
+
+class _CoRecursiveSemLock(object):
+    """The `_semlock` of a recursive multiprocessing SemLock (mp.RLock,
+    Value/Array.get_lock(), mp.Condition's default lock) under monkey.patch.
+
+    The C RECURSIVE_MUTEX object keys its owner and recursion count on the OS
+    thread (semaphore.c ISMINE).  Many fibers share one hub thread, so it let
+    a sibling fiber re-enter a section another fiber held; and a fiber that
+    parked holding it and resumed on another hub was a stranger to it: its
+    re-acquire waited on itself and its release raised
+    (docs/dev/FT_CPYTHON_LOCK_GAPS.md, finding 5).  So a fiber never calls that
+    object.  Owner and recursion live here, keyed by the fiber, and the
+    cross-process gate is a SEMAPHORE-kind twin on the same kernel semaphore
+    (sem_trywait / sem_post, no owner check), which works from whichever hub
+    the fiber is on.  A plain OS thread keeps the C object's own recursive
+    path; the kernel semaphore keeps the two kinds of holder out of each other.
+    _is_mine() / _count() answer for a fiber owner from here, so
+    mp.Condition.wait (it releases _count() times) and repr() work; every other
+    attribute (handle, kind, name, _get_value, ...) is the C object's."""
+
+    __slots__ = ("_c", "_twin", "_owner", "_depth", "__weakref__")
+
+    def __init__(self, c):
+        self._c = c
+        self._twin = _semlock_twin(c)
+        self._owner = None          # the owning fiber (stackweave.current())
+        self._depth = 0             # its recursion depth
+
+    def __getattr__(self, name):
+        return getattr(self._c, name)
+
+    def _try_take(self):
+        if self._twin.acquire(False):              # sem_trywait
+            self._owner = stackweave.current()
+            self._depth = 1
+            return True
+        return False
+
+    def acquire(self, block=True, timeout=None):
         if not _in_fiber():
-            return semlock.acquire(block, timeout)
-        cur = _co_recursion_owner()
-        if state[0] is not None and state[0] == cur:
-            # Already held by THIS fiber -> pure re-entrant bump, no C call (the
-            # kernel sem stays at "1 holder", recursion lives only in Python).
-            # A re-entrant acquire ALWAYS deepens the recursion, blocking or not
-            # -- stdlib RLock bumps the count on a non-blocking re-entrant
-            # acquire too.  Returning True without the bump would drop the count
-            # by one level, so the matching release() would sem_post the kernel
-            # semaphore while we logically still hold an outer level, releasing
-            # the cross-process lock out from under the caller.
-            state[1] += 1
+            return self._c.acquire(block, timeout)
+        owner = self._owner
+        if owner is not None and owner == stackweave.current():
+            # Re-entrant: deepen, blocking or not (stdlib RLock bumps the count
+            # on a non-blocking re-entrant acquire too).
+            self._depth += 1
             return True
         if not block:
-            # A non-blocking acquire by a fiber that is not the owner: only the
-            # C trywait can win it, and only when no fiber owns it (else the C
-            # `_is_mine()` shortcut on a sibling's hub thread would falsely pass).
-            if state[0] is not None:
-                return False
-            if semlock.acquire(False):          # sem_trywait
-                state[0] = cur
-                state[1] = 1
-                return True
-            return False
-        deadline = None if timeout is None else time.monotonic() + timeout
-        step = 0.0005
-        while True:
-            # Only attempt the C acquire when NO fiber currently owns it; this is
-            # what prevents the cross-fiber `_is_mine()` double-enter -- a sibling
-            # on the same hub thread never reaches the C call while we hold it.
-            if state[0] is None and semlock.acquire(False):   # sem_trywait
-                state[0] = cur
-                state[1] = 1
-                return True
-            if deadline is not None:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    return False
-                _co_sleep(min(step, remaining))
-            else:
-                _co_sleep(step)
-            if step < 0.02:
-                step *= 2
+            return self._try_take()
+        return _semlock_backoff_acquire(self._try_take, timeout)
 
-    def release():
-        cur = _co_recursion_owner()
-        if state[0] is None or state[0] != cur:
-            # Not held by us at the Python layer -- either a real-thread holder
-            # (whose recursion lives in C, never in `state`) or a forked child
-            # whose fiber identity changed; defer to the C release, which raises
-            # the same AssertionError the stock SemLock would on a bad release.
-            semlock.release()
-            return
-        state[1] -= 1
-        if state[1] == 0:
-            state[0] = None
-            semlock.release()                   # final release -> sem_post
+    def release(self):
+        owner = self._owner
+        if not _in_fiber() or owner is None or owner != stackweave.current():
+            # Not a fiber that holds it: the C object answers, as stock does
+            # (it raises for a caller that does not hold it).
+            return self._c.release()
+        self._depth -= 1
+        if self._depth == 0:
+            self._owner = None
+            self._twin.release()                   # sem_post
 
-    return acquire, release
+    def _is_mine(self):
+        if _in_fiber():
+            owner = self._owner
+            return owner is not None and owner == stackweave.current()
+        return self._c._is_mine()
+
+    def _count(self):
+        # The holder's recursion depth, whoever asks (as the C _count()).
+        if self._owner is not None:
+            return self._depth
+        return self._c._count()
+
+    def _after_fork(self):
+        self._c._after_fork()
+        self._twin._after_fork()
+        self._owner = None
+        self._depth = 0
+
+    def __enter__(self):
+        return self.acquire()
+
+    def __exit__(self, *args):
+        return self.release()
 
 
 def _patched_semlock_make_methods(self):
-    _orig_semlock_make_methods(self)            # binds the C acquire/release
+    if isinstance(self._semlock, _CoRecursiveSemLock):
+        self._semlock = self._semlock._c
+    type(self)._stackweave_orig_make_methods(self)   # binds the C acquire/release
     if getattr(self._semlock, "kind", None) == _SEMLOCK_RECURSIVE:
-        # RLock (Value/Array.get_lock()): re-entrancy must be per-FIBER, so own
-        # both ends -- the recursion count lives in Python, not the C semlock.
-        self.acquire, self.release = _co_recursive_semlock_methods(self._semlock)
+        # RLock (Value/Array.get_lock()): owner and recursion keyed by fiber.
+        self._semlock = _CoRecursiveSemLock(self._semlock)
+        self.acquire = self._semlock.acquire
+        self.release = self._semlock.release
     else:
         # Non-recursive (Lock/Semaphore/Event/Condition): every acquire goes to
         # the real sem, no `_is_mine()` shortcut exists, so only acquire needs
         # the cooperative backoff; release stays the C sem_post.
         self.acquire = _co_semlock_acquire(self._semlock)
+
+
+# SemLock.__enter__/__exit__ call the C object directly, so `with lock:`
+# skipped the cooperative acquire/release (a blocking sem_wait on the hub, and
+# for an RLock a hold the cooperative release never saw).  Route them through
+# the instance's acquire/release, which for a SemLock made before patch() are
+# still the C ones.
+def _semlock_enter(self):
+    return self.acquire()
+
+
+def _semlock_exit(self, *args):
+    return self.release()
 
 
 def _patch_mp_connection():
@@ -421,25 +463,94 @@ def _patch_mp_connection():
         conn._write = os.write
 
 
-def _patch_mp_synchronize():
-    # SemLock._make_methods binds self.acquire to the C sem_wait; replace it
-    # with a cooperative version.  Only SemLock instances created after this
-    # runs cooperate (patch early).  Force-import synchronize only when the
-    # program already uses multiprocessing, so non-mp users pay nothing.
-    global _orig_semlock_make_methods
-    if _orig_semlock_make_methods is not None:
-        return
-    if "multiprocessing" not in sys.modules:
-        return
-    try:
-        import multiprocessing.synchronize as sync
-    except ImportError:
-        return
+def _install_semlock_patch(sync):
+    """Patch sync.SemLock, once per class: a reloaded or re-imported
+    multiprocessing.synchronize brings a new class, which gets patched too."""
     SemLock = getattr(sync, "SemLock", None)
     if SemLock is None or not hasattr(SemLock, "_make_methods"):
         return
-    _orig_semlock_make_methods = SemLock._make_methods
+    if "_stackweave_orig_make_methods" in SemLock.__dict__:
+        return
+    orig = SemLock._make_methods
+    _patched_semlock_classes.append((SemLock, orig,
+                                     SemLock.__dict__.get("__enter__"),
+                                     SemLock.__dict__.get("__exit__")))
+    SemLock._stackweave_orig_make_methods = orig
     SemLock._make_methods = _patched_semlock_make_methods
+    SemLock.__enter__ = _semlock_enter
+    SemLock.__exit__ = _semlock_exit
+
+
+class _PatchAfterExecLoader(object):
+    """Wraps multiprocessing.synchronize's loader: run the module, then patch
+    its SemLock.  Everything else is the real loader's."""
+
+    def __init__(self, loader):
+        self._loader = loader
+
+    def create_module(self, spec):
+        return self._loader.create_module(spec)
+
+    def exec_module(self, module):
+        self._loader.exec_module(module)
+        _install_semlock_patch(module)
+
+    def __getattr__(self, name):
+        return getattr(self._loader, name)
+
+
+class _SynchronizeImportHook(object):
+    """sys.meta_path entry from patch() to unpatch(): whenever
+    multiprocessing.synchronize is loaded -- first imported, re-imported after
+    leaving sys.modules, or reloaded -- patch its SemLock as it loads.  Without
+    it a program that imports multiprocessing after patch() -- the usual order
+    -- got stock SemLocks: a blocking sem_wait on the hub, and recursion keyed
+    on the hub's OS thread.  Every other import passes by on one string
+    compare.  It stays put rather than removing itself: sys.meta_path is a
+    plain list that other threads may be walking for their own imports."""
+
+    _NAME = "multiprocessing.synchronize"
+
+    def find_spec(self, name, path=None, target=None):
+        if name != self._NAME:
+            return None
+        for finder in sys.meta_path:
+            if finder is self:
+                continue
+            find_spec = getattr(finder, "find_spec", None)
+            if find_spec is None:
+                continue
+            spec = find_spec(name, path, target)
+            if spec is not None:
+                break
+        else:
+            return None
+        if spec.loader is not None and hasattr(spec.loader, "exec_module"):
+            spec.loader = _PatchAfterExecLoader(spec.loader)
+        return spec
+
+
+_synchronize_hook = None
+
+
+def _patch_mp_synchronize():
+    # SemLock._make_methods binds self.acquire to the C sem_wait; replace it
+    # with a cooperative version.  Only SemLock instances created after this
+    # runs cooperate (patch early).  Import synchronize now only when the
+    # program already uses multiprocessing, so non-mp users pay nothing; the
+    # hook patches every later load of it.
+    global _synchronize_hook
+    if _synchronize_hook is None:
+        _synchronize_hook = _SynchronizeImportHook()
+        sys.meta_path.insert(0, _synchronize_hook)
+    sync = sys.modules.get("multiprocessing.synchronize")
+    if sync is None and "multiprocessing" in sys.modules:
+        try:
+            import multiprocessing.synchronize as sync
+        except ImportError:
+            return
+    if sync is not None:
+        _install_semlock_patch(sync)
 
 
 def _patch_multiprocessing():
@@ -448,11 +559,28 @@ def _patch_multiprocessing():
 
 
 def _unpatch_multiprocessing():
-    global _orig_semlock_make_methods
-    sync = sys.modules.get("multiprocessing.synchronize")
-    if sync is not None and _orig_semlock_make_methods is not None:
-        sync.SemLock._make_methods = _orig_semlock_make_methods
-        _orig_semlock_make_methods = None
+    global _synchronize_hook
+    if _synchronize_hook is not None:
+        try:
+            sys.meta_path.remove(_synchronize_hook)
+        except ValueError:
+            pass
+        _synchronize_hook = None
+    while _patched_semlock_classes:
+        SemLock, make_methods, enter, exit_ = _patched_semlock_classes.pop()
+        SemLock._make_methods = make_methods
+        for attr, orig in (("__enter__", enter), ("__exit__", exit_)):
+            if orig is not None:
+                setattr(SemLock, attr, orig)
+            else:
+                try:
+                    delattr(SemLock, attr)
+                except AttributeError:
+                    pass
+        try:
+            del SemLock._stackweave_orig_make_methods
+        except AttributeError:
+            pass
     conn = sys.modules.get("multiprocessing.connection")
     if conn is None:
         return

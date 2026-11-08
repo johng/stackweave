@@ -38,6 +38,10 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   Build that interpreter from `src/patches/` with **no `--with-lto`** (LTO
   inlines pystate.c's thread-state reads and silently undoes exec-home); PGO
   alone is fine. `tools/ci/check_exec_home_tls.py <python>` checks a build.
+  Its CPPFLAGS (and pyconfig.h) carry `-DPy_TSTATE_ALLOC_HOME
+  -DPy_TSTATE_EXEC_HOME -DPy_TSTATE_TLBC_FOLLOW` (`RL_CI_FEATURE_DEFINES`); the
+  third only lets fibers share bytecode copies (~4% interpreter cost), so an
+  interpreter without it is sound, just keeps one copy per fiber.
 - Build `STACKWEAVE_EXTRA_CFLAGS="-DPy_TSTATE_ALLOC_HOME -DPy_TSTATE_EXEC_HOME"
   python setup.py build_ext --inplace` (an interpreter whose pyconfig.h lacks
   the flags doesn't pass them on, and without them the alloc-home borrow
@@ -49,10 +53,14 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   `build_ext --inplace` is ungated; set
   `STACKWEAVE_ALLOW_STOCK_CPYTHON=1` to let pip through. Guard: `tests/test_install_gate.py`.
 - On a patched interpreter, build greenlet from source
-  (`pip install --no-binary greenlet greenlet`). The PyPI wheel is built
-  against stock headers and hangs on its first `switch()` there, which makes
-  every `tests/test_greenlet_interop.py` test time out. Hosted CI doesn't
-  install greenlet, so that file skips there.
+  (`pip install --no-cache-dir --no-binary greenlet greenlet`). The PyPI
+  wheel is built against stock headers and hangs on its first `switch()`
+  there, which makes every `tests/test_greenlet_interop.py` test time out.
+  Rebuild it whenever the patches change `_PyThreadStateImpl` (the `_fiber`
+  field did), and bypass pip's cache: it keys a locally built wheel on the
+  `cp314t` tag alone, so it reinstalls one built against the old layout,
+  which hangs the same way. Hosted CI doesn't install greenlet, so that file
+  skips there.
 - Run the suite via `tests/run_isolated.py` (one file/subprocess — in-process
   `pytest tests/` flakes on cross-file state leaks). It and `tests/conftest.py`
   refuse to run unless migration is sound: the GIL off, and both the
@@ -113,6 +121,30 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   raising during a cooperative wait propagates out of *that call*; the idle
   scheduler carries one out of `run()` only when nothing is parked. Path:
   `runloom_netpoll_signal_wake` + the `RUNLOOM_NETPOLL_SIGNALED` sentinel.
+- **In a child forked in a fiber, the fiber's state is CPython's main one,
+  and `_PyRuntime.main_tstate` never names a freed state.** CPython never
+  moves `main_tstate` after fork, and a signal sets its pending bit there; a
+  child forked from a fiber's per-g state on a hub thread had it naming the
+  old main thread's deleted state, so a bytecode loop ran handlers only at
+  the next EINTR. A `pthread_atfork` child handler (`runloom_mn_atfork_child`,
+  inside `fork()`, before CPython's after-fork code deletes the other states)
+  makes the forking fiber's state main and takes a ref on its g that the child
+  never drops, so stackweave never clears that state there. It also points the
+  state's alloc home back at itself and stamps its (empty) heaps with this
+  thread's id (`runloom_iframe_fork_child_own_heap`): the fiber borrowed its
+  hub's allocator, and the after-fork code deletes the hub's state, so the
+  child allocated through freed memory (Linux 3.14 segfaulted in
+  threading's own after-fork hook). Any other fork
+  puts back the embedded initial state (which a fork resets, never frees) if
+  `main_tstate` names a state the fork is about to free: a grandchild forked
+  from a plain thread would otherwise keep naming the freed fiber state, and
+  every signal would write into freed memory. Never point `main_tstate` at a
+  state stackweave or a fork may free, and never set it later than the atfork
+  handler. A fork from a plain non-main thread keeps upstream's EINTR-only
+  handling. Guards: `tests/test_cpython_thread_keyed_locks.py -k
+  "forked_from_a_fiber_runs_signal or never_name_a_freed"`
+  (`stackweave_c._main_thread_state()`, `_alloc_home_is_own()`),
+  `tests/test_import_lock.py::test_a_child_forked_from_a_fiber_can_import`.
 - **Only a hub's own thread edits its sleep heap.** A signal-woken io sleeper
   (`sched_sleep_io`: CoPoll, no-fd `select`) resumes through the global
   run-queue on any hub, so it never removes its own entry: the entry is
@@ -171,6 +203,19 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   detached hub state heads the bucket. Guard:
   `tests/test_cross_hub_migration.py::test_cross_hub_drops_drain_before_the_hub_heads_the_bucket`
   (`stats()["brc_release_merges_hub_first"]` must stay 0).
+  "Queued" includes the fiber's private `local_objects_to_merge`: a `__del__`
+  run by the fiber's own merge loop that parks leaves the rest of that stack
+  on it, and a fiber that resumed on another hub would merge it there, off the
+  owner thread (`_Py_ExplicitMergeRefcount` zeroes `ob_ref_local`
+  non-atomically). release() drains both stacks at the park; the suspended
+  loop then finds its stack empty and returns. The rest of that batch is
+  therefore deallocated on the hub with no current fiber, where a patched lock
+  or sleep in a `__del__` blocks the hub's OS thread (and deadlocks it if a
+  fiber on that hub holds the lock). That is the open finding #10 in
+  docs/dev/FT_CPYTHON_LOCK_GAPS.md; merging on the owner thread comes first.
+  Guard:
+  `tests/test_cpython_thread_keyed_locks.py::test_memory_queued_objects_merge_on_their_owner_thread`
+  (`stats()["brc_release_local_drains"]` must be > 0 there).
 - **A run(1) drain or Coro nested on a hub's fiber is its own world.** The
   single-thread drain (`run(1)`, stackweave's asyncio loop) and `_Coro.resume`
   run other fibers on the calling fiber's stack and thread state.
@@ -229,6 +274,43 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   (a patched `Lock` in an mp.Queue `_feed` thread) must detect no-goroutine (TLS
   peek NULL) and block on the real OS — never park a non-existent g, never lazily
   alloc sched state (`peek_current`, never `sched_get`).
+- **CPython's locks that are held across Python code are owned by the
+  thread state, and their waits park the fiber, through exec-home hunks
+  whose hooks the library installs.** (1) Ownership:
+  `Python/lock.c` keys `_PyRecursiveMutex` (so `threading.RLock`, and
+  CPython's import and warnings locks) on a fiber's `tstate->id` (other
+  states keep the OS thread), the fiber's own for its whole life; `Python/import.c`'s after-fork reinit uses
+  the same identity, and so do `_io.Buffered*`'s owner (`bufferedio.c`) and a
+  recursive multiprocessing SemLock's `last_tid` (`semaphore.c`), all through
+  `_PyRecursiveMutex_SelfIdent()`. Keyed on the OS thread, a fiber that
+  migrated inside the lock could not release it (wedged for good: an import
+  or warnings lock hung every later import or warn), and a second fiber on
+  the holder's hub re-entered it (two in the critical section; a buffered
+  stream raised "reentrant call"). (2) Waiting: `Python/parking_lot.c` lets a
+  wait flagged `_PY_LOCK_FIBER` (the lock objects' acquire, RLock's
+  `_acquire_restore`, every `_PyRecursiveMutex_Lock`, a buffered stream's
+  lock, now a `PyMutex`) ask `_Py_fiber_park` first; `runloom_fiberlock.c`
+  installs those hooks at import (whenever the interpreter has them)
+  and parks the fiber through `runloom_park_generic`, so its hub runs other
+  fibers and the release wakes it from any thread. Without (2), a waiter
+  blocked its hub's OS thread in the parking lot, and with as many waiters as
+  hubs on a lock held across a park (a `showwarning` or meta-path finder
+  doing I/O) nothing could run the holder: a hard hang the deadlock detector
+  cannot see (hubs busy, not idle); a waiter on the hub of a PREEMPTED holder
+  hung that hub on its own, since nothing steals from a ready ring.
+  `fl_prepare` names a fiber only while its own state is attached (M:N:
+  `g->tstate`; `run(1)`: stackweave's interpreter): inside a subinterpreter
+  call a fiber parked with a foreign state attached (`run(1)` crashed). A
+  plain thread, the hub's own stack and a nested `run(1)`'s fibers keep the
+  platform semaphore; nested fibers share the outer fiber's state, so they
+  still re-enter its RLocks. A SemLock's wait is a cross-process semaphore and
+  still blocks the hub. `stackweave_c.rlock_tstate_owned` /
+  `fiber_lock_hooks` say whether the interpreter has the lock.c and
+  parking_lot.c hunks, `fiber_locks_installed` whether the hooks are in, and
+  `stats()["fiber_lock_parks"]` counts waits that parked. Guards:
+  `tests/test_fiber_locks.py`, `tests/test_cross_hub_migration.py -k
+  stock_rlock`, `tests/test_cpython_thread_keyed_locks.py -k "warnings or
+  import_lock or preempt_lock_holder or shared_buffered or mp_value"`.
 - **importlib's module locks key on the fiber, not the OS thread.**
   `import stackweave` rebinds `importlib._bootstrap._ModuleLock` to
   `_FiberModuleLock` (`src/stackweave/_importlock.py`): `_ModuleLock`'s own
@@ -249,10 +331,64 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   nested run(1) or Coro (`_nest_owner`). Such an import gets the module so far
   (`import x`) or `_DeadlockError` (`importlib.import_module`), as between two
   threads, instead of hanging. Raw `stackweave_c` use without `import
-  stackweave` gets none of this. Still open: importlib's global `_imp` lock
-  keys on the OS thread, and a preemption inside `_get_module_lock` lets a
-  same-hub fiber re-enter it. Guards: `tests/test_import_lock.py`,
-  `tests/test_cross_hub_migration.py -k import`.
+  stackweave` gets none of this. importlib's global `_imp` lock is a
+  `_PyRecursiveMutex`: owned by a fiber's thread state (the exec-home lock.c
+  hunk), so a same-hub fiber no longer re-enters it. Guards:
+  `tests/test_import_lock.py`, `tests/test_cross_hub_migration.py -k import`.
+- **The stock-lock hooks park only where parking is sound, and only a FIBER's
+  thread state owns a lock.** (1) Identity: `_PyRecursiveMutex_SelfIdent()`
+  (the owner a `_PyRecursiveMutex` records, and every other lock keyed on the
+  same identity) is the tagged `tstate->id` only for a state marked
+  `_PyThreadStateImpl._fiber` (Py_TSTATE_EXEC_HOME, `_Py_TSTATE_FIBER_FLAG`),
+  which spawn sets on every per-g state before its first attach
+  (`runloom_iframe_mark_fiber_tstate`); every other state -- a thread's, a
+  hub's, a C thread's per-callback PyGILState one -- keeps the OS thread, so
+  code that never runs a fiber is exactly stock (an RLock taken in one
+  PyGILState callback and released in the next still works). A new per-g state
+  must be marked, or its locks key on whichever hub it runs on. (2)
+  `fl_prepare` names a fiber only on the fiber's own coroutine (not inside a
+  `_Coro` it resumed: the outer g would be marked parked while only the Coro
+  yields), with its own state attached (not inside `_interpreters.exec`), and
+  outside object destruction (`runloom_tstate_in_destruction`, the preemption
+  gate); otherwise the wait blocks the thread, as stock. (3) Waiters: each is
+  on the waiter list of the sched it waits on (`sched->fl_head`: a hub's for
+  M:N, its owner's for run(1)), linked through its g, never its stack, under
+  that sched's `fl_lock` -- per sched, so contended locks on different hubs
+  share nothing. A wake holds that lock from before it queues the fiber until
+  it has stored WOKEN, and freeing a g still on a list
+  (`runloom_fiberlock_forget`, from `runloom_g_decref`: woken, then dropped
+  unrun by a sched reset) unlinks it under the same lock first and gives back
+  its run-alive count; so a wake never writes into a freed stack. (4) A wait
+  ends with no wake credit outstanding (every credit then was aimed at it); a
+  timed wait arms one timer entry (re-armed only after a migration) and, on
+  ending, bumps `g->timer_ticket`, so the heap drops the entry instead of
+  waking the fiber's next park and purges it before its deadline
+  (`timer_stale`, `runloom_sched_drain_timers`). Out of memory arming it, the
+  wait naps until woken or the deadline, its state detached so a
+  stop-the-world does not wait on it. (5) Teardown: `mn_fini` ends the session
+  first thing (`runloom_fiberlock_mn_stop`: a wake for one of its waiters is
+  dropped from then on, never queued on a hub) and dequeues the waiters'
+  parking-lot entries (`runloom_fiberlock_mn_unpark`); after the joins it
+  waits out wakes still in flight (`fl_inflight`, a Dekker pair with
+  `fl_alive`), dequeues late waiters too, unlinks them all and gives back
+  their run-alive counts. (6) Fork: the child keeps the forking thread's
+  run(1) waiters and wakes them to retry with a fresh parking-lot entry
+  (CPython emptied the lot); the rest are dead and only their counts are given
+  back. (7) Signals: a run(1) fiber's interruptible wait (`_Py_PARK_INTR`, the
+  lock objects' acquire) on the main thread is woken by the drain while a
+  signal is pending and returns `Py_PARK_INTR`, so CPython runs the handler in
+  the fiber, as for a stock main-thread acquire; an M:N fiber never runs on
+  the main thread, so like a stock non-main thread its wait is not
+  interrupted, and the signal is carried out of `run()`. Known limitations:
+  every lock park is foreign-wakeable (a plain thread may release), so the
+  deadlock detector never reports a fiber-vs-fiber lock deadlock (AB-BA): it
+  hangs; an RLock's owner is knowable (its thread state), a plain Lock's is
+  not. And a lock handed off to a fiber that never runs stays locked for good:
+  a release in the window between an aborted M:N `run()` returning and
+  `mn_fini`, or one that reaches a fiber which began waiting while the hubs
+  stopped, or a woken waiter that a sched reset then drops. Guards:
+  `tests/test_fiber_locks.py` (`stats()` `fiber_lock_stale_wakes`,
+  `_timer_arms`, `_signal_wakes`, `timer_entries`).
 - **Parked-fiber frames are made GC-visible by the frames anchor.** The
   free-threaded collector credits PEP-703 deferred stackrefs (code objects,
   functions, deferred locals) only on LIVE tstate `current_frame` chains; a parked
@@ -292,10 +428,31 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   inactive. **greenlet coexistence on 3.14t still needs `PYTHON_TLBC=0`** (its own
   suspended-frame GC fix is 3.15-only; our anchor covers stackweave fibers, not
   greenlet's frames — see `tests/test_greenlet_interop.py`). `sys._clear_internal_caches`
-  is safe during `run()` (hub tstates own their TLBC indices for the whole run),
+  is safe during `run()` (each hub's TLBC index is held for the whole run, by the
+  hub's state or the fiber it lends it to; parked frames point into hub copies),
   EXCEPT the upstream latent case of a suspended generator escaped from a since-dead
   user thread. Guard: `tests/test_tlbc_parked_frame_gc.py` (+ p565/p524 as the
   TLBC-on ground-truth oracle).
+
+- **A resumed fiber runs on its hub's TLBC copy, and only where frames follow
+  it.** `runloom_iframe_tlbc_lend` SWAPS the fiber's and the hub's `tlbc_index`
+  right after the fiber's state attaches, and `_unlend` swaps back right before
+  it detaches, so live fibers share one bytecode copy per hub instead of one each.
+  Three rules: (1) swap, never copy: every index is held by exactly one state
+  (`PyThreadState_Clear` frees whatever a state holds, and a forked child clears
+  every other state), so a parked fiber holds its own reserved index and the hub
+  its own; (2) swap only while the FIBER's state is attached, so no
+  stop-the-world reader (`_Py_ClearUnusedTLBC`) sees half a swap; (3) lend only
+  when the interpreter re-points a frame at its state's copy before each
+  instruction (the exec-home patch's TLBC hunk, built with
+  `-DPy_TSTATE_TLBC_FOLLOW`: `_PyEval_TLBCFollow`, found by `dlsym`;
+  `stackweave_c.tlbc_follow`, `stackweave_c.tlbc_shared`). A frame keeps the copy it started on
+  until its next `RESUME`, and a fiber parks mid-instruction, so without that
+  hunk a migrated frame runs hub A's copy on hub B while A specializes it:
+  p23_tlbc_shared_stress segfaults in seconds. New code that attaches a per-g
+  state on a hub must lend/unlend around it the same way, or not at all.
+  Guards: `tests/test_tlbc_hub_copies.py` (`stats()["tlbc_switches"]` > 0 when
+  shared), `tests/test_cpython_thread_keyed_locks.py::test_cost_live_fibers_share_bytecode_within_1_5x_of_tlbc_off`.
 
 - **A hub-thread wake lands on the waker's OWN deque (Go-style local
   wake), not the global run-queue.** `runloom_mn_woken_enqueue`
@@ -319,11 +476,54 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   g switched out and its tstate is detached, never from inside the fiber: a
   thief resumes it the moment it is queued; (2) a preempted g goes back on the
   ready ring (`runloom_mn_preempt_yield`), which only its hub reads: a time
-  slice ends wherever the fiber is, maybe inside `with rlock:` or an import,
-  whose locks key on the OS thread. A timer for a g pinned to another hub
+  slice ends wherever the fiber is, maybe inside a sqlite call or other C
+  code that keys on the OS thread. A timer for a g pinned to another hub
   wakes it like a channel wake (QUEUED, global run-queue), so the pin holds.
-  Guards: `tests/test_cross_hub_migration.py -k "idle_hub_takes or
-  preempted_fiber_keeps or pinned_fiber_resumes"` (`stats()["mn_yield_steals"]`).
+  The ring is picked first, so the pick right after a preempted ring (or
+  yield-queue) turn is the starve-bound forced turn (global run-queue,
+  deque): without it a CPU-bound g refilled the ring every slice, and a g
+  pinned onto its hub, which only the global queue holds and only that hub
+  may take, waited 64 slices (~3 s) per turn. A g a forced turn picked hands
+  the next pick back to the ring when preempted, so the two alternate: with
+  every preemption forcing a turn, a stream of fresh CPU-bound gs (the deque
+  pops LIFO) kept the ring from running at all. Guards:
+  `tests/test_cross_hub_migration.py -k "idle_hub_takes or
+  preempted_fiber_keeps or pinned_fiber_resumes"` (`stats()["mn_yield_steals"]`),
+  `tests/test_sched_fairness.py -k "pinned_onto_one_hub or keep_arriving"`
+  (`stats()["mn_preempt_turns"]`).
+- **A fiber with a foreign C caller on its stack never moves to another
+  hub.** A C library that calls back into Python through `PyGILState_Ensure`
+  (sqlite3's user functions and handlers, ctypes / cffi callbacks, Cython,
+  pybind11) may hold a lock owned by the OS thread across the call: sqlite's
+  serialized-mode connection mutex aborted on macOS when a callback resumed on
+  another hub. While the fiber's state has `gilstate_counter > 1`
+  (`PyThreadState_New` gives 1), or Python asked for it
+  (`runloom_mn_hold_here`, `g->hold_depth`), every switch-out holds it on its
+  hub (`runloom_mn_hold_for_c_caller`, in hub_main's release BEFORE anything
+  can route a wake): `pin_hub1` is derived as `cpin_hub1` if set, else
+  `user_pin1` (spawn / `G.pin`), and only `runloom_mn_global_runq_set_pins`
+  writes the three, under the runq lock. So its wakes take the global
+  run-queue to this hub, and its timer and yields stay on the ready ring; a
+  `G.pin()` made meanwhile applies after the callback returns. Callers that
+  re-attach a saved state without the counter (`_tkinter`, `_ssl`'s password
+  callback) are not covered. Guards:
+  `tests/test_cross_hub_migration.py::test_identity_c_callback_keeps_its_os_thread_until_it_returns`,
+  `tests/test_cpython_thread_keyed_locks.py::test_identity_sqlite_callback_keeps_its_os_thread_across_a_park`
+  (`stats()["mn_c_caller_holds"]`).
+- **monkey's sqlite busy wait never parks inside sqlite3_step.** The
+  statement is suspended there, sqlite's busy handler is not reentrant, and
+  serialized mode's recursive mutex lets another fiber of the hub into the
+  same connection. The handler (`module_sqlite.c.inc`) only gives the wait
+  back (SQLITE_BUSY) to an armed whole-call retry (`g->sqlite_coop`,
+  `monkey/sqlite.py`), which sleeps outside sqlite -- held on its hub for a
+  `check_same_thread` connection -- and otherwise sleeps as sqlite's default
+  does. Only calls sqlite says may be retried are armed: a statement run in
+  autocommit, or a commit; never a statement inside an open transaction, and
+  never while a foreign C caller is on the stack (`gilstate_counter > 1`,
+  checked both when arming and in the handler): SQL run from a user function
+  is inside the outer connection's `sqlite3_step`, so it must not park
+  either. Guards: `tests/test_monkey_sqlite.py`,
+  `tests/test_cpython_thread_keyed_locks.py::test_preempt_sqlite_writer_waits_for_a_same_hub_transaction`.
 - **A sysmon preemption request names the resume it is for.** sysmon asks two
   ways at once, a flag the eval-frame wrapper reads at the next call and a
   pending call run at the next backward jump; `h->preempt_seq` holds the
@@ -433,3 +633,22 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   custom awaitable-iterator takes the `.send()` branch on a non-None value and
   raises. Guard: `tests/test_differential_asyncio.py` (sc_send_none_protocol).
 
+## monkey invariants (src/stackweave/monkey/)
+- **The cooperative os.read/os.write family never changes an fd's
+  O_NONBLOCK.** The flag lives on the open file description, shared by dups,
+  child processes and every user of a terminal. A blocking fd is routed instead:
+  socket -> `MSG_DONTWAIT` per call (recv; send off macOS, where it blocks);
+  pipe/char device -> a zero-timeout level probe under the inode's stripe
+  mutex, then the plain call (pipe writes in PIPE_BUF pieces); tty writes and
+  unwatchable fds -> the pool. Never probe with `wait_fd` alone: it is
+  edge-triggered, and a pipe still holding bytes from a consumed edge never
+  fires again. Only `set_blocking` an fd stackweave created. Guard:
+  `tests/test_cpython_thread_keyed_locks.py::test_identity_patched_os_read_leaves_the_fd_mode_alone`.
+- **A fiber never calls a recursive multiprocessing SemLock's C object.** Its
+  owner and recursion are keyed on the OS thread (ISMINE), so a migrated fiber
+  waits on itself and cannot release. `_CoRecursiveSemLock` (the patched
+  `SemLock._semlock`) keeps owner/depth per fiber and gates on a SEMAPHORE-kind
+  twin of the same kernel semaphore; `SemLock.__enter__`/`__exit__` go through
+  the instance's acquire/release. Guards:
+  `tests/test_cpython_thread_keyed_locks.py::test_identity_mp_value_lock_reenters_after_a_migration[monkey]`,
+  `tests/test_multiprocessing_compat.py`.

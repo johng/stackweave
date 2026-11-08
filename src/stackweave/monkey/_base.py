@@ -67,6 +67,15 @@ _raw_sock_setblocking = socket.socket.setblocking
 # this -- the patched select would re-enter the cooperative path on a thread
 # with no fiber/hub.
 _raw_select = _select_mod.select
+# Raw select.poll (polling.py makes the patched one cooperative), for the
+# zero-timeout readiness probes in osio.py on fds select() cannot take.
+_raw_poll = getattr(_select_mod, "poll", None)
+# Raw os.fstat (the syscalls patch offloads the patched one to the pool).  An
+# fstat of an OPEN fd is a sub-microsecond metadata read (see subproc.py's
+# _patched_popen_init); osio.py classifies the fd with it on every cooperative
+# os.read/os.write, where a pool round trip per call would cost more than the
+# I/O itself.
+_raw_os_fstat = os.fstat
 # Raw os.sendfile (before _patch_syscalls offloads it to the pool).  The
 # cooperative socket.sendfile drives this directly in non-blocking mode and
 # parks on wait_fd, rather than blocking a pool worker for the whole transfer.
@@ -894,7 +903,8 @@ def offload(fn, *args, **kwargs):
 
         data = stackweave.monkey.offload(f.read, 65536)
 
-    sqlite3 is NOT auto-patched: a Connection is thread-affine (it raises
+    sqlite3 calls are not offloaded (the `sqlite` category only moves a busy
+    wait out of sqlite3_step): a Connection is thread-affine (it raises
     "SQLite objects created in a thread can only be used in that same thread"),
     and the pool runs the call on a worker thread.  To offload sqlite, open the
     connection with ``check_same_thread=False`` and keep your own access to it

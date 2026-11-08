@@ -176,6 +176,9 @@ int runloom_mn_init(int n_threads)
      * on for an M:N run; mn_fini clears it again. */
     runloom_mn_interp = interp;
     runloom_set_mn_live(1);
+    /* Settle whether resumes lend fibers their hub's bytecode copies before
+     * any hub runs one (runloom_iframe_tlbc_shared: fixed for the process). */
+    (void)runloom_iframe_tlbc_shared();
     /* Configure the sysmon watchdog (threshold, logging) BEFORE the hubs
      * spawn so the per-resume progress instrumentation is live immediately. */
     runloom_sysmon_config();
@@ -271,6 +274,8 @@ int runloom_mn_init(int n_threads)
          * load and treat NULL as attach-state -1 (fail closed) during the brief
          * window before the hub publishes it. */
     }
+    /* A new M:N session for the stock-lock waits (runloom_fiberlock.c). */
+    runloom_fiberlock_mn_start();
     saved = PyEval_SaveThread();
     for (i = 0; i < n_threads; i++) {
         if (runloom_thread_create(&runloom_hubs[i].thread,
@@ -418,6 +423,14 @@ void runloom_mn_fini(void)
      * lose by gating early.  See runloom_mn_gen in mn_sched.c and the dekker
      * finding (docs/dev/repro/DEKKER_SIGSEGV_FINDING.md). */
     __atomic_add_fetch(&runloom_mn_gen, 1, __ATOMIC_RELEASE);
+    /* End the session for the stock-lock waits before the hubs stop: a fiber
+     * still parked in one (an abnormal end -- a signal carried out of mn_run,
+     * a deadlock raise) will never run, so its wakes are dropped from here on
+     * and its parking-lot entry goes now, before a release can hand it the
+     * lock (runloom_fiberlock.c). */
+    runloom_fiberlock_mn_stop();
+    for (i = 0; i < runloom_hub_count; i++)
+        runloom_fiberlock_mn_unpark(&runloom_hubs[i].sched, 0);
     /* Stop the watchdog before any hub teardown so its scan never touches
      * freed hub state. */
     runloom_sysmon_stop_join();
@@ -444,6 +457,12 @@ void runloom_mn_fini(void)
         }
         PyEval_RestoreThread(saved);
     }
+    /* The stock-lock waiters still parked will never run: wait out wakes in
+     * flight, dequeue any that started waiting while the hubs stopped, unlink
+     * them all and give back their run-alive counts.  Before the leftovers
+     * drain, so a wake that queued its g has finished with it. */
+    for (i = 0; i < runloom_hub_count; i++)
+        runloom_fiberlock_mn_unpark(&runloom_hubs[i].sched, 1);
     /* controlled-mode baton: all hubs joined, nobody can acquire/release now */
     runloom_mn_ctrl_fini();
     /* Drain leftover gs BEFORE tearing down per-hub tstates: g->snap
@@ -621,6 +640,37 @@ void runloom_mn_reset_after_fork(void)
     __atomic_add_fetch(&runloom_mn_gen, 1, __ATOMIC_RELEASE);
 }
 
+/* pthread_atfork child handler: the forking fiber's state in the child.  A
+ * fork made in a fiber -- the hub's current g, whose own state is attached
+ * (nested in a run(1) or not) -- makes that state CPython's main one
+ * (runloom_iframe_fork_child_main_tstate) and gives it back its own allocator
+ * (runloom_iframe_fork_child_own_heap): CPython's after-fork code is about to
+ * delete the hub's state, whose heaps it borrowed.  It also takes a ref on
+ * the g that nothing in the child drops (a one-time leak, like the abandoned
+ * hub array): a per-g state is cleared only when its g's last ref goes, so the
+ * state CPython now calls main is never cleared by stackweave here.  Runs
+ * inside fork(), before CPython's after-fork code and the
+ * os.register_at_fork reset below. */
+static void runloom_mn_atfork_child(void)
+{
+    runloom_g_t *cur = runloom_tls_current_g;
+    PyThreadState *ts = PyThreadState_GetUnchecked();
+    int fiber = (cur != NULL && cur->tstate != NULL && cur->tstate == ts);
+    if (fiber) {
+        runloom_g_incref(cur);
+        runloom_iframe_fork_child_own_heap(ts);
+    }
+    runloom_iframe_fork_child_main_tstate(fiber ? ts : NULL);
+}
+
+void runloom_mn_atfork_init(void)
+{
+    static int registered = 0;
+    if (registered) return;
+    registered = 1;
+    (void)pthread_atfork(NULL, NULL, runloom_mn_atfork_child);
+}
+
 /* Internal core: pick hub, alloc g, set up coro, submit, bump counters.
  * Either callable (Python path) or c_fn+c_arg (C-only path) must be set,
  * not both.  Returns 0 on success, -1 on failure (errno set).  Python
@@ -742,8 +792,10 @@ static RUNLOOM_NOINLINE int runloom_mn_fiber_core(PyObject *callable,
     g->park_fd = -1;
     /* Record the pin (+1 encoded, see runloom_sched.h) so the drain routes this
      * g to hub_idx's LOCAL FIFO, not its stealable deque. */
-    if (force_hub >= 0)
+    if (force_hub >= 0) {
+        g->user_pin1 = hub_idx + 1;
         __atomic_store_n(&g->pin_hub1, hub_idx + 1, __ATOMIC_RELEASE);
+    }
     /* Clamp an explicit per-spawn size to [MIN, MAX], exactly like the
      * single-thread go() path (runloom_sched_spawn_sized): "the explicit size
      * wins" means it overrides the autosizer, not that it can exceed the 8 MiB
@@ -796,6 +848,9 @@ static RUNLOOM_NOINLINE int runloom_mn_fiber_core(PyObject *callable,
      * mn_init for the whole life of the hubs). */
     if (runloom_mn_interp != NULL) {
         g->tstate = PyThreadState_New(runloom_mn_interp);
+        /* A fiber's state: locks that record an owner record it, not the OS
+         * thread (Py_TSTATE_EXEC_HOME; no-op without the field). */
+        runloom_iframe_mark_fiber_tstate(g->tstate);
         if (g->tstate == NULL) {
             runloom_coro_destroy(g->coro);
             g->coro = NULL;

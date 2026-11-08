@@ -397,12 +397,53 @@ struct runloom_g {
      * Set only by runloom_park_generic; a g never park_generic'd leaves it NULL
      * (it is woken by its own parker -- netpoll/chan -- not via this field). */
     void *park_hub;
+    /* The stock-lock wait this fiber is in (runloom_fiberlock.c), set by the
+     * parking lot's prepare hook before the entry is queued and read by the
+     * wake hook, which may run on any thread: the parked-on address, the M:N
+     * session it parked in (fl_hub: parked on a hub; 0: the single-thread
+     * plane), whether the wait handles signals, and the signal mark the
+     * single-thread drain sets to interrupt it (atomic). */
+    const void *fl_addr;
+    uint64_t fl_session;
+    unsigned char fl_hub;
+    unsigned char fl_intr;
+    int fl_sig;
+    /* Its place on the waiter list of the sched it waits on (fl_list: a hub's
+     * for M:N, its owner's for run(1)) while it is in the wait, under that
+     * sched's fl_lock, and the wait's parking-lot semaphore (on its stack).
+     * Off the stack, so dropping a woken-but-unrun g can unlink it
+     * (runloom_fiberlock_forget, from the free path). */
+    struct runloom_g *fl_prev, *fl_next;
+    struct runloom_sched *fl_list;
+    void *fl_sema;
+    /* Generation of this g's timer-heap entries (runloom_timer_push stamps it):
+     * a wait that ends early bumps it, and the heap drops entries that no
+     * longer match instead of firing them into the fiber's next park. */
+    uint64_t timer_ticket;
     /* Hub this g is confined to, PLUS ONE so 0 == unpinned (slab_alloc zeroes
-     * everything before `state`).  Set at spawn (force_hub) or by G.pin(); on
-     * a possibly-queued g it must only change via runloom_mn_global_runq_repin,
-     * which keeps the runq counters consistent.  Contract: mn_sched.h,
-     * runloom_mn_fiber_pinned. */
+     * everything before `state`).  The pin every wake route honours: cpin_hub1
+     * while that is set, else user_pin1.  On a possibly-queued g it must only
+     * change via runloom_mn_global_runq_set_pins, which keeps the runq counters
+     * consistent.  Contract: mn_sched.h, runloom_mn_fiber_pinned. */
     int pin_hub1;
+    /* The pin asked for at spawn (force_hub) or by G.pin(), +1 encoded. */
+    int user_pin1;
+    /* The hub this g is held on, +1 encoded, while a foreign C caller is on its
+     * stack: a C library that called back into Python through
+     * PyGILState_Ensure (sqlite3, ctypes, cffi, Cython, pybind11) and may hold a
+     * lock owned by this OS thread until the callback returns.  Set and cleared
+     * by the hub that switches the g out (runloom_mn_hold_for_c_caller); it
+     * overrides user_pin1 until then.  Written under the global runq lock. */
+    int cpin_hub1;
+    /* Explicit holds (runloom_mn_hold_here): while > 0 the g is held on its
+     * hub at every switch-out, as for a foreign C caller.  Touched only by the
+     * thread running this g. */
+    int hold_depth;
+    /* sqlite busy-wait arm word (module_sqlite.c.inc): the id of the sqlite
+     * connection whose busy waits this fiber retries cooperatively, << 1, and
+     * bit 0 once the busy handler gave up for it.  Touched only by the thread
+     * running this g. */
+    uint64_t sqlite_coop;
     /* A hub's current fiber can host a run(1) drain or a Coro, which run other
      * fibers on its stack and thread state.  nest_depth > 0 while either runs
      * hides the hub from the code running there (runloom_mn_nested_here);
@@ -457,6 +498,10 @@ struct runloom_g {
      * proves the handshake necessary; this is its runtime fidelity oracle).  In the
      * slab-cleared [pass_index,id) range so a recycled g starts unbound. */
     unsigned long tstate_owner_tid;
+    /* 1 + the hub TLBC index this fiber's state was last lent
+     * (runloom_iframe_tlbc_lend); 0 = never lent.  Slab-cleared, like the
+     * field above.  Only feeds stats()["tlbc_switches"]. */
+    int tlbc_lent;
 
     /* ---- introspection block (runloom_introspect.c) ----
      * These fields are deliberately the LAST members of runloom_g_t.  The
@@ -592,6 +637,7 @@ typedef struct {
     double       deadline;   /* wake deadline (monotonic seconds -- or census-
                               * LOGICAL seconds when `logical` is set, I4) */
     runloom_g_t *g;          /* the timed-parked fiber */
+    uint64_t     ticket;     /* g->timer_ticket at push; stale once it differs */
     int          logical;    /* I4: deadline is on the census logical plane.
                               * The census folds ONLY logical entries into its
                               * advance target -- folding a monotonic (wall-
@@ -642,6 +688,16 @@ struct runloom_sched {
     runloom_timer_entry_t *timer_heap;
     Py_ssize_t timer_size;
     Py_ssize_t timer_cap;
+    /* Entries of this heap that went stale (their g's timer_ticket moved on):
+     * a hint, bumped from any thread, for runloom_sched_drain_timers to purge
+     * them on the owner's thread before their deadlines (atomic). */
+    long timer_stale;
+    /* runloom_fiberlock.c: the fibers in a stock-lock wait on this sched (a
+     * hub's: M:N waiters that parked on it; a single-thread one: its run(1)
+     * waiters), linked through g->fl_prev/fl_next, and the lock that guards
+     * the list and every wake delivered to one of them. */
+    runloom_mutex_t fl_lock;
+    runloom_g_t *fl_head;
     /* Default stack size for new gs. */
     Py_ssize_t stack_size;
     /* Goroutines completed since the last sched_drain. */
@@ -856,6 +912,18 @@ int runloom_park_generic(int foreign_wakeable);
  * real wake, or a stale timer entry from a prior re-park); the caller must
  * re-check its own deadline, exactly as the fd-backed wait_fd(timeout) path did. */
 int runloom_park_generic_timed(int foreign_wakeable, double deadline);
+
+/* For a park loop that wants ONE timer entry per wait, not one per park:
+ * runloom_park_timer_home() names the sched/hub whose timer heap would hold the
+ * current fiber's entry now (NULL off a fiber), and runloom_park_timer_arm()
+ * pushes an entry for `deadline` there (0, or -1: not a fiber / OOM with
+ * PyErr_NoMemory set).  Parks through runloom_park_generic then wake at the
+ * deadline.  Only that sched/hub's own thread fires its entries, never while
+ * the fiber runs on that thread, so an entry armed on the fiber's current
+ * home cannot fire in the window between a deadline check and the next park;
+ * re-arm after the fiber moved. */
+void *runloom_park_timer_home(void);
+int runloom_park_timer_arm(double deadline, int logical);
 
 /* Sim-plane twin (I4): entry expiry + resume verdict on the census logical
  * clock (a logical deadline vs monotonic uptime is expired-at-birth).  m_park

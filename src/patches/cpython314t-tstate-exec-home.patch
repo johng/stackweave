@@ -1,5 +1,6 @@
 # CPython 3.14t OPTIONAL feature patch: thread-state EXECUTION home
 #   build flag:  -DPy_TSTATE_EXEC_HOME      (OFF by default)
+#                -DPy_TSTATE_TLBC_FOLLOW    (with it; see ALSO, TLBC)
 #   pinned to:   Python-3.14.4  (applies at ZERO fuzz: patch -p1 -F0)
 #   series pair: this is the EXECUTION half for the 3.14 series.  The matching
 #                ALLOCATION half is cpython314t-tstate-alloc-home.patch;
@@ -14,6 +15,19 @@
 #   _PyManagedBufferObject.exports -> atomic ++/--  (memoryobject.c)
 #   PyMemoryViewObject.exports     -> atomic in hex()/hash() too (3.14 backport)
 #   arrayobject.ob_exports         -> atomic ++/--  (arraymodule.c)
+# Plus three lock owners, which a migration changes and fibers on one OS
+# thread share (see ALSO below):
+#   _PyRecursiveMutex.thread (_thread.RLock, the import and warnings locks)
+#                         -> a fiber's thread state's id, not the OS thread
+#                            (other states: the OS thread)  (lock.c, import.c)
+#   _io.Buffered* owner   -> the same identity            (_io/bufferedio.c)
+#   SemLock.last_tid (multiprocessing RLock, mp.Value's lock)
+#                         -> the same identity  (_multiprocessing/semaphore.c)
+# Plus the waits on them, which a fiber runtime may redirect so a lock's
+# waiter parks the FIBER instead of its OS thread (see ALSO below):
+#   _thread.lock / RLock, _PyRecursiveMutex, _io.Buffered* waits
+#                         -> _Py_fiber_park hooks  (parking_lot.c, lock.c,
+#                            _threadmodule.c, bufferedio.c, pycore_semaphore.h)
 #
 # WHY: compilers treat thread identity as loop-invariant and hoist/CSE it.  That
 # is sound for OS threads, whose stacks never move.  A stackful fiber parks on
@@ -129,8 +143,54 @@
 #        test_memory_array_view_survives_a_migration.  arraymodule.c is not
 # installed either; its witness is _Py_ARRAY_EXPORTS_ATOMIC in object.h.
 #
+# ALSO -- a lock owned by the OS thread, waited for by the OS thread (lock.c,
+# parking_lot.c, _threadmodule.c, import.c, bufferedio.c, semaphore.c).  A
+# fiber that parks inside a lock and resumes on another OS thread must still
+# own it, and the other fibers on its old OS thread must not: so the owner of
+# a _PyRecursiveMutex, of a buffered stream's lock and of a recursive SemLock
+# is a fiber's thread state (_PyRecursiveMutex_SelfIdent(): tstate->id,
+# tagged odd so it never equals an OS thread id; every state the runtime did
+# not mark as a fiber's keeps the OS thread, as stock).  And a waiter must not
+# block an OS thread a parked holder may need: the parking lot asks
+# _Py_fiber_park (installed by the fiber runtime) to park the waiting FIBER
+# for the waits that are held across Python code -- the _thread lock objects,
+# every _PyRecursiveMutex (import, warnings), a buffered stream's lock (now a
+# PyMutex).  Everything else blocks the thread as before.  A multiprocessing
+# SemLock's wait is a cross-process semaphore and still blocks the thread.
+# Full story, measurements and guards: src/patches/README.md, "A lock owned by
+# the OS thread, waited for by the OS thread".
+#
+# ALSO, under its own flag -DPy_TSTATE_TLBC_FOLLOW (meaningful only with
+# Py_TSTATE_EXEC_HOME; stackweave's builds set both): a frame follows its
+# thread state's thread-local bytecode (TLBC) copy (Python/ceval_macros.h,
+# Python/ceval.c).  Free-threaded CPython gives each thread state its own copy
+# of every code object's bytecode, because the specializer rewrites
+# instructions and inline caches without atomics; a frame keeps the copy it
+# started on until its next RESUME.  stackweave gives each fiber a thread
+# state, so each live fiber got its own copy of every function it ran: 2000
+# fibers that ran one 144 KB function took 663 MB, 281 MB with PYTHON_TLBC=0
+# (tools/probes/ft_locks/p21_tlbc_per_fiber.py).  stackweave lends a running
+# fiber its hub's TLBC index (runloom_iframe_tlbc_lend), which is sound only if
+# a frame that started on one hub's copy stops using it as soon as the fiber
+# resumes on another hub -- else two hubs run, and specialize, one copy at
+# once.  This hunk re-points the frame before each instruction starts:
+# DISPATCH() (one compare, and a shared out-of-line slow path,
+# _PyEval_TLBCFollow), DISPATCH_SAME_OPARG(), JUMP_TO_PREDICTED and
+# PAUSE_ADAPTIVE_COUNTER.  _PyEval_TLBCFollow is exported only under the flag;
+# stackweave lends only when dlsym finds it, so an interpreter built without
+# the flag keeps per-fiber copies and stays sound.  The flag costs about 4%
+# interpreter throughput (+2-7.5% on interpreter-bound microbenchmarks, arm64
+# Darwin, no LTO/PGO, same build with and without it); a deployment that would
+# rather keep the per-fiber copies builds without it.  With lending forced on
+# WITHOUT the hunk, p23_tlbc_shared_stress.py segfaults in the eval loop 3/3.
+# Guards: tests/test_tlbc_hub_copies.py and
+# tests/test_cpython_thread_keyed_locks.py::
+#        test_cost_live_fibers_share_bytecode_within_1_5x_of_tlbc_off.
+#
 # ZERO IMPACT BY DEFAULT: with the flag undefined every site macro-expands back
-# to stock.  No ABI change (unlike alloc-home, no struct field is added).
+# to stock.  No public ABI change: the fields it adds or retypes are internal
+# (_PySemaphore, _PyThreadStateImpl) or private to one module (buffered,
+# SemLockObject).
 #
 # CAVEATS
 #   * Do NOT build with --with-lto (or -flto): LTO inlines pystate.c's direct
@@ -153,19 +213,41 @@
 #         grep MBUF_EXPORTS_INC Objects/memoryobject.c
 #         grep _Py_ARRAY_EXPORTS_ATOMIC Include/object.h
 #         grep ARRAY_EXPORTS_INC Modules/arraymodule.c
+#         grep _Py_RMUTEX_TSTATE_IDENT Include/object.h
+#         grep _Py_TSTATE_FIBER_FLAG Include/internal/pycore_tstate.h
+#         grep recursive_mutex_self Python/lock.c
+#         grep _Py_FIBER_PARK_HOOKS Include/object.h
+#         grep _Py_fiber_park Python/parking_lot.c
+#         grep BUFFERED_SELF Modules/_io/bufferedio.c
+#         grep SEMLOCK_SELF Modules/_multiprocessing/semaphore.c
+#         grep _PyEval_TLBCFollow Python/ceval.c   (Py_TSTATE_TLBC_FOLLOW)
 #   * MSVC thread-id reads are intrinsics, not asm, and are left untouched.
 #   * Same class, not covered (not read by a fiber across a park in any path
 #     exercised so far): import.c's `pkgcontext`, mimalloc's _mi_heap_default.
+#   * The lock-owner identity is a FIBER's thread state only: one a fiber
+#     runtime marked (_PyThreadStateImpl._fiber, pycore_tstate.h, set before its
+#     first attach).  Every other state keeps the OS thread, so an interpreter
+#     that never runs a fiber is stock -- a C library's thread may take an
+#     RLock in one PyGILState callback and release it in the next, on a fresh
+#     state.  The fiber hooks get the parked-on address and the _Py_PARK_* bits
+#     (_Py_PARK_INTR: the wait handles signals, so the runtime may return
+#     Py_PARK_INTR to let the fiber run the handler, as the thread would).
 #
-# ENABLE: ./configure --disable-gil CPPFLAGS=-DPy_TSTATE_EXEC_HOME
+# ENABLE: ./configure --disable-gil CPPFLAGS="-DPy_TSTATE_EXEC_HOME -DPy_TSTATE_TLBC_FOLLOW"
 #         (also add the #define to pyconfig.h so extension modules agree)
 # APPLY:  from the CPython source root:  patch -p1 -F0 < this-file
 # SCOPE:  Include/object.h, Include/internal/pycore_pystate.h, Python/pystate.c,
-#         Objects/memoryobject.c, Modules/arraymodule.c
+#         Include/internal/pycore_tstate.h,
+#         Objects/memoryobject.c, Modules/arraymodule.c, Python/lock.c,
+#         Include/internal/pycore_lock.h, Python/import.c, Python/parking_lot.c,
+#         Include/internal/pycore_semaphore.h, Include/internal/pycore_parking_lot.h,
+#         Modules/_threadmodule.c, Modules/_testinternalcapi/test_lock.c,
+#         Modules/_io/bufferedio.c, Modules/_multiprocessing/semaphore.c,
+#         Python/ceval_macros.h, Python/ceval.c (Py_TSTATE_TLBC_FOLLOW)
 #
 --- a/Include/object.h
 +++ b/Include/object.h
-@@ -182,6 +182,35 @@
+@@ -182,6 +182,47 @@
  #if defined(Py_GIL_DISABLED) && !defined(Py_LIMITED_API)
  PyAPI_FUNC(uintptr_t) _Py_GetThreadLocal_Addr(void);
  
@@ -198,10 +280,22 @@
 +#  define _Py_ARRAY_EXPORTS_ATOMIC 1
 +#endif
 +
++/* Likewise for the Python/lock.c hunk (_PyRecursiveMutex, and so
++   _thread.RLock, owned by a fiber's thread state, not the OS thread). */
++#ifdef Py_TSTATE_EXEC_HOME
++#  define _Py_RMUTEX_TSTATE_IDENT 1
++#endif
++
++/* Likewise for the Python/parking_lot.c hunk (_Py_fiber_park: a Python-level
++   lock's wait can park the current fiber instead of its OS thread). */
++#ifdef Py_TSTATE_EXEC_HOME
++#  define _Py_FIBER_PARK_HOOKS 1
++#endif
++
  static inline uintptr_t
  _Py_ThreadId(void)
  {
-@@ -199,24 +228,24 @@
+@@ -199,24 +240,24 @@
  #elif defined(__MINGW32__) && defined(_M_ARM64)
      tid = __getReg(18);
  #elif defined(__i386__)
@@ -234,7 +328,7 @@
      tid = tp;
      #endif
  #elif defined(__powerpc__)
-@@ -225,7 +254,7 @@
+@@ -225,7 +266,7 @@
      #else
      // r2 is reserved for use as system thread ID by the Power 32-bit ABI.
      register uintptr_t tp __asm__ ("r2");
@@ -243,7 +337,7 @@
      tid = tp;
      #endif
  #elif defined(__s390__) && defined(__GNUC__)
-@@ -237,7 +266,7 @@
+@@ -237,7 +278,7 @@
      tid = (uintptr_t)__builtin_thread_pointer();
      #else
      // tp is Thread Pointer provided by the RISC-V ABI.
@@ -270,6 +364,25 @@
      return _PyThreadState_GetCurrent();
  #endif
  }
+--- a/Include/internal/pycore_tstate.h
++++ b/Include/internal/pycore_tstate.h
+@@ -97,6 +97,16 @@
+     uintptr_t c_stack_init_base;
+     uintptr_t c_stack_init_top;
+ 
++#ifdef Py_TSTATE_EXEC_HOME
++    // Py_TSTATE_EXEC_HOME: set (once, before its first attach) by a fiber
++    // runtime on the thread states it runs stackful fibers on -- many per OS
++    // thread, migrating between OS threads.  A lock that records its owner
++    // (pycore_lock.h, _PyRecursiveMutex_SelfIdent) records such a state, not
++    // its OS thread; every other state keeps the OS thread, exactly as stock.
++    int _fiber;
++#  define _Py_TSTATE_FIBER_FLAG 1
++#endif
++
+ #ifdef Py_GIL_DISABLED
+     // gh-144438: Add padding to ensure that the fields above don't share a
+     // cache line with other allocations.
 --- a/Python/pystate.c
 +++ b/Python/pystate.c
 @@ -109,7 +109,25 @@
@@ -466,3 +579,784 @@
  }
  
  static PyObject *
+--- a/Modules/_testinternalcapi/test_lock.c
++++ b/Modules/_testinternalcapi/test_lock.c
+@@ -488,7 +488,11 @@
+     assert(!_PyRecursiveMutex_IsLockedByCurrentThread(&m));
+ 
+     _PyRecursiveMutex_Lock(&m);
++#ifdef Py_TSTATE_EXEC_HOME
++    assert(m.thread == _PyRecursiveMutex_SelfIdent());   // owned by the thread state
++#else
+     assert(m.thread == PyThread_get_thread_ident_ex());
++#endif
+     assert(PyMutex_IsLocked(&m.mutex));
+     assert(m.level == 0);
+ 
+--- a/Python/lock.c
++++ b/Python/lock.c
+@@ -6,6 +6,9 @@
+ #include "pycore_parking_lot.h"
+ #include "pycore_semaphore.h"
+ #include "pycore_time.h"          // _PyTime_Add()
++#ifdef Py_TSTATE_EXEC_HOME
++#  include "pycore_pystate.h"     // _PyThreadState_GET()
++#endif
+ 
+ #ifdef MS_WINDOWS
+ #  ifndef WIN32_LEAN_AND_MEAN
+@@ -105,8 +108,16 @@
+             }
+         }
+ 
++#ifdef Py_TSTATE_EXEC_HOME
++        // Py_TSTATE_EXEC_HOME: a Python-level lock's wait may park the fiber
++        // (pycore_semaphore.h); every other mutex blocks the thread as before.
++        int park = ((flags & _PY_LOCK_DETACH) ? _Py_PARK_DETACH : 0)
++                   | _PY_LOCK_FIBER_PARK_BITS(flags);
++#else
++        int park = (flags & _PY_LOCK_DETACH) != 0;
++#endif
+         int ret = _PyParkingLot_Park(&m->_bits, &newv, sizeof(newv), timeout,
+-                                     &entry, (flags & _PY_LOCK_DETACH) != 0);
++                                     &entry, park);
+         if (ret == Py_PARK_OK) {
+             if (entry.handed_off) {
+                 // We own the lock now.
+@@ -362,21 +373,59 @@
+     return _Py_atomic_load_ullong_relaxed(&m->thread) == tid;
+ }
+ 
++#ifdef Py_TSTATE_EXEC_HOME
++/* Py_TSTATE_EXEC_HOME: a FIBER's recursive mutex is owned by its THREAD
++   STATE, not by an OS thread.  A stackful fiber (runloom-style) runs on a
++   thread state of its own, which the runtime marks (_PyThreadStateImpl._fiber),
++   parks on one OS thread and resumes on another, and shares each OS thread
++   with other fibers.  Keyed on the OS thread, a fiber that moved could not
++   release the lock it holds, and a fiber on the holder's OS thread re-entered
++   it.  Every other state (a thread's own, a C thread's PyGILState one, one
++   per callback) keeps the OS thread, as stock.  tstate->id is unique for the
++   interpreter's life, and the tag keeps a state's identity apart from an OS
++   thread's: a pthread_t is an aligned pointer and a Windows thread id a
++   multiple of 4, so both are even, and a tagged id is odd.  Nested fibers on
++   their resumer's state keep sharing its locks.  Also the owner identity of
++   a buffered stream and a SemLock; exported for _PyImport_ReInitLock, which
++   re-owns the import lock after a fork. */
++PyThread_ident_t
++_PyRecursiveMutex_SelfIdent(void)
++{
++    PyThreadState *tstate = _PyThreadState_GET();
++    if (tstate != NULL && ((_PyThreadStateImpl *)tstate)->_fiber) {
++        return ((PyThread_ident_t)tstate->id << 1) | 1;
++    }
++    return PyThread_get_thread_ident_ex();
++}
++#define recursive_mutex_self() _PyRecursiveMutex_SelfIdent()
++#else
++#define recursive_mutex_self() PyThread_get_thread_ident_ex()
++#endif
++
+ int
+ _PyRecursiveMutex_IsLockedByCurrentThread(_PyRecursiveMutex *m)
+ {
+-    return recursive_mutex_is_owned_by(m, PyThread_get_thread_ident_ex());
++    return recursive_mutex_is_owned_by(m, recursive_mutex_self());
+ }
+ 
+ void
+ _PyRecursiveMutex_Lock(_PyRecursiveMutex *m)
+ {
+-    PyThread_ident_t thread = PyThread_get_thread_ident_ex();
++    PyThread_ident_t thread = recursive_mutex_self();
+     if (recursive_mutex_is_owned_by(m, thread)) {
+         m->level++;
+         return;
+     }
++#ifdef Py_TSTATE_EXEC_HOME
++    // Py_TSTATE_EXEC_HOME: CPython's own recursive mutexes (the import lock,
++    // the warnings lock) are held across Python code -- a finder's
++    // find_spec(), a showwarning() -- which may park a fiber, so a contender
++    // parks its fiber too (pycore_semaphore.h) instead of blocking an OS
++    // thread the holder may need to run on.
++    (void)_PyMutex_LockTimed(&m->mutex, -1, _PY_LOCK_DETACH | _PY_LOCK_FIBER);
++#else
+     PyMutex_Lock(&m->mutex);
++#endif
+     _Py_atomic_store_ullong_relaxed(&m->thread, thread);
+     assert(m->level == 0);
+ }
+@@ -384,7 +433,7 @@
+ PyLockStatus
+ _PyRecursiveMutex_LockTimed(_PyRecursiveMutex *m, PyTime_t timeout, _PyLockFlags flags)
+ {
+-    PyThread_ident_t thread = PyThread_get_thread_ident_ex();
++    PyThread_ident_t thread = recursive_mutex_self();
+     if (recursive_mutex_is_owned_by(m, thread)) {
+         m->level++;
+         return PY_LOCK_ACQUIRED;
+@@ -409,7 +458,7 @@
+ int
+ _PyRecursiveMutex_TryUnlock(_PyRecursiveMutex *m)
+ {
+-    PyThread_ident_t thread = PyThread_get_thread_ident_ex();
++    PyThread_ident_t thread = recursive_mutex_self();
+     if (!recursive_mutex_is_owned_by(m, thread)) {
+         return -1;
+     }
+--- a/Include/internal/pycore_lock.h
++++ b/Include/internal/pycore_lock.h
+@@ -41,8 +41,26 @@
+ 
+     // Handle signals if interrupted while waiting on the lock.
+     _PY_LOCK_HANDLE_SIGNALS = 2,
++
++#ifdef Py_TSTATE_EXEC_HOME
++    // Py_TSTATE_EXEC_HOME: a wait on this lock may park the current FIBER
++    // instead of the OS thread, when a fiber runtime installed the parking
++    // lot's fiber hooks (pycore_semaphore.h).  Only locks held across Python
++    // code pass it (the _thread lock objects first).
++    _PY_LOCK_FIBER = 16,
++#endif
+ } _PyLockFlags;
+ 
++#ifdef Py_TSTATE_EXEC_HOME
++// Py_TSTATE_EXEC_HOME: the parking-lot bits (pycore_parking_lot.h) a fiber
++// wait adds: _Py_PARK_FIBER, and _Py_PARK_INTR when the wait handles signals,
++// so the runtime can interrupt it as a signal interrupts the thread's wait.
++#  define _PY_LOCK_FIBER_PARK_BITS(flags) \
++    (((flags) & _PY_LOCK_FIBER) \
++     ? (_Py_PARK_FIBER | (((flags) & _PY_LOCK_HANDLE_SIGNALS) ? _Py_PARK_INTR : 0)) \
++     : 0)
++#endif
++
+ // Lock a mutex with an optional timeout and additional options. See
+ // _PyLockFlags for details.
+ extern PyAPI_FUNC(PyLockStatus)
+@@ -157,6 +175,12 @@
+ extern PyLockStatus _PyRecursiveMutex_LockTimed(_PyRecursiveMutex *m, PyTime_t timeout, _PyLockFlags flags);
+ PyAPI_FUNC(void) _PyRecursiveMutex_Unlock(_PyRecursiveMutex *m);
+ extern int _PyRecursiveMutex_TryUnlock(_PyRecursiveMutex *m);
++#ifdef Py_TSTATE_EXEC_HOME
++// Py_TSTATE_EXEC_HOME: the identity a recursive mutex records as its owner --
++// a fiber's thread state's, else the OS thread's (Python/lock.c).  The type
++// is _PyRecursiveMutex.thread's: PyThread_ident_t, spelled out as there.
++PyAPI_FUNC(unsigned long long) _PyRecursiveMutex_SelfIdent(void);
++#endif
+ 
+ // A readers-writer (RW) lock. The lock supports multiple concurrent readers or
+ // a single writer. The lock is write-preferring: if a writer is waiting while
+--- a/Python/import.c
++++ b/Python/import.c
+@@ -138,7 +138,12 @@
+ _PyImport_ReInitLock(PyInterpreterState *interp)
+ {
+     // gh-126688: Thread id may change after fork() on some operating systems.
++#ifdef Py_TSTATE_EXEC_HOME
++    // Py_TSTATE_EXEC_HOME: the lock is owned by a thread state (pycore_lock.h).
++    IMPORT_LOCK(interp).thread = _PyRecursiveMutex_SelfIdent();
++#else
+     IMPORT_LOCK(interp).thread = PyThread_get_thread_ident_ex();
++#endif
+ }
+ 
+ 
+--- a/Include/internal/pycore_semaphore.h
++++ b/Include/internal/pycore_semaphore.h
+@@ -43,8 +43,42 @@
+     pthread_cond_t cond;
+     int counter;
+ #endif
++#ifdef Py_TSTATE_EXEC_HOME
++    // Py_TSTATE_EXEC_HOME: the fiber waiting on this semaphore (set by the
++    // parking lot through the fiber hooks below), or NULL for a thread.
++    void *fiber;
++    int fiber_state;
++#endif
+ } _PySemaphore;
+ 
++#ifdef Py_TSTATE_EXEC_HOME
++/* Py_TSTATE_EXEC_HOME: a stackful-fiber runtime (runloom-style: many fibers
++   per OS thread, each on a thread state of its own) can make a Python-level
++   lock's wait park the FIBER instead of the OS thread, so the thread goes on
++   running its other fibers -- otherwise every fiber that waits for a lock a
++   parked fiber holds takes an OS thread with it, and with as many waiters as
++   threads nothing can run the holder.  The parking lot keeps all of its
++   bookkeeping (queue, handoff, timeout vs unpark race); only the sleep and
++   the wakeup are delegated, and only for a wait flagged _Py_PARK_FIBER
++   (pycore_parking_lot.h), which the lock objects pass through _PY_LOCK_FIBER.
++
++   prepare(addr, flags) runs under the bucket lock, before the entry is
++   queued, so every unparker sees `fiber`: it gets the parked-on address and
++   the _Py_PARK_* bits, and returns the current fiber, or NULL to wait on the
++   platform semaphore as usual.  wait() parks that fiber until wake() or the
++   timeout and returns Py_PARK_OK or Py_PARK_TIMEOUT, or Py_PARK_INTR (only
++   for a wait flagged _Py_PARK_INTR) when the runtime interrupts it for a
++   signal.  wake() is called at most once per wait, from any thread, after the
++   entry was dequeued; the entry stays valid until the waiter has observed the
++   wakeup.  Installed once, before any fiber exists; NULL means no runtime. */
++typedef struct {
++    void *(*prepare)(const void *addr, int flags);
++    int (*wait)(struct _PySemaphore *sema, PyTime_t timeout_ns);
++    void (*wake)(struct _PySemaphore *sema);
++} _Py_fiber_park_hooks;
++PyAPI_DATA(_Py_fiber_park_hooks) _Py_fiber_park;
++#endif
++
+ // Puts the current thread to sleep until _PySemaphore_Wakeup() is called.
+ // If `detach` is true, then the thread will detach/release the GIL while
+ // sleeping.
+--- a/Include/internal/pycore_parking_lot.h
++++ b/Include/internal/pycore_parking_lot.h
+@@ -47,6 +47,16 @@
+ //
+ // `park_arg`, which can be NULL, is passed to the unpark operation.
+ //
++#ifdef Py_TSTATE_EXEC_HOME
++// Py_TSTATE_EXEC_HOME: `detach` is a bit set.  _Py_PARK_DETACH is the plain
++// `detach` below; _Py_PARK_FIBER lets the wait park the current fiber instead
++// of the thread when a fiber runtime installed _Py_fiber_park
++// (pycore_semaphore.h); _Py_PARK_INTR says the caller handles Py_PARK_INTR
++// (runs pending calls and signal handlers, then retries or fails).
++#define _Py_PARK_DETACH 1
++#define _Py_PARK_FIBER 2
++#define _Py_PARK_INTR 4
++#endif
+ // If `detach` is true, then the thread will detach/release the GIL while
+ // waiting.
+ //
+--- a/Python/parking_lot.c
++++ b/Python/parking_lot.c
+@@ -50,9 +50,17 @@
+     BUCKET_INIT(buckets, 256),
+ };
+ 
++#ifdef Py_TSTATE_EXEC_HOME
++_Py_fiber_park_hooks _Py_fiber_park = { NULL, NULL, NULL };
++#endif
++
+ void
+ _PySemaphore_Init(_PySemaphore *sema)
+ {
++#ifdef Py_TSTATE_EXEC_HOME
++    sema->fiber = NULL;
++    sema->fiber_state = 0;
++#endif
+ #if defined(MS_WINDOWS)
+     sema->platform_sem = CreateSemaphore(
+         NULL,   //  attributes
+@@ -249,6 +257,12 @@
+ void
+ _PySemaphore_Wakeup(_PySemaphore *sema)
+ {
++#ifdef Py_TSTATE_EXEC_HOME
++    if (sema->fiber != NULL) {
++        _Py_fiber_park.wake(sema);
++        return;
++    }
++#endif
+ #if defined(MS_WINDOWS)
+     if (!ReleaseSemaphore(sema->platform_sem, 1, NULL)) {
+         Py_FatalError("parking_lot: ReleaseSemaphore failed");
+@@ -339,11 +353,21 @@
+         return Py_PARK_AGAIN;
+     }
+     _PySemaphore_Init(&wait.sema);
++#ifdef Py_TSTATE_EXEC_HOME
++    if ((detach & _Py_PARK_FIBER) && _Py_fiber_park.prepare != NULL) {
++        wait.sema.fiber = _Py_fiber_park.prepare(addr, detach);
++    }
++    int fiber = (wait.sema.fiber != NULL);
++#endif
+     enqueue(bucket, addr, &wait);
+     _PyRawMutex_Unlock(&bucket->mutex);
+ 
+     PyThreadState *tstate = NULL;
++#ifdef Py_TSTATE_EXEC_HOME
++    if ((detach & _Py_PARK_DETACH) && !fiber) {
++#else
+     if (detach) {
++#endif
+         tstate = _PyThreadState_GET();
+         if (tstate && _PyThreadState_IsAttached(tstate)) {
+             // Only detach if we are attached
+@@ -354,7 +378,12 @@
+         }
+     }
+ 
++#ifdef Py_TSTATE_EXEC_HOME
++    int res = fiber ? _Py_fiber_park.wait(&wait.sema, timeout_ns)
++                    : _PySemaphore_Wait(&wait.sema, timeout_ns, 0);
++#else
+     int res = _PySemaphore_Wait(&wait.sema, timeout_ns, 0);
++#endif
+     if (res == Py_PARK_OK) {
+         goto done;
+     }
+@@ -366,7 +395,12 @@
+         // Another thread has started to unpark us. Wait until we process the
+         // wakeup signal.
+         do {
++#ifdef Py_TSTATE_EXEC_HOME
++            res = fiber ? _Py_fiber_park.wait(&wait.sema, -1)
++                        : _PySemaphore_Wait(&wait.sema, -1, 0);
++#else
+             res = _PySemaphore_Wait(&wait.sema, -1, 0);
++#endif
+         } while (res != Py_PARK_OK);
+         goto done;
+     }
+--- a/Modules/_threadmodule.c
++++ b/Modules/_threadmodule.c
+@@ -14,6 +14,14 @@
+ #include "pycore_time.h"          // _PyTime_FromSeconds()
+ #include "pycore_weakref.h"       // _PyWeakref_GET_REF()
+ 
++// Py_TSTATE_EXEC_HOME: a Python-level lock's wait may park the current fiber
++// instead of its OS thread (pycore_lock.h); without the feature the flag is 0.
++#ifdef Py_TSTATE_EXEC_HOME
++#  define _PY_LOCK_FIBER_ _PY_LOCK_FIBER
++#else
++#  define _PY_LOCK_FIBER_ 0
++#endif
++
+ #include <stddef.h>               // offsetof()
+ #ifdef HAVE_SIGNAL_H
+ #  include <signal.h>             // SIGINT
+@@ -824,7 +832,7 @@
+     }
+ 
+     PyLockStatus r = _PyMutex_LockTimed(&self->lock, timeout,
+-                                        _PY_LOCK_HANDLE_SIGNALS | _PY_LOCK_DETACH);
++                                        _PY_LOCK_HANDLE_SIGNALS | _PY_LOCK_DETACH | _PY_LOCK_FIBER_);
+     if (r == PY_LOCK_INTR) {
+         return NULL;
+     }
+@@ -1048,7 +1056,7 @@
+     }
+ 
+     PyLockStatus r = _PyRecursiveMutex_LockTimed(&self->lock, timeout,
+-                                                 _PY_LOCK_HANDLE_SIGNALS | _PY_LOCK_DETACH);
++                                                 _PY_LOCK_HANDLE_SIGNALS | _PY_LOCK_DETACH | _PY_LOCK_FIBER_);
+     if (r == PY_LOCK_INTR) {
+         return NULL;
+     }
+@@ -1134,7 +1142,13 @@
+             &count, &owner))
+         return NULL;
+ 
++#ifdef Py_TSTATE_EXEC_HOME
++    // Py_TSTATE_EXEC_HOME: the same wait as acquire(), so a fiber parks here too.
++    (void)_PyRecursiveMutex_LockTimed(&self->lock, -1,
++                                      _PY_LOCK_DETACH | _PY_LOCK_FIBER);
++#else
+     _PyRecursiveMutex_Lock(&self->lock);
++#endif
+     _Py_atomic_store_ullong_relaxed(&self->lock.thread, owner);
+     self->lock.level = (size_t)count - 1;
+     Py_RETURN_NONE;
+--- a/Modules/_io/bufferedio.c
++++ b/Modules/_io/bufferedio.c
+@@ -10,6 +10,9 @@
+ #include "Python.h"
+ #include "pycore_call.h"                // _PyObject_CallNoArgs()
+ #include "pycore_fileutils.h"           // _PyFile_Flush
++#ifdef Py_TSTATE_EXEC_HOME
++#  include "pycore_lock.h"              // _PyMutex_LockTimed()
++#endif
+ #include "pycore_object.h"              // _PyObject_GC_UNTRACK()
+ #include "pycore_pyerrors.h"            // _Py_FatalErrorFormat()
+ #include "pycore_pylifecycle.h"         // _Py_IsInterpreterFinalizing()
+@@ -253,8 +256,19 @@
+        isn't ready for writing. */
+     Py_off_t write_end;
+ 
++#ifdef Py_TSTATE_EXEC_HOME
++    /* Py_TSTATE_EXEC_HOME: a PyMutex, whose wait can park a fiber
++       (pycore_semaphore.h), and owned by a fiber's thread state, not the
++       OS thread (pycore_lock.h): a raw stream written in Python (makefile()'s
++       SocketIO, a gzip reader) can park or be preempted with the lock held,
++       and other fibers on that OS thread must wait for it, not take it for a
++       reentrant call or block the thread the holder needs. */
++    PyMutex lock;
++    volatile unsigned long long owner;
++#else
+     PyThread_type_lock lock;
+     volatile unsigned long owner;
++#endif
+ 
+     Py_ssize_t buffer_size;
+     Py_ssize_t buffer_mask;
+@@ -290,18 +304,38 @@
+ 
+ /* These macros protect the buffered object against concurrent operations. */
+ 
++#ifdef Py_TSTATE_EXEC_HOME
++#  define BUFFERED_SELF() _PyRecursiveMutex_SelfIdent()
++#  define BUFFERED_TRYLOCK(self) \
++    (_PyMutex_LockTimed(&(self)->lock, 0, 0) == PY_LOCK_ACQUIRED)
++#  define BUFFERED_UNLOCK(self) PyMutex_Unlock(&(self)->lock)
++#else
++#  define BUFFERED_SELF() PyThread_get_thread_ident()
++#  define BUFFERED_TRYLOCK(self) PyThread_acquire_lock((self)->lock, 0)
++#  define BUFFERED_UNLOCK(self) PyThread_release_lock((self)->lock)
++#endif
++
+ static int
+ _enter_buffered_busy(buffered *self)
+ {
+     int relax_locking;
+     PyLockStatus st;
+-    if (self->owner == PyThread_get_thread_ident()) {
++    if (self->owner == BUFFERED_SELF()) {
+         PyErr_Format(PyExc_RuntimeError,
+                      "reentrant call inside %R", self);
+         return 0;
+     }
+     PyInterpreterState *interp = _PyInterpreterState_GET();
+     relax_locking = _Py_IsInterpreterFinalizing(interp);
++#ifdef Py_TSTATE_EXEC_HOME
++    /* The mutex detaches the thread state only if it has to wait. */
++    if (!relax_locking)
++        st = _PyMutex_LockTimed(&self->lock, -1,
++                                _PY_LOCK_DETACH | _PY_LOCK_FIBER);
++    else  /* the grace period below */
++        st = _PyMutex_LockTimed(&self->lock, (PyTime_t)1000000000,
++                                _PY_LOCK_DETACH);
++#else
+     Py_BEGIN_ALLOW_THREADS
+     if (!relax_locking)
+         st = PyThread_acquire_lock(self->lock, 1);
+@@ -315,6 +349,7 @@
+         st = PyThread_acquire_lock_timed(self->lock, (PY_TIMEOUT_T)1e6, 0);
+     }
+     Py_END_ALLOW_THREADS
++#endif
+     if (relax_locking && st != PY_LOCK_ACQUIRED) {
+         PyObject *ascii = PyObject_ASCII((PyObject*)self);
+         _Py_FatalErrorFormat(__func__,
+@@ -326,14 +361,14 @@
+ }
+ 
+ #define ENTER_BUFFERED(self) \
+-    ( (PyThread_acquire_lock(self->lock, 0) ? \
++    ( (BUFFERED_TRYLOCK(self) ? \
+        1 : _enter_buffered_busy(self)) \
+-     && (self->owner = PyThread_get_thread_ident(), 1) )
++     && (self->owner = BUFFERED_SELF(), 1) )
+ 
+ #define LEAVE_BUFFERED(self) \
+     do { \
+         self->owner = 0; \
+-        PyThread_release_lock(self->lock); \
++        BUFFERED_UNLOCK(self); \
+     } while(0);
+ 
+ #define CHECK_INITIALIZED(self) \
+@@ -427,10 +462,12 @@
+         PyMem_Free(self->buffer);
+         self->buffer = NULL;
+     }
++#ifndef Py_TSTATE_EXEC_HOME
+     if (self->lock) {
+         PyThread_free_lock(self->lock);
+         self->lock = NULL;
+     }
++#endif
+     (void)buffered_clear(op);
+     tp->tp_free(self);
+     Py_DECREF(tp);
+@@ -841,6 +878,7 @@
+         PyErr_NoMemory();
+         return -1;
+     }
++#ifndef Py_TSTATE_EXEC_HOME
+     if (self->lock)
+         PyThread_free_lock(self->lock);
+     self->lock = PyThread_allocate_lock();
+@@ -848,6 +886,7 @@
+         PyErr_SetString(PyExc_RuntimeError, "can't allocate read lock");
+         return -1;
+     }
++#endif  /* else a PyMutex, zeroed (unlocked) by tp_alloc */
+     self->owner = 0;
+     /* Find out whether buffer_size is a power of 2 */
+     /* XXX is this optimization useful? */
+--- a/Modules/_multiprocessing/semaphore.c
++++ b/Modules/_multiprocessing/semaphore.c
+@@ -8,6 +8,9 @@
+  */
+ 
+ #include "multiprocessing.h"
++#ifdef Py_TSTATE_EXEC_HOME
++#  include "pycore_lock.h"        // _PyRecursiveMutex_SelfIdent()
++#endif
+ 
+ #ifdef HAVE_SYS_TIME_H
+ #  include <sys/time.h>           // gettimeofday()
+@@ -21,7 +24,11 @@
+ typedef struct {
+     PyObject_HEAD
+     SEM_HANDLE handle;
++#ifdef Py_TSTATE_EXEC_HOME
++    unsigned long long last_tid;
++#else
+     unsigned long last_tid;
++#endif
+     int count;
+     int maxvalue;
+     int kind;
+@@ -46,7 +53,19 @@
+ 
+ #include "clinic/semaphore.c.h"
+ 
+-#define ISMINE(o) (o->count > 0 && PyThread_get_thread_ident() == o->last_tid)
++#ifdef Py_TSTATE_EXEC_HOME
++/* Py_TSTATE_EXEC_HOME: a recursive SemLock (mp.Lock's RLock kind, mp.Value's
++   lock) is "mine" when the same FIBER's thread state took it, as for a
++   _PyRecursiveMutex (pycore_lock.h): a fiber that parked holding it and
++   resumed on another OS thread still owns it, and another fiber on the
++   holder's OS thread does not. */
++#  define SEMLOCK_SELF() _PyRecursiveMutex_SelfIdent()
++#  define SEMLOCK_SELF_WIN32() _PyRecursiveMutex_SelfIdent()
++#else
++#  define SEMLOCK_SELF() PyThread_get_thread_ident()
++#  define SEMLOCK_SELF_WIN32() GetCurrentThreadId()
++#endif
++#define ISMINE(o) (o->count > 0 && SEMLOCK_SELF() == o->last_tid)
+ 
+ 
+ #ifdef MS_WINDOWS
+@@ -130,7 +149,7 @@
+ 
+     /* check whether we can acquire without releasing the GIL and blocking */
+     if (WaitForSingleObjectEx(self->handle, 0, FALSE) == WAIT_OBJECT_0) {
+-        self->last_tid = GetCurrentThreadId();
++        self->last_tid = SEMLOCK_SELF_WIN32();
+         ++self->count;
+         Py_RETURN_TRUE;
+     }
+@@ -159,7 +178,7 @@
+     case WAIT_TIMEOUT:
+         Py_RETURN_FALSE;
+     case WAIT_OBJECT_0 + 0:
+-        self->last_tid = GetCurrentThreadId();
++        self->last_tid = SEMLOCK_SELF_WIN32();
+         ++self->count;
+         Py_RETURN_TRUE;
+     case WAIT_OBJECT_0 + 1:
+@@ -382,7 +401,7 @@
+     }
+ 
+     ++self->count;
+-    self->last_tid = PyThread_get_thread_ident();
++    self->last_tid = SEMLOCK_SELF();
+ 
+     Py_RETURN_TRUE;
+ }
+--- a/Python/ceval.c
++++ b/Python/ceval.c
+@@ -1024,6 +1024,37 @@ _Py_LoadAttr_StackRefSteal(
+     return _PyThreadState_PopCStackRefSteal(tstate, &method);
+ }
+ 
++#ifdef _PY_TLBC_FOLLOW_ENABLED
++/* Py_TSTATE_TLBC_FOLLOW: re-point a frame at its thread state's bytecode copy
++   (see _PY_TLBC_FOLLOW in ceval_macros.h).  IP and frame->instr_ptr keep
++   their offsets.  Returns the new IP, or NULL with MemoryError set. */
++Py_NO_INLINE _Py_CODEUNIT *
++_PyEval_TLBCFollow(PyThreadState *tstate, _PyInterpreterFrame *frame,
++                   _PyStackRef *stack_pointer, _Py_CODEUNIT *ip)
++{
++    if (frame->owner == FRAME_OWNED_BY_INTERPRETER) {
++        /* An entry frame runs the static trampoline, never specialized. */
++        frame->tlbc_index = ((_PyThreadStateImpl *)tstate)->tlbc_index;
++        return ip;
++    }
++    PyCodeObject *co = _PyFrame_GetCode(frame);
++    if (co == (PyCodeObject *)&_Py_InitCleanup) {
++        /* Its one static copy is never specialized (specialize.c). */
++        return ip;
++    }
++    _PyFrame_SetStackPointer(frame, stack_pointer);
++    _Py_CODEUNIT *bc = _PyEval_GetExecutableCode(tstate, co);
++    (void)_PyFrame_GetStackPointer(frame);
++    if (bc == NULL) {
++        return NULL;
++    }
++    _Py_CODEUNIT *old = _PyFrame_GetBytecode(frame);
++    frame->instr_ptr = bc + (frame->instr_ptr - old);
++    frame->tlbc_index = ((_PyThreadStateImpl *)tstate)->tlbc_index;
++    return bc + (ip - old);
++}
++#endif
++
+ int _Py_CheckRecursiveCallPy(
+     PyThreadState *tstate)
+ {
+@@ -1191,6 +1222,11 @@ _PyEval_EvalFrameDefault(PyThreadState *tstate, _PyInterpreterFrame *frame, int
+     entry.frame.return_offset = 0;
+ #ifdef Py_DEBUG
+     entry.frame.lltrace = 0;
++#endif
++#ifdef _PY_TLBC_FOLLOW_ENABLED
++    /* Py_TSTATE_TLBC_FOLLOW: so DISPATCH() finds the entry frame current
++       (_PyEval_TLBCFollow) unless the thread state's copy changes. */
++    entry.frame.tlbc_index = ((_PyThreadStateImpl *)tstate)->tlbc_index;
+ #endif
+     /* Push frame */
+     entry.frame.previous = tstate->current_frame;
+@@ -1252,6 +1288,26 @@ _PyEval_EvalFrameDefault(PyThreadState *tstate, _PyInterpreterFrame *frame, int
+ #else
+     goto start_frame;
+ #   include "generated_cases.c.h"
++#ifdef _PY_TLBC_FOLLOW_ENABLED
++    /* Py_TSTATE_TLBC_FOLLOW: DISPATCH() found the frame on another thread
++       state's bytecode copy (_PY_TLBC_FOLLOW_DISPATCH, ceval_macros.h). */
++tlbc_follow_dispatch:
++    {
++        _Py_CODEUNIT *tlbc_ip = _PyEval_TLBCFollow(tstate, frame,
++                                                   stack_pointer, next_instr);
++        if (tlbc_ip == NULL) {
++            frame->instr_ptr = next_instr;
++            next_instr = frame->instr_ptr + 1;
++            goto error;
++        }
++        next_instr = tlbc_ip;
++        /* Not DISPATCH(): a frame that stays on its one shared copy
++           (_Py_InitCleanup) would come straight back here. */
++        NEXTOPARG();
++        PRE_DISPATCH_GOTO();
++        DISPATCH_GOTO();
++    }
++#endif
+ #endif
+ 
+ 
+--- a/Python/ceval_macros.h
++++ b/Python/ceval_macros.h
+@@ -104,12 +104,16 @@
+ #   ifdef Py_STATS
+ #       define JUMP_TO_PREDICTED(name) \
+             do { \
+-                Py_MUSTTAIL return (_TAIL_CALL_##name)(frame, stack_pointer, tstate, this_instr, oparg, lastopcode); \
++                _Py_CODEUNIT *tlbc_this_ = this_instr; \
++                _PY_TLBC_FOLLOW(tlbc_this_, this_instr); \
++                Py_MUSTTAIL return (_TAIL_CALL_##name)(frame, stack_pointer, tstate, tlbc_this_, oparg, lastopcode); \
+             } while (0)
+ #   else
+ #       define JUMP_TO_PREDICTED(name) \
+             do { \
+-                Py_MUSTTAIL return (_TAIL_CALL_##name)(frame, stack_pointer, tstate, this_instr, oparg); \
++                _Py_CODEUNIT *tlbc_this_ = this_instr; \
++                _PY_TLBC_FOLLOW(tlbc_this_, this_instr); \
++                Py_MUSTTAIL return (_TAIL_CALL_##name)(frame, stack_pointer, tstate, tlbc_this_, oparg); \
+             } while (0)
+ #   endif
+ #    define LABEL(name) TARGET(name)
+@@ -117,16 +121,80 @@
+ #  define TARGET(op) TARGET_##op:
+ #  define DISPATCH_GOTO() goto *opcode_targets[opcode]
+ #  define JUMP_TO_LABEL(name) goto name;
+-#  define JUMP_TO_PREDICTED(name) goto PREDICTED_##name;
++#  define JUMP_TO_PREDICTED(name) \
++    do { _PY_TLBC_FOLLOW(next_instr, this_instr); goto PREDICTED_##name; } while (0)
+ #  define LABEL(name) name:
+ #else
+ #  define TARGET(op) case op: TARGET_##op:
+ #  define DISPATCH_GOTO() goto dispatch_opcode
+ #  define JUMP_TO_LABEL(name) goto name;
+-#  define JUMP_TO_PREDICTED(name) goto PREDICTED_##name;
++#  define JUMP_TO_PREDICTED(name) \
++    do { _PY_TLBC_FOLLOW(next_instr, this_instr); goto PREDICTED_##name; } while (0)
+ #  define LABEL(name) name:
+ #endif
+ 
++/* Py_TSTATE_TLBC_FOLLOW (with Py_TSTATE_EXEC_HOME): a frame follows its
++ * thread state's bytecode copy.
++ *
++ * Free-threaded builds give each thread state its own copy of each code
++ * object's bytecode (thread-local bytecode, TLBC): the specializer rewrites
++ * instructions and inline caches without atomics, so two OS threads running
++ * one copy can tear a cache entry (a type version from one specialization, an
++ * index or a borrowed pointer from another).  A frame picks its copy when it
++ * starts and again only at RESUME or a throw.  A stackful fiber runtime that
++ * moves a fiber's thread state between OS threads at any call, and lends it
++ * the copy of the thread it runs on (live fibers then share a copy per OS
++ * thread instead of owning one each), needs a frame to switch copies as soon
++ * as its thread state's index changed under it.  Every instruction starts
++ * through DISPATCH(), DISPATCH_SAME_OPARG() or a deopt (JUMP_TO_PREDICTED);
++ * INSTRUMENTED_LINE and INSTRUMENTED_INSTRUCTION, which start the original
++ * instruction straight after a monitoring callback, reach
++ * PAUSE_ADAPTIVE_COUNTER first for every opcode that has caches.  Re-pointing
++ * the frame at those points means no instruction starts on another thread's
++ * copy.  The instruction whose call parked finishes on the old copy: in
++ * 3.14.4 that tail reads no inline cache but a function version it checks
++ * against the callee (CALL_BOUND_METHOD_*), and writes only the atomic
++ * branch-history bits -- unless the park happened inside the specializer
++ * (a finalizer run by one of its decrefs), whose remaining writes then land
++ * on the old copy.  Costs a compare per instruction; raises MemoryError at
++ * the instruction about to start if the new copy cannot be allocated.
++ * Its own define: a build without it keeps per-thread-state copies only
++ * and pays nothing, and _PyEval_TLBCFollow, which a runtime looks up
++ * before it lends copies, does not exist. */
++#if defined(Py_GIL_DISABLED) && defined(Py_TSTATE_EXEC_HOME) \
++    && defined(Py_TSTATE_TLBC_FOLLOW)
++#  define _PY_TLBC_FOLLOW_ENABLED 1
++PyAPI_FUNC(_Py_CODEUNIT *) _PyEval_TLBCFollow(
++    PyThreadState *tstate, _PyInterpreterFrame *frame,
++    _PyStackRef *stack_pointer, _Py_CODEUNIT *ip);
++#  define _PY_TLBC_STALE() \
++    (frame->tlbc_index != ((_PyThreadStateImpl *)tstate)->tlbc_index)
++#  if Py_TAIL_CALL_INTERP
++#    define _PY_TLBC_FOLLOW_DISPATCH() _PY_TLBC_FOLLOW(next_instr, next_instr)
++#  else
++     /* One shared slow path after generated_cases.c.h (ceval.c), so each
++        dispatch site adds only the compare and a branch. */
++#    define _PY_TLBC_FOLLOW_DISPATCH() \
++        do { if (_PY_TLBC_STALE()) { goto tlbc_follow_dispatch; } } while (0)
++#  endif
++#  define _PY_TLBC_FOLLOW(IP, RAISE_AT) \
++    do { \
++        if (_PY_TLBC_STALE()) { \
++            _Py_CODEUNIT *tlbc_ip_ = \
++                _PyEval_TLBCFollow(tstate, frame, stack_pointer, (IP)); \
++            if (tlbc_ip_ == NULL) { \
++                frame->instr_ptr = (RAISE_AT); \
++                next_instr = frame->instr_ptr + 1; \
++                JUMP_TO_LABEL(error); \
++            } \
++            (IP) = tlbc_ip_; \
++        } \
++    } while (0)
++#else
++#  define _PY_TLBC_FOLLOW(IP, RAISE_AT) ((void)0)
++#  define _PY_TLBC_FOLLOW_DISPATCH() ((void)0)
++#endif
++
+ /* PRE_DISPATCH_GOTO() does lltrace if enabled. Normally a no-op */
+ #ifdef Py_DEBUG
+ #define PRE_DISPATCH_GOTO() if (frame->lltrace >= 5) { \
+@@ -161,6 +229,7 @@ do { \
+ #define DISPATCH() \
+     { \
+         assert(frame->stackpointer == NULL); \
++        _PY_TLBC_FOLLOW_DISPATCH(); \
+         NEXTOPARG(); \
+         PRE_DISPATCH_GOTO(); \
+         DISPATCH_GOTO(); \
+@@ -168,6 +237,7 @@ do { \
+ 
+ #define DISPATCH_SAME_OPARG() \
+     { \
++        _PY_TLBC_FOLLOW(next_instr, next_instr); \
+         opcode = next_instr->op.code; \
+         PRE_DISPATCH_GOTO(); \
+         DISPATCH_GOTO(); \
+@@ -292,6 +362,7 @@ GETITEM(PyObject *v, Py_ssize_t i) {
+ 
+ #define PAUSE_ADAPTIVE_COUNTER(COUNTER) \
+     do { \
++        _PY_TLBC_FOLLOW(next_instr, next_instr); \
+         (COUNTER) = pause_backoff_counter((COUNTER)); \
+     } while (0);
+ 

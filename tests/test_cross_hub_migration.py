@@ -48,12 +48,13 @@ tests already cover when run with migration on (hub introspection, sysmon
 classification, the stack pool, the seeded scheduler) are not duplicated
 here.
 
-Four tests pass today and are here to pin down what was verified to work:
+Five tests pass today and are here to pin down what was verified to work:
 that migration is actually observable through this harness, that
 ``PyGILState_Ensure`` callbacks (ctypes, sqlite UDFs, OpenSSL) run on the
-fiber's own thread state after it has moved, that ``G.pin`` keeps a fiber
-on one OS thread, and that signal delivery into a migrating io-sleeper
-neither crashes nor cuts the fiber's next sleep short.
+fiber's own thread state after it has moved, and that a fiber does not move
+while such a callback is on its stack, that ``G.pin`` keeps a fiber on one
+OS thread, and that signal delivery into a migrating io-sleeper neither
+crashes nor cuts the fiber's next sleep short.
 """
 import ast
 import os
@@ -239,6 +240,52 @@ def main():
     stackweave.sleep(0.01)
     sort_once()
     assert seen and all(t == "fiber" for t in seen), seen
+    print("PASS", flush=True)
+stackweave.run(4, main)
+''')
+
+
+def test_identity_c_callback_keeps_its_os_thread_until_it_returns():
+    """A C library may hold a lock owned by the OS thread across a callback
+    into Python (sqlite3's connection mutex; see
+    test_cpython_thread_keyed_locks.py), so a fiber with a foreign C caller
+    on its stack -- one that entered through PyGILState_Ensure, here a
+    ctypes qsort comparator -- must not move.  The comparator asks to be
+    pinned to another hub and parks on foreign-thread wakes, which move a
+    plain fiber; it must resume on the OS thread qsort called it on every
+    time.  The pin is not lost: it takes effect at the first park after qsort
+    returns."""
+    assert_pass(r'''
+import ctypes, ctypes.util
+_watchdog(40)
+libc = ctypes.CDLL(ctypes.util.find_library("c"))
+CMP = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int))
+def main():
+    require_migration(force_migrate())          # a plain park here moves
+    g = stackweave_c.current_g()
+    state = {}
+    tids = set()
+    @CMP
+    def cmp(a, b):
+        tids.add(threading.get_ident())
+        if "target" not in state:
+            state["target"] = (stackweave_c.mn_current_hub() + 1) % stackweave_c.mn_hub_count()
+            g.pin(state["target"])
+        tids.update(park_n_times(2))
+        return a[0] - b[0]
+    holds = stackweave_c.stats()["mn_c_caller_holds"]
+    arr = (ctypes.c_int * 6)(*[6, 3, 5, 1, 4, 2])
+    libc.qsort(arr, 6, ctypes.sizeof(ctypes.c_int), cmp)
+    holds = stackweave_c.stats()["mn_c_caller_holds"] - holds
+    park_n_times(1)                             # the deferred pin applies now
+    after = stackweave_c.mn_current_hub()
+    g.pin(None)
+    print("comparator threads=%d holds=%d hub after=%d target=%d"
+          % (len(tids), holds, after, state["target"]), flush=True)
+    assert list(arr) == [1, 2, 3, 4, 5, 6], list(arr)
+    assert len(tids) == 1, "the comparator resumed on %d OS threads" % len(tids)
+    assert holds > 0, "no park was held on its hub (stats mn_c_caller_holds)"
+    assert after == state["target"], "the pin made inside the callback was lost"
     print("PASS", flush=True)
 stackweave.run(4, main)
 ''')
@@ -534,22 +581,93 @@ os._exit(0)
 # get_ident), not a patch; the tests track the gap.  (PR #23 review, 7.3)
 # ---------------------------------------------------------------------------
 
-@MIGRATION_GAP(
-    'stock _thread.RLock compares the OS thread id in C at release; nothing in the runtime can satisfy it once the fiber moved -- use G.pin or monkey.patch() (CoRLock)')
 def test_identity_stock_rlock_releases_after_a_migration():
-    """Known gap: stock _thread.RLock keys ownership on the OS thread; after a
-    migration release() raises and the lock is wedged for good (needs a
-    per-fiber pin or a fiber-aware identity).
+    """Was a gap (fixed: the exec-home patch's Python/lock.c hunk makes a
+    _PyRecursiveMutex, so _thread.RLock, owned by the attached thread state,
+    which is the fiber's own): stock _thread.RLock keyed ownership on the OS
+    thread, so after a migration release() raised and the lock was wedged for
+    good.
     """
     assert_pass(r'''
 _watchdog(30)
 def main():
+    assert stackweave_c.rlock_tstate_owned, "interpreter built without the exec-home lock.c hunk"
     lk = threading.RLock()
-    lk.acquire()
+    lk.acquire(); lk.acquire()           # both levels survive the move
     require_migration(force_migrate())
-    lk.release()                   # RuntimeError: cannot release un-acquired lock
+    lk.release()
+    assert lk._is_owned(), "ownership lost after a migration"
+    lk.release()
+    assert not lk._is_owned()
     assert lk.acquire(timeout=1), "lock wedged after migration"
     lk.release()
+    print("PASS", flush=True)
+stackweave.run(4, main)
+''')
+
+
+def test_identity_stock_rlock_excludes_a_fiber_on_the_same_hub():
+    """Fibers on one hub share its OS thread.  Keyed on the OS thread, a fiber
+    that took an RLock another fiber on its hub held re-entered it: both ran
+    the critical section at once, and the second's release took a level off
+    the first's.  Owned by the thread state, the second waits -- parked, so
+    the hub goes on running (tests/test_fiber_locks.py); here the holder
+    still sleeps past the waiter's timeout, so the timed acquire fails.
+    """
+    assert_pass(r'''
+_watchdog(30)
+def main():
+    assert stackweave_c.rlock_tstate_owned, "interpreter built without the exec-home lock.c hunk"
+    lk = threading.RLock()
+    log = []
+    done = stackweave.Chan(0)
+    def holder():
+        stackweave_c.current_g().pin(0); stackweave.sleep(0)
+        with lk:
+            log.append(("in", stackweave_c.mn_current_hub()))
+            stackweave.sleep(0.3)
+            log.append(("out", stackweave_c.mn_current_hub()))
+        done.send(1)
+    def contender():
+        stackweave_c.current_g().pin(0); stackweave.sleep(0.05)
+        got = lk.acquire(timeout=0.1)
+        log.append(("contender", got, stackweave_c.mn_current_hub(), [e[0] for e in log]))
+        if got:
+            lk.release()
+    stackweave.fiber(holder); stackweave.fiber(contender)
+    done.recv()
+    print(log, flush=True)
+    hubs = {e[1] for e in log if e[0] in ("in", "out")} | {e[2] for e in log if e[0] == "contender"}
+    assert hubs == {0}, "the fibers did not share hub 0: %r" % (log,)
+    entry = [e for e in log if e[0] == "contender"][0]
+    assert entry[1] is False and entry[3] == ["in"], "a same-hub fiber re-entered the held RLock: %r" % (log,)
+    assert lk.acquire(timeout=1); lk.release()
+    print("PASS", flush=True)
+stackweave.run(4, main)
+''')
+
+
+def test_identity_stock_rlock_is_shared_with_a_nested_drains_fibers():
+    """A run(1) nested in an M:N fiber runs its fibers on the outer fiber's
+    thread state, so they share the outer fiber's RLocks as a nested call
+    would: an inner fiber re-enters a lock the outer holds instead of waiting
+    for an outer fiber that cannot run until the drain returns.
+    """
+    assert_pass(r'''
+_watchdog(30)
+def main():
+    assert stackweave_c.rlock_tstate_owned, "interpreter built without the exec-home lock.c hunk"
+    lk = threading.RLock()
+    res = {}
+    def inner():
+        res["got"] = lk.acquire(timeout=0.5)
+        if res["got"]:
+            lk.release()
+    with lk:
+        stackweave.run(1, lambda: stackweave.fiber(inner))
+        assert lk._is_owned(), "the nested drain's fiber took the outer fiber's lock away"
+    assert res.get("got") is True, "an inner fiber could not re-enter the outer fiber's RLock: %r" % (res,)
+    assert lk.acquire(timeout=1); lk.release()
     print("PASS", flush=True)
 stackweave.run(4, main)
 ''')

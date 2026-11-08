@@ -22,6 +22,10 @@ lists them all.
                           It is not strict, because an XPASS does not mean the
                           gap has closed.
 
+condition= (default True) limits the gap to the runs where it is still open,
+for a gap that a fix closes only on some interpreters: where the condition is
+False the test runs plain and must pass.
+
 raises= narrows what counts as the known break.  A test that first checks that
 its scenario reached the trigger, and calls pytest.fail when it did not, passes
 raises=AssertionError.  A missed trigger then stays a real failure.
@@ -32,17 +36,17 @@ PREFIXES = ("KNOWN GAP: ", "MIGRATION GAP: ", "SEEDED M:N TODO: ",
             "INTERMITTENT: ")
 
 
-def _xfail(prefix, reason, strict, raises):
-    return pytest.mark.xfail(strict=strict, raises=raises,
+def _xfail(prefix, reason, strict, raises, condition=True):
+    return pytest.mark.xfail(bool(condition), strict=strict, raises=raises,
                              reason=prefix + reason)
 
 
-def KNOWN_GAP(reason, *, raises=None, strict=True):
-    return _xfail("KNOWN GAP: ", reason, strict, raises)
+def KNOWN_GAP(reason, *, raises=None, strict=True, condition=True):
+    return _xfail("KNOWN GAP: ", reason, strict, raises, condition)
 
 
-def MIGRATION_GAP(reason, *, raises=None, strict=True):
-    return _xfail("MIGRATION GAP: ", reason, strict, raises)
+def MIGRATION_GAP(reason, *, raises=None, strict=True, condition=True):
+    return _xfail("MIGRATION GAP: ", reason, strict, raises, condition)
 
 
 def INTERMITTENT(reason, *, raises=None):

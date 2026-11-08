@@ -60,6 +60,18 @@ size_t runloom_gen_exc_state_offset(void);
  * when built with RUNLOOM_NO_IFRAME. */
 int runloom_tstate_in_destruction(PyThreadState *ts);
 
+/* Py_TSTATE_EXEC_HOME's fiber mark (_PyThreadStateImpl._fiber): a lock that
+ * records its owner records a marked state, not its OS thread; unmarked states
+ * keep the OS thread, as stock.  Set on each per-g state before its first
+ * attach.  runloom_iframe_fiber_tstate_flag() says whether the interpreter has
+ * the field (its witness, _Py_TSTATE_FIBER_FLAG); without it the mark is a
+ * no-op.  runloom_iframe_main_signals_pending(): on the main thread, whether a
+ * signal is waiting for its Python handler (the eval-breaker bit CPython's C
+ * handler sets), without running or consuming it; 0 elsewhere. */
+void runloom_iframe_mark_fiber_tstate(PyThreadState *ts);
+int runloom_iframe_fiber_tstate_flag(void);
+int runloom_iframe_main_signals_pending(void);
+
 /* Critical-section suspend/restore across a fiber swap (no-op when built
  * with RUNLOOM_NO_IFRAME).  A fiber can park while
  * holding a CPython per-object critical section (e.g. a dict's ma_mutex held
@@ -130,6 +142,26 @@ void runloom_iframe_hand_over_freelists(PyThreadState *dead);
  * otherwise cost every fiber teardown a walk of every abandoned segment. */
 void runloom_iframe_clear_fiber_tstate(PyThreadState *ts);
 
+/* In a fork child, from a pthread_atfork child handler (before CPython's
+ * after-fork code): a fork made in a fiber makes fiber_ts, the forking
+ * fiber's state, the runtime's main thread state, so signals set their
+ * pending bit where the eval loop will see it; any other fork (fiber_ts
+ * NULL) puts back the embedded initial state if main_tstate names a state
+ * the fork is about to free.  runloom_iframe_main_state_check reports, for the
+ * tests, whether the main state / main thread are the caller's, and whether
+ * the main state is the embedded initial one. */
+void runloom_iframe_fork_child_main_tstate(PyThreadState *fiber_ts);
+/* In the child of a fork made in a fiber, from the same atfork handler: the
+ * fiber's state stops borrowing the hub's allocator (the hub's state is about
+ * to be deleted) and allocates from its own heaps, stamped with this thread's
+ * id.  runloom_iframe_alloc_home_is_own reports, for the tests, whether the
+ * calling state allocates from its own heaps (-1 without alloc-home). */
+void runloom_iframe_fork_child_own_heap(PyThreadState *ts);
+int  runloom_iframe_alloc_home_is_own(void);
+void runloom_iframe_main_state_check(int *tstate_is_current,
+                                     int *thread_is_current,
+                                     int *tstate_is_initial);
+
 /* Drain the biased-refcount merge queue that free-threaded CPython attached to
  * THIS thread state, if any.  Every object is allocated on the running hub's
  * thread id (alloc-home), so a last decref from another hub is queued -- by
@@ -171,6 +203,47 @@ void runloom_iframe_brc_release(PyThreadState *fiber, PyThreadState *hub);
 unsigned long long runloom_iframe_brc_release_merges(void);
 unsigned long long runloom_iframe_brc_release_merges_off_stack(void);
 unsigned long long runloom_iframe_brc_release_merges_hub_first(void);
+/* stats()["brc_release_local_drains"]: releases that found the fiber switched
+ * out part-way through its own merge drain (a __del__ in it parked or yielded)
+ * and drained the rest of its local_objects_to_merge here, on the owner. */
+unsigned long long runloom_iframe_brc_release_local_drains(void);
+
+/* Thread-local bytecode (TLBC) per hub, not per fiber.
+ *
+ * Free-threaded CPython gives every thread state its own copy of each code
+ * object's bytecode, because the specializer rewrites instructions and inline
+ * caches without atomics.  Every fiber has a thread state, so each live fiber
+ * got its own copy of every function it ran (2000 fibers that ran one 144 KB
+ * function took ~390 MB more than with PYTHON_TLBC=0).  Instead, a resume lends
+ * the fiber its hub's index: lend() SWAPS the two states' tlbc_index fields
+ * and unlend() swaps them back, so every index is held by exactly one thread
+ * state at all times (PyThreadState_Clear frees whatever index a state holds,
+ * and a forked child clears every other state: holding one index in two
+ * states would free it twice).  Live fibers then share one copy per hub.
+ *
+ * A frame keeps executing the copy it started on, so a fiber that parked on
+ * hub A and resumes on hub B would run A's copy on B's thread while A runs it
+ * too -- the race TLBC exists to prevent.  This is sound only on an
+ * interpreter whose eval loop re-points a frame at its thread state's copy
+ * before each instruction (the exec-home patch's TLBC hunk, built with
+ * -DPy_TSTATE_TLBC_FOLLOW, which exports _PyEval_TLBCFollow:
+ * runloom_iframe_tlbc_follow(), stackweave_c.tlbc_follow).
+ * runloom_iframe_tlbc_shared() is 0 without it, or with PYTHON_TLBC=0;
+ * lend/unlend are then no-ops and every fiber keeps its own copies as
+ * before.  Call it once before any hub runs.
+ *
+ * Both are called with the FIBER's state attached (right after it attaches,
+ * right before it detaches), so the world cannot be stopped mid-swap and a
+ * stop-the-world reader of the indices (_Py_ClearUnusedTLBC) sees a
+ * consistent pair.  lend() returns the index lent, or -1 when off.
+ * stats()["tlbc_switches"] counts resumes whose lent copy differed from the
+ * one the fiber last ran on (its frames re-point at their next instruction). */
+int runloom_iframe_tlbc_follow(void);
+int runloom_iframe_tlbc_shared(void);
+int runloom_iframe_tlbc_lend(PyThreadState *fiber, PyThreadState *hub);
+void runloom_iframe_tlbc_unlend(PyThreadState *fiber, PyThreadState *hub);
+void runloom_iframe_tlbc_note_switch(void);
+unsigned long long runloom_iframe_tlbc_switches(void);
 
 /* Destroy whatever a fiber's per-g state still has parked on its trashcan list
  * (delete_later): only a later dealloc on that state would, and

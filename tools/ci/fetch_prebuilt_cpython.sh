@@ -145,7 +145,7 @@ import sys
 assert not sys._is_gil_enabled(), "GIL is ENABLED in the prebuilt -- wrong artifact"
 print("prebuilt interpreter:", sys.version.split()[0], "| free-threaded:", not sys._is_gil_enabled())
 ' || rl_die "prebuilt interpreter failed its smoke check"
-rl_log "installed pyconfig.h carries both defines; interpreter is free-threaded"
+rl_log "installed pyconfig.h carries every feature define; interpreter is free-threaded"
 
 printf '%s\n' "$PYBIN" > "$WORK/pybin-$VERSION-$PLATFORM.txt"
 rl_ci_summary "♻️ **CPython $VERSION** ($PLATFORM): reused prebuilt from release \`$FOUND\` (skipped source build + stdlib suite)"
