@@ -217,6 +217,20 @@ only replaces `tempfile._once_lock`; logging handlers' RLocks created before
 (`_PY_LOCK_FIBER`) fixes `_thread` locks only; the warnings and import
 `_PyRecursiveMutex` waits (3, 4) need it too.
 
+**Status: partly, under monkey.patch.**
+`_fixup_preimported_stdlib_locks` now also re-creates `_strptime._cache_lock`,
+`logging._lock` and the lock of every handler created before `patch()`
+(skipping a lock held at that moment, by the calling thread too; a later
+`patch()` retries it; `unpatch()` restores them), so with the
+patch those no longer wedge the hub (guard:
+`test_preempt_preimported_stdlib_lock_holder_runs_under_monkey`). Unpatched
+code, `threading.Lock`s made before `patch()`, and the warnings/import mutexes
+are unchanged; the known-gap test runs unpatched and stays xfail. One window
+stays: a thread that read the old lock before the swap, acquires it after, and
+reads the attribute again to release (logging's `Handler.acquire()`/
+`release()`, its fork hooks) releases the new lock and gets RuntimeError;
+`with lock:` code is safe.
+
 ### 7. sqlite busy timeout blocks the hub for its full length (C)
 
 **Status: FIXED under monkey.patch** (commit "monkey: wait for a locked

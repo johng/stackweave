@@ -229,47 +229,99 @@ _PATCHERS = {
 _applied = set()
 
 
-_saved_tempfile_once_lock = None
+# (obj, attr, original lock, the cooperative lock put there), for unpatch().
+_swapped_stdlib_locks = []
+
+
+def _held_by_this_thread(lock):
+    """Whether the calling thread holds `lock` (an RLock: acquire(False)
+    would succeed for it, re-entrantly).  A plain lock has no owner, and its
+    acquire(False) fails while anyone holds it."""
+    is_owned = getattr(lock, "_is_owned", None)
+    if is_owned is None:
+        return False
+    try:
+        return bool(is_owned())
+    except Exception:
+        return True                   # cannot tell: treat it as held
+
+
+def _swap_stdlib_lock(obj, attr, factory):
+    """Replace obj.attr, a real lock, with factory() -- only while nobody
+    holds it, this thread included (a holder would later release the new,
+    unheld lock).  A held lock is left real; a later patch() call retries it.
+
+    One window stays: a thread that read the old lock object before the swap
+    but acquires it after, and then reads the attribute again to release it,
+    releases the new lock it never took (RuntimeError).  logging's
+    Handler.acquire()/release() pair and its fork hooks read it twice; `with
+    lock:` code releases the object it acquired and is safe.  patch() normally
+    runs at startup, before such threads exist."""
+    old = getattr(obj, attr, None)
+    if old is None or isinstance(old, (CoLock, CoRLock)):
+        return
+    if _held_by_this_thread(old):
+        return
+    try:
+        if not old.acquire(False):
+            return                    # held by another thread right now
+    except Exception:
+        return
+    try:
+        new = factory()
+        setattr(obj, attr, new)
+        _swapped_stdlib_locks.append((obj, attr, old, new))
+    finally:
+        old.release()
 
 
 def _fixup_preimported_stdlib_locks():
     """Make stdlib lock singletons captured BEFORE patch() cooperative.
 
-    A stdlib module imported before patch() may capture ``_thread.allocate_lock``
-    DIRECTLY (tempfile: ``from _thread import allocate_lock``), so its
-    module-level lock is a REAL (non-cooperative) lock even after the threading
-    patch -- and a real lock held by one fiber across a yielding/offloaded call
-    while another fiber blocks on it FREEZES the single scheduler thread
-    (deadlock; see the locks.py header).  ``tempfile._once_lock`` (the one-time
-    ``gettempdir()`` probe guard) is hit by every fiber doing ``mkstemp`` /
-    ``NamedTemporaryFile`` / etc. -- stackweave imports tempfile before patch(), so
-    this deadlocked deterministically (tools/monkey_offload_stress.py, lifefuzz
-    seed=2).  Re-create it cooperative; save the original so unpatch() restores
-    it."""
-    global _saved_tempfile_once_lock
-    import sys
+    A stdlib module imported before patch() made its locks with the real
+    ``_thread`` / ``threading`` factories, so they stay real OS locks after the
+    threading patch.  A fiber that blocks on a real lock blocks its hub's OS
+    thread; if the holder is a fiber parked or preempted on that hub (a
+    preempted fiber waits on its hub's ready ring, which nothing steals), it
+    never runs again and the hub is wedged (docs/dev/FT_CPYTHON_LOCK_GAPS.md,
+    finding 6).  Each lock below is taken implicitly by common calls:
+
+      tempfile._once_lock    every mkstemp / NamedTemporaryFile (the one-time
+                             gettempdir() probe; stackweave imports tempfile
+                             before patch(), so this deadlocked deterministically:
+                             tools/monkey_offload_stress.py, lifefuzz seed=2)
+      _strptime._cache_lock  time.strptime / datetime.strptime
+      logging._lock          getLogger, handler and config changes
+      Handler.lock           every record a handler emits, for each handler
+                             created before patch() (logging.lastResort, the
+                             handlers basicConfig made, ...)
+
+    Re-create each cooperative, unless something holds it right now; unpatch()
+    puts the originals back.  Modules imported after patch() get cooperative
+    locks from the patched factories."""
     tf = sys.modules.get("tempfile")
-    if tf is None or _saved_tempfile_once_lock is not None:
-        return
-    try:
-        _saved_tempfile_once_lock = tf._once_lock
-        tf._once_lock = CoLock()
-    except Exception:
-        _saved_tempfile_once_lock = None
+    if tf is not None:
+        _swap_stdlib_lock(tf, "_once_lock", CoLock)
+    sp = sys.modules.get("_strptime")
+    if sp is not None:
+        _swap_stdlib_lock(sp, "_cache_lock", CoLock)
+    lg = sys.modules.get("logging")
+    if lg is not None:
+        _swap_stdlib_lock(lg, "_lock", CoRLock)
+        for ref in list(getattr(lg, "_handlerList", ())):
+            h = ref() if callable(ref) else None
+            if h is not None:
+                _swap_stdlib_lock(h, "lock", CoRLock)
 
 
 def _restore_preimported_stdlib_locks():
-    global _saved_tempfile_once_lock
-    if _saved_tempfile_once_lock is None:
-        return
-    import sys
-    tf = sys.modules.get("tempfile")
-    if tf is not None:
+    while _swapped_stdlib_locks:
+        obj, attr, old, new = _swapped_stdlib_locks.pop()
         try:
-            tf._once_lock = _saved_tempfile_once_lock
+            if getattr(obj, attr, None) is new:
+                setattr(obj, attr, old)
         except Exception:
             pass
-    _saved_tempfile_once_lock = None
 
 
 def patch(**flags):
@@ -301,8 +353,9 @@ def patch(**flags):
             continue
         _PATCHERS[name][0]()
         _applied.add(name)
-    # stdlib locks captured pre-patch (tempfile._once_lock) are real and freeze
-    # a hub when a fiber blocks on them across an offloaded call -- cooperative-ize.
+    # stdlib locks made before patch() (tempfile, _strptime, logging) are real
+    # and freeze a hub when a fiber blocks on one a parked or preempted fiber
+    # holds -- cooperative-ize.
     _fixup_preimported_stdlib_locks()
 
 

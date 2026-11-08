@@ -663,6 +663,99 @@ stackweave.run(2, main)
 '''.replace("LOCKNAME", lock))
 
 
+@pytest.mark.parametrize("lock", ["_strptime._cache_lock", "logging-handler"])
+def test_preempt_preimported_stdlib_lock_holder_runs_under_monkey(lock):
+    """The same scenario under monkey.patch, for stdlib locks made BEFORE
+    patch() with the real factories (the module imported first, the handler
+    created first): patch() re-creates them cooperative
+    (_fixup_preimported_stdlib_locks), so the same-hub waiter parks and the
+    preempted holder finishes.  unpatch() puts the originals back.
+
+    The trigger does not hang on timing: B is spawned only once A holds the
+    lock, and A spins inside it until B has started, which on hub 0 can only
+    happen once A has been preempted.  A pinned fiber on a busy hub can wait
+    ~64 time slices for its turn (finding 14), so A allows 20 s for that."""
+    run_gap(r'''
+import time as _t, _strptime, logging, io
+held, b_started, emitted_while_held = [False], [False], []
+class Probe(io.StringIO):
+    def write(self, s):                       # runs under handler.lock
+        emitted_while_held.append(held[0])
+        return super().write(s)
+handler = logging.StreamHandler(Probe())     # real RLock: made pre-patch
+log = logging.getLogger("preimported"); log.addHandler(handler); log.propagate = False
+orig = {"_strptime": _strptime._cache_lock, "handler": handler.lock}
+import stackweave.monkey as monkey; monkey.patch()
+_watchdog(45)
+LOCK = "LOCKNAME"
+lock = _strptime._cache_lock if LOCK == "_strptime._cache_lock" else handler.lock
+assert type(lock).__name__ in ("CoLock", "CoRLock"), type(lock)
+def main():
+    out = {}
+    wg = stackweave.WaitGroup(); wg.add(2)
+    def A():
+        with lock:
+            held[0] = True
+            end = _t.perf_counter() + 20
+            while not b_started[0] and _t.perf_counter() < end:
+                pass                          # CPU-bound: only preemption lets B in
+            held[0] = False
+            out["A_released"] = _t.perf_counter()
+        wg.done()
+    def B():
+        b_started[0] = True
+        if held[0]:
+            print("REACHED: B runs on the hub while preempted A holds the lock", flush=True)
+        if LOCK == "_strptime._cache_lock":
+            _t.strptime("2026-11-08", "%Y-%m-%d")
+        else:
+            log.warning("from B")
+        out["B_done"] = _t.perf_counter(); wg.done()
+    stackweave_c.mn_fiber(A, hub=0)
+    deadline = _t.perf_counter() + 20
+    while not held[0] and _t.perf_counter() < deadline:
+        stackweave.sleep(0.005)
+    stackweave_c.mn_fiber(B, hub=0)
+    wg.wait()
+    print(out, "emitted while A held:", emitted_while_held, flush=True)
+    assert out["B_done"] > out["A_released"], "B got the lock while A held it"
+    assert True not in emitted_while_held, "B got into the handler lock A held"
+    finished.append(True)
+finished = []
+stackweave.run(2, main)
+assert finished, "main did not finish"
+monkey.unpatch()
+assert _strptime._cache_lock is orig["_strptime"] and handler.lock is orig["handler"]
+print("PASS", flush=True)
+'''.replace("LOCKNAME", lock))
+
+
+def test_preimported_stdlib_lock_held_by_the_patching_thread_stays_real():
+    """patch() run while the calling thread holds a pre-patch RLock (say,
+    from a logging handler factory under dictConfig) must not swap it: the
+    holder would then release the new, unheld lock.  acquire(False) used to
+    be the "is it held?" test, and it succeeds re-entrantly for the owner.
+    A later patch() call, once it is released, swaps it."""
+    rc, out, err = run_scenario(r'''
+import logging, io
+real_rlock = type(logging._lock)          # patch() rebinds _thread.RLock
+handler = logging.StreamHandler(io.StringIO())
+handler.acquire()                         # held by this thread across patch()
+with logging._lock:
+    import stackweave.monkey as monkey
+    monkey.patch()
+    assert type(logging._lock) is real_rlock, logging._lock
+    assert type(handler.lock) is real_rlock, handler.lock
+handler.release()                         # the lock it took: no RuntimeError
+monkey.patch()                            # released now: swapped
+assert type(handler.lock).__name__ == "CoRLock", handler.lock
+assert type(logging._lock).__name__ == "CoRLock", logging._lock
+handler.acquire(); handler.release()
+print("PASS", flush=True)
+''', timeout=60)
+    assert rc == 0 and "PASS" in out, (out, err[-3000:])
+
+
 def test_preempt_sqlite_writer_waits_for_a_same_hub_transaction():
     """Was a gap (fixed under monkey.patch: monkey/sqlite.py moves the wait
     out of sqlite3_step): sqlite's busy handler slept inside sqlite3_step on
