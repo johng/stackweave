@@ -1,0 +1,321 @@
+# CPython locks, conditions and thread identity under fibers
+
+Status: investigation, 2026-11-08, branch `investigate/ft-cpython-locks` off
+main 8ad634c1. Interpreter: `~/.pyenv/versions/3.14.4t-mig` (the committed
+alloc-home + exec-home patches; NOT the in-progress `fix/rlock-fiber-identity`
+hunks), macOS arm64, sqlite 3.54 (system, multi-thread mode). Nothing here is
+fixed. Linux was not run.
+
+Probes: `tools/probes/ft_locks/`, run as `./run.sh pNN_*.py args`; each prints
+PASS or FAIL (or hangs into its watchdog). Every "confirmed" below was
+reproduced with its probe; the numbers are from this box.
+
+Strict known-gap tests: `tests/test_cpython_thread_keyed_locks.py`, one per
+stackweave-visible finding (1-15 and 17; not 16, which is CPython's alone, nor
+18, which is documented design). Each prints REACHED once its trigger
+happened, so a scenario that misses its trigger fails outright instead of
+counting as the gap.
+
+## How a fiber looks to CPython
+
+A fiber has its own `PyThreadState`, attached on the hub thread while it runs
+and detached with `PyEval_SaveThread` when it parks, so critical sections and
+QSBR behave as for a blocked thread. Anything keyed on the OS thread does not
+follow it: `PyThread_get_thread_ident`, `pthread_self`, `_Py_ThreadId`
+(`ob_tid`), `_PyRecursiveMutex` owners, pthread / `os_unfair_lock` ownership,
+thread-locals. At any Python-level call a fiber can park and resume on another
+hub; several live fibers share each hub's OS thread; a preempted fiber stays on
+its hub's ready ring, which nothing steals.
+
+Hazard classes: **A** identity recorded and compared later; **B** a lock that
+is not a critical section held while C calls into Python; **C** the hub's OS
+thread blocks on something only a fiber can signal; **D** thread-locals across
+a callback; **E** protocols assuming one tstate per OS thread.
+
+The single most productive pattern: **an OS-thread-owned lock held across a
+Python callback**. If the fiber migrates inside the callback, the unlock runs
+on the wrong OS thread: CPython's `_PyRecursiveMutex` refuses and the lock
+leaks for good (warnings, import), an OS lock aborts (sqlite on macOS), a
+semaphore's owner check self-deadlocks (multiprocessing). If it does not
+migrate but parks or is preempted, a same-hub contender either re-enters or
+blocks the only OS thread that could run the holder.
+
+## Confirmed: crash or memory safety
+
+### 1. sqlite3 callback that parks and migrates aborts the process (B)
+
+`p11_sqlite_udf_min.py serialized`: 3/3 SIGKILL, no Python traceback.
+User functions, aggregates, window functions, collations, authorizer,
+progress and trace callbacks run inside `sqlite3_step` (or prepare), which
+holds the connection mutex in serialized mode. The callback parks, resumes on
+another hub, and `sqlite3_step` releases the mutex from the wrong OS thread:
+macOS aborts in `_os_unfair_lock_unowned_abort`. `check_same_thread` (default
+True) does not catch it: it runs when `execute` starts, before the migration.
+
+- macOS's system libsqlite3 is multi-thread mode (`sqlite3.threadsafety == 1`,
+  no connection mutex); the probe switches to serialized with
+  `sqlite3_config(SQLITE_CONFIG_SERIALIZED)` through ctypes. Debian/Ubuntu,
+  Homebrew and python.org builds are serialized (`threadsafety == 3`). On
+  glibc a non-owner unlock of the recursive mutex returns EPERM, which sqlite
+  ignores, so expect the connection mutex to stay held by the first hub's
+  thread and other hubs to hang on it (not run).
+- Same shape in other C libraries that hold an owner-checked lock across a
+  Python callback: `_tkinter` (Tcl is bound to its thread), `_ssl`'s
+  `load_cert_chain` password callback (holds a PyMutex), ctypes/cffi callbacks
+  into user libraries.
+- Fix idea: such callbacks enter through `PyGILState_Ensure`, so a nested
+  `gilstate_counter` on the fiber's tstate at park time marks "foreign C frame
+  on the stack": pin the fiber to its hub until the matching Release.
+
+### 2. A `__del__` that parks mid merge-drain lets the rest merge on the wrong thread (B)
+
+`p12_brc_wrong_thread_merge.py 4 300`: FAIL, 3-4 objects per run merged and
+freed on a thread that does not own them (gc disabled, never merged before).
+`_Py_brc_merge_refcounts` moves the bucket queue into the tstate's
+`local_objects_to_merge` and pops it, deallocating each object that reaches
+zero. If a `__del__` there parks, the hub runs
+`runloom_iframe_brc_release` (`src/runloom_c/runloom_iframe.c:366`), which
+drains only when the SHARED queue `objects_to_merge` is non-empty, not when
+`local_objects_to_merge` still holds objects. The fiber resumes on another
+hub and finishes the loop there: `_Py_ExplicitMergeRefcount` reads and zeroes
+`ob_ref_local` of objects whose owner hub may be bumping that field
+non-atomically right then. A lost increment frees a live object. The
+preemption gate (`runloom_tstate_in_destruction`) covers this window for
+preemption only. Rare in the probe because a nested merge inside the parking
+`__del__` usually empties the stack first. Fix: also drain in release when
+`local_objects_to_merge.head != NULL` (on the hub, the right thread).
+
+## Confirmed: a lock leaks to the old OS thread, then everything hangs
+
+### 3. warnings lock (B, process-wide hang)
+
+`WMODE=showwarning p16_warnings_lock.py 4`: watchdog. C `do_warn`
+(`Python/_warnings.c:1170`) holds the interpreter's warnings
+`_PyRecursiveMutex` across `warn_explicit` -> `showwarning` (and message
+`__str__`, category construction, linecache). A `showwarning` that does I/O
+(e.g. `logging.captureWarnings(True)` with a network handler) parks and
+migrates; the unlock on the new thread fails and `do_warn` ignores the return
+value, so the lock stays owned by the old hub's OS thread. The next
+`warnings.warn` on any other hub -- even for an ignored category -- blocks
+that hub forever; so do `catch_warnings` and `simplefilter`.
+The `os.stat` that `linecache` does inside the lock (offloaded by
+monkey.patch) did not migrate in 6 tries (`WMODE=stat`), so that trigger is
+possible but not shown.
+
+### 4. Global import lock (B, process-wide hang; known gap, new trigger and outcome)
+
+`p17_import_lock_finder.py`: the first import raises
+`RuntimeError('not holding the import lock')`, then imports on every hub hang.
+`importlib._bootstrap._find_spec` runs every `finder.find_spec()` under
+`_ImportLockContext` (the C IMPORT_LOCK, `_PyRecursiveMutex`), not just
+`_get_module_lock`. A meta-path finder that does I/O (setuptools' editable
+finder calls `Path.exists()` -> patched `os.stat`) parks and migrates inside
+it. Also reached by `_ModuleLock` weakref callbacks and `os.fork()`.
+
+### 5. `multiprocessing.Value`'s lock self-deadlocks after a migration (A)
+
+`p14_mp_semlock.py [patch]`: watchdog, with or without monkey.patch.
+`with v.get_lock(): <park, migrate>; v.value += 1` -- the property re-acquires
+the same recursive SemLock, whose `ISMINE` compares the OS thread
+(`Modules/_multiprocessing/semaphore.c:49`), so the owner now looks like a
+stranger and waits on itself in `sem_wait`, blocking its hub's OS thread.
+`mp.Condition` and `mp.RLock` are the same kind.
+
+## Confirmed: a hub stalls or deadlocks (no migration needed)
+
+### 6. A preempted lock holder deadlocks its hub (C)
+
+`p09_preempt_holding_lock.py stock|strptime`: watchdog; `patched` PASS;
+`rlock`: re-enters (B waited 0.0 s, the known RLock gap).
+Fiber A runs CPU-bound Python inside `with lock:` (no park at all), is
+preempted, and waits on its hub's ready ring. B on the same hub contends,
+blocks the OS thread in the stock acquire, and A never runs again. Stdlib
+locks do it implicitly: `time.strptime()` while another fiber on the hub is
+preempted inside `_strptime._cache_lock`. `_fixup_preimported_stdlib_locks`
+only replaces `tempfile._once_lock`; logging handlers' RLocks created before
+`patch()` and `logging._lock` are the same. The in-progress parking-lot hook
+(`_PY_LOCK_FIBER`) fixes `_thread` locks only; the warnings and import
+`_PyRecursiveMutex` waits (3, 4) need it too.
+
+### 7. sqlite busy timeout blocks the hub for its full length (C)
+
+`p13_sqlite_busy.py 2`: FAIL, writer waited 2.095 s then
+`OperationalError('database is locked')`; threads succeed in ~50 ms. One
+connection per fiber on one database file: fiber A holds the write lock across
+a park (implicit BEGIN, then `stackweave.sleep`), fiber B on the same hub
+writes. sqlite's busy handler sleeps inside `sqlite3_step` on the hub's OS
+thread, and A's wake-up timer lives on that hub's heap, so A cannot commit
+until B gives up. The default timeout is 5 s. `Connection.backup` retries the
+same way.
+
+## Confirmed: wrong results or spurious errors
+
+### 8. Shared buffered stream: false "reentrant call" on one hub (A)
+
+`p04_buffered_reentrant.py {park-read|preempt-read|preempt-write} 2 same`:
+FAIL every time; the `diff` (two hubs) variants PASS.
+`_io.Buffered*` holds `self->lock` with `owner = PyThread_get_thread_ident()`
+across the raw stream's `readinto`/`write` (`Modules/_io/bufferedio.c:294`).
+When the raw stream is Python code (`socket.SocketIO` from `makefile()`, gzip /
+bz2 / lzma readers, any `RawIOBase` subclass), the holder can park or be
+preempted inside it, and a second fiber on the same hub gets
+`RuntimeError: reentrant call inside <_io.BufferedReader ...>`. A fiber on
+another hub blocks its hub's OS thread until the holder is done.
+
+### 9. `PyThreadState_SetAsyncExc` interrupts the wrong fiber (E)
+
+`p18_setasyncexc.py`: FAIL, the bystander on the same hub got the exception.
+The stopit / func_timeout idiom records `threading.get_ident()` and later calls
+`PyThreadState_SetAsyncExc(ident)`, which picks the newest tstate with that
+`thread_id` (`Python/pystate.c:2519`): whatever is running on the hub, once
+the target has parked.
+
+### 10. Finalizers mostly run with no fiber, where cooperative ops fail (E)
+
+`p07_del_parks.py {sleep|chan} 4 2000`. Objects allocated on hub 0 and dropped
+on hub 1 are destroyed by hub 0's merge drain: 1583 of 2000 `__del__` ran with
+`current_g() is None` on the hub's own tstate
+(`runloom_iframe_service_merge_queue` after a resume, or the release drain).
+There `stackweave.sleep` silently blocks the hub's OS thread (1.17 s in total)
+and a channel op raises `RuntimeError: ... no goroutine is running`; the
+fibers spawned to answer those ops are left blocked and reported at exit. So a
+finalizer that logs, returns a connection to a pool, or does patched I/O
+behaves differently depending on which hub dropped the last reference.
+
+### 11. asyncio debug mode raises after a migration (A)
+
+`p22_asyncio_debug.py`: `RuntimeError: Non-thread-safe operation invoked on
+an event loop other than the current one`. `BaseEventLoop._check_thread`
+compares `get_ident()` (debug only: `-X dev`, `PYTHONASYNCIODEBUG`,
+`IsolatedAsyncioTestCase`). A stock loop inside an M:N fiber parks in its
+patched selector and resumes elsewhere. `stackweave.aio` (nested run(1)) does
+not migrate.
+
+### 12. A thread started from a fiber is a daemon, so exit drops its work (E)
+
+`p20_thread_daemon.py`: `daemon: True`, and the thread's work never finished.
+`Thread.__init__` copies `daemon` from `current_thread()`, the hub's
+`_DummyThread` (daemon), so interpreter exit does not join it.
+
+## Confirmed: in stackweave itself
+
+### 13. Patched `os.read` / `os.write` leave the fd non-blocking
+
+`p15_osread_nonblock.py`: `blocking(r)` True before, False after.
+`monkey/osio.py` calls `os.set_blocking(fd, False)` on any pollable fd and
+never restores it. O_NONBLOCK lives on the open file description, which dups,
+`sys.std*` on a tty and child processes share: a later plain read there gets
+EAGAIN (`BlockingIOError`, or `None` from a buffered reader, i.e. a short
+read). Popen's own pipes survived because the subprocess patch covers them.
+
+### 14. Fibers that pin themselves onto a busy hub wait ~64 time slices
+
+`p06_pin_starve.py`: a fiber doing `g.pin(0); sleep(0)` while hub 0 runs a
+CPU-bound fiber first runs after 3.4 s; with
+`STACKWEAVE_READY_STARVE_BOUND=4`, 0.18 s. The preempted hog returns to the
+ready ring, which is picked before the global run-queue holding the pinned
+fiber, until `starve_bound` (64) forces one global pull: 64 x 50 ms. `G.pin`
+is the workaround the identity gaps recommend.
+
+### 15. Each fiber gets its own bytecode copy (TLBC): cost
+
+`p21_tlbc_per_fiber.py 2000`: 2000 live fibers that ran one 144 KB function
+take 670 MB with TLBC on vs 281 MB with `PYTHON_TLBC=0` (~195 KB per fiber,
+one copy each), and RSS does not come back after they exit. Every per-g
+tstate reserves its own TLBC index (`Python/pystate.c:1652`); stackweave has
+no TLBC handling. Sharing the hub's index would let a migrated frame keep
+executing the old hub's copy while that hub specializes it -- the race TLBC
+exists to avoid -- so the fix is not just "use the hub's index". A candidate
+for the open post-burst RSS rise.
+
+## Upstream CPython bugs (plain threads too)
+
+### 16. Shared `BufferedReader.readline()` loses data
+
+`p02t_buffered_threads.py`, no stackweave: FAIL on 3.13.12 (GIL), 3.14.6
+(GIL), 3.14.4t. `_buffered_readline` scans the buffer before taking the lock
+(`Modules/_io/bufferedio.c:1203`, "can run unlocked because ... can't trigger
+any thread switch") and uses that stale `n`/`start` after `ENTER_BUFFERED`;
+when another thread filled and partly consumed the buffer meanwhile,
+`_bufferedreader_reset_buf` drops the rest. Two threads `readline()` on one
+socket file, peer sends `b"one\ntwo\n"`: one gets `one\n`, the other blocks
+forever.
+
+### 17. A child forked from a non-main thread handles signals only at EINTR
+
+`p19_fork_signal.py thread|mn`: an async SIGALRM handler never runs during a
+1 s bytecode loop in the child (`plain`: 51 ms). `_PyRuntime.main_tstate` is
+set once (`Python/pylifecycle.c:673`) and never updated after fork, and
+`_PyEval_SignalReceived` sets the pending bit there; in such a child that is
+the original main thread's (deleted) state. It is `interp->_initial_thread`,
+embedded in the interpreter, so no write lands in freed memory. Under M:N
+every fork comes from a hub thread.
+
+## Known, deterministic
+
+### 18. Main-thread-only APIs fail in every M:N fiber
+
+`p08_mainthread.py [patch]`: `signal.signal` and `signal.set_wakeup_fd` raise
+ValueError, `current_thread() is main_thread()` is False, in every fiber
+including `main`, with or without monkey.patch (documented in
+`monkey/signals.py`). `asyncio.run` skips its SIGINT handler;
+`loop.add_signal_handler` and `unittest -c` fail.
+
+## Candidates from the source audit, not reproduced
+
+Plausible from reading the code; no probe yet.
+
+- `_asyncio` task list (`Modules/_asynciomodule.c:2198-2240`): `unregister_task`
+  takes an unlocked fast path when `task_tid == _Py_ThreadId()`; a task
+  created on hub A by a fiber now on hub B, destroyed in A's merge drain,
+  edits the fiber's list concurrently with B: list corruption.
+- Dict lookup that migrates inside a key's `__eq__` (`Objects/dictobject.c`
+  1315-1560): it started as the owner (no shared mark), finishes as a
+  non-owner while the owner hub frees the old keys at once. Needs ASan/TSan.
+- `pdb` / `breakpoint()` (monitoring backend) filters events by
+  `current_thread()`: other fibers on the hub get stepped, a migrated fiber's
+  own steps get dropped.
+- `reprlib.recursive_repr` (dataclasses, ChainMap) keys on
+  `(id(self), get_ident())`: a same-hub fiber reprs a preempted fiber's object
+  as `'...'`.
+- `current_thread()` builds a new `Dummy-N` per fiber (per-tstate
+  `_thread_local_info`), so `%(threadName)s` is meaningless and each
+  short-lived fiber that logs builds a Thread object.
+- `multiprocessing.util.ForkAwareLocal` registers an after-fork entry per
+  fiber that touches a manager proxy (leak), and each opens its own manager
+  connection.
+- `shelve` / `dbm.open` default to `dbm.sqlite3` with `check_same_thread=True`:
+  the known sqlite gap through an implicit path.
+- Per-tstate refcount arrays for the unique-id pool (`Python/uniqueid.c:54`):
+  up to 512 KB per fiber that creates a heap-type instance or function, and
+  merged under stop-the-world at every GC.
+- The single-frame preemption backstop (`_PyEval_AddPendingCall`) sets the
+  pending bit on every tstate under `HEAD_LOCK` and is consumed by whichever
+  hub checks first.
+- Single-phase extension init that parks: `pkgcontext` thread-local
+  (`Python/import.c:821`).
+- In-progress hook (`fix/rlock-fiber-identity`): `_Py_fiber_park.prepare`
+  should return NULL unless the attached tstate is `g->tstate`, else a
+  contended lock inside a subinterpreter call re-attaches the wrong
+  interpreter's state on resume.
+- Diagnostics: faulthandler dumps at most 100 tstates (newest first);
+  `pthread_sigmask` changes the hub's mask for every fiber on it;
+  `settrace_all_threads` misses fibers spawned later.
+
+## Checked and fine
+
+- `PyGILState_Ensure` from C inside a fiber (sqlite3 UDF, ctypes callback),
+  2 hubs (`p01_gilstate.py`): `tstate_activate` rebinds the gilstate slot.
+- Critical sections across a park or preemption.
+- A hub blocked in C does not stall fd wakes for other hubs
+  (`p03_blocked_hub_netpoll.py`).
+- `queue.SimpleQueue` is replaced by monkey.patch (`monkey/queues.py`).
+- Resurrection inside a migrating `__del__` (`Objects/object.c:495`) routes
+  the reference through the merge queue; the second dealloc skips the
+  finalizer.
+- Locks never held across Python code: weakref striped locks, type lock,
+  interned strings, codecs, audit hooks, `LOCK_POOL`, once-flags, zlib/bz2/
+  lzma/zstd/hashlib object locks, `TextIOWrapper` (critical sections).
+- Per-tstate (so per-fiber, as intended): contextvars, `_thread._local`,
+  `Py_ReprEnter`, exc_info, recursion counters, asyncio's running loop,
+  `_decimal` context.
