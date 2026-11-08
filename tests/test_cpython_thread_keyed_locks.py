@@ -298,39 +298,51 @@ stackweave.run(2, main)
 
 
 @pytest.mark.parametrize("raw", ["socket-park", "python-raw-preempt"])
-@KNOWN_GAP(
-    "_io.Buffered* keeps its lock's owner as the OS thread "
-    "(_enter_buffered_busy); a fiber on the same hub as a holder parked or "
-    "preempted inside the raw stream gets 'reentrant call inside' instead of "
-    "waiting",
-    raises=AssertionError)
 def test_identity_shared_buffered_stream_waits_on_one_hub(raw):
     """Two fibers on one hub use one buffered stream; the first is inside the
     raw stream's Python code (a cooperative recv that parks, or a long
-    write that is preempted).  The second must wait, as a thread would."""
+    write that is preempted).  The second must wait, as a thread would.
+
+    Was a gap: _io.Buffered* kept its lock's owner as the OS thread
+    (_enter_buffered_busy), so the second got 'reentrant call inside'.  The
+    exec-home bufferedio.c hunk owns the lock by the thread state, and makes
+    it a PyMutex whose wait parks the fiber (stats()["fiber_lock_parks"]): a
+    wait that blocked the hub's OS thread would never let a preempted holder
+    run again."""
     run_gap(r'''
 import io, time as _t
-_watchdog(20)
+_watchdog(40)
+assert stackweave_c.fiber_locks_installed
 RAW = "RAWKIND"
 if RAW == "socket-park":
     import stackweave.monkey as monkey; monkey.patch()
 import socket
 inside = []
+P0 = stackweave_c.stats()["fiber_lock_parks"]
+def parked():                               # the second fiber waits on the lock
+    return stackweave_c.stats()["fiber_lock_parks"] > P0
 def _step(end):
     return _t.perf_counter() < end
 class SpinRaw(io.RawIOBase):
     def writable(self): return True
     def write(self, b):
         inside.append(1)
-        end = _t.perf_counter() + 0.3
-        while _step(end):
+        end = _t.perf_counter() + 10        # spin (preempted, not parked) until
+        while _step(end) and not parked():  # the second waits, capped
             pass
         inside.pop()
         return len(b)
+class MarkedSocketIO(socket.SocketIO):
+    def readinto(self, b):
+        inside.append(1)
+        try:
+            return super().readinto(b)      # parks in the patched recv
+        finally:
+            inside.pop()
 def main():
     if RAW == "socket-park":
         a, b = socket.socketpair()
-        f = a.makefile("rb")
+        f = io.BufferedReader(MarkedSocketIO(a, "rb"))
         op = lambda: f.read(4)
     else:
         f = io.BufferedWriter(SpinRaw(), buffer_size=4)
@@ -338,22 +350,27 @@ def main():
     res = {}
     wg = stackweave.WaitGroup(); wg.add(2)
     def worker(i):
-        if i == 1 and (RAW == "socket-park" and 0 not in res or inside):
+        if i == 1 and inside:
             print("REACHED: second fiber starts while the first is inside the raw stream", flush=True)
         try:
             op(); res[i] = "ok"
         except Exception as e:
             res[i] = repr(e)
         wg.done()
+    def wait_for(cond):
+        end = _t.monotonic() + 10
+        while not cond() and _t.monotonic() < end:
+            stackweave.sleep(0.005)
     stackweave_c.mn_fiber(lambda: worker(0), hub=0)
-    stackweave.sleep(0.05)
+    wait_for(lambda: inside)                # the first is inside the raw stream
     stackweave_c.mn_fiber(lambda: worker(1), hub=0)
-    stackweave.sleep(0.05)
     if RAW == "socket-park":
+        wait_for(lambda: parked() or 1 in res)
         b.sendall(b"onetwo!!")
     wg.wait()
     print(res, flush=True)
     assert res == {0: "ok", 1: "ok"}, res
+    assert parked(), "the second never parked"
     print("PASS", flush=True)
 stackweave.run(2, main)
 '''.replace("RAWKIND", raw))

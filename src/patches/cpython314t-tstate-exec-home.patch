@@ -14,17 +14,18 @@
 #   _PyManagedBufferObject.exports -> atomic ++/--  (memoryobject.c)
 #   PyMemoryViewObject.exports     -> atomic in hex()/hash() too (3.14 backport)
 #   arrayobject.ob_exports         -> atomic ++/--  (arraymodule.c)
-# Plus one lock owner, which a migration changes and fibers on one OS thread
+# Plus two lock owners, which a migration changes and fibers on one OS thread
 # share (see ALSO below):
 #   _PyRecursiveMutex.thread (_thread.RLock, the import and warnings locks)
 #                         -> the attached thread state's id, not the OS thread
 #                                                         (lock.c, import.c)
+#   _io.Buffered* owner   -> the same identity            (_io/bufferedio.c)
 # Plus the waits on locks held across Python code, which a fiber runtime may
 # redirect so a lock's waiter parks the FIBER instead of its OS thread (see
 # ALSO below):
-#   _thread.lock / RLock, _PyRecursiveMutex waits
+#   _thread.lock / RLock, _PyRecursiveMutex, _io.Buffered* waits
 #                         -> _Py_fiber_park hooks  (parking_lot.c, lock.c,
-#                            _threadmodule.c, pycore_semaphore.h)
+#                            _threadmodule.c, bufferedio.c, pycore_semaphore.h)
 #
 # WHY: compilers treat thread identity as loop-invariant and hoist/CSE it.  That
 # is sound for OS threads, whose stacks never move.  A stackful fiber parks on
@@ -141,21 +142,23 @@
 # installed either; its witness is _Py_ARRAY_EXPORTS_ATOMIC in object.h.
 #
 # ALSO -- a lock owned by the OS thread, waited for by the OS thread (lock.c,
-# parking_lot.c, _threadmodule.c, import.c).  A fiber that parks inside a lock
-# and resumes on another OS thread must still own it, and the other fibers on
-# its old OS thread must not: so a _PyRecursiveMutex's owner is the attached
-# thread state (_PyRecursiveMutex_SelfIdent(): tstate->id, tagged odd so it
-# never equals an OS thread id).  And a waiter must not block an OS thread a
-# parked holder may need: the parking lot asks _Py_fiber_park (installed by
-# the fiber runtime) to park the waiting FIBER for the waits that are held
-# across Python code -- the _thread lock objects and every _PyRecursiveMutex
-# (import, warnings).  Everything else blocks the thread as before.  Full
-# story, measurements and guards: src/patches/README.md, "A lock owned by the
-# OS thread, waited for by the OS thread".
+# parking_lot.c, _threadmodule.c, import.c, bufferedio.c).  A fiber that parks
+# inside a lock and resumes on another OS thread must still own it, and the
+# other fibers on its old OS thread must not: so the owner of a
+# _PyRecursiveMutex and of a buffered stream's lock is the attached thread
+# state (_PyRecursiveMutex_SelfIdent(): tstate->id, tagged odd so it never
+# equals an OS thread id).  And a waiter must not block an OS thread a parked
+# holder may need: the parking lot asks _Py_fiber_park (installed by the fiber
+# runtime) to park the waiting FIBER for the waits that are held across
+# Python code -- the _thread lock objects, every _PyRecursiveMutex (import,
+# warnings), a buffered stream's lock (now a PyMutex).  Everything else
+# blocks the thread as before.  Full story, measurements and guards:
+# src/patches/README.md, "A lock owned by the OS thread, waited for by the OS
+# thread".
 #
 # ZERO IMPACT BY DEFAULT: with the flag undefined every site macro-expands back
-# to stock.  No public ABI change: the fields it adds are internal
-# (_PySemaphore).
+# to stock.  No public ABI change: the fields it adds or retypes are internal
+# (_PySemaphore) or private to one module (buffered).
 #
 # CAVEATS
 #   * Do NOT build with --with-lto (or -flto): LTO inlines pystate.c's direct
@@ -183,6 +186,7 @@
 #         grep recursive_mutex_self Python/lock.c
 #         grep _Py_FIBER_PARK_HOOKS Include/object.h
 #         grep _Py_fiber_park Python/parking_lot.c
+#         grep BUFFERED_SELF Modules/_io/bufferedio.c
 #   * MSVC thread-id reads are intrinsics, not asm, and are left untouched.
 #   * Same class, not covered (not read by a fiber across a park in any path
 #     exercised so far): import.c's `pkgcontext`, mimalloc's _mi_heap_default.
@@ -203,7 +207,8 @@
 #         Objects/memoryobject.c, Modules/arraymodule.c, Python/lock.c,
 #         Include/internal/pycore_lock.h, Python/import.c, Python/parking_lot.c,
 #         Include/internal/pycore_semaphore.h, Include/internal/pycore_parking_lot.h,
-#         Modules/_threadmodule.c, Modules/_testinternalcapi/test_lock.c
+#         Modules/_threadmodule.c, Modules/_testinternalcapi/test_lock.c,
+#         Modules/_io/bufferedio.c
 #
 --- a/Include/object.h
 +++ b/Include/object.h
@@ -914,3 +919,130 @@
      _Py_atomic_store_ullong_relaxed(&self->lock.thread, owner);
      self->lock.level = (size_t)count - 1;
      Py_RETURN_NONE;
+--- a/Modules/_io/bufferedio.c
++++ b/Modules/_io/bufferedio.c
+@@ -10,6 +10,9 @@
+ #include "Python.h"
+ #include "pycore_call.h"                // _PyObject_CallNoArgs()
+ #include "pycore_fileutils.h"           // _PyFile_Flush
++#ifdef Py_TSTATE_EXEC_HOME
++#  include "pycore_lock.h"              // _PyMutex_LockTimed()
++#endif
+ #include "pycore_object.h"              // _PyObject_GC_UNTRACK()
+ #include "pycore_pyerrors.h"            // _Py_FatalErrorFormat()
+ #include "pycore_pylifecycle.h"         // _Py_IsInterpreterFinalizing()
+@@ -253,8 +256,19 @@
+        isn't ready for writing. */
+     Py_off_t write_end;
+ 
++#ifdef Py_TSTATE_EXEC_HOME
++    /* Py_TSTATE_EXEC_HOME: a PyMutex, whose wait can park a fiber
++       (pycore_semaphore.h), and owned by a fiber's thread state, not the
++       OS thread (pycore_lock.h): a raw stream written in Python (makefile()'s
++       SocketIO, a gzip reader) can park or be preempted with the lock held,
++       and other fibers on that OS thread must wait for it, not take it for a
++       reentrant call or block the thread the holder needs. */
++    PyMutex lock;
++    volatile unsigned long long owner;
++#else
+     PyThread_type_lock lock;
+     volatile unsigned long owner;
++#endif
+ 
+     Py_ssize_t buffer_size;
+     Py_ssize_t buffer_mask;
+@@ -290,18 +304,38 @@
+ 
+ /* These macros protect the buffered object against concurrent operations. */
+ 
++#ifdef Py_TSTATE_EXEC_HOME
++#  define BUFFERED_SELF() _PyRecursiveMutex_SelfIdent()
++#  define BUFFERED_TRYLOCK(self) \
++    (_PyMutex_LockTimed(&(self)->lock, 0, 0) == PY_LOCK_ACQUIRED)
++#  define BUFFERED_UNLOCK(self) PyMutex_Unlock(&(self)->lock)
++#else
++#  define BUFFERED_SELF() PyThread_get_thread_ident()
++#  define BUFFERED_TRYLOCK(self) PyThread_acquire_lock((self)->lock, 0)
++#  define BUFFERED_UNLOCK(self) PyThread_release_lock((self)->lock)
++#endif
++
+ static int
+ _enter_buffered_busy(buffered *self)
+ {
+     int relax_locking;
+     PyLockStatus st;
+-    if (self->owner == PyThread_get_thread_ident()) {
++    if (self->owner == BUFFERED_SELF()) {
+         PyErr_Format(PyExc_RuntimeError,
+                      "reentrant call inside %R", self);
+         return 0;
+     }
+     PyInterpreterState *interp = _PyInterpreterState_GET();
+     relax_locking = _Py_IsInterpreterFinalizing(interp);
++#ifdef Py_TSTATE_EXEC_HOME
++    /* The mutex detaches the thread state only if it has to wait. */
++    if (!relax_locking)
++        st = _PyMutex_LockTimed(&self->lock, -1,
++                                _PY_LOCK_DETACH | _PY_LOCK_FIBER);
++    else  /* the grace period below */
++        st = _PyMutex_LockTimed(&self->lock, (PyTime_t)1000000000,
++                                _PY_LOCK_DETACH);
++#else
+     Py_BEGIN_ALLOW_THREADS
+     if (!relax_locking)
+         st = PyThread_acquire_lock(self->lock, 1);
+@@ -315,6 +349,7 @@
+         st = PyThread_acquire_lock_timed(self->lock, (PY_TIMEOUT_T)1e6, 0);
+     }
+     Py_END_ALLOW_THREADS
++#endif
+     if (relax_locking && st != PY_LOCK_ACQUIRED) {
+         PyObject *ascii = PyObject_ASCII((PyObject*)self);
+         _Py_FatalErrorFormat(__func__,
+@@ -326,14 +361,14 @@
+ }
+ 
+ #define ENTER_BUFFERED(self) \
+-    ( (PyThread_acquire_lock(self->lock, 0) ? \
++    ( (BUFFERED_TRYLOCK(self) ? \
+        1 : _enter_buffered_busy(self)) \
+-     && (self->owner = PyThread_get_thread_ident(), 1) )
++     && (self->owner = BUFFERED_SELF(), 1) )
+ 
+ #define LEAVE_BUFFERED(self) \
+     do { \
+         self->owner = 0; \
+-        PyThread_release_lock(self->lock); \
++        BUFFERED_UNLOCK(self); \
+     } while(0);
+ 
+ #define CHECK_INITIALIZED(self) \
+@@ -427,10 +462,12 @@
+         PyMem_Free(self->buffer);
+         self->buffer = NULL;
+     }
++#ifndef Py_TSTATE_EXEC_HOME
+     if (self->lock) {
+         PyThread_free_lock(self->lock);
+         self->lock = NULL;
+     }
++#endif
+     (void)buffered_clear(op);
+     tp->tp_free(self);
+     Py_DECREF(tp);
+@@ -841,6 +878,7 @@
+         PyErr_NoMemory();
+         return -1;
+     }
++#ifndef Py_TSTATE_EXEC_HOME
+     if (self->lock)
+         PyThread_free_lock(self->lock);
+     self->lock = PyThread_allocate_lock();
+@@ -848,6 +886,7 @@
+         PyErr_SetString(PyExc_RuntimeError, "can't allocate read lock");
+         return -1;
+     }
++#endif  /* else a PyMutex, zeroed (unlocked) by tp_alloc */
+     self->owner = 0;
+     /* Find out whether buffer_size is a power of 2 */
+     /* XXX is this optimization useful? */

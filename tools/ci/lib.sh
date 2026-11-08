@@ -242,7 +242,9 @@ rl_verify_witnesses() {
         || rl_die "exec-home witness missing: _Py_fiber_park not in Python/parking_lot.c (a lock wait can park the fiber)"
     grep -qs '_Py_FIBER_PARK_HOOKS' "$_src/Include/object.h" "$_src/Include/cpython/object.h" \
         || rl_die "exec-home witness missing: _Py_FIBER_PARK_HOOKS not in Include/object.h or Include/cpython/object.h"
-    rl_log "witnesses present: _Py_TID_ASM, _PyThreadStateImpl_AllocHome, Py_NO_INLINE, MBUF_EXPORTS_INC, _Py_MV_EXPORTS_ATOMIC, ARRAY_EXPORTS_INC, _Py_ARRAY_EXPORTS_ATOMIC, recursive_mutex_self, _Py_RMUTEX_TSTATE_IDENT, _Py_fiber_park, _Py_FIBER_PARK_HOOKS"
+    grep -q 'BUFFERED_SELF' "$_src/Modules/_io/bufferedio.c" \
+        || rl_die "exec-home witness missing: BUFFERED_SELF not in Modules/_io/bufferedio.c (buffered stream lock owned by the thread state, its wait parks a fiber)"
+    rl_log "witnesses present: _Py_TID_ASM, _PyThreadStateImpl_AllocHome, Py_NO_INLINE, MBUF_EXPORTS_INC, _Py_MV_EXPORTS_ATOMIC, ARRAY_EXPORTS_INC, _Py_ARRAY_EXPORTS_ATOMIC, recursive_mutex_self, _Py_RMUTEX_TSTATE_IDENT, _Py_fiber_park, _Py_FIBER_PARK_HOOKS, BUFFERED_SELF"
 }
 
 # ---- guards -----------------------------------------------------------------

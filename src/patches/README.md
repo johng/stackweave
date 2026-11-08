@@ -7,7 +7,7 @@ one OS thread in two separate ways — and either alone still corrupts:
 | half | flag | what it decouples |
 |---|---|---|
 | **allocation** | `Py_TSTATE_ALLOC_HOME` | which heap a migrated fiber allocates on |
-| **execution** | `Py_TSTATE_EXEC_HOME` | whether the compiler may cache *which OS thread we are* (plus memoryview's and array.array's buffer-export counts, which a migrated fiber's deallocs race, and the locks CPython holds across Python code -- `_thread` locks, the import and warnings locks: owned by the thread state rather than the OS thread, and their waits can park a fiber, see below) |
+| **execution** | `Py_TSTATE_EXEC_HOME` | whether the compiler may cache *which OS thread we are* (plus memoryview's and array.array's buffer-export counts, which a migrated fiber's deallocs race, and the locks CPython holds across Python code -- `_thread` locks, the import and warnings locks, buffered streams: owned by the thread state rather than the OS thread, and their waits can park a fiber, see below) |
 
 Each half ships as a **version-specific** patch (stackweave supports only
 free-threaded CPython 3.14+), and they are **not** interchangeable across
@@ -329,7 +329,7 @@ which xfails the same way on an interpreter without the installed
 Not audited beyond that: the rest of the class. bytearray is safe (its
 `ob_exports` is under the object's critical section).
 
-### A lock owned by the OS thread, waited for by the OS thread (`lock.c`, `parking_lot.c`)
+### A lock owned by the OS thread, waited for by the OS thread (`lock.c`, `parking_lot.c`, `bufferedio.c`)
 
 `_PyRecursiveMutex` -- `_thread.RLock`, and CPython's own import and warnings
 locks -- records `PyThread_get_thread_ident_ex()` at acquire and compares the
@@ -402,6 +402,23 @@ leaves them out). Guards: `tests/test_fiber_locks.py`,
 import tests in `tests/test_cpython_thread_keyed_locks.py`
 (`stats()["fiber_lock_parks"]`).
 
+One more lock has the same two problems and takes the same identity
+(`_PyRecursiveMutex_SelfIdent()`):
+
+- `_io.Buffered*` (`bufferedio.c`) holds its lock across the raw stream's
+  `readinto()`/`write()`, which is Python code when the raw stream is
+  (`socket.makefile()`'s `SocketIO`, gzip/bz2/lzma readers, any `RawIOBase`
+  subclass), and records `owner = PyThread_get_thread_ident()` to report a
+  reentrant call. A second fiber on the holder's hub, while the holder was
+  parked or preempted inside the raw stream, got `RuntimeError: reentrant
+  call inside <_io.BufferedReader>`; one on another hub blocked its hub's
+  thread. The hunk records a fiber's thread state as the owner (any other
+  state, the OS thread, as stock) and makes the lock a
+  `PyMutex` (a platform lock in 3.14, a `PyMutex *` behind the same API in
+  3.15), whose contended wait passes `_PY_LOCK_FIBER`. Witness grep:
+  `BUFFERED_SELF`. Guard:
+  `tests/test_cpython_thread_keyed_locks.py -k shared_buffered`.
+
 One behaviour changes for plain threads too: a thread state is the owner, so
 a C thread whose `PyGILState_Ensure()` state is torn down between acquiring
 and releasing one of these locks (one `Ensure`/`Release` pair per callback,
@@ -447,6 +464,7 @@ needs is an interpreter built with **both** patches:
    grep -q _Py_FIBER_PARK_HOOKS Include/object.h                 # exec-home
    grep -q _Py_TSTATE_FIBER_FLAG Include/internal/pycore_tstate.h  # exec-home
    grep -q _Py_fiber_park Python/parking_lot.c                     # exec-home
+   grep -q BUFFERED_SELF Modules/_io/bufferedio.c                  # exec-home
    grep -q _PyThreadStateImpl_AllocHome Include/internal/pycore_tstate.h  # alloc-home
    ```
 

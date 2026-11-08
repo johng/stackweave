@@ -302,6 +302,13 @@ same way.
 
 ### 8. Shared buffered stream: false "reentrant call" on one hub (A)
 
+**Status: FIXED.** The exec-home bufferedio.c hunk records a fiber's state as
+the owner and makes the lock a `PyMutex` whose contended wait parks the fiber
+(`_PY_LOCK_FIBER`), so a same-hub fiber waits instead of raising, and a
+cross-hub one no longer blocks its hub. Test:
+`test_identity_shared_buffered_stream_waits_on_one_hub[*]`. 16 (the unlocked
+`readline` scan) is upstream and untouched.
+
 `p04_buffered_reentrant.py {park-read|preempt-read|preempt-write} 2 same`:
 FAIL every time; the `diff` (two hubs) variants PASS.
 `_io.Buffered*` holds `self->lock` with `owner = PyThread_get_thread_ident()`
