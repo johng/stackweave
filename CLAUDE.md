@@ -269,7 +269,10 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   registry (`runloom_base_snap_register`, one node per drain, paired at the single
   exit), and so must a parked `stackweave_c._Coro`'s saved state (its own node,
   linked at its first yield, unlinked when it finishes or is dropped, visited
-  only while `parked`). A Coro's frames link to whoever resumes it, as a
+  only while `parked`). Coro nodes sit on a list of their own, which a forked
+  child keeps while it drops the drains' (`runloom_introspect_reset_after_fork`):
+  the Coro objects survive the fork, and a Coro parked before it is parked in
+  the child too. A Coro's frames link to whoever resumes it, as a
   generator's do: each yield cuts its bottom frame's `previous` off the
   resumer's frame and each resume re-links it (`runloom_iframe_chain_cut/_link`),
   so a parked chain holds the Coro's frames alone and the anchor never reaches a

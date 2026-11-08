@@ -11,7 +11,8 @@
     anchor (module_gcframes.c.inc) visits them.  Before, a gc.collect() while
     it was parked freed what only their deferred stackrefs kept alive (its
     function and code objects), and the resume ran freed bytecode -- the p565
-    class of bug, for Coro instead of fibers.
+    class of bug, for Coro instead of fibers.  The same held in a forked child
+    for a Coro parked before the fork, until the child kept its node.
 
 Each case runs in a subprocess, since the old failure was a crash.
 """
@@ -268,6 +269,85 @@ def test_a_parked_coros_frames_keep_their_code_alive_across_a_collection():
     assert _lines(out, "ALIVE") == ["True True"], (
         "the parked Coro's function/code were collected", out)
     assert rc == 0 and _lines(out, "RESULT") == ["[42, 'tail-42', 42]"], (
+        rc, out, err[-500:])
+
+
+# A Coro parked before os.fork() is parked in the child too.  The child's
+# after-fork reset dropped the whole base-snap registry, the Coro's node with
+# the drains', and the Coro never linked itself again (it still counted as
+# linked), so in the child its function and code were collected and the resume
+# SIGSEGVed.  Another thread sits in a run(1) drain at the fork, so the
+# registry also holds a drain's node, on a stack the child does not have.
+FORKED = r"""
+import gc, os, threading, warnings, weakref
+import stackweave, stackweave_c        # stackweave installs the after-fork reset
+warnings.simplefilter("ignore", DeprecationWarning)   # fork with threads
+SRC = '''
+import stackweave_c
+def inner():
+    a = 1
+    stackweave_c.yield_()
+    b = a + 41
+    return [b, "tail-%d" % b, (lambda: b)()]
+def outer():
+    return inner()
+'''
+ns = {}
+exec(compile(SRC, "<parked>", "exec"), ns)
+c = stackweave_c._Coro(ns["outer"])
+c.resume()
+fn, code = weakref.ref(ns["inner"]), weakref.ref(ns["inner"].__code__)
+del ns["inner"]
+
+in_drain, release = threading.Event(), threading.Event()
+def drain():
+    def body():
+        in_drain.set()
+        while not release.is_set():
+            stackweave.sleep(0.01)
+    stackweave.run(1, body)
+t = threading.Thread(target=drain)
+t.start()
+assert in_drain.wait(10)
+
+def check(who):
+    walked = stackweave_c.stats()["gc_coros_walked"]
+    for _ in range(4):
+        gc.collect()
+    print(who, "WALKED", stackweave_c.stats()["gc_coros_walked"] - walked, flush=True)
+    print(who, "ALIVE", fn() is not None, code() is not None, flush=True)
+    fs = []
+    for i in range(3000):          # reuse whatever the collection freed
+        d = {}
+        exec("def f(x):\n    return x * %d + %d\n" % (i, i), d)
+        fs.append(d["f"])
+    c.resume()
+    print(who, "RESULT", c.result, flush=True)
+
+pid = os.fork()
+if pid == 0:
+    check("CHILD")
+    os._exit(0)
+print("CHILD_RC", os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1]), flush=True)
+release.set()
+t.join()
+check("PARENT")
+"""
+
+
+def test_a_coro_parked_before_a_fork_keeps_its_code_alive_in_the_child():
+    rc, out, err = _run(FORKED)
+    if not _lines(out, "CHILD_RC"):
+        pytest.fail("the parent never forked: rc=%s %s" % (rc, err[-1500:]))
+    # The child's collections walked the parked Coro, as the parent's do.
+    assert _lines(out, "CHILD WALKED") == ["4"], out
+    assert _lines(out, "CHILD ALIVE") == ["True True"], (
+        "the child collected the parked Coro's function/code", out)
+    assert _lines(out, "CHILD_RC") == ["0"], ("the child crashed", out, err[-1500:])
+    assert _lines(out, "CHILD RESULT") == ["[42, 'tail-42', 42]"], out
+    _assert_no_crash(rc, err, "the parent after the fork")
+    assert _lines(out, "PARENT WALKED") == ["4"], out
+    assert rc == 0 and _lines(out, "PARENT RESULT") == ["[42, 'tail-42', 42]"], (
         rc, out, err[-500:])
 
 

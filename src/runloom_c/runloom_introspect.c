@@ -151,9 +151,10 @@ static runloom_mutex_t runloom_greg_lock;
 static int          runloom_greg_inited = 0;
 static runloom_g_t    *runloom_greg_head   = NULL;   /* doubly-linked, no tail */
 static long         runloom_greg_total  = 0;      /* live + cached structs */
-/* base-snap registry head (single-thread drains' caller frames); shares
- * runloom_greg_lock.  Defined here so runloom_introspect_fini can reset it. */
-static runloom_base_snap_node_t *runloom_base_snap_head = NULL;
+/* base-snap registry heads, one list per kind (single-thread drains' caller
+ * frames, parked Coros); shares runloom_greg_lock.  Defined here so
+ * runloom_introspect_fini and the fork reset can reset them. */
+static runloom_base_snap_node_t *runloom_base_snap_heads[RUNLOOM_BASE_SNAP_KINDS];
 
 void runloom_introspect_init(void)
 {
@@ -177,7 +178,8 @@ void runloom_introspect_fini(void)
     if (!runloom_greg_inited) return;
     RUNLOOM_RLOCK(&runloom_greg_lock, RUNLOOM_RANK_GREG);
     runloom_greg_head = NULL;
-    runloom_base_snap_head = NULL;
+    runloom_base_snap_heads[RUNLOOM_BASE_SNAP_SCHED] = NULL;
+    runloom_base_snap_heads[RUNLOOM_BASE_SNAP_CORO] = NULL;
     __atomic_store_n(&runloom_greg_total, 0L, __ATOMIC_RELAXED);
     RUNLOOM_RUNLOCK(&runloom_greg_lock, RUNLOOM_RANK_GREG);
 }
@@ -223,8 +225,12 @@ void runloom_introspect_reset_after_fork(void)
     runloom_mutex_init(&runloom_greg_lock);
     runloom_greg_head = NULL;
     /* The parent's single-thread drain (if any) does not run in the child; drop
-     * its base-snap node so the anchor never walks a stale stack address. */
-    runloom_base_snap_head = NULL;
+     * its base-snap node so the anchor never walks a stale stack address.  Keep
+     * the parked Coros' list: a Coro is a heap object, so it and its node
+     * survive the fork, and one parked before it is still parked in the child.
+     * Dropped, its node stayed marked linked (gc_linked), so it was never
+     * linked again and its frames were invisible to the child's collections. */
+    runloom_base_snap_heads[RUNLOOM_BASE_SNAP_SCHED] = NULL;
     __atomic_store_n(&runloom_greg_total, 0L, __ATOMIC_RELAXED);
     runloom_greg_inited = 1;
 }
@@ -269,28 +275,32 @@ runloom_g_t *runloom_greg_head_for_gc(void)
 /* ---- base-snap registry (drain caller frames, parked Coros) ----
  * Shares runloom_greg_lock (both are cold: base-snap register/unregister happen
  * once per run() at drain entry/exit, and once per Coro that yields; the rank
- * stays GREG so no new lock-order edge is introduced).  The head is read
+ * stays GREG so no new lock-order edge is introduced).  The heads are read
  * lock-free by the anchor under STW.
- * (runloom_base_snap_head is declared with the other registry statics above.) */
+ * (runloom_base_snap_heads is declared with the other registry statics above.) */
 void runloom_base_snap_register(runloom_base_snap_node_t *node, void *snap, int kind)
 {
+    runloom_base_snap_node_t **head;
     if (node == NULL || !runloom_greg_inited) return;
     node->snap = snap;
     node->kind = kind;
+    head = &runloom_base_snap_heads[kind];
     RUNLOOM_RLOCK(&runloom_greg_lock, RUNLOOM_RANK_GREG);
     node->prev = NULL;
-    node->next = runloom_base_snap_head;
-    if (runloom_base_snap_head != NULL) runloom_base_snap_head->prev = node;
-    runloom_base_snap_head = node;
+    node->next = *head;
+    if (*head != NULL) (*head)->prev = node;
+    *head = node;
     RUNLOOM_RUNLOCK(&runloom_greg_lock, RUNLOOM_RANK_GREG);
 }
 
 void runloom_base_snap_unregister(runloom_base_snap_node_t *node)
 {
+    runloom_base_snap_node_t **head;
     if (node == NULL || !runloom_greg_inited) return;
+    head = &runloom_base_snap_heads[node->kind];
     RUNLOOM_RLOCK(&runloom_greg_lock, RUNLOOM_RANK_GREG);
     if (node->prev != NULL) node->prev->next = node->next;
-    else if (runloom_base_snap_head == node) runloom_base_snap_head = node->next;
+    else if (*head == node) *head = node->next;
     if (node->next != NULL) node->next->prev = node->prev;
     node->prev = NULL;
     node->next = NULL;
@@ -298,10 +308,10 @@ void runloom_base_snap_unregister(runloom_base_snap_node_t *node)
     RUNLOOM_RUNLOCK(&runloom_greg_lock, RUNLOOM_RANK_GREG);
 }
 
-runloom_base_snap_node_t *runloom_base_snap_head_for_gc(void)
+runloom_base_snap_node_t *runloom_base_snap_head_for_gc(int kind)
 {
     if (!runloom_greg_inited) return NULL;
-    return runloom_base_snap_head;
+    return runloom_base_snap_heads[kind];
 }
 
 /* Count fibers owned by `owner` parked on a channel or via park_safe --
