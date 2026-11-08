@@ -577,64 +577,130 @@ stackweave.run(2, main)
 # memory: the biased-refcount merge queue
 # ---------------------------------------------------------------------------
 
-@KNOWN_GAP(
-    "runloom_iframe_brc_release drains only the shared queue "
-    "(objects_to_merge), so a fiber that parks in a __del__ run by its own "
-    "merge drain resumes on another hub and merges the rest of "
-    "local_objects_to_merge there, racing the owner's ob_ref_local",
-    raises=AssertionError)
 def test_memory_queued_objects_merge_on_their_owner_thread():
-    """Objects allocated on one hub and dropped on another are queued to the
-    allocating hub; their merge (and so their dealloc, here) must run on
-    that hub's OS thread even when an earlier object's __del__ parks and the
-    draining fiber moves.  gc is off, so nothing else merges them."""
+    """Objects allocated on one hub and dropped on another thread are queued
+    to the allocating hub; their merge (and so their dealloc, here) must run
+    on that hub's OS thread even when an earlier object's __del__ parks and
+    the draining fiber moves.  gc is off, so nothing else merges them.
+
+    The trigger is made deterministic: a plain OS thread drops B, B, B, A
+    while the producer fiber spins in C on its hub until the dropper sets a
+    flag.  Spinning in C runs no bytecode, so there is no eval-breaker check
+    (no merge yet), and keeps the producer's state ATTACHED and at the head
+    of the hub's bucket, so every drop queues to it.  (Blocking would not do:
+    a fiber's contended lock acquire parks it, and drops made while it is
+    parked go to the hub's own state; os.read detaches it, and from CPython
+    3.15.0rc3 (gh-157838) a dropper that finds its owner detached merges the
+    queue itself, on the dropper's thread.)  The producer's next eval-breaker
+    check then merges all four in one batch, A on top (LIFO).  A's __del__
+    parks at once (no Python in between that could run a nested merge and
+    empty the stack first) and is resumed on another hub by the pin.  The
+    B's are still on the fiber's local_objects_to_merge at the park:
+    runloom_iframe_brc_release drains them there, on their owner
+    (stats()["brc_release_local_drains"]).  Before that fix the fiber carried
+    them to the other hub and merged all of them there.
+
+    B records its owner in __init__ and checks it at the first line of
+    __del__; nothing else is queued meanwhile, so no nested merge can move
+    the fiber between a merge and that check (which is what made the earlier,
+    racier version of this scenario count B's that were merged on their
+    owner).  A merge on the dropper's own thread is CPython's legitimate
+    merge-on-behalf, not this bug, so it is counted apart; here it means the
+    setup failed (the producer was detached), and so does an A whose __del__
+    never parked: nothing receives the dropper's wake, the send gives up, and
+    the scenario fails instead of hanging."""
     run_gap(r'''
-import gc
+import collections, functools, gc, itertools, operator, queue
 gc.disable()
 _watchdog(50)
-ROUNDS, SPIN = 1000, 20000
-stats = {"a_moved": 0, "b_off_owner": 0, "b_del": 0}
+ROUNDS, SPIN = 100, 1_000_000
+wake = stackweave.Chan(0)
+stats = {"a_moved": 0, "a_ahead": 0, "b_del": 0, "b_off_owner": 0,
+         "b_on_dropper": 0, "round_b0": 0, "lost": 0, "dropper": None}
+dropped = bytearray(1)                      # set by the dropper per round
+poll = functools.partial(operator.getitem, dropped, 0)
 class A:
-    __slots__ = ("owner",)
-    def __init__(self): self.owner = threading.get_ident()
+    __slots__ = ()
     def __del__(self):
-        if stackweave_c.current_g() is not None:
-            before = threading.get_ident()
-            force_migrate(rounds=3)
-            if threading.get_ident() != before:
-                stats["a_moved"] += 1
+        g = stackweave_c.current_g()
+        if g is None:
+            return
+        if stats["b_del"] == stats["round_b0"]:
+            stats["a_ahead"] += 1           # this round's B's still queued
+        before = threading.get_ident()
+        g.pin((stackweave_c.mn_current_hub() + 1) % stackweave_c.mn_hub_count())
+        try:
+            wake.recv()                     # park now; resume on another hub
+        finally:
+            g.pin(None)
+        if threading.get_ident() != before:
+            stats["a_moved"] += 1
 class B:
     __slots__ = ("owner",)
     def __init__(self): self.owner = threading.get_ident()
     def __del__(self):
         stats["b_del"] += 1
-        if threading.get_ident() != self.owner:
+        me = threading.get_ident()
+        if me == stats["dropper"]:
+            stats["b_on_dropper"] += 1      # merged on the dropper's behalf
+        elif me != self.owner:
             stats["b_off_owner"] += 1
+def send_or_give_up(ch, value, secs):
+    """foreign_send with a deadline: False if no fiber came to receive."""
+    end = time.monotonic() + secs
+    while True:
+        try:
+            ch.send(value)
+            return True
+        except RuntimeError:
+            if time.monotonic() > end:
+                return False
+            time.sleep(0.0005)
 def main():
-    ch = stackweave.Chan(0)
-    wg = stackweave.WaitGroup(); wg.add(2)
+    inbox = queue.SimpleQueue()
+    def dropper():                          # a plain OS thread
+        stats["dropper"] = threading.get_ident()
+        while True:
+            v = inbox.get()
+            if v is None:
+                return
+            while v:
+                v.pop(0)                    # drop B, B, B, then A
+            del v
+            dropped[0] = 1                  # the producer may go on
+            if not send_or_give_up(wake, 1, 5):   # resume A's __del__
+                stats["lost"] += 1
+    t = threading.Thread(target=dropper, daemon=True)
+    t.start()
+    wg = stackweave.WaitGroup(); wg.add(1)
     def producer():
         for _ in range(ROUNDS):
-            ch.send([B(), B(), B(), A()])   # consumer drops B, B, B, then A
-            for _ in range(SPIN):           # busy here, so this fiber drains
-                pass
-        ch.send(None); wg.done()
-    def consumer():
-        while True:
-            v, ok = ch.recv()
-            if v is None:
+            if stats["lost"]:
                 break
-            while v:
-                v.pop(0)
+            stats["round_b0"] = stats["b_del"]
+            dropped[0] = 0
+            inbox.put([B(), B(), B(), A()])
+            while not dropped[0]:           # spin in C, attached, no bytecode
+                collections.deque(itertools.islice(iter(poll, 1), SPIN), maxlen=0)
+            # the next eval-breaker check merges the drops in one batch, A first
+        inbox.put(None)
         wg.done()
     stackweave_c.mn_fiber(producer, hub=0)
-    stackweave_c.mn_fiber(consumer, hub=1)
     wg.wait()
-    stackweave.sleep(0.3)
+    t.join()
+    stackweave.sleep(0.2)
     print(stats, flush=True)
-    if stats["a_moved"]:
-        print("REACHED: a __del__ moved hubs during a merge drain", flush=True)
+    if stats["a_moved"] and stats["a_ahead"]:
+        print("REACHED: a __del__ moved hubs during a merge drain, with "
+              "objects still queued behind it", flush=True)
     assert stats["b_off_owner"] == 0, "%d objects merged off their owner thread" % stats["b_off_owner"]
+    assert stats["b_on_dropper"] == 0 and stats["lost"] == 0, (
+        "setup failed: the dropper merged on the producer's behalf, or an A's "
+        "__del__ ran outside the producer's merge: %r" % stats)
+    assert stats["b_del"] == 3 * ROUNDS, stats
+    drains = stackweave_c.stats()["brc_release_local_drains"]
+    assert drains > 0, "the release never found a part-drained local stack"
+    print("local drains:", drains, flush=True)
     print("PASS", flush=True)
 stackweave.run(4, main)
 ''', timeout=90)

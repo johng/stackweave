@@ -18,7 +18,7 @@ FAIL, or hangs into its watchdog (rc 3).
 | p09_preempt_holding_lock.py | `stock\|rlock\|patched\|strptime\|strptime-patched` | [6] preempted holder deadlock |
 | p10_sqlite_udf_migrate.py | `park\|migrate [serialized]` | [1] sqlite callback + second fiber |
 | p11_sqlite_udf_min.py | `multithread\|serialized` | [1] sqlite callback migrate abort |
-| p12_brc_wrong_thread_merge.py | `H rounds [spin]` | [2] wrong-thread refcount merge |
+| p12_brc_wrong_thread_merge.py | `H rounds` | [2] wrong-thread refcount merge (fixed) |
 | p13_sqlite_busy.py | `H` (H>=2) | [7] busy handler blocks the hub |
 | p14_mp_semlock.py | `[patch]` | [5] mp.Value lock self-deadlock |
 | p15_osread_nonblock.py | | [13] fd left non-blocking |

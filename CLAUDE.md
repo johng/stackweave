@@ -171,6 +171,19 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   detached hub state heads the bucket. Guard:
   `tests/test_cross_hub_migration.py::test_cross_hub_drops_drain_before_the_hub_heads_the_bucket`
   (`stats()["brc_release_merges_hub_first"]` must stay 0).
+  "Queued" includes the fiber's private `local_objects_to_merge`: a `__del__`
+  run by the fiber's own merge loop that parks leaves the rest of that stack
+  on it, and a fiber that resumed on another hub would merge it there, off the
+  owner thread (`_Py_ExplicitMergeRefcount` zeroes `ob_ref_local`
+  non-atomically). release() drains both stacks at the park; the suspended
+  loop then finds its stack empty and returns. The rest of that batch is
+  therefore deallocated on the hub with no current fiber, where a patched lock
+  or sleep in a `__del__` blocks the hub's OS thread (and deadlocks it if a
+  fiber on that hub holds the lock). That is the open finding #10 in
+  docs/dev/FT_CPYTHON_LOCK_GAPS.md; merging on the owner thread comes first.
+  Guard:
+  `tests/test_cpython_thread_keyed_locks.py::test_memory_queued_objects_merge_on_their_owner_thread`
+  (`stats()["brc_release_local_drains"]` must be > 0 there).
 - **A run(1) drain or Coro nested on a hub's fiber is its own world.** The
   single-thread drain (`run(1)`, stackweave's asyncio loop) and `_Coro.resume`
   run other fibers on the calling fiber's stack and thread state.

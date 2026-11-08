@@ -85,6 +85,48 @@ preemption only. Rare in the probe because a nested merge inside the parking
 `__del__` usually empties the stack first. Fix: also drain in release when
 `local_objects_to_merge.head != NULL` (on the hub, the right thread).
 
+**Status: FIXED on fix/ft-brc-finalizers.** `runloom_iframe_brc_release`
+counts the local stack as pending, so the drain it already runs (fiber at the
+head of the bucket, hub's C-stack limits lent) empties both stacks on the
+owner; `stats()["brc_release_local_drains"]` counts the releases that found
+one part-drained. The fiber's suspended loop then finds its stack empty and
+returns: it holds no pointer into the stack across `_Py_Dealloc`
+(`_PyObjectStack_Pop` re-reads `head` and frees each chunk as it empties it),
+and plain threads already get the same thing from a nested merge in a
+`__del__` or from a GC merging a thread blocked in one.
+
+The cost: the rest of that batch is now deallocated on the hub after the fiber
+has switched out, so any later `__del__` in it runs with no current fiber. A
+patched lock or `stackweave.sleep` there takes the foreign-thread path and
+blocks the hub's OS thread; if a fiber on the same hub holds that lock, the
+hub waits on itself. That is finding #10's class (finalizers with no fiber),
+and the trade is deliberate: merging on the right thread beats a cooperative
+finalizer that merges on the wrong one. Closing it is #10's work.
+
+The original probe did not show this mechanism. Its count came from its
+oracle: `__del__` starts with an eval-breaker check (RESUME), where a nested
+merge can run an A whose `__del__` migrates the fiber. B's `__del__` body then
+runs on another thread although B was merged on its owner. With debug
+counters, no queue was ever carried across a hub change and the local stack
+was never non-empty at a park; force_migrate's thread start drops
+producer-owned objects (the Condition waiter lock), which re-sets the merge
+bit, so a nested merge always emptied the stack first. The probe and
+`test_memory_queued_objects_merge_on_their_owner_thread` now trigger it
+deterministically: a plain OS thread drops B, B, B, A while the producer fiber
+spins in C on its hub (`deque(islice(iter(poll, 1), N), maxlen=0)` until the
+dropper sets a flag): no bytecode runs, so no eval-breaker check merges early,
+and the producer's state stays attached at the head of the bucket, so one
+merge batch holds all four with A on top. A's `__del__` then parks with no
+Python before the park, pinned to resume on another hub. Blocking does not
+work. With the fiber-lock hooks a fiber's contended acquire parks it, the
+drops queue to the hub's own state and A's `__del__` runs with no fiber; the
+lock version hung that way on Linux 3.14 CI. `os.read` detaches the state, and
+from 3.15.0rc3 (gh-157838) the dropper merges a detached owner's queue itself,
+on its own thread; that version failed on 3.15 CI. The oracle counts such a
+merge-on-behalf apart (`b_on_dropper`), as a failed setup rather than this bug,
+and a lost handshake fails the scenario instead of hanging it. Before the fix: 300/300 B's in the test and 900/900 in
+`p12 4 300` merged off their owner. After: 0, with one local drain per round.
+
 ## Confirmed: a lock leaks to the old OS thread, then everything hangs
 
 ### 3. warnings lock (B, process-wide hang)

@@ -280,6 +280,9 @@ void runloom_iframe_brc_adopt(PyThreadState *fiber, PyThreadState *hub)
 static unsigned long long runloom_brc_release_merges_total = 0;
 static unsigned long long runloom_brc_release_merges_off_stack_total = 0;
 static unsigned long long runloom_brc_release_merges_hub_first_total = 0;
+/* Releases that found the fiber parked part-way through its own merge drain:
+ * local_objects_to_merge non-empty (stats()["brc_release_local_drains"]). */
+static unsigned long long runloom_brc_release_local_drains_total = 0;
 
 unsigned long long runloom_iframe_brc_release_merges(void)
 {
@@ -295,6 +298,12 @@ unsigned long long runloom_iframe_brc_release_merges_off_stack(void)
 unsigned long long runloom_iframe_brc_release_merges_hub_first(void)
 {
     return __atomic_load_n(&runloom_brc_release_merges_hub_first_total,
+                           __ATOMIC_RELAXED);
+}
+
+unsigned long long runloom_iframe_brc_release_local_drains(void)
+{
+    return __atomic_load_n(&runloom_brc_release_local_drains_total,
                            __ATOMIC_RELAXED);
 }
 
@@ -390,11 +399,35 @@ void runloom_iframe_brc_release(PyThreadState *fiber, PyThreadState *hub)
      * took the lock.  Bounded: past RUNLOOM_BRC_RELEASE_ROUNDS (a dropper
      * refilling the queue faster than we drain), fall back to the old order --
      * hub at the head, one last drain -- rather than stall the hub; that drain
-     * counts in brc_release_merges_hub_first. */
+     * counts in brc_release_merges_hub_first.
+     *
+     * "Queued" includes the fiber's PRIVATE stack, local_objects_to_merge.
+     * _Py_brc_merge_refcounts moves the shared queue there and pops it,
+     * deallocating as it goes; a __del__ in that loop that parks (or yields)
+     * switches the fiber out with the rest of the stack still on it.  Left
+     * there, the fiber would merge it wherever it resumes -- another hub's OS
+     * thread -- and _Py_ExplicitMergeRefcount's non-atomic read-and-zero of
+     * ob_ref_local would race this thread, the objects' owner, still bumping
+     * it.  The drain below (_Py_HandlePending -> _Py_brc_merge_refcounts)
+     * empties both stacks here, on the owner thread.  The fiber's suspended
+     * loop then finds its stack empty when it resumes and returns: it keeps
+     * no pointer into the stack across _Py_Dealloc (each _PyObjectStack_Pop
+     * re-reads stack->head, and frees a chunk as it empties it), the object it
+     * was deallocating was already merged (ob_tid 0, owned by nobody), and the
+     * same thing happens without fibers whenever a __del__ reaches an
+     * eval-breaker check (a nested merge) or another thread's GC merges a
+     * thread blocked in a __del__ (gc_free_threading.c merge_queued_objects,
+     * under stop-the-world).  The stack itself is touched only by its own
+     * state on its owner thread (or under stop-the-world), so reading it here
+     * needs no lock. */
     for (rounds = 0; ; rounds++) {
         int pending, hub_first;
+        if (rounds == 0 && f->brc.local_objects_to_merge.head != NULL)
+            __atomic_add_fetch(&runloom_brc_release_local_drains_total, 1,
+                               __ATOMIC_RELAXED);
         PyMutex_Lock(&b->mutex);
-        pending = (f->brc.objects_to_merge.head != NULL);
+        pending = (f->brc.objects_to_merge.head != NULL ||
+                   f->brc.local_objects_to_merge.head != NULL);
         if (!pending || rounds == RUNLOOM_BRC_RELEASE_ROUNDS) {
             runloom_brc_move_to_front(b, &h->brc.bucket_node);
             PyMutex_Unlock(&b->mutex);

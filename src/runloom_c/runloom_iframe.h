@@ -171,6 +171,10 @@ void runloom_iframe_brc_release(PyThreadState *fiber, PyThreadState *hub);
 unsigned long long runloom_iframe_brc_release_merges(void);
 unsigned long long runloom_iframe_brc_release_merges_off_stack(void);
 unsigned long long runloom_iframe_brc_release_merges_hub_first(void);
+/* stats()["brc_release_local_drains"]: releases that found the fiber switched
+ * out part-way through its own merge drain (a __del__ in it parked or yielded)
+ * and drained the rest of its local_objects_to_merge here, on the owner. */
+unsigned long long runloom_iframe_brc_release_local_drains(void);
 
 /* Destroy whatever a fiber's per-g state still has parked on its trashcan list
  * (delete_later): only a later dealloc on that state would, and
