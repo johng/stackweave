@@ -251,7 +251,11 @@ rl_verify_witnesses() {
     # it by exporting _PyEval_TLBCFollow (stackweave_c.tlbc_follow).
     grep -q '_PyEval_TLBCFollow' "$_src/Python/ceval.c" \
         || rl_die "tlbc-follow witness missing: _PyEval_TLBCFollow not in Python/ceval.c (fibers would keep one bytecode copy each)"
-    rl_log "witnesses present: _Py_TID_ASM, _PyThreadStateImpl_AllocHome, Py_NO_INLINE, MBUF_EXPORTS_INC, _Py_MV_EXPORTS_ATOMIC, ARRAY_EXPORTS_INC, _Py_ARRAY_EXPORTS_ATOMIC, recursive_mutex_self, _Py_RMUTEX_TSTATE_IDENT, _Py_fiber_park, _Py_FIBER_PARK_HOOKS, _Py_TSTATE_FIBER_FLAG, BUFFERED_SELF, SEMLOCK_SELF, _PyEval_TLBCFollow"
+    grep -q '_PyEval_RequestFiberBreak' "$_src/Python/ceval_gil.c" \
+        || rl_die "exec-home witness missing: _PyEval_RequestFiberBreak not in Python/ceval_gil.c (fiber preemption hook)"
+    grep -q '_Py_FIBER_BREAKER_HOOK' "$_src/Include/cpython/ceval.h" \
+        || rl_die "exec-home witness missing: _Py_FIBER_BREAKER_HOOK not in Include/cpython/ceval.h"
+    rl_log "witnesses present: _Py_TID_ASM, _PyThreadStateImpl_AllocHome, Py_NO_INLINE, MBUF_EXPORTS_INC, _Py_MV_EXPORTS_ATOMIC, ARRAY_EXPORTS_INC, _Py_ARRAY_EXPORTS_ATOMIC, recursive_mutex_self, _Py_RMUTEX_TSTATE_IDENT, _Py_fiber_park, _Py_FIBER_PARK_HOOKS, _Py_TSTATE_FIBER_FLAG, BUFFERED_SELF, SEMLOCK_SELF, _PyEval_TLBCFollow, _PyEval_RequestFiberBreak, _Py_FIBER_BREAKER_HOOK"
 }
 
 # ---- guards -----------------------------------------------------------------

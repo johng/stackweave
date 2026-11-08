@@ -1227,9 +1227,17 @@ static _PyFrameEvalFunction runloom_preempt_prev_eval = NULL;
 /* Process-lifetime guard: the preempt eval-frame hook is installed EXACTLY ONCE
  * (first mn_init) and never swapped back -- see runloom_preempt_install. */
 static int runloom_preempt_installed = 0;
+/* 1 once runloom_preempt_install chose the eval-breaker hook (the
+ * interpreter has the exec-home patch's _PyEval_SetFiberBreakerHook) over the
+ * eval-frame wrapper.  Written once, before any hub runs; sysmon reads it to
+ * pick how it asks for a preemption. */
+static int runloom_preempt_via_breaker = 0;
+/* Odometer: preemption yields taken, by any site (stats "preempt_yields"). */
+static unsigned long long runloom_mn_preempt_yields_total = 0;
 
-/* The preemption yield, shared by every preemption site (the eval-frame
- * wrapper, the liveness pending call, the preempt_init time-slicer): back on
+/* The preemption yield, shared by every preemption site (the eval-breaker
+ * hook, the eval-frame wrapper, the liveness pending call, the preempt_init
+ * time-slicer): back on
  * this hub's ready ring and resumed here, never on the stealable yield queue.
  * A time slice ends wherever the fiber happens to be, perhaps holding a lock
  * keyed on the OS thread (see runloom_mn_requeue_local).  Pushing from inside
@@ -1239,6 +1247,7 @@ static int runloom_preempt_installed = 0;
 static RUNLOOM_NOINLINE void runloom_mn_preempt_yield(runloom_hub_t *h,
                                                       runloom_g_t *g)
 {
+    __atomic_add_fetch(&runloom_mn_preempt_yields_total, 1, __ATOMIC_RELAXED);
     runloom_sched_ready_push(&h->sched, g);
     runloom_pystate_snap(&g->snap);
     runloom_tls_self_queued = 1;
@@ -1400,8 +1409,63 @@ static int runloom_mn_liveness_pending_cb(void *arg)
     return 0;
 }
 
-/* Install the preemption eval-frame wrapper on `interp` ONCE for the process
- * lifetime.  Install runs in mn_init after runloom_sysmon_config (so
+#if RUNLOOM_HAVE_FIBER_BREAKER
+/* Eval-breaker preemption (the default where the interpreter has the
+ * exec-home patch's fiber hook, see src/patches/README.md).  sysmon asks for a
+ * break on the thread state the wedged resume runs on
+ * (runloom_sysmon_request_break); CPython raises that thread's eval breaker,
+ * and at its next check -- a function entry (RESUME) or a loop back-edge --
+ * _Py_HandlePending() calls this from its end, with the pending-call slot and
+ * everything else it takes already released.  So, unlike the eval-frame
+ * wrapper, nothing is paid until a preemption is asked for (that wrapper's
+ * presence alone deoptimizes every Python-to-Python call process-wide: ~1.8x
+ * slower calls, ~2 KB of C stack per frame, recursion in a 512 KB fiber capped
+ * near 180 frames), and unlike the liveness pending call, a fiber switched
+ * out here holds nothing that stops another hub's fiber being preempted
+ * meanwhile.  Runs on every thread that services its eval breaker; anything
+ * not running a hub fiber returns at the first check.
+ *
+ * Same gates as the other two sites: only the resume sysmon flagged
+ * (runloom_mn_preempt_due), never mid object-destruction, never a fiber nested
+ * in a run(1)/Coro.  A destruction defers without consuming the request;
+ * sysmon re-requests every tick the wedge persists, so the yield comes at most
+ * a tick later. */
+static void runloom_preempt_breaker_hook(PyThreadState *ts)
+{
+    runloom_hub_t *h = runloom_tls_hub;
+    runloom_g_t *g;
+    if (h == NULL || !runloom_mn_preempt_due(h)) return;
+    if (runloom_tstate_in_destruction(ts)) return;
+    __atomic_store_n(&h->preempt_seq, 0, __ATOMIC_RELAXED);
+    if ((g = runloom_tls_current_g) != NULL && !runloom_mn_nested_here()) {
+#if defined(RUNLOOM_FSM_VALIDATE)
+        /* p69b witness (tools/verify/cbmc/preempt_defer_cbmc.c): returned
+         * above if in_destruction, so this yield is unreachable mid-destruction. */
+        if (runloom_tstate_in_destruction(ts))
+            runloom_fsm_violation("preempt_gate", 1 /*about-to-yield*/, 0,
+                                  __FILE__, __LINE__);
+#endif
+        runloom_mn_preempt_yield(h, g);
+    }
+}
+#endif
+
+int runloom_mn_preempt_via_breaker(void)
+{
+    return __atomic_load_n(&runloom_preempt_via_breaker, __ATOMIC_RELAXED);
+}
+
+unsigned long long runloom_mn_preempt_yields(void)
+{
+    return __atomic_load_n(&runloom_mn_preempt_yields_total, __ATOMIC_RELAXED);
+}
+
+/* Install the preemption hook on `interp` ONCE for the process lifetime: the
+ * eval-breaker hook above where the interpreter has it, else the eval-frame
+ * wrapper (also kept for the seeded controller's frame-count preemption, which
+ * must count every frame entry).
+ *
+ * The eval-frame wrapper: install runs in mn_init after runloom_sysmon_config (so
  * runloom_preempt_enabled is set) and BEFORE any fiber runs Python.  Capturing
  * the previous func means we chain rather than clobber a wrapper someone else
  * installed.
@@ -1437,6 +1501,14 @@ static void runloom_preempt_install(PyInterpreterState *interp)
 {
     if (!__atomic_load_n(&runloom_preempt_enabled, __ATOMIC_RELAXED)) return;
     if (runloom_preempt_installed) return;   /* install once; never re-swap */
+#if RUNLOOM_HAVE_FIBER_BREAKER
+    if (runloom_mn_ctrl.preempt_frames <= 0) {
+        _PyEval_SetFiberBreakerHook(runloom_preempt_breaker_hook);
+        __atomic_store_n(&runloom_preempt_via_breaker, 1, __ATOMIC_RELAXED);
+        runloom_preempt_installed = 1;
+        return;
+    }
+#endif
     /* Release-store so the eval hook's acquire-load sees a fully-published
      * prev pointer; pairs with the load in runloom_preempt_eval_frame. */
     __atomic_store_n((void **)&runloom_preempt_prev_eval,

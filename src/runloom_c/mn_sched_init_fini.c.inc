@@ -186,8 +186,10 @@ int runloom_mn_init(int n_threads)
      * runs.  No-op when RUNLOOM_MN_SEED is unset, and always while the
      * controller is disabled (RUNLOOM_MN_CTRL). */
     runloom_mn_ctrl_init(n_threads);
-    /* Its frame-count preemption hook, installed while we still hold the main
-     * tstate and before any hub runs Python (no-op unless controlled). */
+    /* The preemption hook -- the interpreter's eval-breaker fiber hook where it
+     * has one, else the eval-frame wrapper (which the controlled scheduler's
+     * frame-count preemption also needs) -- installed while we still hold the
+     * main tstate and before any hub runs Python. */
     runloom_preempt_install(interp);
     /* Native mn-sim EFFECTIVE-state check (I2 review): ctrl_init silently
      * self-disables on OOM -- the env fence above cannot see that, and an

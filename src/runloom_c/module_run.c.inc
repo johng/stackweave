@@ -424,6 +424,11 @@ static PyObject *m_stats(PyObject *self, PyObject *unused)
                           (Py_ssize_t)(runloom_mn_timer_entries_total() +
                                        (own != NULL ? own->timer_size : 0)));
     }
+    /* Preemption: yields taken (odometer, any site), and whether they come
+     * through the eval-breaker fiber hook (1) or the eval-frame wrapper (0). */
+    RUNLOOM_STATS_SET("preempt_yields",
+                      (Py_ssize_t)runloom_mn_preempt_yields());
+    RUNLOOM_STATS_SET("preempt_via_breaker", runloom_mn_preempt_via_breaker());
     /* M:N fibers' first frame-stack chunks: from a hub's pool, or mapped by
      * CPython because the pool was empty.  Summed as each hub exits, so
      * complete once run() returns. */

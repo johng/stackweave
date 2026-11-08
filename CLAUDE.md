@@ -226,8 +226,9 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   coroutine swapped out (inner fiber lost, outer g resumed twice; the per-g
   snapshot skip also made inner fibers share one frame chain). While
   `g->nest_depth > 0` the `runloom_mn_current_*` / `runloom_mn_tls_current_g`
-  accessors return NULL, `runloom_mn_yield_current` returns 0, and the two
-  preemption hooks this applies to -- the sysmon eval-frame wrapper
+  accessors return NULL, `runloom_mn_yield_current` returns 0, and the
+  preemption hooks this applies to -- the eval-breaker hook
+  (`runloom_preempt_breaker_hook`), or without it the eval-frame wrapper
   (`runloom_preempt_eval_frame`) and the liveness pending call
   (`runloom_mn_liveness_pending_cb`) -- skip. Code that asks through those
   accessors takes its single-thread branch; new fiber-context code must do the
@@ -254,12 +255,15 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   never yields. So running a whole program nested (an aio.run in an M:N fiber)
   costs its hub for that long. Guard:
   `tests/test_nested_run1_in_mn.py`.
-- **Preemption never yields mid object-destruction.** Both yield sites (the
-  `preempt_init` time-slicer, and the seeded controller's frame-count hook,
-  compiled only with `RUNLOOM_MN_CTRL`) gate on
-  `runloom_tstate_in_destruction` and defer (trigger stays armed); yielding inside
-  a `tp_dealloc` freezes a half-dead object across a GC-safe point → UAF. Don't
-  reroute via the eval-breaker.
+- **Preemption never yields mid object-destruction.** Every yield site (the
+  eval-breaker hook, or without it the eval-frame wrapper and the liveness
+  pending call; the `preempt_init` time-slicer; the seeded controller's
+  frame-count hook, compiled only with `RUNLOOM_MN_CTRL`) gates on
+  `runloom_tstate_in_destruction` and defers (the request stays armed); yielding
+  inside a `tp_dealloc` freezes a half-dead object across a GC-safe point → UAF.
+  The eval breaker is no safe point by itself: a dealloc's callback re-enters
+  the eval loop and `_Py_HandlePending` nested, so a yield site there keeps the
+  gate too.
 - **A thread-local's address never survives a park.** The compiler computes it
   once per function and reuses it after calls (macOS keeps the `tlv_get_addr`
   result, aarch64 Linux the `tpidr_el0` base, x86-64 global-dynamic the
@@ -524,17 +528,27 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   is inside the outer connection's `sqlite3_step`, so it must not park
   either. Guards: `tests/test_monkey_sqlite.py`,
   `tests/test_cpython_thread_keyed_locks.py::test_preempt_sqlite_writer_waits_for_a_same_hub_transaction`.
-- **A sysmon preemption request names the resume it is for.** sysmon asks two
-  ways at once, a flag the eval-frame wrapper reads at the next call and a
-  pending call run at the next backward jump; `h->preempt_seq` holds the
-  wedged resume's `resume_seq`, and each path yields only while it still
-  matches (`runloom_mn_preempt_due`). As a plain flag, whichever came second
-  preempted the next fiber the hub ran before its first line, so a sibling on
-  a CPU-bound fiber's hub never got a turn. Still open (KNOWN_GAP): a fiber
-  preempted from the pending call is suspended inside CPython's
-  `make_pending_calls`, which keeps the interpreter's pending-call slot
-  (`handling_thread`) until it resumes, so a second single-frame loop cannot
-  be preempted meanwhile. Guard:
+- **Preemption never installs a PEP 523 eval-frame function where the
+  interpreter has the fiber hook.** Its mere presence deoptimizes every
+  specialized Python-to-Python call, process-wide and for good: calls ~1.8x
+  slower, ~2 KB of C stack per frame, recursion in a 512 KB fiber capped near
+  180 frames. The exec-home patch's `_PyEval_SetFiberBreakerHook` runs a hook
+  at the end of `_Py_HandlePending`, and sysmon raises the wedged resume's
+  eval breaker with `_PyEval_RequestFiberBreak` on the tstate it reads under
+  its hazard pointer (`runloom_sysmon_request_break`), so the fiber yields at
+  its next function entry or loop back-edge. An interpreter built from an older
+  copy of `src/patches` (`stackweave_c.fiber_breaker_hook == 0`) falls back to
+  the eval-frame wrapper plus a pending call, whose known gap is that a fiber
+  preempted from the pending call keeps CPython's pending-call slot
+  (`handling_thread`) until it resumes. Guard: `tests/test_preempt_breaker.py`
+  (`stats()["preempt_via_breaker"]`, recursion past 180 frames).
+- **A sysmon preemption request names the resume it is for.**
+  `h->preempt_seq` holds the wedged resume's `resume_seq`, and a yield site
+  yields only while it still matches (`runloom_mn_preempt_due`); a break
+  request that lands on a tstate whose resume has ended is dropped the same
+  way when that fiber next runs. As a plain flag, a request that outlived its
+  resume preempted the next fiber the hub ran before its first line, so a
+  sibling on a CPU-bound fiber's hub never got a turn. Guard:
   `tests/test_sched_fairness.py::test_preemption_takes_turns_between_fibers_on_one_hub`.
 - **An M:N fiber's data-stack chunks come from its hub's pool and go back to
   it.** Each fiber has its own thread state, so unpooled, CPython mapped a

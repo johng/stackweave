@@ -285,6 +285,20 @@ unsigned long long runloom_mn_c_caller_holds(void);
  * migrates.  Only the running fiber's own thread calls it. */
 int runloom_mn_hold_here(int delta);
 
+/* Preemption (mn_sched_hub_resume_preempt.c.inc).  RUNLOOM_HAVE_FIBER_BREAKER:
+ * the interpreter's headers carry the exec-home patch's eval-breaker fiber hook
+ * (_Py_FIBER_BREAKER_HOOK, Include/cpython/ceval.h), which preemption uses in
+ * place of a PEP 523 eval-frame wrapper.  via_breaker: 1 once installed that way
+ * (stats "preempt_via_breaker"); yields: preemption yields taken, any site
+ * (stats "preempt_yields", an odometer). */
+#if defined(_Py_FIBER_BREAKER_HOOK)
+#  define RUNLOOM_HAVE_FIBER_BREAKER 1
+#else
+#  define RUNLOOM_HAVE_FIBER_BREAKER 0
+#endif
+int                runloom_mn_preempt_via_breaker(void);
+unsigned long long runloom_mn_preempt_yields(void);
+
 /* ---- per-hub diagnostic snapshot (runloom.inspect.hubs()) ----
  * A point-in-time view of every hub's scheduler state, for answering
  * "what is each hub doing / is any hub wedged, on what, for how long".
@@ -300,6 +314,7 @@ int runloom_mn_hold_here(int delta);
 struct runloom_hub;                       /* defined in mn_sched.c */
 void runloom_sysmon_tstate_retire_wait(PyThreadState *ts);
 int  runloom_sysmon_hub_attach_state(struct runloom_hub *h, PyThreadState *hts);
+void runloom_sysmon_request_break(struct runloom_hub *h, PyThreadState *hts);
 
 typedef struct runloom_hub_info {
     int       id;                 /* dense hub index 0..count-1 */
