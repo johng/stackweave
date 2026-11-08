@@ -88,9 +88,10 @@ static PyMethodDef module_methods[] = {
      "internal: register the Python full-feature fiber wrapper that fiber_fast\n"
      "delegates rich calls to."},
     {"fiber_grow",     (PyCFunction)m_fiber_grow, METH_FASTCALL | METH_KEYWORDS,
-     "fiber_grow(callable): the default stackweave.fiber entry.  Does the grow-down\n"
-     "auto-sizer, but handles the FROZEN case (learned size) in C with no Python\n"
-     "frame; sampling / rich / single-thread calls delegate to _fiber_register's\n"
+     "fiber_grow(callable): the default stackweave.fiber entry.  Spawns a plain\n"
+     "M:N fiber in C with no Python frame: at the default stack while grow-down\n"
+     "is off (the default), at the learned size once it is on and frozen; rich /\n"
+     "single-thread calls and grow-down sampling delegate to _fiber_register's\n"
      "wrapper."},
     {"_fiber_register_growdown", m_fiber_register_growdown, METH_VARARGS,
      "internal: register (GROW_DOWN_KEY, GROW_DOWN_SAMPLES) so fiber_grow can read\n"

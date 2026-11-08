@@ -13,7 +13,7 @@ import stackweave
 
 stackweave.optimize()                          # auto — the default; nothing to set
 stackweave.optimize("throughput")              # max spawn rate
-stackweave.optimize("memory")                  # right-sized stacks
+stackweave.optimize("memory")                  # right-sized stack reservations
 stackweave.optimize("latency")                 # sharp tail
 stackweave.optimize("secure")                  # hardened
 stackweave.optimize("throughput", "latency")   # compose — pass the trades you want
@@ -29,8 +29,8 @@ model:
 
 | goal | buys you | spends |
 |---|---|---|
-| **`"throughput"`** | max spawn rate — `stackweave.fiber` spawns like `fiber_fast` (fixed default stack, no grow-down sampling), and a bigger blocking-offload pool (16 workers) | a little RAM |
-| **`"memory"`** | right-sized stacks — `stackweave.fiber` keeps the grow-down auto-sizer (the default; re-enabled if you turned it off) | some spawn rate |
+| **`"throughput"`** | max spawn rate — `stackweave.fiber` spawns like `fiber_fast` (fixed default stack, no grow-down sampling: the default too, but this also overrides a `set_grow_down(True)`), and a bigger blocking-offload pool (16 workers) | a little RAM |
+| **`"memory"`** | right-sized stack reservations — turns on the grow-down auto-sizer (off by default), which halves a light function's stack reservation: address space and commit charge, not RSS (untouched stack pages are never resident) | spawn rate: 1.2–1.7× slower on closure-heavy code |
 | **`"latency"`** | sharp tail — tighter stall detection (25 ms) so a wedged hub recovers faster | a little CPU (extra watchdog wakeups) |
 | **`"secure"`** | hardened — recycled stacks are wiped before reuse (no leftover TLS keys / request bodies) | a little speed |
 
@@ -58,8 +58,8 @@ secure  >  memory  >  latency  >  throughput
 ```
 
 The only knob two goals share is the spawn path, so `optimize("throughput",
-"memory")` gives you throughput's bigger offload pool *and* memory's right-sized
-stacks. It returns the dict of **effective** settings: the env-var knobs it set
+"memory")` gives you throughput's bigger offload pool *and* memory's grow-down
+sizer. It returns the dict of **effective** settings: the env-var knobs it set
 (an explicit shell env var shows through, since it overrides optimize()), plus
 `"spawn"`, `"stack_scrub"` and `"max_fibers"` for the settings it applied live.
 

@@ -28,7 +28,7 @@ def _restore_settings(monkeypatch):
     cap = stackweave_c.get_max_fibers()
     yield
     stackweave_c._fiber_set_speed(0)
-    stackweave.set_grow_down(True)
+    stackweave.set_grow_down(False)     # the default
     stackweave_c.set_stack_scrub(scrub)
     stackweave_c.set_max_fibers(cap)
 
@@ -42,8 +42,8 @@ def test_no_goals_applies_nothing():
     assert stackweave.optimize() == {}
 
 
-def test_memory_keeps_grow_down():
-    stackweave.set_grow_down(False)
+def test_memory_turns_grow_down_on():
+    assert not stackweave.grow_down_enabled()       # off by default
     applied = stackweave.optimize("memory")
     assert applied == {"spawn": "grow_down"}
     assert stackweave.grow_down_enabled()

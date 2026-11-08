@@ -15,7 +15,7 @@ unused tail costs no RAM until touched).  Calibration scans completed
 fibers' high-water marks and after 1 000 completions can adapt the default
 **up** to `next_pow2(max_hwm × 4)` (clamped at 8 MB) for stack-hungry programs --
 but it is **floored at 512 KB** and never auto-shrinks below it.  (Reclaiming
-the tail per function is the **grow-down**'s job -- on by default under M:N, see
+the tail per function is the **grow-down**'s job -- opt-in under M:N, see
 the next section; an explicit `set_stack_size()` can still go down to the
 **256 KB minimum**.  stackweave requires free-threaded CPython 3.14+, and there
 every fiber stack is raised to at least 256 KB when it is created -- the room
@@ -27,11 +27,25 @@ physical pages while keeping the virtual mapping.  Net effect: 10 000
 idle fibers cost about as much RAM as their actual stack usage,
 not their reservation.
 
-## Automatic grow-down (on by default, M:N)
+## Grow-down (opt-in, M:N)
 
-Under M:N scheduling (`run(n)` with `n > 1`) stackweave **learns each function's
-real stack need and reserves only that** -- automatically, no setup. This is the
-function-bound *grow-down*, and it is **on by default**.
+Under M:N scheduling (`run(n)` with `n > 1`) stackweave can **learn each
+function's real stack need and reserve only that**. This is the function-bound
+*grow-down*. It is **off by default**; turn it on with
+`stackweave.optimize("memory")` or `stackweave.set_grow_down(True)`.
+
+### Why it is off by default
+
+It saves address space, not memory. Untouched stack pages are never resident,
+so RSS per fiber is the same whatever the reservation (measured on macOS: 120 KB
+per parked fiber at 256 KB, 512 KB and 1 MB stacks alike), and every fiber
+stack is at least 256 KB, so the most it can do is halve the 512 KB default
+reservation. That matters only where reservations are charged -- strict
+overcommit (`vm.overcommit_memory=2`). Its cost is on the spawn path: each of a
+function's first 64 spawns is wrapped and measured in Python, and a closure
+made per spawn (`stackweave.fiber(wrap(f))`) is a new function every time, so
+it never stops being measured -- 1.2-1.7x slower on the bench's gateway and
+crawler apps. With it off, `stackweave.fiber(fn)` spawns straight from C.
 
 The first time you `stackweave.fiber(fn)` a function, its fiber starts at the safe
 default stack (a "cold start" -- a size the function is known to complete on),
@@ -48,17 +62,17 @@ the 512 KB default (a 2× cut).
 It only ever shrinks *from* the cold start -- a size the function already ran on
 -- so it never reserves **more** than a known-safe amount. The one residual
 risk, an input that drives the function deeper than any of the first 64 sampled
-runs, lands on the guard page as a clean classified crash (never corruption) and
-re-learns next process. The learned size is **in-memory only, never persisted**:
+runs, raises `RecursionError` from the fiber's C-stack check where the default
+stack would have fit, and re-learns next process. The learned size is **in-memory only, never persisted**:
 a remembered-small size would be a foot-gun across restarts -- the run that
 finally gets the deep input would load a too-small size.
 
-### Turning it off
+### Turning it on
 
 ```python
 import stackweave
 
-stackweave.set_grow_down(False)     # reserve the fixed default for every fiber
+stackweave.set_grow_down(True)      # or stackweave.optimize("memory")
 stackweave.grow_down_enabled()      # -> current state
 ```
 
@@ -117,7 +131,7 @@ print(s["stack_calibrated"])       # 1 once frozen
 print(s["stack_painting"])         # 0 once painting is disabled
 ```
 
-Typical numbers (these are the **per-function grow-down** sizes -- the default-on
+Typical numbers (these are the **per-function grow-down** sizes -- the opt-in
 M:N auto-sizer that shrinks each function to its measured need; *calibration*
 itself never goes below the 512 KB floor, see above; the stack a fiber actually
 gets is never below the 256 KB minimum):
@@ -561,5 +575,5 @@ inspect `stats()` afterwards.
 - Guard page (`mprotect PROT_NONE` on the lowest page) + `SIGSEGV` handler
   that raises a clean `StackOverflowError` instead of crashing.
 - Per-thread calibration so M:N hubs converge independently.
-- ~~Adaptive shrink~~ -- shipped: the default-on [grow-down](#automatic-grow-down-on-by-default-mn)
-  shrinks each function to its measured need under M:N.
+- ~~Adaptive shrink~~ -- shipped: the opt-in [grow-down](#grow-down-opt-in-mn)
+  shrinks each function's reservation to its measured need under M:N.

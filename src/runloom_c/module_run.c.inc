@@ -692,19 +692,21 @@ static PyObject *m_fiber_register(PyObject *self, PyObject *fn)
     Py_RETURN_NONE;
 }
 
-/* ---- default runloom.fiber: C-side frozen grow-down -----------------------
- * runloom.fiber binds to fiber_grow.  It IS the grow-down auto-sizer, but the
- * FROZEN case -- a callable measured >= GROW_DOWN_SAMPLES times, i.e. the steady
- * state -- is handled here in C: the learned size lives in
+/* ---- default runloom.fiber: plain C spawn, or C-side frozen grow-down -------
+ * runloom.fiber binds to fiber_grow.  With grow-down off (the default, see
+ * runtime.py for why) a plain M:N fiber(fn) spawns here in C at the default
+ * stack, exactly as _fiber_full would, minus its Python frame.  With grow-down
+ * on, the FROZEN case -- a callable measured >= GROW_DOWN_SAMPLES times, i.e.
+ * the steady state -- is handled here in C too: the learned size lives in
  * fn.__dict__[GROW_DOWN_KEY] = [size, count]; read it and spawn at it with no
  * Python frame.  The sampling phase (first GROW_DOWN_SAMPLES spawns of each
- * callable -- which must wrap + measure the C-stack HWM), grow-down disabled,
- * single-thread, rich (args/kwargs), and non-plain-function callables all
- * delegate to the registered Python _fiber_full wrapper.  The constants + the
- * on/off flag are pushed from runtime.py so Python stays the source of truth. */
+ * callable -- which must wrap + measure the C-stack HWM), single-thread, rich
+ * (args/kwargs), and non-plain-function callables all delegate to the
+ * registered Python _fiber_full wrapper.  The constants + the on/off flag are
+ * pushed from runtime.py so Python stays the source of truth. */
 static PyObject *runloom_grow_down_key = NULL;       /* interned GROW_DOWN_KEY */
 static long      runloom_grow_down_samples = (1L << 30); /* never frozen until registered */
-static int       runloom_grow_down_active = 1;       /* mirrors runtime.grow_down_active */
+static int       runloom_grow_down_active = 0;       /* mirrors runtime.grow_down_active */
 
 static PyObject *m_fiber_register_growdown(PyObject *self, PyObject *args)
 {
@@ -745,11 +747,13 @@ static PyObject *m_fiber_grow(PyObject *self, PyObject *const *args,
                               Py_ssize_t nargs, PyObject *kwnames)
 {
     (void)self;
-    if (runloom_fiber_speed) {
-        /* optimize("throughput"): raw fiber_fast spawn.  Wins over grow-down --
-         * the user explicitly chose max spawn rate, which is incompatible with
-         * routing every spawn through the Python _fiber_full frame that
-         * grow-down's sampling needs. */
+    if (runloom_fiber_speed || !runloom_grow_down_active) {
+        /* No sampling to do: raw fiber_fast spawn at the default stack, which
+         * is all _fiber_full would do for a plain fiber(fn) here.  Grow-down off
+         * is the default; optimize("throughput") (runloom_fiber_speed) also wins
+         * over a grow-down turned on -- the user explicitly chose max spawn
+         * rate, which is incompatible with routing every spawn through the
+         * Python _fiber_full frame that grow-down's sampling needs. */
         if (nargs == 1 && kwnames == NULL && runloom_mn_spawns_to_hubs()
                 && PyCallable_Check(args[0]))
             return runloom_mn_fiber(args[0], 0);
