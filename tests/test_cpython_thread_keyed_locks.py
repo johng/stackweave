@@ -30,6 +30,7 @@ import sys
 
 import pytest
 
+import stackweave_c
 from known_gaps import INTERMITTENT, KNOWN_GAP, MIGRATION_GAP
 from test_cross_hub_migration import run_scenario, _key_line
 
@@ -1152,6 +1153,7 @@ def main():
     wg.wait()
     print("REACHED: %d live fibers ran big()" % N, flush=True)
     print("GROWTH_MB %.1f" % (peak_mb() - base), flush=True)
+    print("TLBC_SHARED %d" % stackweave_c.tlbc_shared, flush=True)
     gate.close()
     print("PASS", flush=True)
 stackweave.run(4, main)
@@ -1159,20 +1161,27 @@ stackweave.run(4, main)
 
 
 @KNOWN_GAP(
-    "every per-fiber tstate reserves its own thread-local-bytecode index, so "
-    "each live fiber gets its own copy of every function it runs (~195 KB "
-    "per fiber for a 144 KB function on macOS), kept after the fibers exit",
-    raises=AssertionError)
+    "the interpreter was built without -DPy_TSTATE_TLBC_FOLLOW (it does not "
+    "export _PyEval_TLBCFollow), so fibers cannot run on their hub's bytecode "
+    "copies and every per-fiber tstate keeps its own thread-local-bytecode "
+    "index: each live fiber gets its own copy of every function it runs "
+    "(~195 KB per fiber for a 144 KB function on macOS); rebuild the "
+    "interpreter with tools/ci/build_patched_cpython.sh",
+    raises=AssertionError, condition=not stackweave_c.tlbc_shared)
 def test_cost_live_fibers_share_bytecode_within_1_5x_of_tlbc_off():
     """1000 live fibers that ran one large function: memory growth with
-    thread-local bytecode on stays within 1.5x of PYTHON_TLBC=0."""
-    def growth(env):
+    thread-local bytecode on stays within 1.5x of PYTHON_TLBC=0, because each
+    fiber runs on its hub's copy (stackweave_c.tlbc_shared)."""
+    def run(env):
         out = run_gap(_TLBC_SCENARIO, env=env, timeout=120)
-        return float(re.search(r"GROWTH_MB ([\d.]+)", out).group(1))
-    on = growth(None)
-    off = growth({"PYTHON_TLBC": "0"})
-    print("growth: TLBC on %.1f MB, off %.1f MB" % (on, off))
+        return (float(re.search(r"GROWTH_MB ([\d.]+)", out).group(1)),
+                int(re.search(r"TLBC_SHARED (\d)", out).group(1)))
+    on, shared = run(None)
+    off, _ = run({"PYTHON_TLBC": "0"})
+    print("growth: TLBC on %.1f MB (shared=%d), off %.1f MB" % (on, shared, off))
     assert on <= 1.5 * max(off, 1.0), "TLBC on %.1f MB vs off %.1f MB" % (on, off)
+    # The sharing path ran: the scenario's fibers were lent their hubs' copies.
+    assert shared == 1, "stackweave_c.tlbc_shared is 0 in the scenario"
 
 
 if __name__ == "__main__":

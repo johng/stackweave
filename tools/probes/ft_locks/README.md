@@ -29,3 +29,4 @@ FAIL, or hangs into its watchdog (rc 3).
 | p20_thread_daemon.py | `flagfile` | [12] fiber-started thread is daemon |
 | p21_tlbc_per_fiber.py | `N` (try `PYTHON_TLBC=0`) | [15] per-fiber TLBC copies |
 | p22_asyncio_debug.py | | [11] asyncio debug thread check |
+| p23_tlbc_shared_stress.py | `hubs fibers rounds [clear]` | [15] specialized code stays right while fibers change hub copies |

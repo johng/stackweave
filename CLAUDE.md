@@ -38,6 +38,10 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   Build that interpreter from `src/patches/` with **no `--with-lto`** (LTO
   inlines pystate.c's thread-state reads and silently undoes exec-home); PGO
   alone is fine. `tools/ci/check_exec_home_tls.py <python>` checks a build.
+  Its CPPFLAGS (and pyconfig.h) carry `-DPy_TSTATE_ALLOC_HOME
+  -DPy_TSTATE_EXEC_HOME -DPy_TSTATE_TLBC_FOLLOW` (`RL_CI_FEATURE_DEFINES`); the
+  third only lets fibers share bytecode copies (~4% interpreter cost), so an
+  interpreter without it is sound, just keeps one copy per fiber.
 - Build `STACKWEAVE_EXTRA_CFLAGS="-DPy_TSTATE_ALLOC_HOME -DPy_TSTATE_EXEC_HOME"
   python setup.py build_ext --inplace` (an interpreter whose pyconfig.h lacks
   the flags doesn't pass them on, and without them the alloc-home borrow
@@ -424,10 +428,31 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   inactive. **greenlet coexistence on 3.14t still needs `PYTHON_TLBC=0`** (its own
   suspended-frame GC fix is 3.15-only; our anchor covers stackweave fibers, not
   greenlet's frames — see `tests/test_greenlet_interop.py`). `sys._clear_internal_caches`
-  is safe during `run()` (hub tstates own their TLBC indices for the whole run),
+  is safe during `run()` (each hub's TLBC index is held for the whole run, by the
+  hub's state or the fiber it lends it to; parked frames point into hub copies),
   EXCEPT the upstream latent case of a suspended generator escaped from a since-dead
   user thread. Guard: `tests/test_tlbc_parked_frame_gc.py` (+ p565/p524 as the
   TLBC-on ground-truth oracle).
+
+- **A resumed fiber runs on its hub's TLBC copy, and only where frames follow
+  it.** `runloom_iframe_tlbc_lend` SWAPS the fiber's and the hub's `tlbc_index`
+  right after the fiber's state attaches, and `_unlend` swaps back right before
+  it detaches, so live fibers share one bytecode copy per hub instead of one each.
+  Three rules: (1) swap, never copy: every index is held by exactly one state
+  (`PyThreadState_Clear` frees whatever a state holds, and a forked child clears
+  every other state), so a parked fiber holds its own reserved index and the hub
+  its own; (2) swap only while the FIBER's state is attached, so no
+  stop-the-world reader (`_Py_ClearUnusedTLBC`) sees half a swap; (3) lend only
+  when the interpreter re-points a frame at its state's copy before each
+  instruction (the exec-home patch's TLBC hunk, built with
+  `-DPy_TSTATE_TLBC_FOLLOW`: `_PyEval_TLBCFollow`, found by `dlsym`;
+  `stackweave_c.tlbc_follow`, `stackweave_c.tlbc_shared`). A frame keeps the copy it started on
+  until its next `RESUME`, and a fiber parks mid-instruction, so without that
+  hunk a migrated frame runs hub A's copy on hub B while A specializes it:
+  p23_tlbc_shared_stress segfaults in seconds. New code that attaches a per-g
+  state on a hub must lend/unlend around it the same way, or not at all.
+  Guards: `tests/test_tlbc_hub_copies.py` (`stats()["tlbc_switches"]` > 0 when
+  shared), `tests/test_cpython_thread_keyed_locks.py::test_cost_live_fibers_share_bytecode_within_1_5x_of_tlbc_off`.
 
 - **A hub-thread wake lands on the waker's OWN deque (Go-style local
   wake), not the global run-queue.** `runloom_mn_woken_enqueue`

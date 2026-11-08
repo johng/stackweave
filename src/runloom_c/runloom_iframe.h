@@ -208,6 +208,43 @@ unsigned long long runloom_iframe_brc_release_merges_hub_first(void);
  * and drained the rest of its local_objects_to_merge here, on the owner. */
 unsigned long long runloom_iframe_brc_release_local_drains(void);
 
+/* Thread-local bytecode (TLBC) per hub, not per fiber.
+ *
+ * Free-threaded CPython gives every thread state its own copy of each code
+ * object's bytecode, because the specializer rewrites instructions and inline
+ * caches without atomics.  Every fiber has a thread state, so each live fiber
+ * got its own copy of every function it ran (2000 fibers that ran one 144 KB
+ * function took ~390 MB more than with PYTHON_TLBC=0).  Instead, a resume lends
+ * the fiber its hub's index: lend() SWAPS the two states' tlbc_index fields
+ * and unlend() swaps them back, so every index is held by exactly one thread
+ * state at all times (PyThreadState_Clear frees whatever index a state holds,
+ * and a forked child clears every other state: holding one index in two
+ * states would free it twice).  Live fibers then share one copy per hub.
+ *
+ * A frame keeps executing the copy it started on, so a fiber that parked on
+ * hub A and resumes on hub B would run A's copy on B's thread while A runs it
+ * too -- the race TLBC exists to prevent.  This is sound only on an
+ * interpreter whose eval loop re-points a frame at its thread state's copy
+ * before each instruction (the exec-home patch's TLBC hunk, built with
+ * -DPy_TSTATE_TLBC_FOLLOW, which exports _PyEval_TLBCFollow:
+ * runloom_iframe_tlbc_follow(), stackweave_c.tlbc_follow).
+ * runloom_iframe_tlbc_shared() is 0 without it, or with PYTHON_TLBC=0;
+ * lend/unlend are then no-ops and every fiber keeps its own copies as
+ * before.  Call it once before any hub runs.
+ *
+ * Both are called with the FIBER's state attached (right after it attaches,
+ * right before it detaches), so the world cannot be stopped mid-swap and a
+ * stop-the-world reader of the indices (_Py_ClearUnusedTLBC) sees a
+ * consistent pair.  lend() returns the index lent, or -1 when off.
+ * stats()["tlbc_switches"] counts resumes whose lent copy differed from the
+ * one the fiber last ran on (its frames re-point at their next instruction). */
+int runloom_iframe_tlbc_follow(void);
+int runloom_iframe_tlbc_shared(void);
+int runloom_iframe_tlbc_lend(PyThreadState *fiber, PyThreadState *hub);
+void runloom_iframe_tlbc_unlend(PyThreadState *fiber, PyThreadState *hub);
+void runloom_iframe_tlbc_note_switch(void);
+unsigned long long runloom_iframe_tlbc_switches(void);
+
 /* Destroy whatever a fiber's per-g state still has parked on its trashcan list
  * (delete_later): only a later dealloc on that state would, and
  * PyThreadState_Clear doesn't, so it would leak.  Call before clearing it.

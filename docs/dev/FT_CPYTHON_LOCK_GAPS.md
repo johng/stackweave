@@ -520,6 +520,150 @@ executing the old hub's copy while that hub specializes it -- the race TLBC
 exists to avoid -- so the fix is not just "use the hub's index". A candidate
 for the open post-burst RSS rise.
 
+**Status: FIXED** on an interpreter built with `-DPy_TSTATE_TLBC_FOLLOW`,
+which the repo's builds now set next to the two migration flags
+(`RL_CI_FEATURE_DEFINES`): fibers run on their hub's bytecode copy, and a new
+exec-home hunk (3.14 and 3.15) under that flag makes a frame follow its
+thread state's copy. An interpreter built without the flag (or an older
+`3.14.4t-mig`) keeps one copy per fiber, as before, and the test stays a
+known gap there (`stackweave_c.tlbc_follow` / `tlbc_shared` say which). The
+flag costs about 4% interpreter throughput; a deployment that would rather
+keep the per-fiber copies builds without it.
+
+How TLBC works (CPython 3.14.4, pristine tree; line numbers there):
+
+- *Index.* `_PyThreadState_New` reserves one per thread state
+  (`Python/pystate.c:1634`, stored at `:1658`) from an index pool that hands
+  out the lowest free index (`Python/index_pool.c:152`);
+  `PyThreadState_Clear` frees it (`pystate.c:1840` ->
+  `Objects/codeobject.c:3423`). With `PYTHON_TLBC=0` every state gets 0
+  (`codeobject.c:3413`).
+- *Copies.* `co_tlbc->entries[i]` is index i's copy; entry 0 is the code
+  object's own bytecode. `_PyCode_GetTLBC` (`codeobject.c:3526`) creates a
+  copy under the code object's critical section (`create_tlbc_lock_held`,
+  `:3484`: grow the array to a power of two, `copy_code` `:3462` deopts the
+  main copy and re-quickens it). Freeing an index frees no copy: a reused
+  index inherits the old copies, so after a burst memory stays at the peak.
+  Only `sys._clear_internal_caches()` -> `_Py_ClearUnusedTLBC` (`:3636`, stop
+  the world plus a walk of every object) frees copies, those whose index no
+  live thread state holds (`get_indices_in_use`, `:3550`). It never looks at
+  frames, so a frame on a freed index dangles (the upstream "generator from a
+  dead thread" case).
+- *Which copy a frame runs.* `_PyFrame_InitializeTLBC`
+  (`Include/internal/pycore_interpframe.h:164`) picks the state's copy at
+  frame creation, or the main copy with index 0 if none exists yet. After
+  that only `RESUME` re-picks (`_LOAD_BYTECODE`, `Python/bytecodes.c:206`;
+  `RESUME_CHECK` deopts on a mismatch, `:240`), and the `throw()` entry
+  (`Python/ceval.c:1213`). Everywhere else `next_instr` is a C local of the
+  eval loop. A park returns through the call that parked, mid-instruction, so
+  RESUME never runs; and stackweave's PEP 523 hook makes every Python call its
+  own `_PyEval_EvalFrameDefault` invocation, so every frame on a fiber's
+  stack holds its copy in a C local nothing outside the loop can reach.
+- *Why copies are per thread.* The specializer writes inline caches with
+  plain stores and then CASes the opcode (`set_opcode`,
+  `Python/specialize.c:702`; e.g. `:801` writes a keys version, then the
+  index, then `specialize()`), and re-specializes an instruction in place
+  when it keeps missing. A thread executing that instruction meanwhile can
+  pair the new version with the old index, or a type version with another
+  type's borrowed descriptor -- an out-of-bounds read or a call through the
+  wrong object. `specialize.c:3188` says it outright ("specializing multiple
+  copies of the same bytecode is not thread-safe"); `PYTHON_TLBC=0` disables
+  specialization altogether (unreachable counters, `_PyCode_Quicken`,
+  `:459`). Confirmed: lending each fiber its hub's index with no follow
+  makes `p23_tlbc_shared_stress.py 8 64 500` segfault in
+  `_PyEval_EvalFrameDefault` 3 runs in 3.
+
+Options considered:
+
+1. *Per-fiber copies, reclaimed sooner* (no patch). Exited fibers' copies are
+   already reused through index reuse; freeing them needs the stop-the-world
+   heap walk. Does nothing for live fibers, which is the cost here.
+2. *Lend the hub's copy and pin every fiber to the hub it first ran on* (no
+   patch, sound): ends migration of every started fiber. A scheduler
+   semantics change; not taken.
+3. *Lend, and never specialize a copy the frame does not own* (patch): the
+   owning hub still re-specializes it while a foreign frame reads it, so torn
+   reads remain. Unsound.
+4. *Group fibers into lanes, one running fiber per lane, a copy per lane*
+   (no patch, sound): a scheduler rewrite.
+5. *Lend, and make a frame follow its state's copy* (patch). Taken.
+
+What was built:
+
+- stackweave (`runloom_iframe_tlbc_lend`/`_unlend`, around each resume in
+  `hub_main`): swap the fiber's and the hub's `tlbc_index` right after the
+  fiber's state attaches, and back right before it detaches. Swap, not copy:
+  each index stays held by exactly one state, which PyThreadState_Clear and a
+  forked child's clear of every other state rely on. Attached, so no
+  stop-the-world reader sees half a swap. A parked fiber holds its own index
+  (no copies are ever made for it); parked frames point into hub copies, whose
+  indices the hubs hold for the whole run, so `sys._clear_internal_caches()`
+  mid-run leaves them alone. Lends only if `dlsym` finds `_PyEval_TLBCFollow`
+  (`stackweave_c.tlbc_follow`) and TLBC is on (`stackweave_c.tlbc_shared`);
+  `stats()["tlbc_switches"]` counts resumes on a different hub copy than the
+  fiber's last.
+- CPython (`cpython314t-` and `cpython315t-tstate-exec-home.patch`, new
+  `Python/ceval_macros.h` and `Python/ceval.c` hunks, under their own
+  `Py_TSTATE_TLBC_FOLLOW`, meaningful only with `Py_TSTATE_EXEC_HOME`; the
+  witness is `_PyEval_TLBCFollow` in `Python/ceval.c`, and the build script
+  checks the installed interpreter exports it): before every
+  instruction starts -- `DISPATCH()` (a compare, then one shared slow path
+  after `generated_cases.c.h`), `DISPATCH_SAME_OPARG()`, `JUMP_TO_PREDICTED`,
+  and `PAUSE_ADAPTIVE_COUNTER` (which the instrumented LINE/INSTRUCTION paths
+  reach before running a cached opcode) -- a frame whose index differs from
+  its state's is re-pointed at the state's copy, same offsets
+  (`_PyEval_TLBCFollow`; skips the entry frame and `_Py_InitCleanup`, whose
+  one static copy is never specialized). MemoryError creating the copy is
+  raised at the instruction about to start. Checked in the computed-goto and
+  the tail-call interpreters.
+
+Residual: the instruction whose call parked finishes on the old copy. An
+audit of 3.14.4's `generated_cases.c.h` for bytecode accesses after an
+escaping call finds only a function-version read checked against the callee
+(CALL_BOUND_METHOD_*), atomic branch-history bits (POP_JUMP_IF_[NOT_]NONE),
+the never-specialized NOT_TAKEN opcode byte, INSTRUMENTED_LINE's counter
+pause (a 16-bit store) -- and the specializer itself, if it parks mid-way (a
+finalizer run by one of its decrefs, which would need a concurrent type
+mutation), whose remaining cache writes land on the old copy. Re-audit on
+every CPython bump.
+
+Measured (arm64 macOS, interpreters built by `tools/ci/build_patched_cpython.sh`
+from this branch's patches, with and without `Py_TSTATE_TLBC_FOLLOW`, no
+LTO/PGO):
+
+| | per-fiber copies (flag off) | hub copies (flag on) | `PYTHON_TLBC=0` |
+|---|---|---|---|
+| p21, 2000 fibers, RSS live | 662 MB | 158 MB (283 once, box at load 10) | 281 MB |
+| p21 on 3.15.0 | -- | 160 MB | -- |
+| test scenario, 1000 fibers, peak growth | 302 MB | 51 MB | 112 MB |
+| 20k fibers, small handler (json, re, 3 classes) | 141 KB/fiber | 132 | 132 |
+| 10k fibers, pure-Python handler (urllib.parse, http.cookies, dataclasses, ...) | 160 KB/fiber | 135 | 135 |
+
+(The two handler rows are from the first prototype's builds, same hunk.)
+
+p23 with hub copies: 0 wrong results in every run on 3.14 and 3.15, ~166k
+(8 hubs) to ~1.44M (16 hubs, 128 fibers, 2000 rounds) cross-hub switches per
+run, with and without `sys._clear_internal_caches()` every few ms; p524 and
+p565 PASS (8 hubs, 20 s; 3.14 twice each, 3.15 once); the gap file,
+test_tlbc_hub_copies, test_tlbc_parked_frame_gc, test_cross_hub_migration,
+test_fiber_locks and test_sched_fairness green with the flag on 3.14 and
+3.15, and without it on 3.14 (this gap xfail). The tail-call interpreter was
+checked on the first prototype.
+
+Cost of the flag, min of 40 runs per benchmark, interleaved, flag-on vs
+flag-off builds: +5.4% on a bare `for i in range` loop, +3 to +7.5% on
+attribute, call, method, float and dict loops, -2.5% (noise) on a generator
+loop; +4.0% geometric mean (box at load ~10). The first prototype measured
++2.3 to +7.5%, about +4%. A version with the slow path inlined at every
+dispatch site cost +5 to +10%.
+
+**Decision:** the hunk sits behind its own flag, on by default in the repo's
+builds. The 4% is paid by every program on such an interpreter, for a saving
+of ~6-15% of per-fiber memory in the handlers measured (most of a fiber's
+~130 KB is its stack and state) and much more for fibers that run a lot of
+distinct Python; `RL_CI_FEATURE_DEFINES="Py_TSTATE_ALLOC_HOME
+Py_TSTATE_EXEC_HOME" tools/ci/build_patched_cpython.sh` builds without it.
+
 ## Upstream CPython bugs (plain threads too)
 
 ### 16. Shared `BufferedReader.readline()` loses data

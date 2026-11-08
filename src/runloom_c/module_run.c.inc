@@ -466,6 +466,8 @@ static PyObject *m_stats(PyObject *self, PyObject *unused)
                       (Py_ssize_t)runloom_iframe_brc_release_merges_hub_first());
     RUNLOOM_STATS_SET("brc_release_local_drains",
                       (Py_ssize_t)runloom_iframe_brc_release_local_drains());
+    RUNLOOM_STATS_SET("tlbc_switches",
+                      (Py_ssize_t)runloom_iframe_tlbc_switches());
     RUNLOOM_STATS_SET("fiber_trash_drained",
                       (Py_ssize_t)runloom_iframe_fiber_trash_drained());
     RUNLOOM_STATS_SET("copy_grows", (Py_ssize_t)runloom_coro_copy_grows());

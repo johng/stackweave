@@ -1577,6 +1577,19 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
             /* Drops of this hub's objects now land on the FIBER's tstate,
              * whose eval loop merges them as it runs (runloom_iframe_brc_adopt). */
             runloom_iframe_brc_adopt(g->tstate, hub_ts);
+            /* Run on this hub's bytecode copies, not the fiber's own: swap
+             * the two states' TLBC indices until the detach below (a no-op
+             * unless the interpreter re-points frames at the new copy; see
+             * runloom_iframe_tlbc_lend).  Attached, so no stop-the-world
+             * reader sees the swap half done. */
+            {
+                int lent = runloom_iframe_tlbc_lend(g->tstate, hub_ts);
+                if (lent >= 0 && g->tlbc_lent != lent + 1) {
+                    if (g->tlbc_lent != 0)
+                        runloom_iframe_tlbc_note_switch();
+                    g->tlbc_lent = lent + 1;
+                }
+            }
             /* Deep-surface migration oracle (RUNLOOM_DBG_MIGRATE; zero-cost
              * otherwise).  The per-g tstate's mimalloc heap / brc / QSBR are
              * bound to the OS thread that first used them; running it on a
@@ -1644,6 +1657,9 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
              * bucket mutex and the merge need an attached tstate, and the
              * fiber's is the owner of what it holds. */
             runloom_iframe_brc_release(g->tstate, hub_ts);
+            /* Each state takes its own TLBC index back, still attached: a
+             * parked fiber holds its own, the hub runs on the hub's. */
+            runloom_iframe_tlbc_unlend(g->tstate, hub_ts);
             PyEval_SaveThread();                  /* detach g's tstate */
             PyEval_RestoreThread(hub_ts);          /* reattach hub tstate */
             /* Free what other hubs dropped on us while the fiber ran: the

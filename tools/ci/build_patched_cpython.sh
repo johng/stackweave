@@ -83,7 +83,7 @@ for d in $RL_CI_FEATURE_DEFINES; do CPPDEFS="$CPPDEFS -D$d"; done
 CONFIGURE_EXTRA="${RL_CI_CONFIGURE_EXTRA:-}"
 rl_reject_lto "$CONFIGURE_EXTRA"
 
-rl_step "configure (free-threaded, both features, no LTO)"
+rl_step "configure (free-threaded, the feature defines, no LTO)"
 (
     cd "$SRC"
     env ac_cv_buggy_getaddrinfo=no ./configure \
@@ -128,7 +128,19 @@ for d in $RL_CI_FEATURE_DEFINES; do
 Extension modules would compile against a different _PyThreadStateImpl layout
 than the interpreter -- links fine, corrupts at runtime."
 done
-rl_log "installed pyconfig.h carries both defines"
+rl_log "installed pyconfig.h carries every feature define"
+case " $RL_CI_FEATURE_DEFINES " in
+    *" Py_TSTATE_TLBC_FOLLOW "*)
+        # ceval.c is not installed: the export is the installed witness, and
+        # what stackweave looks up before fibers share bytecode copies.
+        if "$PYBIN" -c 'import ctypes' 2>/dev/null; then
+            "$PYBIN" -c 'import ctypes; ctypes.pythonapi._PyEval_TLBCFollow' \
+                || rl_die "Py_TSTATE_TLBC_FOLLOW is set but the interpreter does not export _PyEval_TLBCFollow"
+            rl_log "interpreter exports _PyEval_TLBCFollow"
+        else
+            rl_log "no ctypes in this build: _PyEval_TLBCFollow export not checked"
+        fi ;;
+esac
 
 "$PYBIN" -c '
 import sys

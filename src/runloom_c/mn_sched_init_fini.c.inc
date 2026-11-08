@@ -176,6 +176,9 @@ int runloom_mn_init(int n_threads)
      * on for an M:N run; mn_fini clears it again. */
     runloom_mn_interp = interp;
     runloom_set_mn_live(1);
+    /* Settle whether resumes lend fibers their hub's bytecode copies before
+     * any hub runs one (runloom_iframe_tlbc_shared: fixed for the process). */
+    (void)runloom_iframe_tlbc_shared();
     /* Configure the sysmon watchdog (threshold, logging) BEFORE the hubs
      * spawn so the per-resume progress instrumentation is live immediately. */
     runloom_sysmon_config();

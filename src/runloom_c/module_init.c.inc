@@ -625,6 +625,17 @@ PyMODINIT_FUNC PyInit_stackweave_c(void)
         Py_DECREF(m);
         return NULL;
     }
+    /* `tlbc_follow`: the running interpreter was built with
+     * Py_TSTATE_TLBC_FOLLOW (it exports _PyEval_TLBCFollow).  `tlbc_shared`:
+     * M:N fibers run on their hub's bytecode copies rather than each on its
+     * own -- tlbc_follow, and TLBC on (runloom_iframe.h). */
+    if (PyModule_AddIntConstant(m, "tlbc_follow",
+                                runloom_iframe_tlbc_follow()) < 0 ||
+        PyModule_AddIntConstant(m, "tlbc_shared",
+                                runloom_iframe_tlbc_shared()) < 0) {
+        Py_DECREF(m);
+        return NULL;
+    }
     /* Whether this build has both migration patches (mn_sched.h). */
     if (PyModule_AddIntConstant(m, "migration_patched",
                                 RUNLOOM_MIGRATION_PATCHED) < 0) {

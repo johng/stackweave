@@ -8,6 +8,7 @@ one OS thread in two separate ways — and either alone still corrupts:
 |---|---|---|
 | **allocation** | `Py_TSTATE_ALLOC_HOME` | which heap a migrated fiber allocates on |
 | **execution** | `Py_TSTATE_EXEC_HOME` | whether the compiler may cache *which OS thread we are* (plus memoryview's and array.array's buffer-export counts, which a migrated fiber's deallocs race, and the locks CPython holds across Python code -- `_thread` locks, the import and warnings locks, buffered streams, multiprocessing's RLock: owned by a fiber's thread state rather than the OS thread, and their waits can park a fiber, see below) |
+| execution, own flag (on in the repo's builds) | `Py_TSTATE_TLBC_FOLLOW` | whether a frame follows its thread state's thread-local bytecode copy, so fibers can share their hub's copy instead of owning one each (needs `Py_TSTATE_EXEC_HOME`; costs ~4%, see below) |
 
 Each half ships as a **version-specific** patch (stackweave supports only
 free-threaded CPython 3.14+), and they are **not** interchangeable across
@@ -435,6 +436,51 @@ is torn down between acquiring and releasing one of these locks (one
 its OS thread as upstream. Guard:
 `tests/test_fiber_locks.py::test_a_plain_thread_rlock_across_pygilstate_callbacks_is_stock`.
 
+### A frame follows its thread state's bytecode copy (`ceval_macros.h`, `ceval.c`; own flag `Py_TSTATE_TLBC_FOLLOW`)
+
+Free-threaded CPython gives every thread state its own copy of each code
+object's bytecode (thread-local bytecode, TLBC), because the specializer
+rewrites instructions and inline caches without atomics. stackweave gives every
+fiber a thread state, so every live fiber got its own copy of every function it
+ran (2000 fibers that ran one 144 KB function: 663 MB, against 281 MB with
+`PYTHON_TLBC=0`). stackweave now lends a resumed fiber its hub's TLBC index
+(`runloom_iframe_tlbc_lend`: a swap of the two states' indices for the length
+of the resume), so live fibers share one copy per hub. A frame keeps executing
+the copy it started on until its next `RESUME`, though, and a fiber parks inside
+a call, mid-instruction: after a migration the frame would run hub A's copy on
+hub B's thread while A runs it too, the race TLBC exists to prevent (with
+lending forced on without this hunk, `tools/probes/ft_locks/p23_tlbc_shared_stress.py`
+segfaults in the eval loop 3 runs in 3).
+
+The hunk re-points a frame at its thread state's copy before each instruction
+starts: `DISPATCH()` compares the frame's index with the thread state's and
+branches to one shared slow path (`_PyEval_TLBCFollow`) on a mismatch, and
+`DISPATCH_SAME_OPARG()`, `JUMP_TO_PREDICTED` and `PAUSE_ADAPTIVE_COUNTER` (which
+the instrumented `LINE`/`INSTRUCTION` paths reach before running a cached
+opcode) do the same. Only the instruction whose call parked finishes on the old
+copy; in 3.14.4 that tail reads no inline cache but a function version it checks
+against the callee and writes only the atomic branch-history bits, except when
+the park happened inside the specializer itself (a finalizer run by one of its
+decrefs). The 3.15 hunk is the same, plus `DISPATCH_NON_TRACING()`.
+
+It has its own flag, `-DPy_TSTATE_TLBC_FOLLOW` (meaningful only with
+`Py_TSTATE_EXEC_HOME`), which `tools/ci/versions.env` sets with the other two
+(`RL_CI_FEATURE_DEFINES`). `_PyEval_TLBCFollow` exists only under it;
+stackweave lends only when `dlsym` finds it (`stackweave_c.tlbc_follow`,
+`stackweave_c.tlbc_shared`), so an interpreter built without the flag keeps
+per-fiber copies and stays sound. Build without it with
+`RL_CI_FEATURE_DEFINES="Py_TSTATE_ALLOC_HOME Py_TSTATE_EXEC_HOME"
+tools/ci/build_patched_cpython.sh <version>`.
+
+Cost: a compare and a branch per instruction, about +4% on interpreter-bound
+microbenchmarks against the same build without the flag (3.14.4, arm64
+Darwin, no LTO/PGO; per-benchmark numbers in docs/dev/FT_CPYTHON_LOCK_GAPS.md
+#15). Gain: p21 at 2000 fibers 158 MB instead of 663; a
+10k-fiber pure-Python handler (urllib.parse, http.cookies, dataclasses, ...)
+135 KB per fiber instead of 160. Guards: `tests/test_tlbc_hub_copies.py`,
+`tests/test_cpython_thread_keyed_locks.py::test_cost_live_fibers_share_bytecode_within_1_5x_of_tlbc_off`
+(a known gap on an interpreter built without the flag).
+
 ## Using it
 
 Migration is **always on** under M:N (`run(n > 1)`); there is no switch. What it
@@ -451,12 +497,13 @@ needs is an interpreter built with **both** patches:
    cd cpython
    patch -p1 -F0 < .../patches/cpython314t-tstate-alloc-home.patch
    patch -p1 -F0 < .../patches/cpython314t-tstate-exec-home.patch
-   ./configure --disable-gil CPPFLAGS="-DPy_TSTATE_ALLOC_HOME -DPy_TSTATE_EXEC_HOME"
-   # ALSO put both #defines in pyconfig.h -- CPPFLAGS covers only the CPython
+   ./configure --disable-gil CPPFLAGS="-DPy_TSTATE_ALLOC_HOME -DPy_TSTATE_EXEC_HOME -DPy_TSTATE_TLBC_FOLLOW"
+   # ALSO put the #defines in pyconfig.h -- CPPFLAGS covers only the CPython
    # build, while extension modules include the INSTALLED pyconfig.h.  alloc-home
    # adds a field to _PyThreadStateImpl, so a mismatch shifts struct offsets
-   # silently rather than failing to link.
-   printf '#define Py_TSTATE_ALLOC_HOME 1\n#define Py_TSTATE_EXEC_HOME 1\n' >> pyconfig.h
+   # silently rather than failing to link.  (Drop Py_TSTATE_TLBC_FOLLOW from
+   # both lines to keep one bytecode copy per fiber and save ~4%.)
+   printf '#define Py_TSTATE_ALLOC_HOME 1\n#define Py_TSTATE_EXEC_HOME 1\n#define Py_TSTATE_TLBC_FOLLOW 1\n' >> pyconfig.h
    make && make install
    ```
    Use `-F0` and treat any reject as a hard stop. Both flags are armed in
@@ -476,6 +523,7 @@ needs is an interpreter built with **both** patches:
    grep -q _Py_fiber_park Python/parking_lot.c                     # exec-home
    grep -q BUFFERED_SELF Modules/_io/bufferedio.c                  # exec-home
    grep -q SEMLOCK_SELF Modules/_multiprocessing/semaphore.c       # exec-home
+   grep -q _PyEval_TLBCFollow Python/ceval.c                       # exec-home, TLBC follow
    grep -q _PyThreadStateImpl_AllocHome Include/internal/pycore_tstate.h  # alloc-home
    ```
 

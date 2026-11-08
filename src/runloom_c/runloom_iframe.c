@@ -18,6 +18,9 @@
 
 #include "runloom_iframe.h"
 #include "coro.h"    /* runloom_coro_stack_base/size (fiber C-stack geometry) */
+#if !defined(_WIN32)
+#  include <dlfcn.h> /* dlsym: runloom_iframe_tlbc_shared */
+#endif
 
 #if !defined(RUNLOOM_NO_IFRAME)
 #  include "internal/pycore_frame.h"
@@ -564,6 +567,88 @@ void runloom_iframe_main_state_check(int *tstate_is_current,
     *thread_is_current = -1;
     *tstate_is_initial = -1;
 #endif
+}
+
+/* See runloom_iframe.h.  Decided once, before any hub runs, and never changed
+ * afterwards: lend() and unlend() must agree for the life of the process. */
+static int runloom_tlbc_shared = -1;
+static unsigned long long runloom_tlbc_switches_total = 0;
+
+int runloom_iframe_tlbc_follow(void)
+{
+#if !defined(_WIN32)
+    /* The interpreter re-points a frame at its state's copy only when built
+     * with Py_TSTATE_TLBC_FOLLOW (the exec-home patch's TLBC hunk), which
+     * exports _PyEval_TLBCFollow.  A header can't tell (the extension may be
+     * built against other headers than the binary it loads into), so look the
+     * symbol up. */
+    return dlsym(RTLD_DEFAULT, "_PyEval_TLBCFollow") != NULL;
+#else
+    return 0;
+#endif
+}
+
+int runloom_iframe_tlbc_shared(void)
+{
+    int on = __atomic_load_n(&runloom_tlbc_shared, __ATOMIC_ACQUIRE);
+    if (on >= 0) return on;
+    on = 0;
+#if defined(RUNLOOM_DESTRUCT_HAVE)
+    if (PyInterpreterState_Get()->config.tlbc_enabled
+            && runloom_iframe_tlbc_follow())
+        on = 1;
+#endif
+    {
+        int expected = -1;
+        if (!__atomic_compare_exchange_n(&runloom_tlbc_shared, &expected, on, 0,
+                                         __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+            on = expected;
+    }
+    return on;
+}
+
+int runloom_iframe_tlbc_lend(PyThreadState *fiber, PyThreadState *hub)
+{
+#if defined(RUNLOOM_DESTRUCT_HAVE)
+    _PyThreadStateImpl *f = (_PyThreadStateImpl *)fiber;
+    _PyThreadStateImpl *h = (_PyThreadStateImpl *)hub;
+    int32_t lent;
+    if (__atomic_load_n(&runloom_tlbc_shared, __ATOMIC_RELAXED) != 1)
+        return -1;
+    lent = h->tlbc_index;
+    h->tlbc_index = f->tlbc_index;
+    f->tlbc_index = lent;
+    return (int)lent;
+#else
+    (void)fiber; (void)hub;
+    return -1;
+#endif
+}
+
+void runloom_iframe_tlbc_unlend(PyThreadState *fiber, PyThreadState *hub)
+{
+#if defined(RUNLOOM_DESTRUCT_HAVE)
+    _PyThreadStateImpl *f = (_PyThreadStateImpl *)fiber;
+    _PyThreadStateImpl *h = (_PyThreadStateImpl *)hub;
+    int32_t own;
+    if (__atomic_load_n(&runloom_tlbc_shared, __ATOMIC_RELAXED) != 1)
+        return;
+    own = h->tlbc_index;
+    h->tlbc_index = f->tlbc_index;
+    f->tlbc_index = own;
+#else
+    (void)fiber; (void)hub;
+#endif
+}
+
+void runloom_iframe_tlbc_note_switch(void)
+{
+    __atomic_add_fetch(&runloom_tlbc_switches_total, 1, __ATOMIC_RELAXED);
+}
+
+unsigned long long runloom_iframe_tlbc_switches(void)
+{
+    return __atomic_load_n(&runloom_tlbc_switches_total, __ATOMIC_RELAXED);
 }
 
 int runloom_tstate_in_destruction(PyThreadState *ts)

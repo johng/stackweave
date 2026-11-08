@@ -498,6 +498,10 @@ struct runloom_g {
      * proves the handshake necessary; this is its runtime fidelity oracle).  In the
      * slab-cleared [pass_index,id) range so a recycled g starts unbound. */
     unsigned long tstate_owner_tid;
+    /* 1 + the hub TLBC index this fiber's state was last lent
+     * (runloom_iframe_tlbc_lend); 0 = never lent.  Slab-cleared, like the
+     * field above.  Only feeds stats()["tlbc_switches"]. */
+    int tlbc_lent;
 
     /* ---- introspection block (runloom_introspect.c) ----
      * These fields are deliberately the LAST members of runloom_g_t.  The

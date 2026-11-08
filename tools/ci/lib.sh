@@ -246,7 +246,12 @@ rl_verify_witnesses() {
         || rl_die "exec-home witness missing: BUFFERED_SELF not in Modules/_io/bufferedio.c (a fiber's buffered stream lock owned by its thread state, its wait parks the fiber)"
     grep -q 'SEMLOCK_SELF' "$_src/Modules/_multiprocessing/semaphore.c" \
         || rl_die "exec-home witness missing: SEMLOCK_SELF not in Modules/_multiprocessing/semaphore.c (a fiber's recursive SemLock owned by its thread state)"
-    rl_log "witnesses present: _Py_TID_ASM, _PyThreadStateImpl_AllocHome, Py_NO_INLINE, MBUF_EXPORTS_INC, _Py_MV_EXPORTS_ATOMIC, ARRAY_EXPORTS_INC, _Py_ARRAY_EXPORTS_ATOMIC, recursive_mutex_self, _Py_RMUTEX_TSTATE_IDENT, _Py_fiber_park, _Py_FIBER_PARK_HOOKS, _Py_TSTATE_FIBER_FLAG, BUFFERED_SELF, SEMLOCK_SELF"
+    # Py_TSTATE_TLBC_FOLLOW (its own flag): a frame follows its thread state's
+    # bytecode copy.  ceval.c is not installed; an installed interpreter shows
+    # it by exporting _PyEval_TLBCFollow (stackweave_c.tlbc_follow).
+    grep -q '_PyEval_TLBCFollow' "$_src/Python/ceval.c" \
+        || rl_die "tlbc-follow witness missing: _PyEval_TLBCFollow not in Python/ceval.c (fibers would keep one bytecode copy each)"
+    rl_log "witnesses present: _Py_TID_ASM, _PyThreadStateImpl_AllocHome, Py_NO_INLINE, MBUF_EXPORTS_INC, _Py_MV_EXPORTS_ATOMIC, ARRAY_EXPORTS_INC, _Py_ARRAY_EXPORTS_ATOMIC, recursive_mutex_self, _Py_RMUTEX_TSTATE_IDENT, _Py_fiber_park, _Py_FIBER_PARK_HOOKS, _Py_TSTATE_FIBER_FLAG, BUFFERED_SELF, SEMLOCK_SELF, _PyEval_TLBCFollow"
 }
 
 # ---- guards -----------------------------------------------------------------
