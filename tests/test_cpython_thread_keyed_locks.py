@@ -54,16 +54,17 @@ def run_gap(code, timeout=60, env=None):
 # identity: a lock or check keyed on the OS thread
 # ---------------------------------------------------------------------------
 
-@MIGRATION_GAP(
-    "sqlite3_step holds the connection mutex (serialized mode) across a user "
-    "function; a function that parks and resumes on another hub makes sqlite "
-    "release it from the wrong OS thread (macOS: os_unfair_lock abort)",
-    raises=AssertionError)
-def test_identity_sqlite_callback_survives_a_migration():
-    """A sqlite user function that parks and resumes on another hub returns
-    its value, and the connection stays usable from every hub.  Run in
-    serialized mode (the Debian/Ubuntu/Homebrew default; macOS's system
-    library is multi-thread, so the scenario switches it before import)."""
+def test_identity_sqlite_callback_keeps_its_os_thread_across_a_park():
+    """Was a gap (fixed: a fiber is held on its hub while a foreign C caller
+    is on its stack): sqlite3_step holds the connection mutex (serialized
+    mode) across a user function, and one that parked and resumed on another
+    hub made sqlite release it from the wrong OS thread (macOS: an
+    os_unfair_lock abort).  A user function that parks on wakes that move a
+    plain fiber -- foreign-thread wakes, then a pin to another hub -- must
+    resume on the OS thread it entered on and return its value, and the
+    connection must stay usable from every hub.  Run in serialized mode (the
+    Debian/Ubuntu/Homebrew default; macOS's system library is multi-thread,
+    so the scenario switches it before import)."""
     run_gap(r'''
 import ctypes, importlib.util, subprocess
 _watchdog(40)
@@ -89,18 +90,24 @@ def main():
     if not serialized:
         print("could not put sqlite in serialized mode", flush=True)
         return
+    # The premise: parked this way outside a callback, this fiber moves.
+    require_migration(force_migrate())
     con = sqlite3.connect(":memory:", check_same_thread=False)
     con.execute("create table t(x)")
     con.executemany("insert into t values (?)", [(i,) for i in range(5)])
+    seen = {}
     def udf(x):
         if x == 2:
             before = threading.get_ident()
-            force_migrate(rounds=20)
-            if threading.get_ident() != before:
-                print("REACHED: the function resumed on another hub inside sqlite3_step", flush=True)
+            moved = force_migrate(rounds=20)    # ends with a pin to another hub
+            print("REACHED: the function parked inside sqlite3_step on wakes "
+                  "that move a plain fiber", flush=True)
+            seen["moved"] = moved or threading.get_ident() != before
         return x
     con.create_function("f", 1, udf)
+    holds = stackweave_c.stats()["mn_c_caller_holds"]
     total = con.execute("select sum(f(x)) from t").fetchone()[0]
+    holds = stackweave_c.stats()["mn_c_caller_holds"] - holds
     out = {}
     wg = stackweave.WaitGroup(); wg.add(H)
     def use(h):
@@ -109,7 +116,9 @@ def main():
     for h in range(H):
         stackweave_c.mn_fiber(lambda h=h: use(h), hub=h)
     wg.wait()
-    print("sum=%s per-hub=%s" % (total, out), flush=True)
+    print("sum=%s per-hub=%s moved=%s holds=%d" % (total, out, seen, holds), flush=True)
+    assert seen == {"moved": False}, seen
+    assert holds > 0, "no park was held on its hub (stats mn_c_caller_holds)"
     assert total == 10 and out == {h: 5 for h in range(H)}
     print("PASS", flush=True)
 stackweave.run(H, main)

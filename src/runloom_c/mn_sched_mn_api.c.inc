@@ -27,7 +27,9 @@ int runloom_mn_hub_count(void)
  * odometer): a yield or an ended sleep that moved the fiber.
  * mn_preempt_turns_total: gs a hub ran from its global-runq share or deque
  * right after preempting another (an odometer): the turn a preemption gives
- * the hub's waiting work before the preempted g runs again. */
+ * the hub's waiting work before the preempted g runs again.
+ * mn_c_caller_holds: switch-outs that held a fiber on its hub because a foreign
+ * C caller was on its stack (runloom_mn_hold_for_c_caller), an odometer. */
 long runloom_mn_pending_total(void)
 {
     long total = 0;
@@ -71,6 +73,11 @@ unsigned long long runloom_mn_yield_steals_total(void)
 unsigned long long runloom_mn_preempt_turns(void)
 {
     return __atomic_load_n(&runloom_mn_preempt_turns_total, __ATOMIC_RELAXED);
+}
+
+unsigned long long runloom_mn_c_caller_holds(void)
+{
+    return __atomic_load_n(&runloom_mn_c_caller_holds_total, __ATOMIC_RELAXED);
 }
 
 void *runloom_mn_current_hub_opaque(void)
@@ -287,12 +294,10 @@ int runloom_mn_pin_for_wake(runloom_g_t *g, int hub_id)
         return -1;
     }
 
-    if (hub_id < 0) {                    /* clear the pin */
-        runloom_mn_global_runq_repin(g, 0);
-        return 0;
-    }
-
-    runloom_mn_global_runq_repin(g, hub_id + 1);
+    /* While a foreign C caller is on g's stack the hold on its hub wins, and
+     * this pin takes effect once that caller has returned
+     * (runloom_mn_hold_for_c_caller). */
+    runloom_mn_global_runq_set_pins(g, hub_id < 0 ? 0 : hub_id + 1, -1);
     return 0;
 }
 

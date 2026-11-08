@@ -244,6 +244,52 @@ stackweave.run(4, main)
 ''')
 
 
+def test_identity_c_callback_keeps_its_os_thread_until_it_returns():
+    """A C library may hold a lock owned by the OS thread across a callback
+    into Python (sqlite3's connection mutex; see
+    test_cpython_thread_keyed_locks.py), so a fiber with a foreign C caller
+    on its stack -- one that entered through PyGILState_Ensure, here a
+    ctypes qsort comparator -- must not move.  The comparator asks to be
+    pinned to another hub and parks on foreign-thread wakes, which move a
+    plain fiber; it must resume on the OS thread qsort called it on every
+    time.  The pin is not lost: it takes effect at the first park after qsort
+    returns."""
+    assert_pass(r'''
+import ctypes, ctypes.util
+_watchdog(40)
+libc = ctypes.CDLL(ctypes.util.find_library("c"))
+CMP = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int))
+def main():
+    require_migration(force_migrate())          # a plain park here moves
+    g = stackweave_c.current_g()
+    state = {}
+    tids = set()
+    @CMP
+    def cmp(a, b):
+        tids.add(threading.get_ident())
+        if "target" not in state:
+            state["target"] = (stackweave_c.mn_current_hub() + 1) % stackweave_c.mn_hub_count()
+            g.pin(state["target"])
+        tids.update(park_n_times(2))
+        return a[0] - b[0]
+    holds = stackweave_c.stats()["mn_c_caller_holds"]
+    arr = (ctypes.c_int * 6)(*[6, 3, 5, 1, 4, 2])
+    libc.qsort(arr, 6, ctypes.sizeof(ctypes.c_int), cmp)
+    holds = stackweave_c.stats()["mn_c_caller_holds"] - holds
+    park_n_times(1)                             # the deferred pin applies now
+    after = stackweave_c.mn_current_hub()
+    g.pin(None)
+    print("comparator threads=%d holds=%d hub after=%d target=%d"
+          % (len(tids), holds, after, state["target"]), flush=True)
+    assert list(arr) == [1, 2, 3, 4, 5, 6], list(arr)
+    assert len(tids) == 1, "the comparator resumed on %d OS threads" % len(tids)
+    assert holds > 0, "no park was held on its hub (stats mn_c_caller_holds)"
+    assert after == state["target"], "the pin made inside the callback was lost"
+    print("PASS", flush=True)
+stackweave.run(4, main)
+''')
+
+
 def test_identity_pinned_fiber_stays_on_one_os_thread():
     """G.pin(N) is the escape hatch for code keyed on the OS thread.  A fiber
     pinned to hub N must resume there after every wake, so a stock RLock and a

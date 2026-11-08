@@ -217,6 +217,9 @@ long long runloom_mn_completed_total(void);
 long      runloom_mn_deque_depth_total(void);
 unsigned long long runloom_mn_yield_steals_total(void);
 unsigned long long runloom_mn_preempt_turns(void);
+/* Switch-outs that held a fiber on its hub because a foreign C caller
+ * (PyGILState_Ensure) was on its stack (odometer). */
+unsigned long long runloom_mn_c_caller_holds(void);
 
 /* ---- per-hub diagnostic snapshot (runloom.inspect.hubs()) ----
  * A point-in-time view of every hub's scheduler state, for answering

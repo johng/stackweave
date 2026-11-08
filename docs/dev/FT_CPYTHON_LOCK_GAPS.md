@@ -44,6 +44,27 @@ blocks the only OS thread that could run the holder.
 
 ### 1. sqlite3 callback that parks and migrates aborts the process (B)
 
+**Status: FIXED** (commit "sched: hold a fiber on its hub while a foreign C
+caller is on its stack"). While a fiber's thread state has a nested
+`PyGILState_Ensure` (`gilstate_counter > 1`; `PyThreadState_New` gives a
+per-g state 1), the hub that switches it out holds it there through
+the pin machinery (`runloom_mn_hold_for_c_caller`: `cpin_hub1` overrides the
+user's pin in `pin_hub1`), so the callback resumes on the OS thread the
+library locked from. A `G.pin()` made meanwhile takes effect once the callback
+has returned. That covers every PEP 311 caller: sqlite3's callbacks, ctypes,
+cffi, Cython `with gil`, pybind11 (which bumps the counter itself), `_ssl`'s
+SNI / msg / keylog callbacks. Not covered: callers that re-attach a saved
+thread state without the counter (`_tkinter`, `_ssl`'s password callback,
+`PyThreadState_Swap`). Not changed: a held fiber still parks, so another fiber
+of its hub can use the same connection while the statement is suspended
+(sqlite allows SQL from inside a user function), and it waits behind a busy
+hub like any pinned fiber (#14). A callback stays preemptible, by decision: a
+preempted fiber keeps to its hub's ready ring anyway, while other fibers of
+the hub run. Probes p10 / p11 pass. Guards:
+`test_identity_sqlite_callback_keeps_its_os_thread_across_a_park`,
+`tests/test_cross_hub_migration.py::test_identity_c_callback_keeps_its_os_thread_until_it_returns`
+(`stats()["mn_c_caller_holds"]`).
+
 `p11_sqlite_udf_min.py serialized`: 3/3 SIGKILL, no Python traceback.
 User functions, aggregates, window functions, collations, authorizer,
 progress and trace callbacks run inside `sqlite3_step` (or prepare), which
@@ -63,9 +84,9 @@ True) does not catch it: it runs when `execute` starts, before the migration.
   Python callback: `_tkinter` (Tcl is bound to its thread), `_ssl`'s
   `load_cert_chain` password callback (holds a PyMutex), ctypes/cffi callbacks
   into user libraries.
-- Fix idea: such callbacks enter through `PyGILState_Ensure`, so a nested
+- Fix (above): such callbacks enter through `PyGILState_Ensure`, so a nested
   `gilstate_counter` on the fiber's tstate at park time marks "foreign C frame
-  on the stack": pin the fiber to its hub until the matching Release.
+  on the stack": the fiber is held on its hub until the matching Release.
 
 ### 2. A `__del__` that parks mid merge-drain lets the rest merge on the wrong thread (B)
 

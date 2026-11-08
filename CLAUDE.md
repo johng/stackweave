@@ -371,6 +371,24 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   preempted_fiber_keeps or pinned_fiber_resumes"` (`stats()["mn_yield_steals"]`),
   `tests/test_sched_fairness.py -k "pinned_onto_one_hub or keep_arriving"`
   (`stats()["mn_preempt_turns"]`).
+- **A fiber with a foreign C caller on its stack never moves to another
+  hub.** A C library that calls back into Python through `PyGILState_Ensure`
+  (sqlite3's user functions and handlers, ctypes / cffi callbacks, Cython,
+  pybind11) may hold a lock owned by the OS thread across the call: sqlite's
+  serialized-mode connection mutex aborted on macOS when a callback resumed on
+  another hub. While the fiber's state has `gilstate_counter > 1`
+  (`PyThreadState_New` gives 1), every switch-out holds it on its hub
+  (`runloom_mn_hold_for_c_caller`, in hub_main's release BEFORE anything can
+  route a wake): `pin_hub1` is derived as `cpin_hub1` if set, else
+  `user_pin1` (spawn / `G.pin`), and only `runloom_mn_global_runq_set_pins`
+  writes the three, under the runq lock. So its wakes take the global
+  run-queue to this hub, and its timer and yields stay on the ready ring; a
+  `G.pin()` made meanwhile applies after the callback returns. Callers that
+  re-attach a saved state without the counter (`_tkinter`, `_ssl`'s password
+  callback) are not covered. Guards:
+  `tests/test_cross_hub_migration.py::test_identity_c_callback_keeps_its_os_thread_until_it_returns`,
+  `tests/test_cpython_thread_keyed_locks.py::test_identity_sqlite_callback_keeps_its_os_thread_across_a_park`
+  (`stats()["mn_c_caller_holds"]`).
 - **A sysmon preemption request names the resume it is for.** sysmon asks two
   ways at once, a flag the eval-frame wrapper reads at the next call and a
   pending call run at the next backward jump; `h->preempt_seq` holds the

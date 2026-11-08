@@ -259,21 +259,34 @@ static runloom_g_t *runloom_mn_global_runq_pull(int hub_id)
     return g;
 }
 
-/* The only post-spawn writer of g->pin_hub1.  push and pull classify an entry
- * by pin_hub1 UNDER THIS LOCK, so a bare store on a queued g would make pull
- * decrement a different counter than push incremented, and the drift never
- * heals (a stuck count keeps a hub from ever sleeping, or lets it sleep through
- * work it could take).  The O(n) walk is fine: only pin() reaches here. */
-static void runloom_mn_global_runq_repin(runloom_g_t *g, int new_pin1)
+/* The only post-spawn writer of g->pin_hub1 (and of user_pin1 / cpin_hub1,
+ * from which it is derived).  push and pull classify an entry by pin_hub1
+ * UNDER THIS LOCK, so a bare store on a queued g would make pull decrement a
+ * different counter than push incremented, and the drift never heals (a stuck
+ * count keeps a hub from ever sleeping, or lets it sleep through work it could
+ * take).  user_pin1 / cpin1 < 0 keep the current value.  The effective pin is
+ * the C-caller hold while one is set (runloom_mn_hold_for_c_caller), else the
+ * user's pin.  The O(n) walk is fine: only pin() and a change of hold reach
+ * here, and the hold only changes while the g is RUNNING on the caller's hub,
+ * where it is on no queue. */
+static void runloom_mn_global_runq_set_pins(runloom_g_t *g, int user_pin1,
+                                            int cpin1)
 {
     runloom_g_t *it;
-    int queued = 0, old_pin1;
+    int queued = 0, old_pin1, new_pin1;
     RUNLOOM_RLOCK(&runloom_global_runq_lock, RUNLOOM_RANK_GLOBAL_RUNQ);
+    if (user_pin1 >= 0) g->user_pin1 = user_pin1;
+    if (cpin1 >= 0) g->cpin_hub1 = cpin1;
+    new_pin1 = g->cpin_hub1 != 0 ? g->cpin_hub1 : g->user_pin1;
     old_pin1 = __atomic_load_n(&g->pin_hub1, __ATOMIC_ACQUIRE);
+    if (old_pin1 == new_pin1) {
+        RUNLOOM_RUNLOCK(&runloom_global_runq_lock, RUNLOOM_RANK_GLOBAL_RUNQ);
+        return;
+    }
     for (it = runloom_global_runq_head; it != NULL; it = it->next) {
         if (it == g) { queued = 1; break; }
     }
-    if (queued && old_pin1 != new_pin1 && runloom_hubs != NULL) {
+    if (queued && runloom_hubs != NULL) {
         if (old_pin1 == 0) {
             __atomic_sub_fetch(&runloom_global_runq_unpinned_len, 1, __ATOMIC_RELAXED);
         } else if (old_pin1 - 1 < runloom_hub_count) {

@@ -398,11 +398,20 @@ struct runloom_g {
      * (it is woken by its own parker -- netpoll/chan -- not via this field). */
     void *park_hub;
     /* Hub this g is confined to, PLUS ONE so 0 == unpinned (slab_alloc zeroes
-     * everything before `state`).  Set at spawn (force_hub) or by G.pin(); on
-     * a possibly-queued g it must only change via runloom_mn_global_runq_repin,
-     * which keeps the runq counters consistent.  Contract: mn_sched.h,
-     * runloom_mn_fiber_pinned. */
+     * everything before `state`).  The pin every wake route honours: cpin_hub1
+     * while that is set, else user_pin1.  On a possibly-queued g it must only
+     * change via runloom_mn_global_runq_set_pins, which keeps the runq counters
+     * consistent.  Contract: mn_sched.h, runloom_mn_fiber_pinned. */
     int pin_hub1;
+    /* The pin asked for at spawn (force_hub) or by G.pin(), +1 encoded. */
+    int user_pin1;
+    /* The hub this g is held on, +1 encoded, while a foreign C caller is on its
+     * stack: a C library that called back into Python through
+     * PyGILState_Ensure (sqlite3, ctypes, cffi, Cython, pybind11) and may hold a
+     * lock owned by this OS thread until the callback returns.  Set and cleared
+     * by the hub that switches the g out (runloom_mn_hold_for_c_caller); it
+     * overrides user_pin1 until then.  Written under the global runq lock. */
+    int cpin_hub1;
     /* A hub's current fiber can host a run(1) drain or a Coro, which run other
      * fibers on its stack and thread state.  nest_depth > 0 while either runs
      * hides the hub from the code running there (runloom_mn_nested_here);

@@ -333,6 +333,35 @@ static void runloom_mn_requeue_local(runloom_hub_t *h, runloom_g_t *g)
     runloom_sched_ready_push(&h->sched, g);
 }
 
+/* ---- Foreign C callers hold a fiber on its hub ---------------------------
+ * A C library that calls back into Python -- sqlite3's user functions,
+ * aggregates, collations, authorizer, progress and trace handlers; ctypes and
+ * cffi callbacks; Cython `with gil`; pybind11 -- enters through
+ * PyGILState_Ensure (pybind11 bumps the same counter itself), and may hold a
+ * lock owned by this OS thread across the call: sqlite's serialized-mode
+ * connection mutex is a pthread / os_unfair_lock mutex.  A callback that parks
+ * and resumes on another hub returns into that library on the wrong OS thread,
+ * whose unlock then aborts (macOS os_unfair_lock) or fails and strands the
+ * lock (glibc EPERM).  So while the fiber's own thread state has a nested
+ * Ensure -- gilstate_counter above the 1 PyThreadState_New gives it -- every
+ * switch-out holds it on the hub it is on, through the pin machinery: its
+ * wakes go to the global run-queue for this hub only, its timer re-queues it
+ * on this hub's ready ring, and a yield stays there too.  G.pin() made
+ * meanwhile is kept in user_pin1 and takes effect at the first switch-out
+ * after the callback has returned, which drops the hold.  Runs before any
+ * wake can route the g (the PARKED publish, the RUNNING_WOKEN re-queue, the
+ * yield re-queue), on the hub that owns it, so the g is on no queue here. */
+static unsigned long long runloom_mn_c_caller_holds_total = 0;
+
+static void runloom_mn_hold_for_c_caller(runloom_hub_t *h, runloom_g_t *g)
+{
+    int want = g->tstate->gilstate_counter > 1 ? h->id + 1 : 0;
+    if (want != 0)
+        __atomic_add_fetch(&runloom_mn_c_caller_holds_total, 1, __ATOMIC_RELAXED);
+    if (want != g->cpin_hub1)
+        runloom_mn_global_runq_set_pins(g, -1, want);
+}
+
 /* The owner's take: the TOP, as a thief takes it.  A steal that loses its CAS
  * to a thief returns NULL with gs still queued, so retry while any remain
  * (bottom is ours, and top only grows, so this ends). */
@@ -1617,6 +1646,9 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
              * brc merge queue is keyed to THIS hub's thread state, which
              * never runs bytecode (see runloom_iframe_service_merge_queue). */
             runloom_iframe_service_merge_queue(hub_ts);
+            /* Hold g on this hub while a foreign C caller is on its stack,
+             * before anything below can route a wake. */
+            if (!runloom_coro_done(g->coro)) runloom_mn_hold_for_c_caller(h, g);
             if (runloom_coro_done(g->coro)) {
                 /* Done: the g did not park this resume (a resume ends in a
                  * park OR completion, never both), so no parker is live and

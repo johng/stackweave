@@ -773,8 +773,10 @@ static RUNLOOM_NOINLINE int runloom_mn_fiber_core(PyObject *callable,
     g->park_fd = -1;
     /* Record the pin (+1 encoded, see runloom_sched.h) so the drain routes this
      * g to hub_idx's LOCAL FIFO, not its stealable deque. */
-    if (force_hub >= 0)
+    if (force_hub >= 0) {
+        g->user_pin1 = hub_idx + 1;
         __atomic_store_n(&g->pin_hub1, hub_idx + 1, __ATOMIC_RELEASE);
+    }
     /* Clamp an explicit per-spawn size to [MIN, MAX], exactly like the
      * single-thread go() path (runloom_sched_spawn_sized): "the explicit size
      * wins" means it overrides the autosizer, not that it can exceed the 8 MiB
