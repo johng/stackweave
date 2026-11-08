@@ -335,8 +335,18 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   slice ends wherever the fiber is, maybe inside `with rlock:` or an import,
   whose locks key on the OS thread. A timer for a g pinned to another hub
   wakes it like a channel wake (QUEUED, global run-queue), so the pin holds.
-  Guards: `tests/test_cross_hub_migration.py -k "idle_hub_takes or
-  preempted_fiber_keeps or pinned_fiber_resumes"` (`stats()["mn_yield_steals"]`).
+  The ring is picked first, so the pick right after a preempted ring (or
+  yield-queue) turn is the starve-bound forced turn (global run-queue,
+  deque): without it a CPU-bound g refilled the ring every slice, and a g
+  pinned onto its hub, which only the global queue holds and only that hub
+  may take, waited 64 slices (~3 s) per turn. A g a forced turn picked hands
+  the next pick back to the ring when preempted, so the two alternate: with
+  every preemption forcing a turn, a stream of fresh CPU-bound gs (the deque
+  pops LIFO) kept the ring from running at all. Guards:
+  `tests/test_cross_hub_migration.py -k "idle_hub_takes or
+  preempted_fiber_keeps or pinned_fiber_resumes"` (`stats()["mn_yield_steals"]`),
+  `tests/test_sched_fairness.py -k "pinned_onto_one_hub or keep_arriving"`
+  (`stats()["mn_preempt_turns"]`).
 - **A sysmon preemption request names the resume it is for.** sysmon asks two
   ways at once, a flag the eval-frame wrapper reads at the next call and a
   pending call run at the next backward jump; `h->preempt_seq` holds the

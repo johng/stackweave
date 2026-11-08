@@ -314,6 +314,9 @@ static void runloom_mn_park_exit(runloom_hub_t *h)
  * time slice ran out -- perhaps holding a lock that keys on the OS thread
  * (threading.RLock, an import's _ModuleLock), which a move would orphan. */
 static unsigned long long runloom_mn_yieldq_steals_total = 0;
+/* Forced turns taken right after a preemption that found a g in the global
+ * run-queue or the deque (an odometer; see the pick block in hub_main). */
+static unsigned long long runloom_mn_preempt_turns_total = 0;
 
 static void runloom_mn_requeue_local(runloom_hub_t *h, runloom_g_t *g)
 {
@@ -489,6 +492,11 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
     unsigned int self_pump_ctr = 0;
     unsigned int forced_turns = 0;     /* alternates the forced turn's source (per-g mode) */
     unsigned int local_turns = 0;      /* alternates ready ring / yield queue */
+    /* Set when the last resume ended in a preemption of a g picked from the
+     * ready ring or yield queue: the next pick is a forced turn (see the pick
+     * block), so the g that used up its slice goes behind work waiting in the
+     * global run-queue or the deque. */
+    int preempt_turn = 0;
     (void)self_pump_ctr;
     /* Consecutive idle-pump iterations with no resumed g; drives the adaptive
      * idle-pump backoff (reset to 0 at the resume site below).  Thread-local to
@@ -559,6 +567,9 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
          * steal are single-owner by construction (already RUNNING) and skip
          * both. */
         int from_runq = 0;
+        /* Set when g came from the ready ring or the yield queue (a ring
+         * turn): only its preemption forces the next pick (preempt_turn). */
+        int from_local = 0;
 #ifdef RUNLOOM_DBG_BADCORO
         int gsrc = 0, gvic = -1;   /* source-hunt: which queue delivered g */
 #endif
@@ -817,9 +828,27 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
          * the moment both drain naturally, so workloads that aren't
          * monopolizing never trip it; a sustained yielder pays only a 1-in-
          * starve_bound interleave.  All hub-local + single-consumer; the deque
-         * is touched via its normal owner-pop, never re-ordered internally. */
+         * is touched via its normal owner-pop, never re-ordered internally.
+         *
+         * A preemption forces the same turn at once.  The preempted g goes
+         * back on the ready ring (it may hold a lock keyed on this OS thread,
+         * so it must not move), and the ring is picked first, so a CPU-bound
+         * g refilled it every slice and everything waiting in the global
+         * run-queue -- a g pinned to this hub, above all, which nothing else
+         * may take -- waited starve_bound slices (64 x 50 ms) per turn, and
+         * pinned gs moved here never took turns with each other.  As Go puts
+         * a preempted g behind the global queue, a used-up slice now lets the
+         * work waiting there or on the deque run first; with neither, the
+         * pick falls through to the ring, so preempted gs still alternate.
+         * Only a ring turn's preemption does so: a g taken by a forced turn
+         * hands the next pick back to the ring when its slice runs out, or a
+         * stream of fresh CPU-bound gs, each preempted in turn, would keep
+         * the ring from ever running (the deque pops LIFO, so each new one
+         * went ahead of it).  Ring and waiting work alternate instead. */
         g = NULL;
-        if (sbound && ready_streak >= (unsigned)sbound) {
+        if ((sbound && ready_streak >= (unsigned)sbound) || preempt_turn) {
+            int after_preempt = preempt_turn;
+            preempt_turn = 0;
             ready_streak = 0;
             /* A woken g lands on the GLOBAL run-queue, which the normal order
              * below only pulls once ready ring AND deque are empty -- a
@@ -855,6 +884,9 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
 #endif
                 }
             }
+            if (after_preempt && g != NULL)
+                __atomic_add_fetch(&runloom_mn_preempt_turns_total, 1,
+                                   __ATOMIC_RELAXED);
         }
         if (g == NULL) {
             /* The two local FIFOs -- the ready ring (pinned and preempted gs)
@@ -870,6 +902,7 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
             }
             if (g != NULL) {
                 ready_streak++;
+                from_local = 1;
 #ifdef RUNLOOM_DBG_BADCORO
                 gsrc = 2;      /* ready ring or own yield queue */
 #endif
@@ -1648,6 +1681,7 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                                  __ATOMIC_RELEASE);
                 if (from_runq) runloom_g_decref(g);       /* old queue ref */
                 if (!self_queued) runloom_mn_requeue_local(h, g);
+                else preempt_turn = from_local;   /* a ring turn ran out: others next */
             }
         }
     }

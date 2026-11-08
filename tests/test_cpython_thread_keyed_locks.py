@@ -771,14 +771,13 @@ stackweave.run(4, main)
 # sched / cost
 # ---------------------------------------------------------------------------
 
-@KNOWN_GAP(
-    "a fiber that pins itself onto a hub waits on the global run-queue, which "
-    "that hub pulls only every starve_bound (64) ready-ring turns while a "
-    "preempted CPU-bound fiber keeps the ring busy: ~64 x 50 ms",
-    raises=AssertionError)
 def test_sched_fiber_pinned_onto_a_busy_hub_gets_a_turn_promptly():
     """A fiber does `g.pin(0); sleep(0)` while hub 0 runs a CPU-bound fiber;
-    it first runs on hub 0 within a few time slices (well under 1 s)."""
+    it first runs on hub 0 within a few time slices (well under 1 s).  It
+    waits on the global run-queue, which hub 0 used to pull only every
+    starve_bound (64) ready-ring turns while the preempted hog refilled the
+    ring: ~64 x 50 ms.  A preemption now gives that queue a turn first;
+    stats()["mn_preempt_turns"] counts those turns."""
     run_gap(r'''
 import time as _t
 _watchdog(20)
@@ -809,8 +808,12 @@ def main():
     wg.wait()
     print(out, flush=True)
     assert out["waited"] < 1.0, out
-    print("PASS", flush=True)
+turns = stackweave_c.stats()["mn_preempt_turns"]
 stackweave.run(2, main)
+turns = stackweave_c.stats()["mn_preempt_turns"] - turns
+print("preempt turns", turns, flush=True)
+assert turns > 0, "no hub ran waiting work ahead of a fiber it preempted"
+print("PASS", flush=True)
 ''')
 
 

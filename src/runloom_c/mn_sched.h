@@ -206,11 +206,13 @@ int runloom_mn_hub_count(void);
 /* R0 gauges (lock-free per-hub census): live in-scheduler gs (submitted minus
  * completed, sum conserved under work-stealing); cumulative retired gs
  * (odometer); stealable gs across all hub deques and yield queues; gs other
- * hubs took from a yield queue (odometer). */
+ * hubs took from a yield queue (odometer); gs run ahead of a just-preempted g
+ * (odometer). */
 long      runloom_mn_pending_total(void);
 long long runloom_mn_completed_total(void);
 long      runloom_mn_deque_depth_total(void);
 unsigned long long runloom_mn_yield_steals_total(void);
+unsigned long long runloom_mn_preempt_turns(void);
 
 /* ---- per-hub diagnostic snapshot (runloom.inspect.hubs()) ----
  * A point-in-time view of every hub's scheduler state, for answering

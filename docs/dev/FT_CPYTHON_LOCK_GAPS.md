@@ -338,6 +338,17 @@ ready ring, which is picked before the global run-queue holding the pinned
 fiber, until `starve_bound` (64) forces one global pull: 64 x 50 ms. `G.pin`
 is the workaround the identity gaps recommend.
 
+Status: FIXED on fix/ft-sched-fork: the pick right after a preempted ring
+turn is the starve-bound forced turn (global run-queue / deque), so the pinned
+fiber runs one slice after it is queued (p06: 0.03-0.06 s) and pinned fibers
+take turns (`p05 mn_pin` / `run_pin`: ABAB...). A fiber a forced turn picked
+hands the next pick back to the ring, so ring and waiting work alternate and a
+stream of fresh CPU-bound fibers cannot starve the ring. The preempted fiber
+stays on the ready ring, so it still never moves.
+`stats()["mn_preempt_turns"]` counts the turns; the test checks it, as do
+`tests/test_sched_fairness.py::test_preemption_takes_turns_between_fibers_pinned_onto_one_hub`
+and `::test_preempted_fiber_runs_while_fresh_cpu_bound_fibers_keep_arriving`.
+
 ### 15. Each fiber gets its own bytecode copy (TLBC): cost
 
 `p21_tlbc_per_fiber.py 2000`: 2000 live fibers that ran one 144 KB function

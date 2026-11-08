@@ -397,6 +397,8 @@ static PyObject *m_stats(PyObject *self, PyObject *unused)
     RUNLOOM_STATS_SET("mn_deque_depth",    runloom_mn_deque_depth_total());
     RUNLOOM_STATS_SET("mn_yield_steals",
                       (Py_ssize_t)runloom_mn_yield_steals_total());
+    RUNLOOM_STATS_SET("mn_preempt_turns",
+                      (Py_ssize_t)runloom_mn_preempt_turns());
     /* M:N fibers' first frame-stack chunks: from a hub's pool, or mapped by
      * CPython because the pool was empty.  Summed as each hub exits, so
      * complete once run() returns. */

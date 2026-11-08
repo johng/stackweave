@@ -24,7 +24,10 @@ int runloom_mn_hub_count(void)
  * locally-woken ones under migration (runloom_mn_woken_enqueue) -- and yield
  * queues (runloom_mn_requeue_local).
  * mn_yield_steals_total: gs a hub took from another hub's yield queue (an
- * odometer): a yield or an ended sleep that moved the fiber. */
+ * odometer): a yield or an ended sleep that moved the fiber.
+ * mn_preempt_turns_total: gs a hub ran from its global-runq share or deque
+ * right after preempting another (an odometer): the turn a preemption gives
+ * the hub's waiting work before the preempted g runs again. */
 long runloom_mn_pending_total(void)
 {
     long total = 0;
@@ -63,6 +66,11 @@ long runloom_mn_deque_depth_total(void)
 unsigned long long runloom_mn_yield_steals_total(void)
 {
     return __atomic_load_n(&runloom_mn_yieldq_steals_total, __ATOMIC_RELAXED);
+}
+
+unsigned long long runloom_mn_preempt_turns(void)
+{
+    return __atomic_load_n(&runloom_mn_preempt_turns_total, __ATOMIC_RELAXED);
 }
 
 void *runloom_mn_current_hub_opaque(void)
