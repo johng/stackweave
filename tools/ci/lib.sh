@@ -232,7 +232,17 @@ rl_verify_witnesses() {
         || rl_die "exec-home witness missing: ARRAY_EXPORTS_INC not in Modules/arraymodule.c (atomic array.array export count)"
     grep -qs '_Py_ARRAY_EXPORTS_ATOMIC' "$_src/Include/object.h" "$_src/Include/cpython/object.h" \
         || rl_die "exec-home witness missing: _Py_ARRAY_EXPORTS_ATOMIC not in Include/object.h or Include/cpython/object.h"
-    rl_log "witnesses present: _Py_TID_ASM, _PyThreadStateImpl_AllocHome, Py_NO_INLINE, MBUF_EXPORTS_INC, _Py_MV_EXPORTS_ATOMIC, ARRAY_EXPORTS_INC, _Py_ARRAY_EXPORTS_ATOMIC"
+    grep -q 'recursive_mutex_self' "$_src/Python/lock.c" \
+        || rl_die "exec-home witness missing: recursive_mutex_self not in Python/lock.c (a fiber's _thread.RLock owned by its thread state)"
+    grep -qs '_Py_RMUTEX_TSTATE_IDENT' "$_src/Include/object.h" "$_src/Include/cpython/object.h" \
+        || rl_die "exec-home witness missing: _Py_RMUTEX_TSTATE_IDENT not in Include/object.h or Include/cpython/object.h"
+    grep -q '_Py_TSTATE_FIBER_FLAG' "$_src/Include/internal/pycore_tstate.h" \
+        || rl_die "exec-home witness missing: _Py_TSTATE_FIBER_FLAG not in Include/internal/pycore_tstate.h (only a fiber's thread state owns a lock)"
+    grep -q '_Py_fiber_park' "$_src/Python/parking_lot.c" \
+        || rl_die "exec-home witness missing: _Py_fiber_park not in Python/parking_lot.c (a lock wait can park the fiber)"
+    grep -qs '_Py_FIBER_PARK_HOOKS' "$_src/Include/object.h" "$_src/Include/cpython/object.h" \
+        || rl_die "exec-home witness missing: _Py_FIBER_PARK_HOOKS not in Include/object.h or Include/cpython/object.h"
+    rl_log "witnesses present: _Py_TID_ASM, _PyThreadStateImpl_AllocHome, Py_NO_INLINE, MBUF_EXPORTS_INC, _Py_MV_EXPORTS_ATOMIC, ARRAY_EXPORTS_INC, _Py_ARRAY_EXPORTS_ATOMIC, recursive_mutex_self, _Py_RMUTEX_TSTATE_IDENT, _Py_fiber_park, _Py_FIBER_PARK_HOOKS"
 }
 
 # ---- guards -----------------------------------------------------------------

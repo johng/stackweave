@@ -49,10 +49,14 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   `build_ext --inplace` is ungated; set
   `STACKWEAVE_ALLOW_STOCK_CPYTHON=1` to let pip through. Guard: `tests/test_install_gate.py`.
 - On a patched interpreter, build greenlet from source
-  (`pip install --no-binary greenlet greenlet`). The PyPI wheel is built
-  against stock headers and hangs on its first `switch()` there, which makes
-  every `tests/test_greenlet_interop.py` test time out. Hosted CI doesn't
-  install greenlet, so that file skips there.
+  (`pip install --no-cache-dir --no-binary greenlet greenlet`). The PyPI
+  wheel is built against stock headers and hangs on its first `switch()`
+  there, which makes every `tests/test_greenlet_interop.py` test time out.
+  Rebuild it whenever the patches change `_PyThreadStateImpl` (the `_fiber`
+  field did), and bypass pip's cache: it keys a locally built wheel on the
+  `cp314t` tag alone, so it reinstalls one built against the old layout,
+  which hangs the same way. Hosted CI doesn't install greenlet, so that file
+  skips there.
 - Run the suite via `tests/run_isolated.py` (one file/subprocess — in-process
   `pytest tests/` flakes on cross-file state leaks). It and `tests/conftest.py`
   refuse to run unless migration is sound: the GIL off, and both the
@@ -266,6 +270,37 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   (a patched `Lock` in an mp.Queue `_feed` thread) must detect no-goroutine (TLS
   peek NULL) and block on the real OS — never park a non-existent g, never lazily
   alloc sched state (`peek_current`, never `sched_get`).
+- **CPython's locks that are held across Python code are owned by the thread
+  state, and the `_thread` locks' waits park the fiber, through exec-home
+  hunks whose hooks the library installs.** (1) Ownership: `Python/lock.c`
+  keys `_PyRecursiveMutex` (so `threading.RLock`, and CPython's import and
+  warnings locks) on the attached `tstate->id`, the fiber's own for its whole
+  life; `Python/import.c`'s after-fork reinit uses the same identity. Keyed on
+  the OS thread, a fiber that migrated inside the lock could not release it
+  (wedged for good: an import or warnings lock hung every later import or
+  warn), and a second fiber on the holder's hub re-entered it (two in the
+  critical section). (2) Waiting: `Python/parking_lot.c` lets a wait flagged
+  `_PY_LOCK_FIBER` (the lock objects' acquire, and RLock's `_acquire_restore`)
+  ask `_Py_fiber_park` first; `runloom_fiberlock.c` installs those hooks at
+  import (`STACKWEAVE_FIBER_LOCKS=0` leaves them out) and parks the fiber
+  through `runloom_park_generic`, so its hub runs other fibers and the release
+  wakes it from any thread. Without (2), a waiter blocked its hub's OS thread
+  in the parking lot, and with as many waiters as hubs on a lock held across a
+  park nothing could run the holder: a hard hang the deadlock detector cannot
+  see (hubs busy, not idle); a waiter on the hub of a PREEMPTED holder hung
+  that hub on its own, since nothing steals from a ready ring. `fl_prepare`
+  names a fiber only while its own state is attached (M:N: `g->tstate`;
+  `run(1)`: stackweave's interpreter): inside a subinterpreter call a fiber
+  parked with a foreign state attached (`run(1)` crashed). A plain thread, the
+  hub's own stack and a nested `run(1)`'s fibers keep the platform semaphore;
+  nested fibers share the outer fiber's state, so they still re-enter its
+  RLocks. `stackweave_c.rlock_tstate_owned` / `fiber_lock_hooks` say whether
+  the interpreter has the lock.c and parking_lot.c hunks,
+  `fiber_locks_installed` whether the hooks are in, and
+  `stats()["fiber_lock_parks"]` counts waits that parked. Guards:
+  `tests/test_fiber_locks.py`, `tests/test_cross_hub_migration.py -k
+  stock_rlock`, `tests/test_cpython_thread_keyed_locks.py -k
+  preempt_lock_holder`.
 - **importlib's module locks key on the fiber, not the OS thread.**
   `import stackweave` rebinds `importlib._bootstrap._ModuleLock` to
   `_FiberModuleLock` (`src/stackweave/_importlock.py`): `_ModuleLock`'s own
@@ -286,10 +321,64 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   nested run(1) or Coro (`_nest_owner`). Such an import gets the module so far
   (`import x`) or `_DeadlockError` (`importlib.import_module`), as between two
   threads, instead of hanging. Raw `stackweave_c` use without `import
-  stackweave` gets none of this. Still open: importlib's global `_imp` lock
-  keys on the OS thread, and a preemption inside `_get_module_lock` lets a
-  same-hub fiber re-enter it. Guards: `tests/test_import_lock.py`,
-  `tests/test_cross_hub_migration.py -k import`.
+  stackweave` gets none of this. importlib's global `_imp` lock is a
+  `_PyRecursiveMutex`: owned by a fiber's thread state (the exec-home lock.c
+  hunk), so a same-hub fiber no longer re-enters it. Guards:
+  `tests/test_import_lock.py`, `tests/test_cross_hub_migration.py -k import`.
+- **The stock-lock hooks park only where parking is sound, and only a FIBER's
+  thread state owns a lock.** (1) Identity: `_PyRecursiveMutex_SelfIdent()`
+  (the owner a `_PyRecursiveMutex` records, and every other lock keyed on the
+  same identity) is the tagged `tstate->id` only for a state marked
+  `_PyThreadStateImpl._fiber` (Py_TSTATE_EXEC_HOME, `_Py_TSTATE_FIBER_FLAG`),
+  which spawn sets on every per-g state before its first attach
+  (`runloom_iframe_mark_fiber_tstate`); every other state -- a thread's, a
+  hub's, a C thread's per-callback PyGILState one -- keeps the OS thread, so
+  code that never runs a fiber is exactly stock (an RLock taken in one
+  PyGILState callback and released in the next still works). A new per-g state
+  must be marked, or its locks key on whichever hub it runs on. (2)
+  `fl_prepare` names a fiber only on the fiber's own coroutine (not inside a
+  `_Coro` it resumed: the outer g would be marked parked while only the Coro
+  yields), with its own state attached (not inside `_interpreters.exec`), and
+  outside object destruction (`runloom_tstate_in_destruction`, the preemption
+  gate); otherwise the wait blocks the thread, as stock. (3) Waiters: each is
+  on the waiter list of the sched it waits on (`sched->fl_head`: a hub's for
+  M:N, its owner's for run(1)), linked through its g, never its stack, under
+  that sched's `fl_lock` -- per sched, so contended locks on different hubs
+  share nothing. A wake holds that lock from before it queues the fiber until
+  it has stored WOKEN, and freeing a g still on a list
+  (`runloom_fiberlock_forget`, from `runloom_g_decref`: woken, then dropped
+  unrun by a sched reset) unlinks it under the same lock first and gives back
+  its run-alive count; so a wake never writes into a freed stack. (4) A wait
+  ends with no wake credit outstanding (every credit then was aimed at it); a
+  timed wait arms one timer entry (re-armed only after a migration) and, on
+  ending, bumps `g->timer_ticket`, so the heap drops the entry instead of
+  waking the fiber's next park and purges it before its deadline
+  (`timer_stale`, `runloom_sched_drain_timers`). Out of memory arming it, the
+  wait naps until woken or the deadline, its state detached so a
+  stop-the-world does not wait on it. (5) Teardown: `mn_fini` ends the session
+  first thing (`runloom_fiberlock_mn_stop`: a wake for one of its waiters is
+  dropped from then on, never queued on a hub) and dequeues the waiters'
+  parking-lot entries (`runloom_fiberlock_mn_unpark`); after the joins it
+  waits out wakes still in flight (`fl_inflight`, a Dekker pair with
+  `fl_alive`), dequeues late waiters too, unlinks them all and gives back
+  their run-alive counts. (6) Fork: the child keeps the forking thread's
+  run(1) waiters and wakes them to retry with a fresh parking-lot entry
+  (CPython emptied the lot); the rest are dead and only their counts are given
+  back. (7) Signals: a run(1) fiber's interruptible wait (`_Py_PARK_INTR`, the
+  lock objects' acquire) on the main thread is woken by the drain while a
+  signal is pending and returns `Py_PARK_INTR`, so CPython runs the handler in
+  the fiber, as for a stock main-thread acquire; an M:N fiber never runs on
+  the main thread, so like a stock non-main thread its wait is not
+  interrupted, and the signal is carried out of `run()`. Known limitations:
+  every lock park is foreign-wakeable (a plain thread may release), so the
+  deadlock detector never reports a fiber-vs-fiber lock deadlock (AB-BA): it
+  hangs; an RLock's owner is knowable (its thread state), a plain Lock's is
+  not. And a lock handed off to a fiber that never runs stays locked for good:
+  a release in the window between an aborted M:N `run()` returning and
+  `mn_fini`, or one that reaches a fiber which began waiting while the hubs
+  stopped, or a woken waiter that a sched reset then drops. Guards:
+  `tests/test_fiber_locks.py` (`stats()` `fiber_lock_stale_wakes`,
+  `_timer_arms`, `_signal_wakes`, `timer_entries`).
 - **Parked-fiber frames are made GC-visible by the frames anchor.** The
   free-threaded collector credits PEP-703 deferred stackrefs (code objects,
   functions, deferred locals) only on LIVE tstate `current_frame` chains; a parked
@@ -356,8 +445,8 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   g switched out and its tstate is detached, never from inside the fiber: a
   thief resumes it the moment it is queued; (2) a preempted g goes back on the
   ready ring (`runloom_mn_preempt_yield`), which only its hub reads: a time
-  slice ends wherever the fiber is, maybe inside `with rlock:` or an import,
-  whose locks key on the OS thread. A timer for a g pinned to another hub
+  slice ends wherever the fiber is, maybe inside a sqlite call or other C
+  code that keys on the OS thread. A timer for a g pinned to another hub
   wakes it like a channel wake (QUEUED, global run-queue), so the pin holds.
   The ring is picked first, so the pick right after a preempted ring (or
   yield-queue) turn is the starve-bound forced turn (global run-queue,

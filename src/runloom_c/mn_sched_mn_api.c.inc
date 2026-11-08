@@ -3,6 +3,16 @@
  * these definitions depend on. */
 
 
+long runloom_mn_timer_entries_total(void)
+{
+    long n = 0;
+    int i;
+    if (runloom_hubs == NULL) return 0;
+    for (i = 0; i < runloom_hub_count; i++)
+        n += (long)__atomic_load_n(&runloom_hubs[i].sched.timer_size, __ATOMIC_RELAXED);
+    return n;
+}
+
 int runloom_mn_hub_count(void)
 {
     return runloom_hub_count;

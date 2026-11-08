@@ -7,7 +7,7 @@ one OS thread in two separate ways — and either alone still corrupts:
 | half | flag | what it decouples |
 |---|---|---|
 | **allocation** | `Py_TSTATE_ALLOC_HOME` | which heap a migrated fiber allocates on |
-| **execution** | `Py_TSTATE_EXEC_HOME` | whether the compiler may cache *which OS thread we are* (plus memoryview's and array.array's buffer-export counts, which a migrated fiber's deallocs race, see below) |
+| **execution** | `Py_TSTATE_EXEC_HOME` | whether the compiler may cache *which OS thread we are* (plus memoryview's and array.array's buffer-export counts, which a migrated fiber's deallocs race, and `_thread.RLock` and the import and warnings locks: owned by the thread state rather than the OS thread, and the `_thread` locks' waits can park a fiber, see below) |
 
 Each half ships as a **version-specific** patch (stackweave supports only
 free-threaded CPython 3.14+), and they are **not** interchangeable across
@@ -329,6 +329,82 @@ which xfails the same way on an interpreter without the installed
 Not audited beyond that: the rest of the class. bytearray is safe (its
 `ob_exports` is under the object's critical section).
 
+### A lock owned by the OS thread, waited for by the OS thread (`lock.c`, `parking_lot.c`)
+
+`_PyRecursiveMutex` -- `_thread.RLock`, and CPython's own import and warnings
+locks -- records `PyThread_get_thread_ident_ex()` at acquire and compares the
+current OS thread at every release and `_is_owned()`. That ties the lock to
+the OS thread in two ways a fiber breaks: a fiber that parks inside the lock
+and resumes on another hub cannot release it (`RuntimeError: cannot release
+un-acquired lock`, and the lock stays held for good), and every fiber on one
+hub shares its OS thread, so a fiber that takes a lock another fiber on its
+hub holds re-enters it instead of waiting -- both run the critical section,
+and the second's release takes a level off the first's. `logging.Handler`
+holds one of these around `emit`.
+
+The `lock.c` hunk keys the mutex on a FIBER's thread state instead:
+`tstate->id`, unique for the interpreter's life (`PyThreadState_GetID`),
+tagged odd so it never collides with an OS thread id (a `pthread_t` is an
+aligned pointer, a Windows thread id a multiple of 4). A fiber's state is one
+the runtime marked (`_PyThreadStateImpl._fiber`, which the `pycore_tstate.h`
+hunk adds; stackweave marks every per-g state at spawn). Every other state --
+a thread's own, a hub's, a C thread's per-callback PyGILState state -- keeps
+the OS thread, so code that never runs a fiber behaves exactly as stock: a C
+library's thread may still take an RLock in one callback and release it in
+the next, on a fresh thread state. `_PyRecursiveMutex_SelfIdent()` is exported for
+`_PyImport_ReInitLock`, which re-owns the import lock after a fork (upstream
+writes the raw OS id there, which no longer matches: the child's first import
+died with a fatal "unlocking a recursive mutex that is not owned"). Fibers of
+a nested `run(1)` or Coro run on the outer fiber's state and keep sharing its
+locks. Witnesses: `_Py_RMUTEX_TSTATE_IDENT` and `_Py_TSTATE_FIBER_FLAG`
+(`stackweave_c.rlock_tstate_owned`).
+
+Identity alone is not enough. A contended `_thread.lock` or `RLock` waits in
+the parking lot, which sleeps the OS thread on a semaphore. Under M:N that
+thread is a hub, and with as many waiters as hubs on a lock held across a park
+nothing can run the holder: a hard hang the deadlock detector cannot see (the
+hubs are busy, not idle). Measured: six fibers on four hubs each holding a
+lock across twenty foreign-woken parks hung for good. So the `parking_lot.c`
+hunk adds `_Py_fiber_park`, three hooks a fiber runtime installs once:
+`prepare(addr, flags)` runs under the bucket lock before the entry is queued
+and names the current fiber, or NULL to wait on the platform semaphore as
+usual (stackweave names one only where parking is sound: on the fiber's own
+coroutine, not a `_Coro` it resumed; with its own state attached, not inside
+`_interpreters.exec`; outside object destruction); `wait()` parks it, and may
+return `Py_PARK_INTR` for a wait flagged `_Py_PARK_INTR` (an interruptible
+acquire) when a signal is pending -- the run(1) drain on the main thread
+interrupts it so CPython runs the handler in the fiber, as for a stock
+main-thread acquire; `wake()` wakes it from any thread, at most once per
+wait.
+The lot keeps its queue, handoff and timeout-vs-unpark bookkeeping; only the
+sleep is delegated, and only for a wait flagged `_Py_PARK_FIBER`, which the
+lock objects pass as `_PY_LOCK_FIBER` from `acquire()` and RLock's
+`_acquire_restore` (`_threadmodule.c` hunk; every other `PyMutex` wait, such
+as a critical section's, blocks the thread as before). stackweave's
+`runloom_fiberlock.c` installs them at import and parks through
+`runloom_park_generic` (foreign-wakeable), so the hub runs other fibers and
+the same six-fiber run finishes in 0.1 s. A waiter on the hub of a holder
+that was PREEMPTED inside the lock hung that hub on its own: a preempted
+fiber waits on its hub's ready ring, which nothing steals.
+`prepare()` names a fiber only while that
+fiber's own thread state is attached: a fiber inside a subinterpreter call
+(`_interpreters.exec`) waits with the subinterpreter's state attached, and
+parking there handed the hub or the `run(1)` drain a foreign state (`run(1)`
+crashed), so such a wait blocks the thread. The uncontended path gains one
+flag test. `_testinternalcapi/test_lock.c`'s whitebox owner assert follows
+the identity. Witness: `_Py_FIBER_PARK_HOOKS` (`stackweave_c.fiber_lock_hooks`;
+`fiber_locks_installed` says the hooks are in -- nothing at run time
+leaves them out). Guards: `tests/test_fiber_locks.py`,
+`tests/test_cross_hub_migration.py -k stock_rlock`,
+`tests/test_cpython_thread_keyed_locks.py -k preempt_lock_holder`
+(`stats()["fiber_lock_parks"]`).
+
+One behaviour changes for plain threads too: a thread state is the owner, so
+a C thread whose `PyGILState_Ensure()` state is torn down between acquiring
+and releasing one of these locks (one `Ensure`/`Release` pair per callback,
+the lock held across two callbacks) no longer owns it the second time.
+Upstream keys that case on the OS thread, which survives.
+
 ## Using it
 
 Migration is **always on** under M:N (`run(n > 1)`); there is no switch. What it
@@ -363,6 +439,11 @@ needs is an interpreter built with **both** patches:
    grep -q MBUF_EXPORTS_INC Objects/memoryobject.c                 # exec-home
    grep -q _Py_ARRAY_EXPORTS_ATOMIC Include/object.h               # exec-home
    grep -q ARRAY_EXPORTS_INC Modules/arraymodule.c                 # exec-home
+   grep -q _Py_RMUTEX_TSTATE_IDENT Include/object.h               # exec-home
+   grep -q recursive_mutex_self Python/lock.c                      # exec-home
+   grep -q _Py_FIBER_PARK_HOOKS Include/object.h                 # exec-home
+   grep -q _Py_TSTATE_FIBER_FLAG Include/internal/pycore_tstate.h  # exec-home
+   grep -q _Py_fiber_park Python/parking_lot.c                     # exec-home
    grep -q _PyThreadStateImpl_AllocHome Include/internal/pycore_tstate.h  # alloc-home
    ```
 

@@ -126,20 +126,34 @@ stackweave.run(H, main)
 
 
 @MIGRATION_GAP(
-    "C do_warn holds the interpreter's warnings _PyRecursiveMutex (owner: the "
-    "OS thread) across showwarning; one that parks and migrates cannot "
-    "release it, so every later warn on another hub blocks its hub forever",
+    "C do_warn holds the interpreter's warnings _PyRecursiveMutex across "
+    "showwarning; owned by the thread state (exec-home lock.c hunk) it is "
+    "released after a migration, but a warn that has to wait blocks its hub's "
+    "OS thread, so with a waiter on every hub the parked showwarning never "
+    "resumes",
     raises=AssertionError)
 def test_identity_warnings_lock_released_after_a_migrating_showwarning():
     """A showwarning hook that does I/O (logging.captureWarnings with a
-    network handler, say) parks and resumes on another hub.  Afterwards a
-    warning on every hub still returns."""
+    network handler, say) parks and resumes on another hub, then parks again
+    while a fiber on every hub warns.  Every warning returns, and the waiters
+    parked (stats()["fiber_lock_parks"]) instead of blocking their hubs."""
     run_gap(r'''
 import warnings
 _watchdog(20)
 H = 4
+assert stackweave_c.rlock_tstate_owned and stackweave_c.fiber_locks_installed
 warnings.simplefilter("always")
 state = {"first": True}
+done = []
+started = set()
+waited = {}
+wg = stackweave.WaitGroup(); wg.add(H)
+def parks():
+    return stackweave_c.stats()["fiber_lock_parks"]
+def other(h):
+    started.add(h)
+    warnings.warn("on hub %d" % h, DeprecationWarning)
+    done.append(h); wg.done()
 def show(*a, **k):
     if state["first"] and stackweave_c.current_g() is not None:
         state["first"] = False
@@ -147,18 +161,22 @@ def show(*a, **k):
         force_migrate(rounds=10)
         if threading.get_ident() != before:
             print("REACHED: showwarning resumed on another hub", flush=True)
+        p0 = parks()
+        for h in range(H):                 # one waiter per hub, lock held
+            stackweave_c.mn_fiber(lambda h=h: other(h), hub=h)
+        end = time.monotonic() + 10        # sleeps, not lock waits: only the
+        while len(started) < H and time.monotonic() < end:
+            stackweave.sleep(0.01)         # waiters' parks count below
+        stackweave.sleep(0.2)
+        waited["parks"] = parks() - p0
+        print("waiters parked: %d" % waited["parks"], flush=True)
 warnings.showwarning = show
 def main():
     warnings.warn("first", UserWarning)
-    done = []
-    wg = stackweave.WaitGroup(); wg.add(H)
-    def other(h):
-        warnings.warn("on hub %d" % h, DeprecationWarning)
-        done.append(h); wg.done()
-    for h in range(H):
-        stackweave_c.mn_fiber(lambda h=h: other(h), hub=h)
     wg.wait()
     print("warned on hubs", sorted(done), flush=True)
+    assert sorted(done) == list(range(H)), done
+    assert waited["parks"] >= H, "the waiters never parked: %r" % (waited,)
     print("PASS", flush=True)
 stackweave.run(H, main)
 ''')
@@ -166,18 +184,32 @@ stackweave.run(H, main)
 
 @MIGRATION_GAP(
     "importlib runs every finder.find_spec() under the global import lock "
-    "(_imp, a _PyRecursiveMutex owned by the OS thread); a finder that parks "
-    "and migrates gets 'not holding the import lock' and leaks the lock, so "
-    "every later import hangs",
+    "(_imp, a _PyRecursiveMutex); owned by the thread state (exec-home lock.c "
+    "hunk) it is released after a migration, but an import that has to wait "
+    "blocks its hub's OS thread, so with a waiter on every hub the parked "
+    "finder never resumes",
     raises=AssertionError)
 def test_identity_import_lock_released_after_a_migrating_finder():
     """A meta-path finder that does I/O (setuptools' editable finder calls
-    Path.exists) parks and resumes on another hub.  The import fails with
-    ModuleNotFoundError, and imports on every hub still work."""
+    Path.exists) parks and resumes on another hub, then parks again while a
+    fiber on every hub imports.  The import fails with ModuleNotFoundError,
+    the imports on every hub work, and their waits parked
+    (stats()["fiber_lock_parks"]) instead of blocking their hubs."""
     run_gap(r'''
 import importlib, importlib.abc
 _watchdog(20)
 H = 4
+assert stackweave_c.rlock_tstate_owned and stackweave_c.fiber_locks_installed
+done = []
+started = set()
+waited = {}
+wg = stackweave.WaitGroup(); wg.add(H)
+def parks():
+    return stackweave_c.stats()["fiber_lock_parks"]
+def other(h):
+    started.add(h)
+    importlib.import_module(["colorsys", "fractions", "statistics", "difflib"][h])
+    done.append(h); wg.done()
 class ParkingFinder(importlib.abc.MetaPathFinder):
     def find_spec(self, name, path, target=None):
         if name == "nosuch_mod_for_the_finder" and stackweave_c.current_g() is not None:
@@ -185,6 +217,15 @@ class ParkingFinder(importlib.abc.MetaPathFinder):
             force_migrate(rounds=5)
             if threading.get_ident() != before:
                 print("REACHED: find_spec resumed on another hub", flush=True)
+            p0 = parks()
+            for h in range(H):             # one waiter per hub, lock held
+                stackweave_c.mn_fiber(lambda h=h: other(h), hub=h)
+            end = time.monotonic() + 10    # sleeps, not lock waits: only the
+            while len(started) < H and time.monotonic() < end:
+                stackweave.sleep(0.01)     # waiters' parks count below
+            stackweave.sleep(0.2)
+            waited["parks"] = parks() - p0
+            print("waiters parked: %d" % waited["parks"], flush=True)
         return None
 sys.meta_path.insert(0, ParkingFinder())
 def main():
@@ -196,16 +237,11 @@ def main():
     except Exception as e:
         first = repr(e)
     print("first import:", first, flush=True)
-    done = []
-    wg = stackweave.WaitGroup(); wg.add(H)
-    def other(h):
-        importlib.import_module(["colorsys", "fractions", "statistics", "difflib"][h])
-        done.append(h); wg.done()
-    for h in range(H):
-        stackweave_c.mn_fiber(lambda h=h: other(h), hub=h)
     wg.wait()
     print("imported on hubs", sorted(done), flush=True)
     assert first == "ModuleNotFoundError", first
+    assert sorted(done) == list(range(H)), done
+    assert waited["parks"] >= H, "the waiters never parked: %r" % (waited,)
     print("PASS", flush=True)
 stackweave.run(H, main)
 ''')
@@ -617,34 +653,41 @@ stackweave.run(2, main)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("lock", ["threading.Lock", "_strptime._cache_lock"])
-@KNOWN_GAP(
-    "a preempted fiber waits on its hub's ready ring, which nothing steals; a "
-    "fiber on that hub contending for a stock lock it holds blocks the hub's "
-    "OS thread, so the holder never runs again (monkey.patch avoids it for "
-    "locks made after patch(); the parking-lot hook would cover _thread locks)",
-    raises=AssertionError)
 def test_preempt_lock_holder_runs_while_a_same_hub_fiber_waits(lock):
     """Fiber A runs CPU-bound Python inside a stock lock and is preempted; B
     on the same hub then wants the lock.  A finishes and B gets it, as with
-    threads.  `_strptime._cache_lock` is taken implicitly by time.strptime."""
+    threads.  `_strptime._cache_lock` is taken implicitly by time.strptime.
+
+    Was a gap: a preempted fiber waits on its hub's ready ring, which nothing
+    steals, and B's wait blocked the hub's OS thread, so A never ran again.
+    The exec-home parking_lot.c hunk lets a _thread lock's wait park the
+    fiber (stats()["fiber_lock_parks"]), whenever the lock was made."""
     run_gap(r'''
 import time as _t, _strptime
-_watchdog(15)
+_watchdog(45)
+assert stackweave_c.fiber_locks_installed
 LOCK = "LOCKNAME"
 lock = threading.Lock() if LOCK == "threading.Lock" else _strptime._cache_lock
+held, b_started = [False], [False]
 def step(end):
-    return _t.perf_counter() < end
+    return _t.perf_counter() < end and not b_started[0]
 def main():
     out = {}
     wg = stackweave.WaitGroup(); wg.add(2)
     def A():
+        # Hold the lock, spinning, until B has started.  B is on this hub, so
+        # it can only start while A spins if A was preempted holding the lock:
+        # the trigger cannot be missed on a slow box (20 s cap).
         with lock:
-            end = _t.perf_counter() + 0.3
+            held[0] = True
+            end = _t.perf_counter() + 20
             while step(end):
                 pass
+            held[0] = False
         out["A"] = "done"; wg.done()
     def B():
-        if lock.locked():
+        b_started[0] = True
+        if held[0]:
             print("REACHED: B runs on the hub while preempted A holds the lock", flush=True)
         t0 = _t.perf_counter()
         if LOCK == "threading.Lock":
@@ -654,10 +697,12 @@ def main():
             _t.strptime("2026-11-08", "%Y-%m-%d")
         out["B_waited"] = round(_t.perf_counter() - t0, 3); wg.done()
     stackweave_c.mn_fiber(A, hub=0)
-    stackweave.sleep(0.02)
+    while not held[0]:
+        stackweave.sleep(0.005)
     stackweave_c.mn_fiber(B, hub=0)
     wg.wait()
     print(out, flush=True)
+    assert stackweave_c.stats()["fiber_lock_parks"] >= 1, "B never parked"
     print("PASS", flush=True)
 stackweave.run(2, main)
 '''.replace("LOCKNAME", lock))

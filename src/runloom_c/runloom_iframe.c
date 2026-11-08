@@ -595,6 +595,39 @@ int runloom_tstate_in_destruction(PyThreadState *ts)
 #endif
 }
 
+/* See runloom_iframe.h. */
+void runloom_iframe_mark_fiber_tstate(PyThreadState *ts)
+{
+#if defined(RUNLOOM_DESTRUCT_HAVE) && defined(_Py_TSTATE_FIBER_FLAG)
+    if (ts != NULL)
+        ((_PyThreadStateImpl *)ts)->_fiber = 1;
+#else
+    (void)ts;
+#endif
+}
+
+int runloom_iframe_fiber_tstate_flag(void)
+{
+#if defined(RUNLOOM_DESTRUCT_HAVE) && defined(_Py_TSTATE_FIBER_FLAG)
+    return 1;
+#else
+    return 0;
+#endif
+}
+
+int runloom_iframe_main_signals_pending(void)
+{
+#if defined(RUNLOOM_DESTRUCT_HAVE)
+    PyThreadState *mt;
+    if (PyThread_get_thread_ident() != _PyRuntime.main_thread)
+        return 0;                      /* _Py_IsMainThread is not exported */
+    mt = _PyRuntime.main_tstate;
+    return mt != NULL && _Py_eval_breaker_bit_is_set(mt, _PY_SIGNALS_PENDING_BIT);
+#else
+    return 0;
+#endif
+}
+
 int runloom_iframe_walk(void *top, int max, runloom_iframe_cb cb, void *ctx)
 {
 #if defined(RUNLOOM_IFRAME_HAVE)

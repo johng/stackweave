@@ -202,6 +202,14 @@ static PyMethodDef module_methods[] = {
      "until fd is ready.  events is a bitmask: 1=read, 2=write."},
     {"netpoll_backend", m_netpoll_backend, METH_NOARGS,
      "Return active netpoll backend name (\"epoll\", \"kqueue\", \"select\")."},
+    {"_tstate_in_destruction", m_tstate_in_destruction, METH_NOARGS,
+     "_tstate_in_destruction() -> bool: the calling thread state is inside "
+     "CPython object destruction (trashcan unwind / biased-refcount merge).  "
+     "Test-only."},
+    {"_c_thread_call_each", m_c_thread_call_each, METH_O,
+     "_c_thread_call_each(callables) -> list: call each on one new OS thread, "
+     "each in its own PyGILState_Ensure/Release (a fresh thread state per "
+     "call, as a C library's callbacks get).  Test-only."},
     {"_c_stack_limits", m_c_stack_limits, METH_NOARGS,
      "_c_stack_limits() -> (top, soft_limit, hard_limit): the calling thread "
      "state's C-stack window, which RecursionError and the trashcan measure "
@@ -620,6 +628,26 @@ PyMODINIT_FUNC PyInit_stackweave_c(void)
     /* Whether this build has both migration patches (mn_sched.h). */
     if (PyModule_AddIntConstant(m, "migration_patched",
                                 RUNLOOM_MIGRATION_PATCHED) < 0) {
+        Py_DECREF(m);
+        return NULL;
+    }
+    /* Whether a fiber's _thread.RLock is owned by its thread state (mn_sched.h):
+     * the lock.c hunk and the fiber mark it keys on. */
+    if (PyModule_AddIntConstant(m, "rlock_tstate_owned",
+                                RUNLOOM_RLOCK_TSTATE_OWNED &&
+                                runloom_iframe_fiber_tstate_flag()) < 0) {
+        Py_DECREF(m);
+        return NULL;
+    }
+    /* Whether a lock's wait can park the fiber (mn_sched.h), and whether the
+     * hooks were installed in this process (STACKWEAVE_FIBER_LOCKS). */
+    if (PyModule_AddIntConstant(m, "fiber_lock_hooks",
+                                RUNLOOM_FIBER_LOCK_HOOKS) < 0) {
+        Py_DECREF(m);
+        return NULL;
+    }
+    if (PyModule_AddIntConstant(m, "fiber_locks_installed",
+                                runloom_fiberlock_install()) < 0) {
         Py_DECREF(m);
         return NULL;
     }

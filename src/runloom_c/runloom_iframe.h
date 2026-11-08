@@ -60,6 +60,18 @@ size_t runloom_gen_exc_state_offset(void);
  * when built with RUNLOOM_NO_IFRAME. */
 int runloom_tstate_in_destruction(PyThreadState *ts);
 
+/* Py_TSTATE_EXEC_HOME's fiber mark (_PyThreadStateImpl._fiber): a lock that
+ * records its owner records a marked state, not its OS thread; unmarked states
+ * keep the OS thread, as stock.  Set on each per-g state before its first
+ * attach.  runloom_iframe_fiber_tstate_flag() says whether the interpreter has
+ * the field (its witness, _Py_TSTATE_FIBER_FLAG); without it the mark is a
+ * no-op.  runloom_iframe_main_signals_pending(): on the main thread, whether a
+ * signal is waiting for its Python handler (the eval-breaker bit CPython's C
+ * handler sets), without running or consuming it; 0 elsewhere. */
+void runloom_iframe_mark_fiber_tstate(PyThreadState *ts);
+int runloom_iframe_fiber_tstate_flag(void);
+int runloom_iframe_main_signals_pending(void);
+
 /* Critical-section suspend/restore across a fiber swap (no-op when built
  * with RUNLOOM_NO_IFRAME).  A fiber can park while
  * holding a CPython per-object critical section (e.g. a dict's ma_mutex held

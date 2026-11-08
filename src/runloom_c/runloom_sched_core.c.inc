@@ -145,6 +145,9 @@ void runloom_sched_init(runloom_sched_t *s)
     s->timer_heap = NULL;
     s->timer_size = 0;
     s->timer_cap = 0;
+    s->timer_stale = 0;
+    runloom_mutex_init(&s->fl_lock);
+    s->fl_head = NULL;
     s->stack_size = (Py_ssize_t)runloom_cal_default;
     s->completed = 0;
     s->stopping = 0;
@@ -390,6 +393,7 @@ static void runloom_g_nest_sched_release(runloom_g_t *g)
     PyMem_Free(s->sleep_heap);
     PyMem_Free(s->timer_heap);
     runloom_mutex_destroy(&s->wake_list_lock);
+    runloom_mutex_destroy(&s->fl_lock);
     PyMem_RawFree(s);
 }
 
@@ -933,6 +937,11 @@ void runloom_g_decref(runloom_g_t *g)
      * are observable on the last reference's owner before free. */
     new_count = __atomic_sub_fetch(&g->refcount, 1, __ATOMIC_ACQ_REL);
     if (new_count <= 0) {
+        /* Still on a stock-lock waiter list (woken, then dropped unrun -- a
+         * sched reset): unlink it before its stack goes.  Under the list's
+         * lock, which a wake holds until it is done with the g's stack. */
+        if (__atomic_load_n(&g->fl_list, __ATOMIC_ACQUIRE) != NULL)
+            runloom_fiberlock_forget(g);
         runloom_g_nest_uncount(g);
         if (g->nest_sched != NULL) {
             runloom_g_nest_sched_release(g);

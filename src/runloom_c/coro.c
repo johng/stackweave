@@ -147,6 +147,14 @@ size_t runloom_coro_guard_size(void)
  * to find the caller context.  Thread-local. */
 static RUNLOOM_TLS runloom_coro_t *runloom_tls_current = NULL;
 
+/* See coro.h.  Out of line, so a caller that may migrate reads the TLS slot of
+ * the thread it is on now (CLAUDE.md: a thread-local's address never survives
+ * a park). */
+RUNLOOM_NOINLINE runloom_coro_t *runloom_coro_current(void)
+{
+    return runloom_tls_current;
+}
+
 /* Pre-swap hook -- see coro.h.  NULL unless the Python layer registers a re-arm
  * (free-threaded 3.14+).  Defined unconditionally, outside the backend #if
  * guards, so every runloom_coro_resume variant can invoke it. */

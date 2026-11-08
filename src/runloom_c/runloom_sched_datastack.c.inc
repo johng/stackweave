@@ -884,6 +884,7 @@ static int runloom_timer_push(runloom_sched_t *s, double deadline, runloom_g_t *
     runloom_g_incref(g);
     e.deadline = deadline;
     e.g = g;
+    e.ticket = __atomic_load_n(&g->timer_ticket, __ATOMIC_ACQUIRE);
     e.logical = logical;
     __atomic_store_n(&s->timer_size, s->timer_size + 1, __ATOMIC_RELAXED);  /* census reads x-thread */
     i = s->timer_size;

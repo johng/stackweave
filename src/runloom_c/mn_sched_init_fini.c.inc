@@ -271,6 +271,8 @@ int runloom_mn_init(int n_threads)
          * load and treat NULL as attach-state -1 (fail closed) during the brief
          * window before the hub publishes it. */
     }
+    /* A new M:N session for the stock-lock waits (runloom_fiberlock.c). */
+    runloom_fiberlock_mn_start();
     saved = PyEval_SaveThread();
     for (i = 0; i < n_threads; i++) {
         if (runloom_thread_create(&runloom_hubs[i].thread,
@@ -418,6 +420,14 @@ void runloom_mn_fini(void)
      * lose by gating early.  See runloom_mn_gen in mn_sched.c and the dekker
      * finding (docs/dev/repro/DEKKER_SIGSEGV_FINDING.md). */
     __atomic_add_fetch(&runloom_mn_gen, 1, __ATOMIC_RELEASE);
+    /* End the session for the stock-lock waits before the hubs stop: a fiber
+     * still parked in one (an abnormal end -- a signal carried out of mn_run,
+     * a deadlock raise) will never run, so its wakes are dropped from here on
+     * and its parking-lot entry goes now, before a release can hand it the
+     * lock (runloom_fiberlock.c). */
+    runloom_fiberlock_mn_stop();
+    for (i = 0; i < runloom_hub_count; i++)
+        runloom_fiberlock_mn_unpark(&runloom_hubs[i].sched, 0);
     /* Stop the watchdog before any hub teardown so its scan never touches
      * freed hub state. */
     runloom_sysmon_stop_join();
@@ -444,6 +454,12 @@ void runloom_mn_fini(void)
         }
         PyEval_RestoreThread(saved);
     }
+    /* The stock-lock waiters still parked will never run: wait out wakes in
+     * flight, dequeue any that started waiting while the hubs stopped, unlink
+     * them all and give back their run-alive counts.  Before the leftovers
+     * drain, so a wake that queued its g has finished with it. */
+    for (i = 0; i < runloom_hub_count; i++)
+        runloom_fiberlock_mn_unpark(&runloom_hubs[i].sched, 1);
     /* controlled-mode baton: all hubs joined, nobody can acquire/release now */
     runloom_mn_ctrl_fini();
     /* Drain leftover gs BEFORE tearing down per-hub tstates: g->snap
@@ -829,6 +845,9 @@ static RUNLOOM_NOINLINE int runloom_mn_fiber_core(PyObject *callable,
      * mn_init for the whole life of the hubs). */
     if (runloom_mn_interp != NULL) {
         g->tstate = PyThreadState_New(runloom_mn_interp);
+        /* A fiber's state: locks that record an owner record it, not the OS
+         * thread (Py_TSTATE_EXEC_HOME; no-op without the field). */
+        runloom_iframe_mark_fiber_tstate(g->tstate);
         if (g->tstate == NULL) {
             runloom_coro_destroy(g->coro);
             g->coro = NULL;

@@ -105,6 +105,64 @@
 #  endif
 #endif
 
+/* 1 iff the interpreter's exec-home patch carries its Python/lock.c hunk: a
+ * FIBER's _PyRecursiveMutex, so its _thread.RLock, is owned by its THREAD
+ * STATE (tstate->id), not by the OS thread.  A fiber runs on a thread state of
+ * its own, which spawn marks as a fiber's (runloom_iframe_mark_fiber_tstate;
+ * every other state keeps the OS thread, as stock), so it keeps its RLocks
+ * across a migration, and two fibers on one hub do not share one.  The header
+ * witness is _Py_RMUTEX_TSTATE_IDENT (object.h); stackweave_c.rlock_tstate_owned
+ * also requires the mark's field (_Py_TSTATE_FIBER_FLAG, pycore_tstate.h). */
+#ifdef _Py_RMUTEX_TSTATE_IDENT
+#  define RUNLOOM_RLOCK_TSTATE_OWNED 1
+#else
+#  define RUNLOOM_RLOCK_TSTATE_OWNED 0
+#endif
+
+/* 1 iff the interpreter's exec-home patch carries its Python/parking_lot.c
+ * hunk: a Python-level lock (_thread.lock, _thread.RLock) that has to wait
+ * asks the fiber runtime first, and a fiber parks instead of blocking its
+ * hub's OS thread (runloom_fiberlock.c installs the hooks at import).  The
+ * header witness is _Py_FIBER_PARK_HOOKS (object.h).  Exposed as
+ * stackweave_c.fiber_lock_hooks. */
+#ifdef _Py_FIBER_PARK_HOOKS
+#  define RUNLOOM_FIBER_LOCK_HOOKS 1
+#else
+#  define RUNLOOM_FIBER_LOCK_HOOKS 0
+#endif
+
+/* runloom_fiberlock.c: install the parking-lot fiber hooks (no-op without the
+ * interpreter hunk); 1 if installed.  mn_start begins an M:N session (mn_init);
+ * mn_stop ends it first thing in mn_fini, after which a wake for one of its
+ * lock waiters is dropped; mn_unpark(hub sched, final) dequeues that hub's
+ * waiters' parking-lot entries, right after mn_stop and again, final, once the
+ * hubs are joined (it then also waits out in-flight wakes, unlinks the waiters
+ * and gives back their run-alive counts).  forget: unlink a g being freed
+ * from its waiter list.  signal_wake: the single-thread drain on the main
+ * thread, a signal pending, marks and wakes one of `s`'s interruptible lock
+ * waiters (1 if it did).  The counters are read by stats(): fiber_lock_parks
+ * counts parks of a fiber in a lock wait, fiber_lock_wakes the wakeups
+ * delivered to one, _stale_wakes those dropped because the waiter's M:N
+ * session was over, _timer_arms the timer entries armed for timed waits,
+ * _signal_wakes the waits interrupted for a signal. */
+struct runloom_sched;
+struct runloom_g;
+int runloom_fiberlock_install(void);
+void runloom_fiberlock_mn_start(void);
+void runloom_fiberlock_mn_stop(void);
+void runloom_fiberlock_mn_unpark(struct runloom_sched *hub_sched, int final);
+void runloom_fiberlock_forget(struct runloom_g *g);
+void runloom_fiberlock_reset_after_fork(void);
+int runloom_fiberlock_signal_wake(struct runloom_sched *s);
+unsigned long long runloom_fiberlock_parks_total(void);
+unsigned long long runloom_fiberlock_wakes_total(void);
+unsigned long long runloom_fiberlock_stale_wakes_total(void);
+unsigned long long runloom_fiberlock_timer_arms_total(void);
+unsigned long long runloom_fiberlock_signal_wakes_total(void);
+/* Timer-heap entries pending on all hubs (stats()["timer_entries"] adds the
+ * caller's own scheduler's). */
+long runloom_mn_timer_entries_total(void);
+
 /* Forward-decl avoids pulling io_uring.h into every translation unit
  * that includes mn_sched.h. */
 struct runloom_iouring_ring;

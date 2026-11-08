@@ -267,21 +267,43 @@ int runloom_park_generic(int foreign_wakeable)
     }
 }
 
-int runloom_park_generic_timed(int foreign_wakeable, double deadline)
+/* The sched/hub whose timer heap holds the current fiber's timed parks, and
+ * that fiber; NULL off a fiber.  Never allocates a sched (peek, not get). */
+static runloom_sched_t *runloom_park_timer_target(runloom_g_t **gp)
 {
-    void *hub = runloom_mn_current_hub_opaque();
     runloom_sched_t *target;
     runloom_g_t *g;
-    double now = runloom_sched_monotonic_seconds();
-
-    if (hub != NULL) {
+    if (runloom_mn_current_hub_opaque() != NULL) {
         target = runloom_mn_current_sched();
         g = runloom_mn_tls_current_g();
     } else {
-        target = runloom_sched_get();
+        target = runloom_sched_peek_here();
         g = (target != NULL) ? target->current : NULL;
     }
-    if (g == NULL || target == NULL) return -1;
+    if (g == NULL || target == NULL) return NULL;
+    if (gp != NULL) *gp = g;
+    return target;
+}
+
+/* See runloom_sched.h. */
+void *runloom_park_timer_home(void)
+{
+    return runloom_park_timer_target(NULL);
+}
+
+int runloom_park_timer_arm(double deadline, int logical)
+{
+    runloom_g_t *g;
+    runloom_sched_t *target = runloom_park_timer_target(&g);
+    if (target == NULL) return -1;
+    return runloom_timer_push(target, deadline, g, logical);   /* -1: PyErr_NoMemory */
+}
+
+int runloom_park_generic_timed(int foreign_wakeable, double deadline)
+{
+    double now = runloom_sched_monotonic_seconds();
+
+    if (runloom_park_timer_home() == NULL) return -1;
     if (deadline <= now) return 1;          /* already expired -> don't park */
 
     /* Push the TIMER entry BEFORE the Dekker park, onto the sched/hub the g runs
@@ -292,7 +314,7 @@ int runloom_park_generic_timed(int foreign_wakeable, double deadline)
      * stale -- harmless: when popped it CASes parked_safe and, if the g is not
      * parked, the CAS fails and it is discarded; if the g re-parked, it is at most
      * one spurious wake the caller's deadline loop absorbs. */
-    if (runloom_timer_push(target, deadline, g, 0) < 0) {
+    if (runloom_park_timer_arm(deadline, 0) < 0) {
         return -1;                          /* OOM (PyErr_NoMemory set) */
     }
 
@@ -318,22 +340,12 @@ int runloom_park_generic_timed(int foreign_wakeable, double deadline)
  * real wake paths work unchanged. */
 int runloom_park_generic_timed_logical(int foreign_wakeable, double deadline)
 {
-    void *hub = runloom_mn_current_hub_opaque();
-    runloom_sched_t *target;
-    runloom_g_t *g;
     double now = runloom_mn_logical_now_or(runloom_sched_monotonic_seconds());
 
-    if (hub != NULL) {
-        target = runloom_mn_current_sched();
-        g = runloom_mn_tls_current_g();
-    } else {
-        target = runloom_sched_get();
-        g = (target != NULL) ? target->current : NULL;
-    }
-    if (g == NULL || target == NULL) return -1;
+    if (runloom_park_timer_home() == NULL) return -1;
     if (deadline <= now) return 1;          /* already expired -> don't park */
 
-    if (runloom_timer_push(target, deadline, g, 1) < 0) {
+    if (runloom_park_timer_arm(deadline, 1) < 0) {
         return -1;                          /* OOM (PyErr_NoMemory set) */
     }
     runloom_park_generic(foreign_wakeable);
@@ -410,8 +422,45 @@ int runloom_park_until_locked(runloom_pred_fn pred, void *ctx,
  * and is discarded, or wins and delivers one spurious wake the caller's deadline
  * loop absorbs.  A single-thread parker re-queues same-thread (ready_push, we ARE
  * s's drain); an M:N parker routes via its recorded park_hub (mn_wake_g). */
+/* Rebuild s's timer heap without the entries whose g's timer_ticket moved on
+ * (a timed wait that ended early, runloom_fiberlock.c), dropping their g refs,
+ * so they neither hold their gs nor grow the heap until their deadlines.  On
+ * s's own thread, like every edit of the heap. */
+static void runloom_timer_purge(runloom_sched_t *s, long hint)
+{
+    Py_ssize_t i, n = 0;
+    for (i = 1; i <= s->timer_size; i++) {
+        runloom_timer_entry_t e = s->timer_heap[i];
+        if (e.ticket != __atomic_load_n(&e.g->timer_ticket, __ATOMIC_ACQUIRE)) {
+            runloom_g_decref(e.g);
+            continue;
+        }
+        s->timer_heap[++n] = e;
+    }
+    __atomic_store_n(&s->timer_size, n, __ATOMIC_RELAXED);   /* census reads x-thread */
+    for (i = n / 2; i >= 1; i--) {                           /* heapify */
+        Py_ssize_t j = i;
+        for (;;) {
+            Py_ssize_t c = 2 * j;
+            runloom_timer_entry_t t;
+            if (c > n) break;
+            if (c + 1 <= n && s->timer_heap[c + 1].deadline < s->timer_heap[c].deadline) c++;
+            if (s->timer_heap[j].deadline <= s->timer_heap[c].deadline) break;
+            t = s->timer_heap[j]; s->timer_heap[j] = s->timer_heap[c]; s->timer_heap[c] = t;
+            j = c;
+        }
+    }
+    __atomic_sub_fetch(&s->timer_stale, hint, __ATOMIC_ACQ_REL);
+}
+
 void runloom_sched_drain_timers(runloom_sched_t *s, double now)
 {
+    /* Stale entries are purged once they are half the heap, or at once while
+     * the heap is small: amortised O(1) per entry, and the heap stays bounded
+     * by twice its live entries however many timed waits end early. */
+    long stale = __atomic_load_n(&s->timer_stale, __ATOMIC_ACQUIRE);
+    if (stale > 0 && (s->timer_size <= 64 || 2 * stale >= (long)s->timer_size))
+        runloom_timer_purge(s, stale);
     while (s->timer_size > 0) {
         runloom_timer_entry_t *top = runloom_timer_peek(s);
         runloom_timer_entry_t e;
@@ -427,6 +476,12 @@ void runloom_sched_drain_timers(runloom_sched_t *s, double now)
          * timer-entry UAF class (the p49_barrier_stress flake the entry-ref fix
          * closed).  Catch a regression that drops the entry ref early, at the CAS. */
         RUNLOOM_G_ASSERT_NOT(e.g, RUNLOOM_GST_MASK_DEAD);
+        if (e.ticket != __atomic_load_n(&e.g->timer_ticket, __ATOMIC_ACQUIRE)) {
+            /* Its wait is over (runloom_fiberlock.c bumped the ticket): firing
+             * would only wake the fiber's next, unrelated park. */
+            runloom_g_decref(e.g);
+            continue;
+        }
         if (__atomic_compare_exchange_n(&e.g->parked_safe, &expected, 0, 0,
                                         __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
             void *ph = __atomic_load_n(&e.g->park_hub, __ATOMIC_ACQUIRE);
@@ -469,8 +524,18 @@ void runloom_sched_wake(runloom_g_t *g)
      * scheduler's consumer, so the push belongs on its ready ring, where the
      * reset sweeps, not on its wake_list. */
     self  = runloom_sched_peek_here();
-    if (self == NULL) self = runloom_sched_get();
-    owner = g->owner ? g->owner : self;
+    owner = g->owner;
+    if (owner == NULL) {
+        /* An owner-less g: this thread's scheduler takes it (made if need be). */
+        if (self == NULL) self = runloom_sched_get();
+        owner = self;
+    }
+    /* A thread with no scheduler of its own is a FOREIGN waker -- the g's
+     * owner is another thread's -- and must not get one made here
+     * (CLAUDE.md: never lazily alloc sched state on a foreign thread):
+     * unpark_many calls this under the parker-pool lock, and creating a
+     * second scheduler arms the wake pump, which takes that same lock -- a
+     * self-deadlock under epoll the first time the pump is armed this way. */
     if (owner == self) {
         /* Same thread (the common single-loop / same-loop case): push onto our
          * own cooperative ready ring. */

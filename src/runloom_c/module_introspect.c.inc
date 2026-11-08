@@ -114,6 +114,68 @@ static PyObject *m_main_thread_state(PyObject *self, PyObject *unused)
                          tstate_is_initial ? Py_True : Py_False);
 }
 
+/* _tstate_in_destruction(): whether the calling thread state is inside CPython
+ * object destruction (a trashcan unwind, a biased-refcount merge) -- where a
+ * lock wait blocks the thread instead of parking the fiber.  Test-only. */
+static PyObject *m_tstate_in_destruction(PyObject *self, PyObject *unused)
+{
+    (void)self; (void)unused;
+    return PyBool_FromLong(runloom_tstate_in_destruction(PyThreadState_GET()));
+}
+
+/* _c_thread_call_each(callables): run each callable in turn on ONE new OS
+ * thread that has no Python thread state, each inside its own
+ * PyGILState_Ensure/Release pair -- so each gets a fresh thread state, as a C
+ * library's callbacks on its own thread do.  Returns [result-or-exception, ...].
+ * Test-only (the per-callback lock-ownership pattern). */
+typedef struct {
+    PyObject *callables;   /* tuple */
+    PyObject *results;     /* list, filled by the thread */
+} runloom_cthread_calls_t;
+
+static RUNLOOM_THREAD_RET runloom_cthread_calls_main(void *arg)
+{
+    runloom_cthread_calls_t *c = (runloom_cthread_calls_t *)arg;
+    Py_ssize_t i, n = PyTuple_GET_SIZE(c->callables);
+    for (i = 0; i < n; i++) {
+        PyGILState_STATE st = PyGILState_Ensure();
+        PyObject *r = PyObject_CallNoArgs(PyTuple_GET_ITEM(c->callables, i));
+        if (r == NULL) {
+            r = PyErr_GetRaisedException();
+        }
+        if (r != NULL) {
+            (void)PyList_Append(c->results, r);
+            Py_DECREF(r);
+        }
+        PyErr_Clear();
+        PyGILState_Release(st);
+    }
+    RUNLOOM_THREAD_RETURN(NULL);
+}
+
+static PyObject *m_c_thread_call_each(PyObject *self, PyObject *seq)
+{
+    runloom_cthread_calls_t c;
+    runloom_thread_t t;
+    int rc;
+    (void)self;
+    c.callables = PySequence_Tuple(seq);
+    if (c.callables == NULL) return NULL;
+    c.results = PyList_New(0);
+    if (c.results == NULL) { Py_DECREF(c.callables); return NULL; }
+    Py_BEGIN_ALLOW_THREADS
+    rc = runloom_thread_create(&t, runloom_cthread_calls_main, &c);
+    if (rc == 0) runloom_thread_join(t);
+    Py_END_ALLOW_THREADS
+    Py_DECREF(c.callables);
+    if (rc != 0) {
+        Py_DECREF(c.results);
+        PyErr_SetString(PyExc_RuntimeError, "_c_thread_call_each: thread create failed");
+        return NULL;
+    }
+    return c.results;
+}
+
 /* _alloc_home_is_own(): does the calling thread state allocate from its own
  * heaps?  False in an M:N fiber (it borrows its hub's), True in the child of
  * a fork made in one (runloom_iframe_fork_child_own_heap); None without the

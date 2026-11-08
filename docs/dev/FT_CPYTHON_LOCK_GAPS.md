@@ -205,6 +205,13 @@ monkey.patch, nothing in stackweave can intercept the C object.
 
 ### 6. A preempted lock holder deadlocks its hub (C)
 
+**Status: FIXED** for `_thread` locks (`threading.Lock`/`RLock`, whenever
+made, including `_strptime._cache_lock`): the exec-home parking_lot.c hunk
+lets their waits park the contending fiber, so the hub runs the preempted
+holder. Test: `test_preempt_lock_holder_runs_while_a_same_hub_fiber_waits[*]`
+(`fiber_lock_parks >= 1`). Locks outside the parking lot (a SemLock, C
+libraries' own mutexes, sqlite's busy wait, 7) still block the hub.
+
 `p09_preempt_holding_lock.py stock|strptime`: watchdog; `patched` PASS;
 `rlock`: re-enters (B waited 0.0 s, the known RLock gap).
 Fiber A runs CPU-bound Python inside `with lock:` (no park at all), is
@@ -577,6 +584,23 @@ Plausible from reading the code; no probe yet.
   should return NULL unless the attached tstate is `g->tstate`, else a
   contended lock inside a subinterpreter call re-attaches the wrong
   interpreter's state on resume.
+  **Confirmed and FIXED:** a contended lock in `_interpreters.exec` from a
+  `run(1)` fiber SIGSEGVed, and M:N parked under the subinterpreter's state;
+  `fl_prepare` names a fiber only while its own state is attached
+  (`tests/test_fiber_locks.py::test_a_wait_inside_a_subinterpreter_blocks_the_thread`).
+  A review found more of the same class, all fixed: the hook also stays out
+  of a `_Coro` the fiber resumed and out of object destruction, a wait ends
+  with no stale wake credit and arms one timer entry, an aborted M:N run()
+  drops its waiters at teardown (no wake on freed hubs, no lock handed to a
+  dead fiber, no leaked run-alive count), and a run(1) fiber's acquire on the
+  main thread is interrupted by a signal as the thread's would be.  A second
+  review added: wakes never write into a freed stack (waiter nodes live in
+  the g, on per-sched lists, unlinked when a dropped g is freed), a forked
+  child's surviving run(1) waiters retry, the OOM fallback detaches, and a
+  timed wait's timer entry is dropped and purged when the wait ends.  Still
+  open, and documented in CLAUDE.md: a lock handed off to a fiber that never
+  runs (released just as an M:N run() aborts, or a woken waiter dropped by a
+  sched reset) stays locked for good.
 - Diagnostics: faulthandler dumps at most 100 tstates (newest first);
   `pthread_sigmask` changes the hub's mask for every fiber on it;
   `settrace_all_threads` misses fibers spawned later.

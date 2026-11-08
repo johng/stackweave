@@ -35,7 +35,6 @@ import stackweave
 import stackweave_c as rc
 
 from adv_util import hang_guard, assert_faster_than, raw_thread, run_python
-from known_gaps import KNOWN_GAP
 
 HAVE_ALARM = hasattr(signal, "alarm")
 
@@ -349,51 +348,66 @@ def test_unpark_many_wakes_wait_fd_parkers_and_reports_running_missed():
     assert rvs == {UNPARKED}
 
 
-# Under kqueue the foreign call returns, so the gap is marked only under epoll.
-_FOREIGN_UNPARK_MANY_GAP = KNOWN_GAP(
-    "unpark_many() from a foreign OS thread self-deadlocks under epoll: it "
-    "holds the parker-pool lock while runloom_sched_wake() creates the foreign "
-    "thread's scheduler (runloom_sched_get), and arming that scheduler's wake "
-    "pump takes the same lock"
-) if rc.netpoll_backend() == "epoll" else (lambda f: f)
-
-
-@_FOREIGN_UNPARK_MANY_GAP
-def test_foreign_thread_unpark_many_returns():
+@pytest.mark.parametrize("starter", ["threading", "raw"])
+def test_foreign_thread_unpark_many_returns(starter):
     # unpark_many() called DIRECTLY from a foreign OS thread on fibers parked in
     # a single-thread run()'s wait_fd must wake them and return.  The runtime's
     # own fan-in primitives (Event.set / notify_all from a foreign setter) route
     # through an os.write fallback instead, so only the raw C call reaches this
     # path.  Contained in a subprocess so a wedge fails the test with the
     # child's output.
-    script = r'''
-import sys
+    #
+    # Was a gap under epoll: unpark_many holds the parker-pool lock while
+    # runloom_sched_wake() woke each g, and that made the foreign thread a
+    # scheduler of its own (runloom_sched_get), whose creation arms the wake
+    # pump under the same lock -- a self-deadlock the first time the pump was
+    # armed that way.  runloom_sched_wake no longer makes one on a foreign
+    # waker.  "threading" starts the waker with threading.Thread, whose start
+    # handshake parks the run(1) fiber on a lock and so arms the pump first
+    # (which once hid the bug); "raw" uses _thread.start_new_thread and polls,
+    # so nothing has armed it.  Each waiter must see its wait_fd end with
+    # the unpark sentinel, not its timeout.
+    script = r"""
+import sys, time, _thread
 import stackweave_c as rc, os, threading
+STARTER = "STARTER_NAME"
 RealThread = threading.Thread
 done = {}
+results = []
 def main():
     r, w = os.pipe(); os.set_blocking(r, False)
     handles = []
     def mk():
         def waiter():
             handles.append(rc.current_g())
-            rc.wait_fd(r, 1, 2000)
+            results.append(rc.wait_fd(r, 1, 5000))
         return waiter
     for _ in range(4):
         rc.fiber(mk())
     rc.sched_sleep(0.1)
     def foreign():
-        rc.unpark_many(list(handles))
+        done["missed"] = rc.unpark_many(list(handles))
         done["foreign_returned"] = True
-    t = RealThread(target=foreign); t.start(); t.join()
+    if STARTER == "threading":
+        t = RealThread(target=foreign); t.start(); t.join()
+    else:
+        _thread.start_new_thread(foreign, ())
+        deadline = time.monotonic() + 8
+        while "foreign_returned" not in done and time.monotonic() < deadline:
+            rc.sched_sleep(0.01)
+    rc.sched_sleep(0.1)
     os.close(r); os.close(w)
 rc.fiber(main); rc.run()
-sys.stdout.write("FOREIGN_RETURNED\n" if done.get("foreign_returned") else "NEVER\n")
-'''
-    # The run takes ~0.1s once the parkers commit; 10s only bounds a wedge.
+print("results", [hex(x) for x in results], "missed", done.get("missed"), flush=True)
+ok = (done.get("foreign_returned") and done.get("missed") == []
+      and results == [0x10000000] * 4)
+sys.stdout.write("FOREIGN_RETURNED\n" if ok else "NEVER\n")
+""".replace("STARTER_NAME", starter)
+    # The run takes ~0.2s once the parkers commit; 10s only bounds a wedge.
     p = _subproc(script, timeout=10)
     assert p.returncode == 0 and "FOREIGN_RETURNED" in p.stdout, (
-        "foreign-thread unpark_many did not return: rc=%r stdout=%r stderr=%r"
+        "foreign-thread unpark_many did not return or did not wake its "
+        "waiters: rc=%r stdout=%r stderr=%r"
         % (p.returncode, p.stdout, p.stderr[-1000:]))
 
 

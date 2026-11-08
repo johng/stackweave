@@ -182,6 +182,7 @@ def detect_sources():
         os.path.join(SRC_C, "runloom_gstate.c"),
         os.path.join(SRC_C, "runloom_introspect.c"),
         os.path.join(SRC_C, "runloom_iframe.c"),
+        os.path.join(SRC_C, "runloom_fiberlock.c"),
         os.path.join(SRC_C, "runloom_blockpool.c"),
         os.path.join(SRC_C, "runloom_crash.c"),
         os.path.join(SRC_C, "runloom_stackadvice.c"),
