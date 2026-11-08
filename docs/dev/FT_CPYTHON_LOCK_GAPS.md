@@ -383,6 +383,30 @@ the original main thread's (deleted) state. It is `interp->_initial_thread`,
 embedded in the interpreter, so no write lands in freed memory. Under M:N
 every fork comes from a hub thread.
 
+Status: FIXED for forks made in a fiber on fix/ft-sched-fork: a
+`pthread_atfork` child handler, which runs inside `fork()` before CPython's
+after-fork code, points `_PyRuntime.main_tstate` at the forking fiber's per-g
+state, the one that goes on running bytecode on the thread CPython then makes
+main (`_PyRuntime.main_thread`) (`p19 mn`: 50 ms). It takes a ref on the
+fiber's g that the child never drops, so stackweave never clears that state
+there. Pointing at the embedded initial state when the state is cleared (the
+first version) was wrong: the fork resets that state for reuse, so the next
+thread state made in the child takes it. And a later fork from a plain thread
+of that child deletes the fiber's state: the handler then puts back the
+embedded initial state, CPython's own value, or `main_tstate` would name freed
+memory. In the child, `run(1)` and the loop after it handle signals too;
+`run(n>1)` there is refused as before (documented unsupported: `_mn_active`
+is inherited). The same handler gives the fiber's state back its own
+allocator: it borrowed the hub's (alloc-home), and the after-fork code
+deletes the hub's state, so the child allocated through freed memory --
+Linux 3.14 segfaulted in threading's after-fork hook (`llist_remove` in
+`_PyMem_mi_page_clear_qsbr`), the cause of test_import_lock's Linux-3.14
+known gap, now closed. A fork from a plain non-main thread is upstream's alone
+(`p19 thread` still has no in-loop handler: that thread's state is freed when
+the thread ends, with no hook to un-name it). The tests check
+`stackweave_c._main_thread_state()` in the child, in a thread started there,
+and in a grandchild forked from that thread.
+
 ## Known, deterministic
 
 ### 18. Main-thread-only APIs fail in every M:N fiber

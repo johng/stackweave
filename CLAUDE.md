@@ -113,6 +113,30 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   raising during a cooperative wait propagates out of *that call*; the idle
   scheduler carries one out of `run()` only when nothing is parked. Path:
   `runloom_netpoll_signal_wake` + the `RUNLOOM_NETPOLL_SIGNALED` sentinel.
+- **In a child forked in a fiber, the fiber's state is CPython's main one,
+  and `_PyRuntime.main_tstate` never names a freed state.** CPython never
+  moves `main_tstate` after fork, and a signal sets its pending bit there; a
+  child forked from a fiber's per-g state on a hub thread had it naming the
+  old main thread's deleted state, so a bytecode loop ran handlers only at
+  the next EINTR. A `pthread_atfork` child handler (`runloom_mn_atfork_child`,
+  inside `fork()`, before CPython's after-fork code deletes the other states)
+  makes the forking fiber's state main and takes a ref on its g that the child
+  never drops, so stackweave never clears that state there. It also points the
+  state's alloc home back at itself and stamps its (empty) heaps with this
+  thread's id (`runloom_iframe_fork_child_own_heap`): the fiber borrowed its
+  hub's allocator, and the after-fork code deletes the hub's state, so the
+  child allocated through freed memory (Linux 3.14 segfaulted in
+  threading's own after-fork hook). Any other fork
+  puts back the embedded initial state (which a fork resets, never frees) if
+  `main_tstate` names a state the fork is about to free: a grandchild forked
+  from a plain thread would otherwise keep naming the freed fiber state, and
+  every signal would write into freed memory. Never point `main_tstate` at a
+  state stackweave or a fork may free, and never set it later than the atfork
+  handler. A fork from a plain non-main thread keeps upstream's EINTR-only
+  handling. Guards: `tests/test_cpython_thread_keyed_locks.py -k
+  "forked_from_a_fiber_runs_signal or never_name_a_freed"`
+  (`stackweave_c._main_thread_state()`, `_alloc_home_is_own()`),
+  `tests/test_import_lock.py::test_a_child_forked_from_a_fiber_can_import`.
 - **Only a hub's own thread edits its sleep heap.** A signal-woken io sleeper
   (`sched_sleep_io`: CoPoll, no-fd `select`) resumes through the global
   run-queue on any hub, so it never removes its own entry: the entry is

@@ -98,6 +98,35 @@ static PyObject *m_c_stack_limits(PyObject *self, PyObject *unused)
                          (unsigned long long)l.soft, (unsigned long long)l.hard);
 }
 
+/* _main_thread_state(): is the runtime's main thread state the caller's, is
+ * its main thread the calling OS thread, and is the main state the embedded
+ * initial one?  For the tests of fork children
+ * (runloom_iframe_fork_child_main_tstate). */
+static PyObject *m_main_thread_state(PyObject *self, PyObject *unused)
+{
+    int tstate_is_current, thread_is_current, tstate_is_initial;
+    (void)self; (void)unused;
+    runloom_iframe_main_state_check(&tstate_is_current, &thread_is_current,
+                                    &tstate_is_initial);
+    if (tstate_is_current < 0) Py_RETURN_NONE;
+    return Py_BuildValue("(OOO)", tstate_is_current ? Py_True : Py_False,
+                         thread_is_current ? Py_True : Py_False,
+                         tstate_is_initial ? Py_True : Py_False);
+}
+
+/* _alloc_home_is_own(): does the calling thread state allocate from its own
+ * heaps?  False in an M:N fiber (it borrows its hub's), True in the child of
+ * a fork made in one (runloom_iframe_fork_child_own_heap); None without the
+ * alloc-home patch. */
+static PyObject *m_alloc_home_is_own(PyObject *self, PyObject *unused)
+{
+    int own;
+    (void)self; (void)unused;
+    own = runloom_iframe_alloc_home_is_own();
+    if (own < 0) Py_RETURN_NONE;
+    return PyBool_FromLong(own);
+}
+
 /* Build one {...} dict for a hub snapshot entry (runloom.inspect.hubs()).
  * Returns a new ref or NULL (exception set). */
 static PyObject *runloom_hub_info_to_dict(const runloom_hub_info_t *o)

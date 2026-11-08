@@ -441,20 +441,22 @@ stackweave.run(2, main)
 ''')
 
 
-@KNOWN_GAP(
-    "_PyRuntime.main_tstate is never updated after fork, and every M:N fork "
-    "comes from a hub thread, so the child's pending-signal bit lands on a "
-    "dead state and handlers run only at the next EINTR (upstream: any "
-    "fork from a non-main thread)",
-    raises=AssertionError)
 def test_identity_child_forked_from_a_fiber_runs_signal_handlers():
     """A child forked from a fiber runs a Python signal handler for an
-    asynchronous signal (setitimer) while it executes bytecode."""
+    asynchronous signal (setitimer) while it executes bytecode.  CPython
+    never updates _PyRuntime.main_tstate after fork, and a signal sets its
+    pending bit there; every M:N fork comes from a fiber's own state on a
+    hub thread, so the bit landed on the old main thread's (deleted) state
+    and the handler ran only at the next EINTR.  The after-fork reset now
+    makes the fiber's state the main one: `_main_thread_state()` checks
+    that it is, and that CPython's main thread is this one too."""
     run_gap(r'''
 import signal, time as _t, warnings
 warnings.simplefilter("ignore", DeprecationWarning)   # fork with threads
 def child():
     hits = []
+    main_state = stackweave_c._main_thread_state()
+    own_heap = stackweave_c._alloc_home_is_own()
     signal.signal(signal.SIGALRM, lambda *a: hits.append(_t.perf_counter()))
     t0 = _t.perf_counter()
     signal.setitimer(signal.ITIMER_REAL, 0.05)
@@ -464,14 +466,61 @@ def child():
     # Decide before any syscall: os.write checks pending signals itself, which
     # would run a handler the bytecode loop never ran.
     ran_in_loop = bool(hits)
-    os.write(1, ("child handler ran during the loop: %s\n" % ran_in_loop).encode())
-    os._exit(0 if ran_in_loop else 1)
+    os.write(1, ("child handler ran during the loop: %s; main thread state "
+                 "(tstate, thread) is mine: %r; own heap: %r\n"
+                 % (ran_in_loop, main_state, own_heap)).encode())
+    os._exit(0 if ran_in_loop and main_state[:2] == (True, True)
+             and own_heap is not False else 1)
+def main():
+    assert stackweave_c._alloc_home_is_own() is not True   # borrows its hub's
+    pid = os.fork()
+    if pid == 0:
+        child()
+    _, st = os.waitpid(pid, 0)
+    assert os.waitstatus_to_exitcode(st) == 0, \
+        "the handler never ran during the loop, or the main state is not the fiber's"
+    print("PASS", flush=True)
+stackweave.run(2, main)
+''')
+
+
+def test_identity_fork_children_never_name_a_freed_main_state():
+    """CPython's main thread state in later fork generations.  In a child
+    forked from a fiber the fiber's state is main (above).  A thread started
+    there takes the memory of the old main state (the fork reset it for
+    reuse), and main must not name that thread's state.  A grandchild forked
+    from that plain thread loses the fiber's state (the fork deletes every
+    state but the forking one), so main must not go on naming it: every
+    later signal would write into freed memory.  It names the forking
+    thread's state or the embedded initial one, as upstream."""
+    run_gap(r'''
+import warnings
+warnings.simplefilter("ignore", DeprecationWarning)   # fork with threads
+def child():
+    seen = {"child": stackweave_c._main_thread_state()}
+    def plain_thread():
+        seen["thread"] = stackweave_c._main_thread_state()
+        pid = os.fork()
+        if pid == 0:
+            mine, _, initial = stackweave_c._main_thread_state()
+            os._exit(0 if mine or initial else 1)
+        seen["grandchild_rc"] = os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1])
+    t = threading.Thread(target=plain_thread)
+    t.start(); t.join()
+    seen["child_after"] = stackweave_c._main_thread_state()
+    os.write(1, ("REACHED: grandchild forked from a plain thread in a fiber's "
+                 "child: %r\n" % (seen,)).encode())
+    ok = (seen["child"][:2] == (True, True)
+          and seen["thread"][0] is False
+          and seen["grandchild_rc"] == 0
+          and seen["child_after"][:2] == (True, True))
+    os._exit(0 if ok else 1)
 def main():
     pid = os.fork()
     if pid == 0:
         child()
     _, st = os.waitpid(pid, 0)
-    assert os.waitstatus_to_exitcode(st) == 0, "the handler never ran during the loop"
+    assert os.waitstatus_to_exitcode(st) == 0, "a fork child's main state is wrong"
     print("PASS", flush=True)
 stackweave.run(2, main)
 ''')

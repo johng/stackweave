@@ -621,6 +621,37 @@ void runloom_mn_reset_after_fork(void)
     __atomic_add_fetch(&runloom_mn_gen, 1, __ATOMIC_RELEASE);
 }
 
+/* pthread_atfork child handler: the forking fiber's state in the child.  A
+ * fork made in a fiber -- the hub's current g, whose own state is attached
+ * (nested in a run(1) or not) -- makes that state CPython's main one
+ * (runloom_iframe_fork_child_main_tstate) and gives it back its own allocator
+ * (runloom_iframe_fork_child_own_heap): CPython's after-fork code is about to
+ * delete the hub's state, whose heaps it borrowed.  It also takes a ref on
+ * the g that nothing in the child drops (a one-time leak, like the abandoned
+ * hub array): a per-g state is cleared only when its g's last ref goes, so the
+ * state CPython now calls main is never cleared by stackweave here.  Runs
+ * inside fork(), before CPython's after-fork code and the
+ * os.register_at_fork reset below. */
+static void runloom_mn_atfork_child(void)
+{
+    runloom_g_t *cur = runloom_tls_current_g;
+    PyThreadState *ts = PyThreadState_GetUnchecked();
+    int fiber = (cur != NULL && cur->tstate != NULL && cur->tstate == ts);
+    if (fiber) {
+        runloom_g_incref(cur);
+        runloom_iframe_fork_child_own_heap(ts);
+    }
+    runloom_iframe_fork_child_main_tstate(fiber ? ts : NULL);
+}
+
+void runloom_mn_atfork_init(void)
+{
+    static int registered = 0;
+    if (registered) return;
+    registered = 1;
+    (void)pthread_atfork(NULL, NULL, runloom_mn_atfork_child);
+}
+
 /* Internal core: pick hub, alloc g, set up coro, submit, bump counters.
  * Either callable (Python path) or c_fn+c_arg (C-only path) must be set,
  * not both.  Returns 0 on success, -1 on failure (errno set).  Python

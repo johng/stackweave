@@ -130,6 +130,26 @@ void runloom_iframe_hand_over_freelists(PyThreadState *dead);
  * otherwise cost every fiber teardown a walk of every abandoned segment. */
 void runloom_iframe_clear_fiber_tstate(PyThreadState *ts);
 
+/* In a fork child, from a pthread_atfork child handler (before CPython's
+ * after-fork code): a fork made in a fiber makes fiber_ts, the forking
+ * fiber's state, the runtime's main thread state, so signals set their
+ * pending bit where the eval loop will see it; any other fork (fiber_ts
+ * NULL) puts back the embedded initial state if main_tstate names a state
+ * the fork is about to free.  runloom_iframe_main_state_check reports, for the
+ * tests, whether the main state / main thread are the caller's, and whether
+ * the main state is the embedded initial one. */
+void runloom_iframe_fork_child_main_tstate(PyThreadState *fiber_ts);
+/* In the child of a fork made in a fiber, from the same atfork handler: the
+ * fiber's state stops borrowing the hub's allocator (the hub's state is about
+ * to be deleted) and allocates from its own heaps, stamped with this thread's
+ * id.  runloom_iframe_alloc_home_is_own reports, for the tests, whether the
+ * calling state allocates from its own heaps (-1 without alloc-home). */
+void runloom_iframe_fork_child_own_heap(PyThreadState *ts);
+int  runloom_iframe_alloc_home_is_own(void);
+void runloom_iframe_main_state_check(int *tstate_is_current,
+                                     int *thread_is_current,
+                                     int *tstate_is_initial);
+
 /* Drain the biased-refcount merge queue that free-threaded CPython attached to
  * THIS thread state, if any.  Every object is allocated on the running hub's
  * thread id (alloc-home), so a last decref from another hub is queued -- by

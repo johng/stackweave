@@ -196,6 +196,15 @@ static PyMethodDef module_methods[] = {
      "_c_stack_limits() -> (top, soft_limit, hard_limit): the calling thread "
      "state's C-stack window, which RecursionError and the trashcan measure "
      "the stack pointer against.  Test-only."},
+    {"_alloc_home_is_own", m_alloc_home_is_own, METH_NOARGS,
+     "_alloc_home_is_own() -> bool | None: whether the calling thread state "
+     "allocates from its own heaps rather than borrowing its hub's (None "
+     "without the alloc-home patch).  Test-only."},
+    {"_main_thread_state", m_main_thread_state, METH_NOARGS,
+     "_main_thread_state() -> (main_tstate_is_mine, main_thread_is_mine, "
+     "main_tstate_is_initial): whether CPython's main thread state and main "
+     "thread are the caller's, and whether the main state is the "
+     "interpreter's embedded initial one (None where unknown).  Test-only."},
     {"_logical_ns", m_logical_ns, METH_NOARGS,
      "Read the single-thread LOGICAL clock in ns (STACKWEAVE_LOGICAL_CLOCK/STACKWEAVE_SIM); "
      "0 off the logical clock.  Diagnostic (sim determinism witness)."},
@@ -496,6 +505,7 @@ PyMODINIT_FUNC PyInit_stackweave_c(void)
     PyObject *m;
     runloom_diag_init();          /* parses RUNLOOM_DEBUG once; cheap; idempotent */
     runloom_introspect_init();    /* fiber registry lock */
+    runloom_mn_atfork_init();     /* main thread state in a fork child */
     runloom_coro_pre_swap = runloom_coro_rearm_stackprot;  /* 3.14: re-arm fiber C-stack limit on every resume */
     if (PyType_Ready(&RunloomCoroType) < 0) return NULL;
     /* Set by hand rather than in the positional initializer, whose long run

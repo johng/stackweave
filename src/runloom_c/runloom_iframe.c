@@ -457,6 +457,115 @@ void runloom_iframe_drain_trashcan(PyThreadState *ts)
     _PyTrash_thread_destroy_chain(ts);
 }
 
+/* _PyRuntime.main_tstate in a fork child.  PyOS_AfterFork_Child makes the
+ * forking OS thread the main thread (_PyRuntime.main_thread) and deletes
+ * every other thread state, but leaves main_tstate where it was: at startup
+ * the old main thread's state, the interpreter's embedded initial state,
+ * which the fork resets and keeps for the next new state to reuse.  A signal
+ * sets its pending bit on main_tstate (_PyEval_SignalReceived), as does a
+ * main-thread-only pending call, so in a child forked from a fiber -- a
+ * per-g state on a hub thread -- the fiber that goes on running bytecode
+ * never saw the bit, and a Python handler ran only when a syscall's EINTR
+ * called PyErr_CheckSignals.
+ *
+ * Called from a pthread_atfork child handler, inside fork() and so before
+ * CPython's after-fork code, with the child single-threaded.  fiber_ts is the
+ * forking fiber's state, or NULL for a fork made anywhere else:
+ *   - a fiber's fork: its state becomes main.  It is the state the thread
+ *     CPython is about to call main runs, so _Py_IsMainThread() and
+ *     main_tstate agree; the fork keeps it (it is current), and the caller
+ *     holds a ref on its g so stackweave never clears it in this child.
+ *   - any other fork: if main_tstate names a state this fork is about to
+ *     delete (a fiber state an earlier generation adopted, now forked from
+ *     another thread), CPython would free it under main_tstate, and every
+ *     later signal would write into freed memory.  Put back CPython's own
+ *     value, the embedded initial state, which a fork resets and never frees
+ *     (as upstream: a fork from a plain non-main thread still delivers
+ *     signals only at EINTR).
+ * Doing it here, not in the os.register_at_fork hook, leaves no window in
+ * which main_tstate names a freed state; and a signal before
+ * _PySignal_AfterFork is discarded by CPython anyway, so no pending bit needs
+ * carrying over. */
+void runloom_iframe_fork_child_main_tstate(PyThreadState *fiber_ts)
+{
+#if defined(RUNLOOM_DESTRUCT_HAVE)
+    PyInterpreterState *interp = _PyRuntime.interpreters.main;
+    PyThreadState *initial;
+    if (interp == NULL) return;
+    initial = (PyThreadState *)&interp->_initial_thread;
+    if (fiber_ts != NULL && fiber_ts->interp == interp)
+        _PyRuntime.main_tstate = fiber_ts;
+    else if (_PyRuntime.main_tstate != PyThreadState_GetUnchecked() &&
+             _PyRuntime.main_tstate != initial)
+        _PyRuntime.main_tstate = initial;
+#else
+    (void)fiber_ts;
+#endif
+}
+
+/* The forking fiber's allocator in a fork child.  A fiber's state borrows the
+ * allocator of the hub running it (alloc-home): its objects come from the
+ * hub state's mimalloc heaps, and its pages awaiting QSBR sit on that state's
+ * page list.  CPython's after-fork code deletes every state but the forking
+ * one, the hub's included -- its heaps abandoned, the state itself freed --
+ * so the fiber that goes on running in the child kept allocating through a
+ * freed state: a use-after-free in mimalloc (llist_remove on a page's QSBR
+ * node in _PyMem_mi_page_clear_qsbr) that Linux 3.14 hit at once, in
+ * threading's own after-fork hook.  Point the alloc home back at the fiber's
+ * own state, the one left in the child, as CPython's forking thread has its
+ * own; and stamp its heaps, which never held a page (every allocation went to
+ * the alloc home), with this thread's id rather than the spawner's, as
+ * mimalloc's _mi_heap_init would.  Called from the pthread_atfork child
+ * handler, before CPython's after-fork code. */
+void runloom_iframe_fork_child_own_heap(PyThreadState *ts)
+{
+#if defined(RUNLOOM_DESTRUCT_HAVE)
+    struct _mimalloc_thread_state *m;
+    int i;
+    if (ts == NULL) return;
+    runloom_iframe_borrow_alloc_home(ts, ts);
+    m = &((_PyThreadStateImpl *)ts)->mimalloc;
+    for (i = 0; i < _Py_MIMALLOC_HEAP_COUNT; i++)
+        m->heaps[i].thread_id = (mi_threadid_t)_Py_ThreadId();
+#else
+    (void)ts;
+#endif
+}
+
+/* For the tests: does the calling thread state allocate from its own heaps
+ * (no alloc home borrowed)?  -1 where the build has no alloc home. */
+int runloom_iframe_alloc_home_is_own(void)
+{
+#if defined(Py_TSTATE_ALLOC_HOME)
+    PyThreadState *ts = PyThreadState_GetUnchecked();
+    if (ts == NULL) return -1;
+    return ((_PyThreadStateImpl *)ts)->_alloc_home == NULL;
+#else
+    return -1;
+#endif
+}
+
+/* For the tests: does the runtime's main thread state name the calling thread
+ * state, does its main thread name the calling OS thread, and is the main
+ * state the interpreter's embedded initial one?  Each is -1 where unknown. */
+void runloom_iframe_main_state_check(int *tstate_is_current,
+                                     int *thread_is_current,
+                                     int *tstate_is_initial)
+{
+#if defined(RUNLOOM_DESTRUCT_HAVE)
+    PyThreadState *ts = PyThreadState_GetUnchecked();
+    PyInterpreterState *interp = _PyRuntime.interpreters.main;
+    *tstate_is_current = (ts != NULL && _PyRuntime.main_tstate == ts);
+    *thread_is_current = (_PyRuntime.main_thread == PyThread_get_thread_ident());
+    *tstate_is_initial = (interp != NULL &&
+        _PyRuntime.main_tstate == (PyThreadState *)&interp->_initial_thread);
+#else
+    *tstate_is_current = -1;
+    *thread_is_current = -1;
+    *tstate_is_initial = -1;
+#endif
+}
+
 int runloom_tstate_in_destruction(PyThreadState *ts)
 {
 #if defined(RUNLOOM_DESTRUCT_HAVE)
