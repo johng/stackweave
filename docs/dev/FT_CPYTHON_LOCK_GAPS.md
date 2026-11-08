@@ -224,6 +224,85 @@ fibers spawned to answer those ops are left blocked and reported at exit. So a
 finalizer that logs, returns a connection to a pool, or does patched I/O
 behaves differently depending on which hub dropped the last reference.
 
+**Status: NOT FIXED; design below, xfail kept
+(`test_memory_finalizer_can_use_a_channel_whichever_hub_drops_it`).** After
+the #2 fix, `p07 chan 4 2000` still runs 1951 of 2000 finalizers with no fiber
+(and 23 releases found a part-drained local stack). The fix needs every merge
+that a hub runs today outside a fiber to run inside one. That touches the
+release-drain and C-stack-limit invariants and their guards, the hub's pick
+step and post-resume state machine, pending accounting (which the deadlock
+census reads), fini and the spawn path. That is too much to land blind on a
+shared box, without the full suite and the formal lanes. Decisions for the
+owner are marked **(decide)**.
+
+Design: a per-hub **reaper**, a pinned fiber that runs this hub's merges.
+
+1. *Where merges run today outside a fiber*: (a) `service_merge_queue(hub_ts)`
+   at the loop top and after every resume (the hub's own state heads its
+   bucket between resumes, so drops queue to it), and (b) the release drain
+   (a parked fiber's shared queue, plus since #2 its local stack, on the hub
+   stack with `tls_current_g` NULL). A fiber's own eval-breaker merge already
+   runs in a fiber and stays as it is.
+2. *Hand off instead of merge*. Both sites move queues instead of running
+   them. Under the bucket mutex, they splice the source's `objects_to_merge`
+   (and, at release, its `local_objects_to_merge`, which only its own state
+   touches) onto the reaper's `objects_to_merge`. Then they set the reaper's
+   merge bit and kick it. This is pure pointer work: no object code runs on
+   the hub thread, so (b) no longer needs the hub's C-stack limits lent, and
+   the "hub to the head only once the fiber's queue is empty" rule holds
+   trivially. The splice is legal because the reaper is created on the hub's
+   thread and pinned to it: its `brc.tid` is the hub's, it sits in the same
+   bucket (same mutex), and `_Py_ExplicitMergeRefcount` will run on the owner.
+   `_PyObjectStack_Merge` is not exported, so it needs a local copy: link the
+   source's bottom chunk to the destination's head. Clear the source's merge
+   bit before the splice, so a push that races in afterwards re-sets it.
+3. *The reaper*. A fiber whose callable is a builtin running a C loop.
+   Python-callable, not `runloom_mn_fiber_c`, so `runloom_g_entry` arms its
+   root frame, datastack and stack limits, since it runs Python finalizers.
+   The loop: `service_merge_queue(own ts)` while the merge bit is set, then
+   idle. Spawn it through the normal slab/`runloom_greg_link` path (frames
+   anchor). Pin it to its hub, leave it out of the fiber limit, and create it
+   lazily on the hub thread the first time the hub has merge work.
+4. *Idle and kick*. To idle, the reaper sets `g->reaper_idle` and does a plain
+   `runloom_coro_yield` (after `runloom_pystate_snap`, as a yield does). In
+   hub_main's yield branch, a reaper with that flag set goes to `h->reaper_idle_g`
+   instead of `runloom_mn_requeue_local`. It stays RUNNING, owned by the hub
+   with no queue ref, and only the hub thread touches the slot. A kick moves
+   it from the slot to a priority slot that the pick step takes before
+   anything else, so merges still run right after the resume that preceded
+   them, as now. (On the ready ring it could wait out every preempted CPU-bound
+   fiber there; that is the gap-#14 shape.)
+5. *A finalizer that parks*. The reaper parks like any fiber. Its release
+   must not touch its own queues: it is pinned, so its suspended merge loop
+   resumes on the owner. It must still put the hub back at the head. The
+   reaper is then not at the head, so no dropper (and no 3.15 merge-on-behalf)
+   reaches its queues; only GC under stop-the-world does, and that is safe.
+   Work that arrives while it is parked: **(decide)** either queue it behind
+   that reaper (CPython's thread-blocked-in-`__del__` behaviour, but a stuck
+   finalizer then stalls the hub's cross-thread frees with no bound), or detach
+   it (it finishes its batch and exits) and start a new reaper for new work, up
+   to a per-hub cap, past which hand-off waits.
+6. *Pending and shutdown*. **(decide)** The proposal is that a reaper counts in
+   its hub's `pending` from kick to idle, so `run()` does not return with
+   finalizers in flight. A reaper parked forever then shows up in the deadlock
+   census like any blocked fiber. An idle reaper is never queued, so the
+   census, which reads the queues, sees no work. At hub exit the idle reaper
+   is suspended in C with no Python frames; `runloom_mn_hub_drain_leftovers`
+   decrefs it like a leftover queued g. Drops after `run()` returns are merged
+   by the hub state's own `_Py_brc_remove_thread`, with no fiber, as today.
+7. *Guards that change*. `brc_release_merges`, `_off_stack` and `_hub_first`
+   (and their two tests) describe the hub-stack drain, which goes away;
+   replace them with hand-off and reaper-run counters. The #2 guard's
+   positive check becomes "a part-drained local stack was handed to the
+   reaper". `runloom_tstate_in_destruction` still keeps preemption out of the
+   reaper's merge loop.
+8. *What users see*. Cross-hub finalizers run on a system fiber:
+   `current_g()` is the reaper, and it appears in fiber dumps and live counts,
+   which should filter it out. Objects that another thread drops are freed one
+   switch later than now. The reaper's priority slot keeps that to
+   microseconds, but tests that check a weakref right after a cross-hub drop
+   need a full-suite run before merge.
+
 ### 11. asyncio debug mode raises after a migration (A)
 
 `p22_asyncio_debug.py`: `RuntimeError: Non-thread-safe operation invoked on
