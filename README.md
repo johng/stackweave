@@ -67,8 +67,8 @@ spawn / sleep cost at 10k+ fibers. Every row and caveat:
 **[latest comparison](benchmark/bench/results/compare/20261012-192447-linux-c32/summary.md)**.
 
 ```python
-stackweave.optimize("throughput")   # stackweave.fiber -> max spawn rate (fiber_fast)
-stackweave.optimize("memory")       # stackweave.fiber -> small right-sized stacks (default)
+stackweave.optimize("throughput")   # max spawn rate + a 16-worker blocking() pool
+stackweave.optimize("memory")       # grow-down sizer: smaller stack reservations (opt-in)
 ```
 
 ## Install

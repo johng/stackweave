@@ -7,7 +7,7 @@ and buying:
 
     stackweave.optimize()                          # nothing -- keep the defaults
     stackweave.optimize("throughput")              # max spawn rate (spends RAM)
-    stackweave.optimize("memory")                  # right-sized stacks (spends spawn rate)
+    stackweave.optimize("memory")                  # right-sized stack reservations (spends spawn rate)
     stackweave.optimize("latency")                 # sharp tail  (spends a little CPU)
     stackweave.optimize("secure")                  # hardened    (spends a little speed)
     stackweave.optimize("throughput", "latency")   # compose -- pass the trades you want
@@ -21,8 +21,10 @@ What each trade does:
     throughput  ``stackweave.fiber`` spawns like ``fiber_fast`` (max naked-spawn
                 rate, fixed default stack), and the blocking-offload pool gets
                 16 workers (STACKWEAVE_BLOCKPOOL_WORKERS).
-    memory      ``stackweave.fiber`` uses the grow-down auto-sizer (small
-                right-sized stacks) -- the default, re-asserted.
+    memory      ``stackweave.fiber`` uses the grow-down auto-sizer, which trims
+                each function's stack RESERVATION (address space and commit
+                charge -- not RSS: untouched stack pages are never resident)
+                at the cost of sampling spawns.  Off by default.
     latency     sysmon's wedge budget drops to 25 ms (STACKWEAVE_SYSMON_MS):
                 faster recovery from a wedged hub for a few hundred extra
                 wakeups/sec.
@@ -117,11 +119,13 @@ def optimize(*goals, max_fibers=None):
     applied = {k: os.environ.get(k) for k in merged}
 
     # Spawn-path trade, applied LIVE (it picks which C entry stackweave.fiber uses):
-    #   throughput -> fiber_fast: max naked-spawn rate, fixed default stack.
-    #   memory     -> grow-down : small right-sized resident stacks.
+    #   throughput -> fiber_fast: max naked-spawn rate, fixed default stack --
+    #                 the default spawn path too, but it also overrides a
+    #                 grow-down turned on with set_grow_down(True).
+    #   memory     -> grow-down : right-sized stack reservations (address space).
     # memory > throughput, so on a conflict the leaner choice wins.  Untouched
     # unless one of the two is requested, so optimize("latency")/optimize() leave
-    # stackweave.fiber at its grow-down default.
+    # stackweave.fiber at its default (fast spawn, grow-down off).
     if "throughput" in goals or "memory" in goals:
         want_speed = ("throughput" in goals) and ("memory" not in goals)
         if not want_speed:

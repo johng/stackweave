@@ -22,13 +22,29 @@ import stackweave_c
 _prewarmed = False
 
 
-# --- function-bound stack grow-down (auto-size-down), default-on under M:N --
+# --- function-bound stack grow-down (auto-size-down), opt-in, M:N only -------
 #
 # Every fiber reserves a C stack.  A fixed default (512 KiB) is safe but
 # wasteful: most fibers touch only a few KiB, so 99% of the reservation is
 # never paged in.  The grow-down learns each function's real need and reserves
 # only that, bound to the function itself rather than a side table -- "the
 # function IS the database row".
+#
+# OFF by default (set_grow_down(True) or optimize("memory") turns it on).  What
+# it saves is address space, not memory: a reservation's untouched pages are
+# never resident, so RSS per fiber is the same at 256 KiB, 512 KiB or 1 MiB
+# stacks (measured: 120 KiB/parked fiber on macOS at all three), and on
+# free-threaded 3.14 runloom_fiber_stack_floor() raises every learned size to
+# 256 KiB anyway -- so the most it can do is halve the reservation.  That pays
+# off only where reservations are charged (strict overcommit,
+# vm.overcommit_memory=2).  What it costs: each of a function's first
+# GROW_DOWN_SAMPLES spawns goes through _fiber_full and a measuring wrapper
+# with a mincore scan at exit, and a closure made per spawn (``fiber(wrap(f))``,
+# the normal way to hand a fiber its arguments) is a new function every time,
+# so it never freezes and pays that on EVERY spawn: 1.2-1.7x slower on the
+# bench's gateway and crawler apps, ~1.5x on closure spawns.  A burst of fibers
+# that park before the first sampled one finishes also freezes at "nothing
+# learned" and spawns at the default anyway.
 #
 # Active under M:N (run(n>1)) only; single-thread run(1) keeps the fixed default
 # (see the dispatch in fiber() for why).
@@ -53,10 +69,10 @@ _prewarmed = False
 # Safety: the learned size only ever SHRINKS from the cold start, a size that
 # already ran the function, so it never reserves more than a known-safe amount.
 # The one residual risk -- an input deeper than every sampled run, hitting the
-# now-smaller stack -- lands on the PROT_NONE guard page as a clean crash (a
-# classified overflow, never silent corruption), and re-learns next process.
-# Pin an exact size with stackweave.fiber(fn, stack_size=N) to opt a function out
-# entirely; disable globally with set_grow_down(False).
+# now-smaller stack -- raises RecursionError from the fiber's C-stack check
+# (runloom_coro_rearm_stackprot) where the default stack would have fit, and
+# re-learns next process.  Pin an exact size with
+# stackweave.fiber(fn, stack_size=N) to opt a function out entirely.
 #
 # Free-threaded note: the learned size lives in a 2-element list on fn.__dict__,
 # read/written under free-threaded CPython's per-object locks.  Concurrent
@@ -68,16 +84,18 @@ GROW_DOWN_SAMPLES = 64               # measure this many runs of a function, the
 GROW_DOWN_MARGIN = 4                 # reserve next_pow2(measured_hwm * MARGIN)
 GROW_DOWN_MIN = 16 * 1024            # never reserve below this (matches C MIN_STACK_SIZE)
 
-grow_down_active = True
+grow_down_active = False
 
 
 def set_grow_down(enabled=True):
     """Enable/disable the function-bound stack grow-down auto-sizer.
 
-    On by default, and active under M:N scheduling (run(n>1)) only -- single-
-    thread run(1) always uses the fixed default stack.  When off, stackweave.fiber()
-    reserves the fixed default stack for every fiber (no per-function
-    learning).  Per-call ``stack_size=`` pins always win regardless of this
+    Off by default.  When on, it is active under M:N scheduling (run(n>1))
+    only -- single-thread run(1) always uses the fixed default stack -- and
+    trims each function's stack reservation (address space, not RSS) at the
+    cost of sampling its first spawns, and every spawn of a fresh closure.
+    When off, stackweave.fiber() spawns straight from C with the fixed default
+    stack.  Per-call ``stack_size=`` pins always win regardless of this
     setting."""
     global grow_down_active
     grow_down_active = bool(enabled)
@@ -364,12 +382,15 @@ def _fiber_full(callable_, *args, **kwargs):
     is required for correctness, not just convenience.
 
     NOTE: this is the full-feature DELEGATE, not the public entry.
-    ``stackweave.fiber`` is bound to the C ``fiber_grow``, which handles the FROZEN
-    grow-down case (a callable's learned stack size, the steady state) in C with
-    no Python frame and delegates back HERE only for the sampling phase (first
-    GROW_DOWN_SAMPLES spawns of a callable, which must wrap + measure), rich calls
-    (args / stack_size= / single-thread), and non-plain-function callables.  ``stackweave.fiber_fast`` is the separate raw-throughput entry that
-    bypasses grow-down entirely (fixed default stack).
+    ``stackweave.fiber`` is bound to the C ``fiber_grow``, which spawns a plain
+    M:N ``fiber(fn)`` in C with no Python frame -- at the default stack while
+    grow-down is off (the default), at the learned size once a callable's
+    grow-down has frozen -- and delegates back HERE only for rich calls (args /
+    stack_size= / single-thread), and, with grow-down on, for the sampling phase
+    (first GROW_DOWN_SAMPLES spawns of a callable, which must wrap + measure)
+    and non-plain-function callables.  ``stackweave.fiber_fast`` is the
+    separate raw-throughput entry that bypasses grow-down entirely (fixed
+    default stack).
     """
     # stack_size= is OUR keyword (the per-fiber C stack), not an argument
     # for the target -- pop it before binding args so it pins the fiber's
@@ -390,7 +411,7 @@ def _fiber_full(callable_, *args, **kwargs):
     else:
         target = callable_
 
-    # Function-bound grow-down (default-on under M:N): unless the caller pinned
+    # Function-bound grow-down (opt-in, M:N only): unless the caller pinned
     # an exact stack_size, learn callable_'s real stack need and reserve only
     # that.  The learned size binds to callable_ (the real function), so every
     # spawn of it -- with or without args -- shares one size.  An explicit
@@ -420,12 +441,13 @@ def _fiber_full(callable_, *args, **kwargs):
     return Goroutine(g, name=name)
 
 
-# stackweave.fiber is bound to the C `fiber_grow`: the grow-down auto-sizer with its
-# FROZEN case (a callable's learned stack size, the steady state) handled in C
-# with no Python frame.  fiber_grow delegates the sampling phase + rich/single-
-# thread calls back to `_fiber_full` (the full-feature wrapper above), and
-# reads the learned size from fn.__dict__ using the (key, samples) registered
-# here.  stackweave.fiber_fast is the raw-throughput entry that skips grow-down.
+# stackweave.fiber is bound to the C `fiber_grow`: a plain M:N spawn handled in
+# C with no Python frame -- at the default stack with grow-down off (the
+# default), or, with it on, at a callable's learned size once frozen (read from
+# fn.__dict__ using the (key, samples) registered here).  fiber_grow delegates
+# rich/single-thread calls, and grow-down's sampling phase, back to
+# `_fiber_full` (the full-feature wrapper above).  stackweave.fiber_fast is the
+# raw-throughput entry that skips grow-down.
 stackweave_c._fiber_register(_fiber_full)
 stackweave_c._fiber_register_growdown(GROW_DOWN_KEY, GROW_DOWN_SAMPLES)
 stackweave_c._fiber_set_grow_down(grow_down_active)

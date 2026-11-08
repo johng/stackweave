@@ -122,7 +122,9 @@ def allocated_blocks():
     return sys.getallocatedblocks()   # includes the abandoned-segment pool
 
 
-assert stackweave.grow_down_enabled()
+# The leak's workload: grow-down (off by default) samples every fresh lambda,
+# and the sampler's exit path leaves non-small ints on the fiber's freelists.
+stackweave.set_grow_down(True)
 before = remote_spawn_p50_us()
 drain_before = remote_drain_us_per_fiber()
 forkjoin()                            # warm: imports, TLBC copies, caches

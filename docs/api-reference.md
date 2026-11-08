@@ -87,11 +87,12 @@ read half of the function-bound grow-down auto-sizer.
 
 (On `stackweave`, not `stackweave_c`.) Toggle the function-bound stack **grow-down**
 auto-sizer, which learns each `stackweave.fiber()`-spawned function's real stack need
-and reserves only that.  **On by default**, active under M:N (`run(n>1)`) only;
-single-thread `run(1)` keeps the fixed default.  A per-call `stackweave.fiber(fn,
+and reserves only that.  **Off by default** (`optimize("memory")` turns it on);
+when on, active under M:N (`run(n>1)`) only, and single-thread `run(1)` keeps
+the fixed default.  It trims address space, not RSS, and samples spawns to do it.  A per-call `stackweave.fiber(fn,
 stack_size=N)` pin always wins, and grow-down defers to the opt-in
 `enable_stack_autosize()` when that is explicitly enabled.  See
-[docs/stack-sizing.md](stack-sizing.md#automatic-grow-down-on-by-default-mn).
+[docs/stack-sizing.md](stack-sizing.md#grow-down-opt-in-mn).
 
 ### Channels
 

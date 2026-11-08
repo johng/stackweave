@@ -1,10 +1,10 @@
 """Tests for the function-bound stack grow-down (stackweave.set_grow_down).
 
-The grow-down is the default-on, M:N-only auto-sizer: each fiber starts at
-the fixed default stack ("cold start"), measures its real C-stack high-water-mark
-on return, and writes a derived, smaller size back onto the callable itself
-(fn.__dict__[GROW_DOWN_KEY] = [learned_bytes, spawns_measured]).  The next spawn
-of that function reserves only next_pow2(hwm * MARGIN).
+The grow-down is an opt-in (off by default), M:N-only auto-sizer: each fiber
+starts at the fixed default stack ("cold start"), measures its real C-stack
+high-water-mark on return, and writes a derived, smaller size back onto the
+callable itself (fn.__dict__[GROW_DOWN_KEY] = [learned_bytes, spawns_measured]).
+The next spawn of that function reserves only next_pow2(hwm * MARGIN).
 
 The observable is that learned store: a function spawned under run(n>1) ends up
 with a learned size well below the default, floored at GROW_DOWN_MIN, while
@@ -19,12 +19,14 @@ import pytest
 
 import stackweave
 import stackweave_c
+from adv_util import run_python
 from stackweave.runtime import GROW_DOWN_KEY, GROW_DOWN_MIN, GROW_DOWN_SAMPLES
 
 # Stack high-water-mark is precise only with 4 KB pages -- see
-# test_stack_autosize.py.
+# test_stack_autosize.py.  Only the tests that assert a learned SIZE need it;
+# whether a store is written at all does not depend on the measurement.
 _RELIABLE_HWM = os.sysconf("SC_PAGESIZE") == 4096
-pytestmark = pytest.mark.skipif(
+needs_4k_hwm = pytest.mark.skipif(
     not _RELIABLE_HWM,
     reason="stack HWM is reliable only with 4 KB pages")
 
@@ -80,10 +82,10 @@ for _ in range(80):
 
 @pytest.fixture(autouse=True)
 def _clean():
-    stackweave.set_grow_down(True)
+    stackweave.set_grow_down(True)          # these tests exercise the opt-in sizer
     stackweave.inspect.enable_stack_autosize(False)
     yield
-    stackweave.set_grow_down(True)
+    stackweave.set_grow_down(False)         # back to the default
     stackweave.inspect.enable_stack_autosize(False)
 
 
@@ -95,10 +97,54 @@ def _spawn_mn(fn, n, hubs=4, **go_kw):
     stackweave.run(hubs, main)
 
 
-def test_on_by_default():
-    assert stackweave.grow_down_enabled() is True
+OFF_BY_DEFAULT = r'''
+import stackweave, stackweave_c
+from stackweave import runtime
+from stackweave.runtime import GROW_DOWN_KEY
+
+assert stackweave.grow_down_enabled() is False
+
+# Count the plain spawns that detour through the Python fallback: with nothing
+# to sample, fiber(fn) must spawn in C (module_run.c.inc m_fiber_grow).
+detours = []
+def spy(*a, **kw):
+    detours.append(a)
+    return runtime._fiber_full(*a, **kw)
+stackweave_c._fiber_register(spy)
+
+def worker():
+    return 1
+
+def make():
+    def f():
+        return 1
+    return f
+
+closures = []
+def main():
+    for _ in range(100):
+        stackweave.fiber(worker)
+        c = make()
+        closures.append(c)
+        stackweave.fiber(c)
+
+stackweave.run(4, main)
+assert GROW_DOWN_KEY not in worker.__dict__, worker.__dict__
+assert not any(GROW_DOWN_KEY in c.__dict__ for c in closures)
+# run(4, main) spawns the root through the fallback; the 200 children must not
+assert len(detours) <= 1, len(detours)
+print("OK")
+'''
 
 
+def test_off_by_default_and_plain_spawns_skip_python():
+    # A fresh process: the setting is process-wide, and _clean flips it.
+    p = run_python(OFF_BY_DEFAULT, timeout=60)
+    assert p.returncode == 0 and "OK" in p.stdout, (
+        p.returncode, p.stdout[-2000:], p.stderr[-4000:])
+
+
+@needs_4k_hwm
 def test_light_learns_to_floor():
     def worker():
         return 1
@@ -109,6 +155,7 @@ def test_light_learns_to_floor():
     _assert_shrunk_to_floorish(store[0])
 
 
+@needs_4k_hwm
 def test_deep_learns_a_real_size_below_default():
     default = stackweave_c.get_stack_size()
     def worker():
@@ -158,6 +205,7 @@ def test_defers_to_c_autosizer_when_enabled():
     assert worker.__dict__.get(GROW_DOWN_KEY) is None
 
 
+@needs_4k_hwm
 def test_freezes_after_samples():
     # spawn far more than GROW_DOWN_SAMPLES; the measured/wrapped count is capped,
     # so the steady state stops paying the per-completion measurement
@@ -188,6 +236,7 @@ def test_non_introspectable_callable_is_safe():
     _spawn_mn(c, 10)     # must not raise
 
 
+@needs_4k_hwm
 def test_arg_bearing_binds_to_real_function():
     # stackweave.fiber(fn, arg) wraps fn in an arg-binding lambda; the learned size must
     # bind to fn (shared across all arg variants), not the per-call wrapper
