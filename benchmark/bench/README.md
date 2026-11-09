@@ -63,9 +63,18 @@ interpreter, no `go`) are skipped with a note.
   stdlib, the pinned / busy / drifted / `@Nh` rows are stackweave
   scheduling variants (Go runs the `@Nh` rows with GOMAXPROCS=N), and Go has
   no foreign OS thread without cgo.
-- Echo: the event loops and threads have no hub count, so their number sits
-  in the default-hubs row (`py-echo @4h`); Go's handler is native code, so its
-  number fills both the `c-echo` and `py-echo` rows of each hub count.
+- Same cores for every runtime: stackweave runs its hubs (4 unless a row
+  says `@Nh`), Go runs `GOMAXPROCS` = the hub count, and the threads and
+  event-loop columns are pinned to as many CPUs as there are hubs (not in the
+  memory suite, where RSS does not depend on it). Unpinned, a thread per
+  connection spread over every core of the box -- 32 on a c-32, 8x the
+  others' -- which compared core counts, not runtimes. Runs up to and
+  including `20261109-070826-linux-c32` have unpinned threads and event-loop
+  columns.
+- Echo: the event loops have no hub count, so their number sits in the
+  default-hubs row (`py-echo @4h`); threads run once per hub count on that
+  many CPUs; Go's handler is native code, so its number fills both the
+  `c-echo` and `py-echo` rows of each hub count.
 - Caveats that move a column, documented in `baselines.py` / `gobench/main.go`:
   asyncio's Lock and gevent's Semaphore never contend (nothing yields inside
   the critical section) while trio's does; threads call the `blocking()` row's

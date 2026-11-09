@@ -344,6 +344,11 @@ def runtime_line(runs, keys, key_name):
         else:
             what = "python %s (%s)" % (e["python"], "gil off" if e["gil_enabled"] is False
                                         else "GIL build")
+            # bench.baselines pins every suite but memory to the hub count's CPUs
+            pins = sorted({len(d["env"]["pinned_cpus"]) for (su, kk), ds in runs.items()
+                           if kk == k and su != "memory" for d in ds
+                           if d["env"].get("pinned_cpus")})
+            what += ", pinned to %s CPUs" % "/".join(map(str, pins)) if pins else ", unpinned"
         by.setdefault(what, []).append(key_name[k])
     return "; ".join("%s on %s" % ("/".join(v), w) for w, v in by.items())
 

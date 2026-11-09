@@ -21,8 +21,17 @@ No stackweave is imported: run this on a STOCK interpreter.
   latencies                foreign-thread wake, unit->unit wake, spawn->first
                            run, 1 ms timer lateness
   py-echo                  64 persistent loopback conns x 500 x 64 B, server
-                           and clients in-process; no hub count, so it is
-                           recorded in the default-hubs row ("py-echo @4h")
+                           and clients in-process.  An event loop has no hub
+                           count, so it is recorded in the default-hubs row
+                           ("py-echo @4h"); threads run it once per hub count
+                           of bench.echo, on that many CPUs ("py-echo @Nh")
+
+CPUs: each run is pinned to as many CPUs as stackweave has hubs
+(STACKWEAVE_BENCH_HUBS, default 4), the parallelism stackweave's rows get
+(hubs) and Go's (GOMAXPROCS = the hub count).  Unpinned, a thread per
+connection spreads over every core of the box -- 32 on a c-32, 8x the others
+-- and the threads columns compared core counts, not runtimes.  The memory
+probe stays unpinned, as stackweave's does (RSS does not depend on it).
 
 Not here: select (no stdlib channel select), stackweave's pinned / busy /
 drifted routing variants and hub scaling.  asyncio.Lock and gevent's
@@ -50,12 +59,16 @@ import threading
 import time
 
 from bench.gil import ensure_nogil
-from bench.harness import Suite
+from bench.harness import Suite, default_pin_set, pin
 
 HOST = "127.0.0.1"
 MSG = 64
-# No hub count here: the echo number goes in stackweave's default-hubs row.
-ECHO_ROW = "py-echo @%sh" % os.environ.get("STACKWEAVE_BENCH_HUBS", "4")
+# stackweave's hub count: every run is pinned to this many CPUs (docstring).
+HUBS = int(os.environ.get("STACKWEAVE_BENCH_HUBS", "4"))
+# An event loop has no hub count: its echo number goes in the default-hubs row.
+ECHO_ROW = "py-echo @%dh" % HUBS
+# bench.echo's hub counts: threads run the echo once per count, on that many CPUs.
+ECHO_HUBS = (2, 4, 8, 16)
 KINDS = ("threads", "asyncio", "uvloop", "trio", "gevent")
 SPAWN_ROWS = ("spawn noop mn_fiber", "spawn noop stackweave.fiber")
 _STOP = object()
@@ -281,7 +294,7 @@ class Threads:
         self.all([mk(k) for k in range(units)])
         return lat
 
-    def echo(self, s, conns_n, rounds, samples, warmup):
+    def echo(self, s, conns_n, rounds, samples, warmup, row=ECHO_ROW):
         srv = socket.create_server((HOST, 0), backlog=1024)
         port = srv.getsockname()[1]
         handlers = []
@@ -335,8 +348,9 @@ class Threads:
             self.all([mk(c) for c in conns])
             _check(not bad, "echo: %r" % (bad[:1],))
         try:
-            s.bench(ECHO_ROW, once, inner=conns_n * rounds,
-                    note="1 server thread per conn + %d client threads" % conns_n)
+            cpus = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else "all"
+            s.bench(row, once, inner=conns_n * rounds,
+                    note="1 server thread per conn + %d client threads, %s CPUs" % (conns_n, cpus))
         finally:
             for c in conns:
                 c.close()
@@ -1196,7 +1210,12 @@ def main(argv=None):
     q = 10 if args.quick else 1
     n = 400 if args.quick else 4_000
     samples, warmup = (3, 1) if args.quick else ((10, 2) if args.suite == "apps" else (12, 3))
-    s = Suite("baseline-" + args.kind, pin_cpus=[], samples=samples, warmup=warmup)
+    # Each threads echo row's CPUs, taken before the Suite narrows this thread's
+    # affinity (default_pin_set falls back to it without NUMA info in /sys).
+    echo_cpus = {h: default_pin_set(n=h) for h in ECHO_HUBS}
+    # Pinned to as many CPUs as stackweave has hubs (docstring); not the memory probe.
+    s = Suite("baseline-" + args.kind, samples=samples, warmup=warmup,
+              pin_cpus=[] if args.suite == "memory" else default_pin_set(n=HUBS))
     s.env["runtime"] = args.kind
     rt = make(args.kind)
     print("runtime: %s  python %s  gil=%s\n" % (args.kind, s.env["python"], s.env["gil_enabled"]))
@@ -1219,7 +1238,20 @@ def main(argv=None):
         s.latency("timer lateness 1ms", rt.lat_timer(200 if args.quick else 1_000, 10))
 
     if args.suite in ("echo", "all"):
-        rt.echo(s, 64, max(10, 500 // q), samples, warmup)
+        rounds = max(10, 500 // q)
+        if args.kind != "threads" or not s.pinned:
+            rt.echo(s, 64, rounds, samples, warmup)
+        else:
+            # A thread per connection runs on as many cores as it is given: one
+            # row per bench.echo hub count, each on that many CPUs.
+            for h in ECHO_HUBS:
+                cpus = echo_cpus[h]
+                if len(cpus) < h:
+                    print("skip py-echo @%dh: %d CPUs here" % (h, len(cpus)))
+                    continue
+                pin(cpus)
+                rt.echo(s, 64, rounds, samples, warmup, row="py-echo @%dh" % h)
+            pin(s.pinned)
     if args.suite in ("apps", "memory"):
         from bench import appspec, baselines_apps
         apps = baselines_apps.make(args.kind, rt)
