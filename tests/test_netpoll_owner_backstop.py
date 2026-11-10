@@ -100,3 +100,67 @@ def test_reader_on_a_wedged_hub_wakes_on_another_hub():
         "polled hub 0's fds while it was stuck" % (late, WEDGE_S))
     assert st["woke_at"] < st["unwedged_at"], st
     assert st["wake_hub"] != 0, st
+
+
+def test_reader_parked_from_another_hub_on_a_wedged_owners_fd_wakes():
+    # On epoll the fd stays in the epoll of the hub that first armed it, even
+    # when its reader later parks from another hub -- whose pool then holds the
+    # parker while the owner's holds none.  The backstop must poll the owner
+    # anyway: it used to skip a hub with no parkers of its own, stranding this
+    # reader for the whole wedge.
+    libc = ctypes.CDLL(ctypes.util.find_library("c"))
+    a, b = socket.socketpair()
+    a.setblocking(False)
+    b.setblocking(False)
+    st = {}
+
+    def reader():
+        _move_to_hub(0)
+        stackweave_c.wait_fd(a.fileno(), READ, 5)    # arms the fd on hub 0, times out
+        g = _move_to_hub(1)
+        g.pin(None)
+        st["park_hub"] = stackweave_c.mn_current_hub()
+        st["parked"] = True
+        st["ready"] = stackweave_c.wait_fd(a.fileno(), READ, 10000)
+        st["woke_at"] = time.monotonic()
+
+    def wedge():
+        _move_to_hub(0)
+        st["wedged_at"] = time.monotonic()
+        libc.usleep(int(WEDGE_S * 1e6))
+        st["unwedged_at"] = time.monotonic()
+        stackweave_c.current_g().pin(None)
+
+    def writer():
+        deadline = time.monotonic() + 30
+        while "wedged_at" not in st and time.monotonic() < deadline:
+            time.sleep(0.001)
+        time.sleep(0.05)
+        st["sent_at"] = time.monotonic()
+        b.send(b"x")
+
+    def main():
+        stackweave.fiber(reader)
+        while not st.get("parked"):
+            stackweave.sleep(0.001)
+        stackweave.sleep(0.02)
+        stackweave.fiber(wedge)
+        t = threading.Thread(target=writer, daemon=True)
+        t.start()
+        st["writer"] = t
+
+    try:
+        stackweave.run(HUBS, main)
+        st["writer"].join(30)
+    finally:
+        a.close()
+        b.close()
+
+    assert st["park_hub"] == 1
+    assert st["ready"] & READ, st
+    late = st["woke_at"] - st["sent_at"]
+    assert late < WAKE_LIMIT_S, (
+        "the reader on hub 1 waited %.3f s for wedged hub 0, whose epoll holds "
+        "its fd (wedge %.1f s)" % (late, WEDGE_S))
+    assert st["woke_at"] < st["unwedged_at"], st
+

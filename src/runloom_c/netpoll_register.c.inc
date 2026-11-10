@@ -408,6 +408,7 @@ static int runloom_netpoll_register(int fd, int events)
          * owner<0 (shared fallback) is already correct for THIS hub since the
          * fallback epoll is shared, so only a >=0 owner mismatch migrates. */
         if (owner >= 0 && owner != my_pool_idx &&
+            my_pool_idx >= 0 && my_pool_idx < RUNLOOM_PARKER_POOL_HUBS &&
             owner < runloom_mn_hub_count() && runloom_pools[owner].epoll_fd >= 0) {
             /* KEEP IT IN ITS OWNER.  The fd lives in a live hub's epoll and a
              * fiber parked on it from another hub: leave it there (ep is the
@@ -423,7 +424,15 @@ static int runloom_netpoll_register(int fd, int events)
              * at 16 (Linux c-32, 2026-11-09; kept here: 199k / 452k).  A hub
              * that stops polling (one long fiber, a C call) does not strand
              * these fds: sysmon polls its epoll for it
-             * (runloom_netpoll_backstop_poll). */
+             * (runloom_netpoll_backstop_poll).  Only for a caller on a hub's
+             * own pool: a run(1) drain nested on a hub fiber parks in the
+             * DEFAULT pool and pumps only its epoll, so its fd moves to the
+             * shared epoll nested there (below), as before.
+             *
+             * An fd number reused after a raw close (no unregister) keeps its
+             * stale arm here, as it already did for a same-hub re-park: the
+             * stale-arm probe (validate_arm, STACKWEAVE_STALE_ARM_PROBE_MS)
+             * heals it. */
         } else if (owner >= 0 && owner != my_pool_idx) {
             /* MULTI-POOL fd: the SAME fd is now wanted by a second hub's pool.
              * The old behaviour ping-ponged it between per-hub epolls (DEL from

@@ -355,11 +355,10 @@ static int runloom_np_miss_grace_us(void)
 }
 #endif
 /* sysmon polls a hub's poller once the hub has gone this long without starting
- * a poll (runloom_netpoll_backstop_poll). */
+ * a poll (runloom_netpoll_backstop_poll); 0 turns the backstop off. */
 static int runloom_np_backstop_ms(void)
 {
-    int v = runloom_np_knob("STACKWEAVE_NETPOLL_BACKSTOP_MS", 5, &runloom_np_backstop_v);
-    return v > 0 ? v : 5;
+    return runloom_np_knob("STACKWEAVE_NETPOLL_BACKSTOP_MS", 5, &runloom_np_backstop_v);
 }
 
 /* Pool mutexes are glibc's ADAPTIVE kind where it exists: a pool lock is taken
@@ -380,7 +379,8 @@ static void runloom_np_pool_mutex_init(runloom_mutex_t *m)
 #endif
 }
 
-int runloom_netpoll_counter_n(void) { return RUNLOOM_NPC__N; }
+/* 0 unless STACKWEAVE_NETPOLL_COUNTERS=1: stats() then adds no netpoll_c_* keys. */
+int runloom_netpoll_counter_n(void) { return runloom_npc_enabled() ? RUNLOOM_NPC__N : 0; }
 const char *runloom_netpoll_counter_name(int k)
 { return (k >= 0 && k < RUNLOOM_NPC__N) ? runloom_npc_names[k] : NULL; }
 unsigned long long runloom_netpoll_counter(int k)
