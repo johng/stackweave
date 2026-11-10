@@ -3,6 +3,28 @@
  * these definitions depend on. */
 
 
+#if defined(RUNLOOM_HAVE_EPOLL) || defined(RUNLOOM_HAVE_KQUEUE)
+/* The backstop's gate, both backends: hub `hub_idx`'s pool when sysmon should
+ * poll it now, else NULL -- the backstop is on, the hub is not blocked in its
+ * own poll, and it has not started one for the budget.  sysmon calls the
+ * backstop only while something is parked ANYWHERE: an fd stays in its owner
+ * hub's poller whichever pool its waiter linked into, so the owner's own pool
+ * may be empty while a waiter on another hub depends on it. */
+static runloom_parker_pool_t *runloom_np_backstop_due(int hub_idx, long long now_ns)
+{
+    runloom_parker_pool_t *pool;
+    int ms = runloom_np_backstop_ms();
+    if (ms <= 0 || hub_idx < 0 || hub_idx >= RUNLOOM_PARKER_POOL_HUBS) return NULL;
+    pool = &runloom_pools[hub_idx];
+    if (__atomic_load_n(&pool->lock_inited, __ATOMIC_ACQUIRE) != 2) return NULL;
+    if (__atomic_load_n(&pool->in_wait, __ATOMIC_RELAXED)) return NULL;
+    if (now_ns - __atomic_load_n(&pool->last_pump_ns, __ATOMIC_RELAXED) <
+        (long long)ms * 1000000LL)
+        return NULL;
+    return pool;
+}
+#endif
+
 #if defined(RUNLOOM_HAVE_EPOLL)
 /* Handle one ready epoll event: io_uring global/per-ring eventfds drain their
  * rings, the legacy generic pump-wake eventfd is drained, and a socket fd is
@@ -55,6 +77,24 @@ static void runloom_epoll_handle_event(int fd, unsigned int events, int *woke)
         /* No parker linked yet (or already woken once): stash the mask so the
          * next wait_fd consumes it instead of parking forever. */
         runloom_fd_pending_wake_set(fd, mask);
+        /* MISS GRACE: keep the arm through a transient miss -- the level
+         * re-report of an fd whose waiter was woken and has not read yet, or
+         * the sysmon backstop and the owner both seeing one readiness.
+         * Disarming there cost a DEL now and an ADD at the waiter's next park,
+         * both under runloom_pool.lock.  An arm nobody comes back for is still
+         * dropped, once it has missed for the grace
+         * (STACKWEAVE_NETPOLL_MISS_GRACE_US, default 2000; 0 = at once), so a
+         * dead fd spins a hub for at most that long.  Only for an fd a live
+         * hub owns: one in the shared epoll is polled by every hub, which
+         * would all spin through the grace, so it is dropped at once.  And
+         * not for a write-only report: a socket stays writable, and a reader
+         * re-parking (which clears the grace) would keep its OUT arm, and
+         * the hub's epoll_wait returning at once, for good. */
+        if ((mask & RUNLOOM_NETPOLL_READ) && runloom_np_owned_by_live_hub(fd) &&
+            runloom_np_miss_defer(fd)) {
+            RUNLOOM_NPC(RUNLOOM_NPC_MISS_DEFER, 1);
+            return;
+        }
         /* Level-triggered EPOLLOUT with no writer parked would otherwise re-fire
          * on every pump iteration and busy-spin the idle hub at 100% CPU -- a
          * bare cooperative connect() or a short write leaves the socket writable
@@ -114,7 +154,101 @@ static void runloom_epoll_handle_event(int fd, unsigned int events, int *woke)
         }
     }
 }
+
+
+
+/* Liveness backstop, called from the sysmon thread (no tstate, no Python).
+ * An fd stays in the epoll of the hub that first armed it, and only that hub
+ * polls it.  When the hub has parkers, is not blocked in its own poll, and has
+ * not started one for the budget -- it is running one long fiber or is stuck
+ * in a C call -- poll its epoll NON-BLOCKING from here, so those waiters wake
+ * and run on other hubs.  Socket events go through the normal handler (the
+ * wakes land on the global run-queue: a foreign waker); the hub's wake
+ * eventfd, the nested shared epoll and the io_uring eventfds stay with their
+ * owners.  A readiness both this and the owner see is a dispatch miss for one
+ * of them, which the miss grace absorbs.  Go's sysmon does the same for its
+ * one poller (10 ms). */
+int runloom_netpoll_backstop_poll(int hub_idx, long long now_ns)
+{
+    runloom_parker_pool_t *pool;
+    struct epoll_event evs[64];
+    int n, i, woke = 0;
+    pool = runloom_np_backstop_due(hub_idx, now_ns);
+    if (pool == NULL || pool->epoll_fd < 0) return 0;
+    RUNLOOM_NPC(RUNLOOM_NPC_BACKSTOP_POLL, 1);
+    n = epoll_wait(pool->epoll_fd, evs, 64, 0);
+    for (i = 0; i < n; i++) {
+        int fd = evs[i].data.fd;
+        int ri, special = 0;
+        if (fd < 0 || fd == pool->wake_efd || fd == runloom_epoll_fd ||
+            fd == runloom_iouring_eventfd_in_epoll ||
+            fd == __atomic_load_n(&runloom_pump_wake_fd, __ATOMIC_ACQUIRE))
+            continue;
+        for (ri = 0; ri < runloom_iouring_ring_count; ri++)
+            if (runloom_iouring_ring_efds[ri] == fd) { special = 1; break; }
+        if (special) continue;
+        runloom_epoll_handle_event(fd, evs[i].events, &woke);
+    }
+    if (woke > 0) RUNLOOM_NPC(RUNLOOM_NPC_BACKSTOP_WOKE, woke);
+    return woke;
+}
+#elif defined(RUNLOOM_HAVE_KQUEUE)
+/* kqueue twin of the backstop above: same gate, the kqueue pump's per-event
+ * handling (one-shot knotes, so wake_all; the self-pipe stays with its hub). */
+int runloom_netpoll_backstop_poll(int hub_idx, long long now_ns)
+{
+    runloom_parker_pool_t *pool;
+    struct kevent evs[64];
+    struct timespec zero = {0, 0};
+    int n, i, woke = 0;
+    pool = runloom_np_backstop_due(hub_idx, now_ns);
+    if (pool == NULL || pool->kqueue_fd < 0) return 0;
+    RUNLOOM_NPC(RUNLOOM_NPC_BACKSTOP_POLL, 1);
+    n = kevent(pool->kqueue_fd, NULL, 0, evs, 64, &zero);
+    for (i = 0; i < n; i++) {
+        int fd = (int)evs[i].ident;
+        int mask;
+        if (pool->selfpipe_r >= 0 && fd == pool->selfpipe_r) {
+            /* The hub's own kick, an EV_CLEAR edge this poll has just taken:
+             * empty the pipe and write one byte, a fresh edge the hub still
+             * sees.  Writing back without emptying it first could fail on a
+             * full pipe and lose the edge for good -- the hub drains only on
+             * an edge, and no write could make another. */
+            char drain[64], b = 1;
+            ssize_t w;
+            while (read(pool->selfpipe_r, drain, sizeof drain) > 0) { }
+            w = write(pool->selfpipe_w, &b, 1);
+            (void)w;
+            continue;
+        }
+        mask = (evs[i].filter == EVFILT_READ) ? RUNLOOM_NETPOLL_READ
+                                              : RUNLOOM_NETPOLL_WRITE;
+        if (evs[i].flags & (EV_EOF | EV_ERROR))
+            mask |= RUNLOOM_NETPOLL_READ | RUNLOOM_NETPOLL_WRITE;
+        woke += runloom_pump_dispatch_event(fd, mask, 1);
+    }
+    if (woke > 0) RUNLOOM_NPC(RUNLOOM_NPC_BACKSTOP_WOKE, woke);
+    return woke;
+}
+#else
+int runloom_netpoll_backstop_poll(int hub_idx, long long now_ns)
+{
+    (void)hub_idx; (void)now_ns;
+    return 0;
+}
 #endif
+
+void runloom_netpoll_hub_waiting(void *hub_opaque, int on)
+{
+    runloom_parker_pool_t *pool;
+    if (hub_opaque == NULL) return;
+    pool = runloom_parker_pool_for_hub(hub_opaque);
+    if (pool == &runloom_pools[RUNLOOM_PARKER_POOL_DEFAULT]) return;
+    /* Leaving a ring wait counts as a poll: the ring reports the hub's epoll
+     * (F_EPOLL) while it waits. */
+    if (!on) __atomic_store_n(&pool->last_pump_ns, monotonic_ns(), __ATOMIC_RELAXED);
+    __atomic_store_n(&pool->in_wait, on ? 1 : 0, __ATOMIC_RELAXED);
+}
 
 int runloom_netpoll_pump(long long timeout_ns)
 {
@@ -203,9 +337,24 @@ int runloom_netpoll_pump(long long timeout_ns)
         runloom_parker_pool_lock_ensure_inited(epool);
         if (epool->epoll_fd >= 0) wait_fd = epool->epoll_fd;
         else epool = NULL;   /* pool epoll create failed -> shared fallback */
+        if (epool != NULL) {
+            /* sysmon backstop: when this hub last polled, and whether it may
+             * be blocked in the poll (then it needs no help). */
+            __atomic_store_n(&epool->last_pump_ns, now, __ATOMIC_RELAXED);
+            if (ms != 0) __atomic_store_n(&epool->in_wait, 1, __ATOMIC_RELAXED);
+        }
         Py_BEGIN_ALLOW_THREADS
         n = epoll_wait(wait_fd, evs, 64, ms);
         Py_END_ALLOW_THREADS
+        if (epool != NULL && ms != 0) {
+            /* The wait ended now: the hub is about to dispatch what it got, so
+             * sysmon must not poll the same readiness behind it. */
+            __atomic_store_n(&epool->last_pump_ns, monotonic_ns(), __ATOMIC_RELAXED);
+            __atomic_store_n(&epool->in_wait, 0, __ATOMIC_RELAXED);
+        }
+        RUNLOOM_NPC(RUNLOOM_NPC_PUMP, 1);
+        if (ms != 0) RUNLOOM_NPC(RUNLOOM_NPC_PUMP_BLOCK, 1);
+        if (n > 0) RUNLOOM_NPC(RUNLOOM_NPC_PUMP_EV, n);
         if (n < 0) {
             runloom_netpoll_wait_failed(n);   /* EINTR -> retry; else log+backoff */
         } else if (n > 0) {
@@ -234,6 +383,8 @@ int runloom_netpoll_pump(long long timeout_ns)
                         struct epoll_event sevs[64];
                         int sn, si;
                         sn = epoll_wait(runloom_epoll_fd, sevs, 64, 0);
+                        RUNLOOM_NPC(RUNLOOM_NPC_SHARED_DRAIN, 1);
+                        if (sn > 0) RUNLOOM_NPC(RUNLOOM_NPC_SHARED_EV, sn);
                         for (si = 0; si < (sn < 0 ? 0 : sn); si++)
                             runloom_epoll_handle_event(sevs[si].data.fd,
                                                        sevs[si].events, &woke);
@@ -294,9 +445,18 @@ int runloom_netpoll_pump(long long timeout_ns)
                 struct timespec zero = {0, 0};
                 /* First pass: caller timeout.  Later passes: non-blocking. */
                 struct timespec *passtsp = (drained == 0) ? tsp : &zero;
+                int may_block = (passtsp == NULL ||
+                                 passtsp->tv_sec != 0 || passtsp->tv_nsec != 0);
+                __atomic_store_n(&kpool->last_pump_ns, now, __ATOMIC_RELAXED);
+                if (may_block) __atomic_store_n(&kpool->in_wait, 1, __ATOMIC_RELAXED);
                 Py_BEGIN_ALLOW_THREADS
                 n = kevent(kpool->kqueue_fd, NULL, 0, evs, 256, passtsp);
                 Py_END_ALLOW_THREADS
+                if (may_block) {
+                    __atomic_store_n(&kpool->last_pump_ns, monotonic_ns(),
+                                     __ATOMIC_RELAXED);
+                    __atomic_store_n(&kpool->in_wait, 0, __ATOMIC_RELAXED);
+                }
             }
             if (n < 0) {
                 runloom_netpoll_wait_failed(n);   /* EINTR -> retry; else log+backoff */

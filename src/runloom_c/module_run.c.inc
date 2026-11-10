@@ -477,6 +477,14 @@ static PyObject *m_stats(PyObject *self, PyObject *unused)
     RUNLOOM_STATS_SET("foreign_park_inflight", runloom_foreign_park_inflight());
     RUNLOOM_STATS_SET("netpoll_deadline_heap", runloom_netpoll_deadline_heap_total());
     RUNLOOM_STATS_SET("netpoll_fd_armed",  runloom_netpoll_fd_armed_count());
+    {
+        int k;
+        char nm[64];
+        for (k = 0; k < runloom_netpoll_counter_n(); k++) {
+            snprintf(nm, sizeof nm, "netpoll_c_%s", runloom_netpoll_counter_name(k));
+            RUNLOOM_STATS_SET(nm, (Py_ssize_t)runloom_netpoll_counter(k));
+        }
+    }
     RUNLOOM_STATS_SET("stale_arm_heals",
                       (Py_ssize_t)runloom_netpoll_stale_arm_heals());
 

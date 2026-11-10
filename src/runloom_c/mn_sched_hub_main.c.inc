@@ -1224,8 +1224,13 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                     if (!have_sub) {
                         if (idle_ns <= 0) idle_ns = 1;
                         saved = PyEval_SaveThread();
+                        /* The ring polls this hub's epoll fd, so the hub is
+                         * listening to its fds here as in epoll_wait: keep
+                         * the sysmon netpoll backstop off its epoll. */
+                        runloom_netpoll_hub_waiting((void *)h, 1);
                         runloom_iouring_loop_wait(h->iouring_ring, idle_ns,
                                                   &lflags);
+                        runloom_netpoll_hub_waiting((void *)h, 0);
                         PyEval_RestoreThread(saved);
                     }
                     __atomic_store_n(&h->ring_waiting, 0, __ATOMIC_RELEASE);
@@ -1438,6 +1443,14 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                          * waits out a whole idle_ns. */
                         if (!have_sub &&
                             __atomic_load_n(&h->sched.sleep_purge, __ATOMIC_ACQUIRE))
+                            have_sub = 1;
+                        /* And netpoll's owner kick (runloom_mn_hub_kick_if_idle):
+                         * a fiber on another hub that parked on an fd this hub's
+                         * epoll holds links its parker, fences, then signals only
+                         * an announced hub -- so one that parked before our
+                         * announce shows up in the count here, and we go poll
+                         * instead of sleeping on the condvar. */
+                        if (!have_sub && runloom_netpoll_parked_count() > 0)
                             have_sub = 1;
                         /* The two signallers that do NOT read idle_waiting set
                          * a flag first and then signal under idle_lock, so

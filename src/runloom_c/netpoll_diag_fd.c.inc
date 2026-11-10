@@ -222,6 +222,11 @@ static unsigned char *runloom_fd_armed = NULL;
  * runloom_fd_armed. */
 static unsigned char *runloom_fd_epoll_pool = NULL;
 
+/* Per-fd time (us, |1; 0 = none) of the first dispatch miss since the fd's
+ * last register: the miss grace (runloom_np_miss_defer).  Not allocated with
+ * STACKWEAVE_NETPOLL_MISS_GRACE_US=0. */
+static unsigned int *runloom_fd_miss_us = NULL;
+
 /* Upper/lower bounds on the preallocated fd capacity.  4M fds = 4MB
  * pending-wake array + 512KB registration bitmap, worst case. */
 #define RUNLOOM_FD_CAP_MIN   1024u
@@ -282,6 +287,10 @@ static void runloom_fd_arrays_init(void)
         return;   /* caps stay 0; set/consume/bit_* bounds-check to no-ops */
     }
     memset(ep, 0xFF, cap_fds);
+#if defined(RUNLOOM_HAVE_EPOLL)
+    if (runloom_np_miss_grace_us() > 0)
+        runloom_fd_miss_us = (unsigned int *)calloc(cap_fds, sizeof(unsigned int));
+#endif
     runloom_fd_epoll_pool           = ep;
     runloom_fd_registered_bm        = bm;
     runloom_fd_registered_cap_bytes = bm_bytes;
@@ -521,4 +530,44 @@ static int                       runloom_iouring_ring_count = 0;
  * Created once in runloom_netpoll_init under runloom_pool.lock. */
 static int runloom_selfpipe_r = -1;
 static int runloom_selfpipe_w = -1;
+#endif
+
+/* Miss grace.  clear: a waiter came back for fd (register).  defer: a
+ * dispatch found nobody parked; returns 1 to keep the arm (first miss, or still
+ * inside the grace since the first one), 0 to disarm now.  Relaxed: two pollers
+ * racing on one fd only shift the window by a miss. */
+#if defined(RUNLOOM_HAVE_EPOLL)
+static inline void runloom_np_miss_clear(int fd)
+{
+    unsigned int *a = runloom_fd_miss_us;
+    if (a != NULL && fd >= 0 && (size_t)fd < runloom_fd_pending_wake_cap &&
+        __atomic_load_n(&a[fd], __ATOMIC_RELAXED) != 0)
+        __atomic_store_n(&a[fd], 0u, __ATOMIC_RELAXED);
+}
+/* Whether fd's arm lives in a live hub's own epoll, not the shared one. */
+static inline int runloom_np_owned_by_live_hub(int fd)
+{
+    int ow = runloom_fd_epoll_pool_get(fd);
+    return ow >= 0 && ow < RUNLOOM_PARKER_POOL_HUBS && ow < runloom_mn_hub_count();
+}
+
+static int runloom_np_miss_defer(int fd)
+{
+    unsigned int *a = runloom_fd_miss_us;
+    unsigned int g = (unsigned int)runloom_np_miss_grace_us();
+    unsigned int now, m;
+    struct timespec ts;
+    if (a == NULL || g == 0 || fd < 0 || (size_t)fd >= runloom_fd_pending_wake_cap)
+        return 0;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    now = ((unsigned int)ts.tv_sec * 1000000u + (unsigned int)(ts.tv_nsec / 1000)) | 1u;
+    m = __atomic_load_n(&a[fd], __ATOMIC_RELAXED);
+    if (m == 0) {
+        __atomic_store_n(&a[fd], now, __ATOMIC_RELAXED);
+        return 1;
+    }
+    if (now - m < g) return 1;
+    __atomic_store_n(&a[fd], 0u, __ATOMIC_RELAXED);
+    return 0;
+}
 #endif
