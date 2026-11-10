@@ -314,31 +314,44 @@ typedef struct {
 static runloom_npc_slot_t *runloom_npc;   /* NULL until the counters turn on */
 static int runloom_npc_on = -1;
 
-/* First caller with the counters on allocates the slots; a racing second one
- * frees its copy.  A site that sees `on` before the pointer just skips a count. */
-static int runloom_npc_alloc(void)
+/* Decided once per process, by whichever thread first reaches a counting site:
+ * read the variable and, when it is on, allocate and publish the slots BEFORE
+ * the flag, then settle the flag with a CAS from -1.  A thread that loses the
+ * CAS returns the winner's answer (and frees slots that never got published),
+ * so the flag can never flip after it is set.  If the slots cannot be
+ * allocated, the counters stay off and say so once on stderr. */
+static RUNLOOM_NOINLINE int runloom_npc_init(void)
 {
-    void *m = NULL;
-    runloom_npc_slot_t *none = NULL;
-    size_t sz = sizeof(runloom_npc_slot_t) * RUNLOOM_NPC_SLOTS;
-    if (__atomic_load_n(&runloom_npc, __ATOMIC_ACQUIRE) != NULL) return 1;
-    if (posix_memalign(&m, sizeof(runloom_npc_slot_t), sz) != 0 || m == NULL) return 0;
-    memset(m, 0, sz);
-    if (!__atomic_compare_exchange_n(&runloom_npc, &none, (runloom_npc_slot_t *)m, 0,
+    const char *e = getenv("STACKWEAVE_NETPOLL_COUNTERS");
+    int on = (e != NULL && e[0] != '\0' && e[0] != '0') ? 1 : 0;
+    int expected = -1, failed = 0;
+    if (on) {
+        void *m = NULL;
+        runloom_npc_slot_t *none = NULL;
+        size_t sz = sizeof(runloom_npc_slot_t) * RUNLOOM_NPC_SLOTS;
+        if (posix_memalign(&m, sizeof(runloom_npc_slot_t), sz) == 0) {
+            memset(m, 0, sz);
+            if (!__atomic_compare_exchange_n(&runloom_npc, &none, (runloom_npc_slot_t *)m,
+                                             0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+                free(m);                      /* another thread published first */
+        } else {
+            on = 0;
+            failed = 1;
+        }
+    }
+    if (!__atomic_compare_exchange_n(&runloom_npc_on, &expected, on, 0,
                                      __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
-        free(m);
-    return 1;
+        return expected;                      /* another thread decided first */
+    if (failed)
+        fprintf(stderr, "stackweave: STACKWEAVE_NETPOLL_COUNTERS is set, but the "
+                        "counter slots could not be allocated; netpoll counters off\n");
+    return on;
 }
 
 static int runloom_npc_enabled(void)
 {
     int on = __atomic_load_n(&runloom_npc_on, __ATOMIC_RELAXED);
-    if (__builtin_expect(on < 0, 0)) {
-        const char *e = getenv("STACKWEAVE_NETPOLL_COUNTERS");
-        on = (e != NULL && e[0] != '\0' && e[0] != '0') ? 1 : 0;
-        if (on && !runloom_npc_alloc()) on = 0;
-        __atomic_store_n(&runloom_npc_on, on, __ATOMIC_RELEASE);
-    }
+    if (__builtin_expect(on < 0, 0)) on = runloom_npc_init();
     return on;
 }
 
