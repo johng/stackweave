@@ -7,7 +7,7 @@ one OS thread in two separate ways — and either alone still corrupts:
 | half | flag | what it decouples |
 |---|---|---|
 | **allocation** | `Py_TSTATE_ALLOC_HOME` | which heap a migrated fiber allocates on |
-| **execution** | `Py_TSTATE_EXEC_HOME` | whether the compiler may cache *which OS thread we are* (plus memoryview's and array.array's buffer-export counts, which a migrated fiber's deallocs race, and the locks CPython holds across Python code -- `_thread` locks, the import and warnings locks, buffered streams, multiprocessing's RLock: owned by a fiber's thread state rather than the OS thread, and their waits can park a fiber, see below) |
+| **execution** | `Py_TSTATE_EXEC_HOME` | whether the compiler may cache *which OS thread we are* (plus memoryview's and array.array's buffer-export counts, which a migrated fiber's deallocs race, and the locks CPython holds across Python code -- `_thread` locks, the import and warnings locks, buffered streams, multiprocessing's RLock: owned by a fiber's thread state rather than the OS thread, and their waits can park a fiber; and a hook that lets a fiber be preempted without a PEP 523 eval-frame function, see below) |
 | execution, own flag (on in the repo's builds) | `Py_TSTATE_TLBC_FOLLOW` | whether a frame follows its thread state's thread-local bytecode copy, so fibers can share their hub's copy instead of owning one each (needs `Py_TSTATE_EXEC_HOME`; costs ~4%, see below) |
 
 Each half ships as a **version-specific** patch (stackweave supports only
@@ -480,6 +480,47 @@ Darwin, no LTO/PGO; per-benchmark numbers in docs/dev/FT_CPYTHON_LOCK_GAPS.md
 135 KB per fiber instead of 160. Guards: `tests/test_tlbc_hub_copies.py`,
 `tests/test_cpython_thread_keyed_locks.py::test_cost_live_fibers_share_bytecode_within_1_5x_of_tlbc_off`
 (a known gap on an interpreter built without the flag).
+
+### Fiber preemption at the eval breaker (`ceval_gil.c`)
+
+The last exec-home hunk is not a migration fix but a scheduler hook. sysmon
+preempts a fiber that holds its hub past the time slice by switching it out
+from inside the eval loop, and CPython offered two ways in, each with a cost:
+
+- **A PEP 523 eval-frame function** runs at every frame entry, but its mere
+  presence (`interp->eval_frame != NULL`) makes every specialized
+  Python-to-Python `CALL` deoptimize, process-wide: each call re-enters
+  `_PyEval_EvalFrameDefault` on the C stack. Measured (3.14.4t, arm64 Darwin,
+  no LTO/PGO): `fib(25)` 4.5 → 8.1 ms, in fibers and in plain threads alike once
+  installed, and recursion in a fiber's 512 KB stack stopped near **180
+  frames** (~2 KB of C stack per call) instead of at the recursion limit.
+- **A pending call** costs nothing until used, but a callback that switches the
+  fiber out stays inside `make_pending_calls()`, which holds the interpreter's
+  pending-call slot (`pending->handling_thread`) until the fiber resumes, so no
+  other thread's fiber can be preempted meanwhile.
+
+The hunk adds `_PyEval_SetFiberBreakerHook(hook)`, whose hook the end of
+`_Py_HandlePending()` calls once every slot it takes is released, and
+`_PyEval_RequestFiberBreak(tstate)`, which raises one thread's eval breaker so
+the hook runs at its next check: a function entry (`RESUME`) or a loop
+back-edge, single-frame loops included. stackweave registers the hook in place
+of the eval-frame function, and sysmon calls the request on the tstate it reads
+under its hazard pointer. The request borrows `_PY_ASYNC_EXCEPTION_BIT` -- all
+eight event bits are taken -- because it is per-thread and its handler does
+nothing when no `async_exc` is queued. `_PY_CALLS_TO_DO_BIT` would not do: on a
+free-threaded build `make_pending_calls()` clears it on **every** thread state,
+dropping other threads' requests at a cost linear in thread states, and under
+M:N every fiber has one.
+
+With the hook, `fib(25)` in a fiber runs in 4.6 ms and a fiber recurses to the
+recursion limit; three single-frame loops pinned to one hub all take turns.
+Guard: `tests/test_preempt_breaker.py` (it asserts
+`stats()["preempt_via_breaker"]`) and the `single_frame` case of
+`tests/test_sched_fairness.py::test_preemption_takes_turns_between_fibers_on_one_hub`.
+The installed witness is `_Py_FIBER_BREAKER_HOOK` in `Include/cpython/ceval.h`;
+an extension built against an interpreter without it keeps the eval-frame
+function (`stackweave_c.fiber_breaker_hook == 0`), and those guards xfail
+asking for a rebuild.
 
 ## Using it
 
