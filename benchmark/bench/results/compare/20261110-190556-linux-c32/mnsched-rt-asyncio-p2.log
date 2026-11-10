@@ -1,0 +1,17 @@
+runtime: asyncio  python 3.14.4  gil=False
+
+  pingpong local-wake                  124155.8 ops/s      8054.4 ns/op  med= 805.439ms  rsd= 0.2%
+  spawn noop mn_fiber                  266657.9 ops/s      3750.1 ns/op  med=  75.002ms  rsd= 0.7%
+  spawn noop stackweave.fiber          266657.9 ops/s      3750.1 ns/op  med=  75.002ms  rsd= 0.7%
+  yield 1000 fibers x200               778368.9 ops/s      1284.7 ns/op  med= 256.948ms  rsd= 0.5%
+  64 pairs pingpong                    185634.0 ops/s      5386.9 ns/op  med= 689.529ms  rsd= 0.4%
+  fan-out 1->32 buf64                  405841.9 ops/s      2464.0 ns/op  med= 246.401ms  rsd= 0.2%
+  mutex 64 fibers contended           2400695.4 ops/s       416.5 ns/op  med=  53.318ms  rsd= 0.4%
+  waitgroup fork-join 100x50           291385.1 ops/s      3431.9 ns/op  med=  17.159ms  rsd= 0.3%
+  blocking() sleep(100us)               48071.8 ops/s     20802.2 ns/op  med=  66.567ms  rsd= 0.2%
+  foreign thread -> fiber wake       p50=    25.9us  p90=    32.7us  p99=   107.0us  max=    141.0us  n=4000
+  cross-hub pinned wake              p50=     8.0us  p90=    31.8us  p99=    37.6us  max=    105.7us  n=4000
+  spawn->run round-robin             p50=     9.5us  p90=    36.0us  p99=    71.0us  max=     83.3us  n=1000
+  timer lateness 1ms                 p50=  4197.0us  p90=  4972.1us  p99=  5028.5us  max=   5094.3us  n=10000
+
+wrote /root/sw/benchmark/bench/results/compare/20261110-190556/mnsched-rt-asyncio-p2.json

@@ -1,0 +1,9 @@
+runtime: trio  python 3.14.4  gil=False
+
+  http json api 64 conns                13578.0 ops/s     73648.3 ns/op  med= 942.699ms  rsd= 0.5%
+  api gateway fan-out 8 x 1ms            3740.1 ops/s    267374.6 ns/op  med= 534.749ms  rsd= 0.6%
+  parse+hash pipeline 4 workers         34446.4 ops/s     29030.6 ns/op  med= 580.613ms  rsd= 0.5%
+  pub/sub broadcast 256 subs            89821.6 ops/s     11133.2 ns/op  med=1425.047ms  rsd= 0.7%
+  crawler 10k concurrent x 3 fetches    32371.7 ops/s     30891.2 ns/op  med= 926.737ms  rsd= 1.4%
+
+wrote /root/sw/benchmark/bench/results/compare/20261109-070826/apps-rt-trio-p2.json

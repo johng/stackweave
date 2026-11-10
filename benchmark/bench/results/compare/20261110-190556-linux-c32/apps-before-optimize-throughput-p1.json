@@ -1,0 +1,145 @@
+{
+  "env": {
+    "aslr": "2",
+    "build_label": "",
+    "cpu_model": "Intel(R) Xeon(R) Platinum 8358 CPU @ 2.60GHz",
+    "cpu_perflevels": null,
+    "gc_frames_active": 1,
+    "gil_enabled": false,
+    "git_dirty": false,
+    "git_sha": "cb25055d",
+    "governor": "n/a (virtualized)",
+    "host": "stackweave-bench-c32",
+    "iouring_available": true,
+    "kernel": "7.0.0-42-generic",
+    "loadavg": [
+      "11.68",
+      "9.63",
+      "7.67"
+    ],
+    "nproc": 32,
+    "numa_nodes": 1,
+    "optimize": {
+      "effective": {
+        "STACKWEAVE_BLOCKPOOL_WORKERS": "16",
+        "spawn": "fast"
+      },
+      "goals": [
+        "throughput"
+      ]
+    },
+    "perf_event_paranoid": "4",
+    "pinned_cpus": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+    ],
+    "py_cflags": "-fno-strict-overflow -Wsign-compare -Wunreachable-code -DNDEBUG -g -O3 -Wall",
+    "py_config_args": "'--prefix=/opt/py-mig' '--enable-optimizations' '--with-tail-call-interp' '--disable-gil' 'CPPFLAGS=-DPy_TSTATE_ALLOC_HOME -DPy_TSTATE_EXEC_HOME -DPy_TSTATE_TLBC_FOLLOW' 'CC=clang-19'",
+    "python": "3.14.4",
+    "python_build": "main Nov 10 2026 19:03:39",
+    "python_impl": "CPython",
+    "python_tlbc_env": null,
+    "runloom_backend": "fcontext-asm",
+    "runloom_netpoll": "epoll",
+    "runloom_so": "/root/swold/src/stackweave_c.cpython-314t-x86_64-linux-gnu.so",
+    "stackweave_env": {
+      "STACKWEAVE_BENCH_OPTIMIZE": "throughput",
+      "STACKWEAVE_BLOCKPOOL_WORKERS": "16"
+    },
+    "timestamp": "2026-11-10T20:00:40+00:00"
+  },
+  "results": [
+    {
+      "ci95_hi_s": 0.16515406300000002,
+      "ci95_lo_s": 0.163370632,
+      "inner": 12800,
+      "mad_s": 0.0008241195000000118,
+      "mean_s": 0.1642755435,
+      "median_s": 0.164217842,
+      "min_s": 0.163254751,
+      "name": "http json api 64 conns",
+      "note": "stackweave_c.serve + TCPConn clients",
+      "ops_per_s": 77945.24543806879,
+      "per_op_ns": 12829.518906250001,
+      "per_op_s": 1.282951890625e-05,
+      "rsd_pct": 0.5650507284754938,
+      "samples": 10,
+      "stdev_s": 0.0009282401552538266
+    },
+    {
+      "ci95_hi_s": 0.102371668,
+      "ci95_lo_s": 0.097432977,
+      "inner": 2000,
+      "mad_s": 0.0022810000000000052,
+      "mean_s": 0.0999370469,
+      "median_s": 0.09957157850000001,
+      "min_s": 0.096725428,
+      "name": "api gateway fan-out 8 x 1ms",
+      "note": "fiber per backend call + WaitGroup",
+      "ops_per_s": 20086.05296942239,
+      "per_op_ns": 49785.78925,
+      "per_op_s": 4.978578925e-05,
+      "rsd_pct": 2.4511465573835918,
+      "samples": 10,
+      "stdev_s": 0.0024496034846401755
+    },
+    {
+      "ci95_hi_s": 0.045710432,
+      "ci95_lo_s": 0.045209854,
+      "inner": 20000,
+      "mad_s": 0.0002786279999999995,
+      "mean_s": 0.0454862485,
+      "median_s": 0.045406074,
+      "min_s": 0.045090709,
+      "name": "parse+hash pipeline 4 workers",
+      "note": "Chan(256) -> 4 worker fibers -> Chan(256)",
+      "ops_per_s": 440469.70455979084,
+      "per_op_ns": 2270.3037,
+      "per_op_s": 2.2703037e-06,
+      "rsd_pct": 0.7021177782561454,
+      "samples": 10,
+      "stdev_s": 0.00031936703738026927
+    },
+    {
+      "ci95_hi_s": 0.030243402,
+      "ci95_lo_s": 0.028951354,
+      "inner": 128000,
+      "mad_s": 0.0004131714999999984,
+      "mean_s": 0.0296273242,
+      "median_s": 0.030017396000000002,
+      "min_s": 0.027731866,
+      "name": "pub/sub broadcast 256 subs",
+      "note": "one Chan(16) per subscriber",
+      "ops_per_s": 4264194.002704298,
+      "per_op_ns": 234.51090625,
+      "per_op_s": 2.3451090625e-07,
+      "rsd_pct": 2.9167431233483185,
+      "samples": 10,
+      "stdev_s": 0.0008641529412356122
+    },
+    {
+      "ci95_hi_s": 0.3406479015,
+      "ci95_lo_s": 0.32087530350000004,
+      "inner": 30000,
+      "mad_s": 0.004690474500000014,
+      "mean_s": 0.3296369347,
+      "median_s": 0.333257013,
+      "min_s": 0.291512905,
+      "name": "crawler 10k concurrent x 3 fetches",
+      "note": "stackweave.sleep per fetch",
+      "ops_per_s": 90020.61120916306,
+      "per_op_ns": 11108.5671,
+      "per_op_s": 1.11085671e-05,
+      "rsd_pct": 4.965382069416808,
+      "samples": 10,
+      "stdev_s": 0.016367733249768993
+    }
+  ],
+  "suite": "apps"
+}

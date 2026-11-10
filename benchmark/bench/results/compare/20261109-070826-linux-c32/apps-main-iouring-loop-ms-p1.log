@@ -1,0 +1,13 @@
+==============================================================================
+suite: apps
+python 3.14.4 CPython  gil=False  | stackweave fcontext-asm/epoll @ 68af7dec
+cpu: Intel(R) Xeon(R) Platinum 8280 CPU @ 2.70GHz  | 32 vCPU / 1 NUMA  | pinned=8 cpus [0..7]  aslr=2  load=3.00/3.07/2.86
+tlbc: on (gc_frames_active=1, PYTHON_TLBC=None)  | build: -  | env: STACKWEAVE_IOURING_LOOP=1 STACKWEAVE_IOURING_MS=1 STACKWEAVE_IOURING_MS_BUFS=1024
+==============================================================================
+  http json api 64 conns                84398.3 ops/s     11848.6 ns/op  med= 151.662ms  rsd= 1.8%
+  api gateway fan-out 8 x 1ms           17767.8 ops/s     56281.5 ns/op  med= 112.563ms  rsd= 2.4%
+  parse+hash pipeline 4 workers        353400.4 ops/s      2829.7 ns/op  med=  56.593ms  rsd= 2.2%
+  pub/sub broadcast 256 subs          3836647.7 ops/s       260.6 ns/op  med=  33.362ms  rsd= 2.4%
+  crawler 10k concurrent x 3 fetches    81564.5 ops/s     12260.2 ns/op  med= 367.807ms  rsd= 6.8%
+
+wrote /root/sw/benchmark/bench/results/compare/20261109-070826/apps-main-iouring-loop-ms-p1.json
