@@ -101,7 +101,8 @@ static void runloom_parker_pool_lock_ensure_inited(runloom_parker_pool_t *pool)
     long expected = 0;
     if (__atomic_compare_exchange_n(&pool->lock_inited, &expected, 1,
                                     0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
-        runloom_mutex_init(&pool->lock);
+        runloom_np_pool_mutex_init(&pool->lock);
+        __atomic_store_n(&pool->dh_min_ns, -1LL, __ATOMIC_RELAXED);
         runloom_pool_backend_create(pool);
         __atomic_store_n(&pool->lock_inited, 2, __ATOMIC_RELEASE);
     } else {
@@ -434,12 +435,13 @@ void runloom_netpoll_reset_after_fork(void)
     runloom_netpoll_fini();        /* close inherited fds, inited = 0 (lock-free) */
     for (i = 0; i < (size_t)RUNLOOM_PARKER_POOL_MAX; i++) {
         runloom_parker_pool_t *p = &runloom_pools[i];
-        runloom_mutex_init(&p->lock);
+        runloom_np_pool_mutex_init(&p->lock);
         p->head = NULL;
         __atomic_store_n(&p->total, 0, __ATOMIC_RELAXED);
         if (p->by_fd != NULL)
             memset(p->by_fd, 0, p->by_fd_cap * sizeof(p->by_fd[0]));
         p->dh_size = 0;
+        __atomic_store_n(&p->dh_min_ns, -1LL, __ATOMIC_RELAXED);
         p->sweep_cursor = NULL;
         p->sweep_cursor_gen = 0;
         p->link_count = 0;

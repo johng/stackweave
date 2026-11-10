@@ -179,6 +179,14 @@ static RUNLOOM_THREAD_RET runloom_sysmon_main(void *arg)
 #endif
             }
         }
+        /* Netpoll backstop: each fd is polled by one hub (on epoll the hub
+         * whose epoll holds it, on kqueue the hub its waiter parked on).  A hub
+         * that has not started a poll for the budget -- busy in one long
+         * fiber, or stuck in a C call -- gets its poller polled from here, so
+         * those waiters wake and run on other hubs (Go's sysmon polls its
+         * netpoller after 10 ms).  Guard: tests/test_netpoll_owner_backstop.py. */
+        for (i = 0; i < n; i++)
+            (void)runloom_netpoll_backstop_poll(i, now);
         /* Piggyback the depot auto-cap recompute on the watchdog tick: decay the
          * live-stack watermark, resize the pool cap.  Cheap, off the hot path. */
         runloom_stack_autocap_tick();

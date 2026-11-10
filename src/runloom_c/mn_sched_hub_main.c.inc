@@ -1224,8 +1224,13 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                     if (!have_sub) {
                         if (idle_ns <= 0) idle_ns = 1;
                         saved = PyEval_SaveThread();
+                        /* The ring polls this hub's epoll fd, so the hub is
+                         * listening to its fds here as in epoll_wait: keep
+                         * the sysmon netpoll backstop off its epoll. */
+                        runloom_netpoll_hub_waiting((void *)h, 1);
                         runloom_iouring_loop_wait(h->iouring_ring, idle_ns,
                                                   &lflags);
+                        runloom_netpoll_hub_waiting((void *)h, 0);
                         PyEval_RestoreThread(saved);
                     }
                     __atomic_store_n(&h->ring_waiting, 0, __ATOMIC_RELEASE);

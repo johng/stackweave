@@ -51,6 +51,7 @@ static int runloom_pump_dispatch_event(int fd, int mask, int wake_all)
      * or genuinely in every pool).  The DEFAULT pool (index 64) is never masked:
      * the `pi < 64` guard lets it through to its lock_inited check below. */
     unsigned long long fm = ~0ULL;
+    RUNLOOM_NPC(RUNLOOM_NPC_DISPATCH, 1);
     {
         unsigned long long *m = __atomic_load_n(&runloom_fd_poolmask, __ATOMIC_ACQUIRE);
         if (m != NULL && fd >= 0 && (size_t)fd < runloom_fd_poolmask_cap)
@@ -60,6 +61,7 @@ static int runloom_pump_dispatch_event(int fd, int mask, int wake_all)
         runloom_parker_pool_t *pool = &runloom_pools[pi];
         if (pi < 64 && fm != ~0ULL && !(fm & (1ULL << pi))) continue;
         if (__atomic_load_n(&pool->lock_inited, __ATOMIC_ACQUIRE) != 2) continue;
+        RUNLOOM_NPC(RUNLOOM_NPC_DISPATCH_POOLS, 1);
         RUNLOOM_RLOCK(&pool->lock, RUNLOOM_RANK_PARKER_POOL);
         if ((size_t)fd < pool->by_fd_cap) {
             runloom_parked_t *p = pool->by_fd[fd];
@@ -110,6 +112,7 @@ static int runloom_pump_dispatch_event(int fd, int mask, int wake_all)
         }
         RUNLOOM_RUNLOCK(&pool->lock, RUNLOOM_RANK_PARKER_POOL);
     }
+    if (woke == 0) RUNLOOM_NPC(RUNLOOM_NPC_DISPATCH_MISS, 1);
     return woke;
 }
 
@@ -147,6 +150,11 @@ static int runloom_pump_drain_expired_pools(long long now, int npools)
         int nprobe = 0;
 #endif
         if (__atomic_load_n(&pool->lock_inited, __ATOMIC_ACQUIRE) != 2) continue;
+        {
+            /* Nothing due here: skip without the lock (see dh_min_ns). */
+            long long front = __atomic_load_n(&pool->dh_min_ns, __ATOMIC_ACQUIRE);
+            if (front < 0 || front > now) continue;
+        }
       drain_more:
         nwakes = 0;
         more = 0;
@@ -275,7 +283,7 @@ int runloom_pump_drain_expired_pub(long long now_ns)
 }
 
 /* Min deadline across all pools.  Returns -1 if no pool has any
- * timed parker.  Takes each pool's lock briefly. */
+ * timed parker.  Lock-free: reads each pool's published front (dh_min_ns). */
 static long long runloom_dh_peek_deadline_pools(int npools)
 {
     long long earliest = -1;
@@ -284,9 +292,7 @@ static long long runloom_dh_peek_deadline_pools(int npools)
         runloom_parker_pool_t *pool = &runloom_pools[pi];
         long long d;
         if (__atomic_load_n(&pool->lock_inited, __ATOMIC_ACQUIRE) != 2) continue;
-        RUNLOOM_RLOCK(&pool->lock, RUNLOOM_RANK_PARKER_POOL);
-        d = runloom_dh_peek_deadline(pool);
-        RUNLOOM_RUNLOCK(&pool->lock, RUNLOOM_RANK_PARKER_POOL);
+        d = __atomic_load_n(&pool->dh_min_ns, __ATOMIC_ACQUIRE);
         if (d >= 0 && (earliest < 0 || d < earliest)) earliest = d;
     }
     return earliest;

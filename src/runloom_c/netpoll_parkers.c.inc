@@ -186,6 +186,9 @@ typedef struct runloom_parker_pool {
     int wake_efd;                       /* pump-wake eventfd, registered in epoll_fd */
     long wake_pending;                  /* 1 = a kick write is in flight; coalesce
                                          * redundant ones (runloom_netpoll_wake_pump) */
+    long long last_pump_ns;             /* sysmon backstop: when this hub last
+                                         * started a poll on its epoll/kqueue */
+    int in_wait;                        /* 1 while that poll may block */
 
     runloom_parked_t *head;
     int total;                          /* read with __atomic_load_n */
@@ -196,6 +199,16 @@ typedef struct runloom_parker_pool {
     runloom_parked_t **dh_arr;
     int             dh_size;
     int             dh_cap;
+    /* The heap's earliest deadline (-1 = empty), republished under pool->lock
+     * after every heap change and read WITHOUT it: every pump looks at every
+     * pool's front (to bound its wait, then to expire timeouts), and taking
+     * each pool's lock for that cost every hub a lock per hub per pump --
+     * contention that grew with the hub count squared.  A stale read is
+     * harmless: a deadline only enters the heap from wait_fd on the pool's
+     * own hub (or, for the default pool, the thread that owns it), which
+     * always reads its own write, and a read that misses a removal just
+     * takes the lock and finds nothing due. */
+    long long       dh_min_ns;
 
     /* Stack-reclaim sweep cursor (hub-idle dwell sweep).  Persists
      * across sweeps so each sweep examines a bounded window of the
@@ -264,6 +277,120 @@ static runloom_parker_pool_t *runloom_parker_pool_for_hub(void *hub_opaque)
     (void)hub_opaque;
 #endif
     return &runloom_pools[RUNLOOM_PARKER_POOL_DEFAULT];
+}
+
+/* DIAG counters, on only with STACKWEAVE_NETPOLL_COUNTERS=1 (read once).  One
+ * padded slot per hub (the calling thread's hub id; RUNLOOM_PARKER_POOL_HUBS for
+ * any other thread), so counting does not add a shared cache line to the very
+ * paths it measures; off, each site is one predictable branch.  stats() sums
+ * the slots (netpoll_c_<name>). */
+enum {
+    RUNLOOM_NPC_REG_SKIP, RUNLOOM_NPC_REG_CTL, RUNLOOM_NPC_REG_LOCK_WAIT,
+    RUNLOOM_NPC_SHARED_MOVE, RUNLOOM_NPC_SHARED_DRAIN, RUNLOOM_NPC_SHARED_EV,
+    RUNLOOM_NPC_PUMP, RUNLOOM_NPC_PUMP_BLOCK, RUNLOOM_NPC_PUMP_EV,
+    RUNLOOM_NPC_WAKE_NULL, RUNLOOM_NPC_WAKE_WRITE, RUNLOOM_NPC_WAKE_DEDUP,
+    RUNLOOM_NPC_WAKE_SHARED, RUNLOOM_NPC_DISPATCH, RUNLOOM_NPC_DISPATCH_POOLS,
+    RUNLOOM_NPC_DISPATCH_MISS, RUNLOOM_NPC_MISS_DEFER,
+    RUNLOOM_NPC_BACKSTOP_POLL, RUNLOOM_NPC_BACKSTOP_WOKE, RUNLOOM_NPC__N
+};
+static const char *const runloom_npc_names[RUNLOOM_NPC__N] = {
+    "reg_skip", "reg_ctl", "reg_lock_wait",
+    "shared_move", "shared_drain", "shared_ev",
+    "pump", "pump_block", "pump_ev",
+    "wake_null", "wake_write", "wake_dedup",
+    "wake_shared", "dispatch", "dispatch_pools", "dispatch_miss",
+    "miss_defer", "backstop_poll", "backstop_woke",
+};
+typedef struct {
+    unsigned long long v[RUNLOOM_NPC__N];
+} __attribute__((aligned(256))) runloom_npc_slot_t;
+static runloom_npc_slot_t runloom_npc[RUNLOOM_PARKER_POOL_HUBS + 1];
+static int runloom_npc_on = -1;
+
+static int runloom_npc_enabled(void)
+{
+    int on = __atomic_load_n(&runloom_npc_on, __ATOMIC_RELAXED);
+    if (__builtin_expect(on < 0, 0)) {
+        const char *e = getenv("STACKWEAVE_NETPOLL_COUNTERS");
+        on = (e != NULL && e[0] != '\0' && e[0] != '0') ? 1 : 0;
+        __atomic_store_n(&runloom_npc_on, on, __ATOMIC_RELAXED);
+    }
+    return on;
+}
+
+static RUNLOOM_NOINLINE void runloom_npc_add(int k, unsigned long long n)
+{
+    int id = -1;
+    void *h = runloom_mn_current_hub_opaque();
+    if (h != NULL) id = runloom_mn_hub_id_of(h);
+    if (id < 0 || id >= RUNLOOM_PARKER_POOL_HUBS) id = RUNLOOM_PARKER_POOL_HUBS;
+    __atomic_add_fetch(&runloom_npc[id].v[k], n, __ATOMIC_RELAXED);
+}
+
+#define RUNLOOM_NPC(k, n) \
+    do { if (runloom_npc_enabled()) runloom_npc_add((k), (unsigned long long)(n)); } while (0)
+
+/* Numeric knobs, each read once from the environment. */
+static int runloom_np_knob(const char *name, int dflt, int *cache)
+{
+    int v = __atomic_load_n(cache, __ATOMIC_RELAXED);
+    if (__builtin_expect(v < 0, 0)) {
+        const char *e = getenv(name);
+        v = (e != NULL && e[0] != '\0') ? atoi(e) : dflt;
+        if (v < 0) v = 0;
+        __atomic_store_n(cache, v, __ATOMIC_RELAXED);
+    }
+    return v;
+}
+#if defined(RUNLOOM_HAVE_EPOLL)
+static int runloom_np_grace_v = -1;
+#endif
+static int runloom_np_backstop_v = -1;
+#if defined(RUNLOOM_HAVE_EPOLL)
+/* How long an arm with nobody parked may keep missing before it is dropped
+ * (runloom_epoll_handle_event); 0 drops it at the first miss. */
+static int runloom_np_miss_grace_us(void)
+{
+    return runloom_np_knob("STACKWEAVE_NETPOLL_MISS_GRACE_US", 2000, &runloom_np_grace_v);
+}
+#endif
+/* sysmon polls a hub's poller once the hub has gone this long without starting
+ * a poll (runloom_netpoll_backstop_poll). */
+static int runloom_np_backstop_ms(void)
+{
+    int v = runloom_np_knob("STACKWEAVE_NETPOLL_BACKSTOP_MS", 5, &runloom_np_backstop_v);
+    return v > 0 ? v : 5;
+}
+
+/* Pool mutexes are glibc's ADAPTIVE kind where it exists: a pool lock is taken
+ * by its own hub (link/unlink) and by any hub dispatching an event to a parker
+ * in it, for a few dozen instructions, and the default kind sleeps in the
+ * kernel on the first collision -- the futex wake at unlock was the top kernel
+ * cost at 16 hubs (+5-9% c-echo with the adaptive kind, Linux c-32). */
+static void runloom_np_pool_mutex_init(runloom_mutex_t *m)
+{
+#if defined(PTHREAD_ADAPTIVE_MUTEX_INITIALIZER_NP)
+    pthread_mutexattr_t a;
+    pthread_mutexattr_init(&a);
+    pthread_mutexattr_settype(&a, PTHREAD_MUTEX_ADAPTIVE_NP);
+    pthread_mutex_init(m, &a);
+    pthread_mutexattr_destroy(&a);
+#else
+    runloom_mutex_init(m);
+#endif
+}
+
+int runloom_netpoll_counter_n(void) { return RUNLOOM_NPC__N; }
+const char *runloom_netpoll_counter_name(int k)
+{ return (k >= 0 && k < RUNLOOM_NPC__N) ? runloom_npc_names[k] : NULL; }
+unsigned long long runloom_netpoll_counter(int k)
+{
+    unsigned long long t = 0;
+    int i;
+    if (k < 0 || k >= RUNLOOM_NPC__N) return 0;
+    for (i = 0; i <= RUNLOOM_PARKER_POOL_HUBS; i++)
+        t += __atomic_load_n(&runloom_npc[i].v[k], __ATOMIC_RELAXED);
+    return t;
 }
 
 static int runloom_netpoll_inited = 0;
@@ -343,6 +470,15 @@ static void runloom_dh_sift_down(runloom_parker_pool_t *pool, int i)
     }
 }
 
+/* Mirror the heap front into dh_min_ns (see the field).  Caller holds
+ * pool->lock and has just changed the heap. */
+static inline void runloom_dh_publish(runloom_parker_pool_t *pool)
+{
+    __atomic_store_n(&pool->dh_min_ns,
+                     pool->dh_size > 0 ? pool->dh_arr[0]->deadline_ns : -1LL,
+                     __ATOMIC_RELEASE);
+}
+
 /* Insert p into pool's heap.  No-op if p has no deadline
  * (deadline_ns < 0) or is already in the heap. */
 static void runloom_dh_insert(runloom_parker_pool_t *pool, runloom_parked_t *p)
@@ -355,6 +491,7 @@ static void runloom_dh_insert(runloom_parker_pool_t *pool, runloom_parked_t *p)
     p->heap_index = pool->dh_size;
     pool->dh_size++;
     runloom_dh_sift_up(pool, p->heap_index);
+    runloom_dh_publish(pool);
 }
 
 /* Remove p from pool's heap if present. */
@@ -364,12 +501,14 @@ static void runloom_dh_remove(runloom_parker_pool_t *pool, runloom_parked_t *p)
     if (i < 0 || i >= pool->dh_size) return;
     p->heap_index = -1;
     pool->dh_size--;
-    if (i == pool->dh_size) return;          /* removed the tail */
-    pool->dh_arr[i] = pool->dh_arr[pool->dh_size];
-    pool->dh_arr[i]->heap_index = i;
-    /* Could be either direction; try both. */
-    runloom_dh_sift_up(pool, i);
-    runloom_dh_sift_down(pool, i);
+    if (i != pool->dh_size) {                /* not the tail: refill the hole */
+        pool->dh_arr[i] = pool->dh_arr[pool->dh_size];
+        pool->dh_arr[i]->heap_index = i;
+        /* Could be either direction; try both. */
+        runloom_dh_sift_up(pool, i);
+        runloom_dh_sift_down(pool, i);
+    }
+    runloom_dh_publish(pool);
 }
 
 /* Peek earliest deadline; returns -1 if heap empty. */

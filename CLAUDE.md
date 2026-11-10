@@ -602,6 +602,24 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   EAGAIN; `STACKWEAVE_IOURING_LOOP_DIRECT=0` forces the ring), which is what
   brought single-shot to epoll parity -- the poll alone fixed multishot only.
   Guard: the same test asserts `stats()["iouring_loop_polls"] > 0`.
+- **An fd is polled by one hub, and sysmon polls for a hub that stops.** On
+  epoll an fd stays in the epoll of the hub that first armed it, whichever hub
+  its later waiters park on (dispatch finds them through the fd's pool mask);
+  only an fd whose owner is not a live hub moves to the shared epoll. On kqueue
+  it sits in the kqueue of the hub its waiter parked on. So a hub that stops
+  polling -- one long fiber, a blocking C call -- holds those waiters, and the
+  netpoll backstop on the sysmon tick (`runloom_netpoll_backstop_poll`) polls
+  the poller of any hub that has parkers, is not blocked in its own poll, and
+  has not started one for `STACKWEAVE_NETPOLL_BACKSTOP_MS` (5). A new place a
+  hub blocks while still listening to its poller (the io_uring loop's ring
+  wait) must say so (`runloom_netpoll_hub_waiting`), or the backstop polls it
+  every tick. Moving every multi-hub fd to the shared epoll instead (the old
+  rule) made each readiness reach several hubs, all but one found no parker and
+  disarmed it, and the re-ADD cost `epoll_ctl` under `runloom_pool.lock` on
+  most round trips: c-echo fell from 148k round trips/s at 4 hubs to 113k at
+  16; kept in the owner it is 224k and 576k (Linux c-32). Guards:
+  `tests/test_netpoll_owner_backstop.py` and the lost-park test
+  `tests/test_cov100_wake_iouring.py::test_mn_many_parkers_one_fd_across_hubs_none_lost`.
 
 ## aio bridge invariants (src/stackweave/aio/)
 - Layout: `_base.py` is the foundation (`_go_io`, `_wait_fd`, `_CURRENT_TASKS`);
