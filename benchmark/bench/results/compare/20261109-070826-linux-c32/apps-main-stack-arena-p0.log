@@ -1,0 +1,13 @@
+==============================================================================
+suite: apps
+python 3.14.4 CPython  gil=False  | stackweave fcontext-asm/epoll @ 68af7dec
+cpu: Intel(R) Xeon(R) Platinum 8280 CPU @ 2.70GHz  | 32 vCPU / 1 NUMA  | pinned=8 cpus [0..7]  aslr=2  load=2.41/3.51/2.62
+tlbc: on (gc_frames_active=1, PYTHON_TLBC=None)  | build: -  | env: STACKWEAVE_STACK_ARENA=1
+==============================================================================
+  http json api 64 conns                68724.0 ops/s     14551.0 ns/op  med= 186.252ms  rsd= 1.2%
+  api gateway fan-out 8 x 1ms           18422.1 ops/s     54282.7 ns/op  med= 108.565ms  rsd= 1.6%
+  parse+hash pipeline 4 workers        356209.3 ops/s      2807.3 ns/op  med=  56.147ms  rsd= 1.9%
+  pub/sub broadcast 256 subs          3872661.6 ops/s       258.2 ns/op  med=  33.052ms  rsd= 3.4%
+  crawler 10k concurrent x 3 fetches    83863.9 ops/s     11924.1 ns/op  med= 357.722ms  rsd= 7.9%
+
+wrote /root/sw/benchmark/bench/results/compare/20261109-070826/apps-main-stack-arena-p0.json

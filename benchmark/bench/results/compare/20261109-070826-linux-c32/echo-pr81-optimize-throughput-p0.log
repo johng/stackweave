@@ -1,0 +1,19 @@
+==============================================================================
+suite: echo
+python 3.14.4 CPython  gil=False  | stackweave fcontext-asm/epoll @ 68af7dec
+cpu: Intel(R) Xeon(R) Platinum 8280 CPU @ 2.70GHz  | 32 vCPU / 1 NUMA  | pinned=32 cpus [0..31]  aslr=2  load=5.70/3.75/2.37
+tlbc: on (gc_frames_active=1, PYTHON_TLBC=None)  | build: -  | env: STACKWEAVE_BENCH_OPTIMIZE=throughput STACKWEAVE_BLOCKPOOL_WORKERS=16
+==============================================================================
+io path: epoll
+
+  c-echo @2h                           113368.3 ops/s      8820.8 ns/op  med= 282.266ms  rsd= 1.6%
+  py-echo @2h                          105204.0 ops/s      9505.3 ns/op  med= 304.171ms  rsd= 1.2%
+  c-echo @4h                           139174.3 ops/s      7185.2 ns/op  med= 229.927ms  rsd= 0.8%
+  py-echo @4h                          128677.8 ops/s      7771.3 ns/op  med= 248.683ms  rsd= 2.6%
+  c-echo @8h                           126265.7 ops/s      7919.8 ns/op  med= 253.434ms  rsd= 2.0%
+  py-echo @8h                          124784.1 ops/s      8013.8 ns/op  med= 256.443ms  rsd= 1.1%
+  c-echo @16h                           97522.2 ops/s     10254.1 ns/op  med= 328.130ms  rsd= 1.9%
+  py-echo @16h                          94967.9 ops/s     10529.9 ns/op  med= 336.956ms  rsd= 2.6%
+  (27.7s)
+
+wrote /root/sw/benchmark/bench/results/compare/20261109-070826/echo-pr81-optimize-throughput-p0.json

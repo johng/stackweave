@@ -1,0 +1,5 @@
+runtime: trio  python 3.14.4  gil=False
+
+  py-echo @4h                           23006.0 ops/s     43467.0 ns/op  med=1390.943ms  rsd= 0.7%
+
+wrote /root/sw/benchmark/bench/results/compare/20261110-190556/echo-rt-trio-p0.json

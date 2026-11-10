@@ -1,0 +1,19 @@
+==============================================================================
+suite: echo
+python 3.14.4 CPython  gil=False  | stackweave fcontext-asm/epoll @ cb25055d
+cpu: Intel(R) Xeon(R) Platinum 8358 CPU @ 2.60GHz  | 32 vCPU / 1 NUMA  | pinned=32 cpus [0..31]  aslr=2  load=4.60/4.82/6.39
+tlbc: on (gc_frames_active=1, PYTHON_TLBC=None)  | build: -  | env: STACKWEAVE_STACK_ARENA=1
+==============================================================================
+io path: epoll
+
+  c-echo @2h                           135007.0 ops/s      7407.0 ns/op  med= 237.025ms  rsd= 0.8%
+  py-echo @2h                          125100.3 ops/s      7993.6 ns/op  med= 255.795ms  rsd= 1.2%
+  c-echo @4h                           224530.1 ops/s      4453.7 ns/op  med= 142.520ms  rsd= 0.7%
+  py-echo @4h                          196167.5 ops/s      5097.7 ns/op  med= 163.126ms  rsd= 0.6%
+  c-echo @8h                           374705.4 ops/s      2668.8 ns/op  med=  85.400ms  rsd= 1.8%
+  py-echo @8h                          310247.0 ops/s      3223.2 ns/op  med= 103.144ms  rsd= 0.7%
+  c-echo @16h                          550055.3 ops/s      1818.0 ns/op  med=  58.176ms  rsd= 3.5%
+  py-echo @16h                         469847.4 ops/s      2128.4 ns/op  med=  68.107ms  rsd= 4.9%
+  (14.0s)
+
+wrote /root/sw/benchmark/bench/results/compare/20261110-190556/echo-main-stack-arena-p1.json

@@ -1,0 +1,19 @@
+==============================================================================
+suite: echo
+python 3.14.4 CPython  gil=False  | stackweave fcontext-asm/epoll @ cb25055d
+cpu: Intel(R) Xeon(R) Platinum 8358 CPU @ 2.60GHz  | 32 vCPU / 1 NUMA  | pinned=32 cpus [0..31]  aslr=2  load=5.63/5.01/6.51
+tlbc: on (gc_frames_active=1, PYTHON_TLBC=None)  | build: -  | env: STACKWEAVE_TCPCONN_IOURING=1
+==============================================================================
+io path: epoll + TCPConn io_uring
+
+  c-echo @2h                           113672.7 ops/s      8797.2 ns/op  med= 281.510ms  rsd= 1.0%
+  py-echo @2h                           51504.7 ops/s     19415.7 ns/op  med= 621.302ms  rsd= 1.9%
+  c-echo @4h                           177090.3 ops/s      5646.8 ns/op  med= 180.699ms  rsd= 0.5%
+  py-echo @4h                          120258.0 ops/s      8315.5 ns/op  med= 266.094ms  rsd= 0.7%
+  c-echo @8h                           289601.5 ops/s      3453.0 ns/op  med= 110.497ms  rsd= 3.2%
+  py-echo @8h                          192865.0 ops/s      5185.0 ns/op  med= 165.919ms  rsd= 0.5%
+  c-echo @16h                          284173.9 ops/s      3519.0 ns/op  med= 112.607ms  rsd= 8.3%
+  py-echo @16h                         144476.4 ops/s      6921.5 ns/op  med= 221.490ms  rsd= 1.2%
+  (24.4s)
+
+wrote /root/sw/benchmark/bench/results/compare/20261110-190556/echo-main-tcpconn-iouring-p1.json

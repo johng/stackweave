@@ -1,0 +1,9 @@
+runtime: go go1.26.6  GOMAXPROCS=4 (scaling 1,2,4,8,16)
+
+  http json api 64 conns                76068.7 ops/s     13146.0 ns/op  med= 168.269ms  rsd= 3.1%
+  api gateway fan-out 8 x 1ms           64149.0 ops/s     15588.7 ns/op  med=  31.177ms  rsd= 4.0%
+  parse+hash pipeline 4 workers        599408.2 ops/s      1668.3 ns/op  med=  33.366ms  rsd=11.5%
+  pub/sub broadcast 256 subs          5356500.5 ops/s       186.7 ns/op  med=  23.896ms  rsd= 2.9%
+  crawler 10k concurrent x 3 fetches  1646070.5 ops/s       607.5 ns/op  med=  18.225ms  rsd= 4.4%
+
+wrote /root/sw/benchmark/bench/results/compare/20261110-190556/apps-rt-go-p1.json

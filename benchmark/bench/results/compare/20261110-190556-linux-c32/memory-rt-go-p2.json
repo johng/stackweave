@@ -1,0 +1,36 @@
+{
+  "env": {
+    "go": "go1.26.6",
+    "gomaxprocs": 4,
+    "host": "stackweave-bench-c32",
+    "loadavg": [
+      "3.23",
+      "5.38",
+      "7.09"
+    ],
+    "nproc": 32,
+    "runtime": "go",
+    "timestamp": "2026-11-10T20:31:35Z"
+  },
+  "latency": [],
+  "memory": [
+    {
+      "bytes_per_unit": 2777.4976,
+      "name": "rss per parked unit @10k",
+      "note": "goroutines parked on a channel receive",
+      "rss_after": 36143104,
+      "rss_before": 8368128,
+      "units": 10000
+    },
+    {
+      "bytes_per_unit": 2489.22112,
+      "name": "rss per parked unit @100k",
+      "note": "goroutines parked on a channel receive",
+      "rss_after": 285265920,
+      "rss_before": 36343808,
+      "units": 100000
+    }
+  ],
+  "results": [],
+  "suite": "go"
+}
