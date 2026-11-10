@@ -117,6 +117,12 @@ Lives in a **parker pool**, one per hub (up to
 `RUNLOOM_PARKER_POOL_HUBS`, 64), so registration and wake don't serialise
 across hubs on one kernel lock.
 
+**thread-state pool** — each hub thread keeps the per-g `PyThreadState`s
+of fibers that finished on it, reset, and gives them to its next spawns
+instead of creating fresh ones (`STACKWEAVE_TSTATE_POOL`, 64 per hub): 2-3x
+spawn throughput, more at high hub counts, where creating a state serialized
+the hubs on interpreter-wide mutexes.
+
 **per-hub epoll** — each hub polls its own epoll set plus a wake eventfd,
 instead of all hubs sharing one `runloom_epoll_fd`. Measured **+34–40 %**
 saturation throughput on a 64-core box versus the old shared set.

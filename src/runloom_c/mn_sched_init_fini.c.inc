@@ -586,6 +586,9 @@ void runloom_mn_fini(void)
      * into a chunk we are about to reclaim -- the GC frames anchor is safe across
      * teardown (any post-run gc.collect walks an empty/clean registry). */
     runloom_g_slab_reclaim();
+    /* The thread states hubs moved to the pool depot (each hub drained its own
+     * pool at exit). */
+    runloom_mn_tspool_depot_drain();
     /* Free the datastack-chunk graveyard the hubs spliced their TLS chunk caches
      * into at exit.  Every hub is joined, so no foreign sys._current_frames reader
      * can still be inside a chunk's grace window -- returning them to the OS is
@@ -632,6 +635,7 @@ void runloom_mn_reset_after_fork(void)
     __atomic_store_n(&runloom_global_runq_unpinned_len, 0, __ATOMIC_RELAXED);
     runloom_tls_hub = NULL;        /* the surviving thread is no longer a hub */
     runloom_tls_current_g = NULL;
+    runloom_mn_tspool_forget_after_fork();
     runloom_coro_prewarm_reset_after_fork();   /* daemon thread didn't survive */
     runloom_stack_autocap_reset();             /* sysmon gone -> forget the watermark */
     /* The inherited hub array is abandoned (leaked); bump the generation so a
@@ -661,6 +665,10 @@ static void runloom_mn_atfork_child(void)
         runloom_iframe_fork_child_own_heap(ts);
     }
     runloom_iframe_fork_child_main_tstate(fiber ? ts : NULL);
+    /* Pooled states are out of every brc bucket; CPython's after-fork code is
+     * about to clear them with every other thread's. */
+    runloom_iframe_fork_child_rebucket(ts != NULL ? ts->interp
+                                                  : PyInterpreterState_Main());
 }
 
 void runloom_mn_atfork_init(void)
@@ -847,10 +855,15 @@ static RUNLOOM_NOINLINE int runloom_mn_fiber_core(PyObject *callable,
     /* Give the g its own migratable PyThreadState (runloom_mn_interp is set by
      * mn_init for the whole life of the hubs). */
     if (runloom_mn_interp != NULL) {
-        g->tstate = PyThreadState_New(runloom_mn_interp);
-        /* A fiber's state: locks that record an owner record it, not the OS
-         * thread (Py_TSTATE_EXEC_HOME; no-op without the field). */
-        runloom_iframe_mark_fiber_tstate(g->tstate);
+        /* A finished fiber's state, reset, from this hub thread's pool
+         * (runloom_mn_tspool_get; already marked), else a new one. */
+        g->tstate = runloom_mn_tspool_get();
+        if (g->tstate == NULL) {
+            g->tstate = PyThreadState_New(runloom_mn_interp);
+            /* A fiber's state: locks that record an owner record it, not the OS
+             * thread (Py_TSTATE_EXEC_HOME; no-op without the field). */
+            runloom_iframe_mark_fiber_tstate(g->tstate);
+        }
         if (g->tstate == NULL) {
             runloom_coro_destroy(g->coro);
             g->coro = NULL;

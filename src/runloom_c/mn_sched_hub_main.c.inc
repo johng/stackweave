@@ -1782,6 +1782,9 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
         h->iouring_ring    = NULL;
         h->iouring_eventfd = -1;
     }
+    /* Free the thread states this hub's pool kept, while its own state is
+     * current (their freelists go to it, as at a fiber's end). */
+    runloom_mn_tspool_hub_drain(h);
     /* Reverse runloom_coro_thread_init (flush this thread's coro/stack pools,
      * disarm the sigaltstack). */
     runloom_coro_thread_fini();

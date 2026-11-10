@@ -458,6 +458,7 @@ static PyObject *m_stats(PyObject *self, PyObject *unused)
                       (Py_ssize_t)runloom_iouring_pbuf_errno());
     RUNLOOM_STATS_SET("iouring_pbuf_resv_quirk",
                       (Py_ssize_t)runloom_iouring_pbuf_resv_quirk());
+    RUNLOOM_STATS_SET("tstate_pool_hits", (Py_ssize_t)runloom_mn_tspool_hits());
     RUNLOOM_STATS_SET("brc_release_merges",
                       (Py_ssize_t)runloom_iframe_brc_release_merges());
     RUNLOOM_STATS_SET("brc_release_merges_off_stack",

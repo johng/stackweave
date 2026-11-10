@@ -1011,8 +1011,13 @@ void runloom_g_decref(runloom_g_t *g)
                  * their hub's heap segments forever once it is abandoned), and
                  * sweeps the interpreter's abandoned-segment pool once per
                  * fiber.  See runloom_iframe_clear_fiber_tstate. */
-                runloom_iframe_clear_fiber_tstate(g->tstate);
-                PyThreadState_Delete(g->tstate);
+                if (!(runloom_mn_tspool_on() &&
+                      runloom_iframe_recycle_fiber_tstate(g->tstate) &&
+                      runloom_mn_tspool_put(g->tstate))) {
+                    runloom_iframe_clear_fiber_tstate(g->tstate);
+                    PyThreadState_Delete(g->tstate);
+                }
+                /* else: reset and kept for this hub thread's next spawn */
                 g->tstate = NULL;
             }
         }
