@@ -114,5 +114,96 @@ print("PASS")
     assert "turns" in out
 
 
+def test_a_fiber_in_a_c_loop_that_checks_signals_still_takes_turns():
+    # The request borrows the async-exception eval-breaker bit.  From 3.15,
+    # PyErr_CheckSignals() clears that bit (_PyEval_RaiseAsyncExc), and C code
+    # that runs long calls it -- the regex engine every 4096 steps -- so a
+    # request that landed while the fiber was in C was gone by the time the
+    # eval loop reached its next check, and a fiber that spends nearly all its
+    # time in such calls was almost never switched out.  The request is now a
+    # flag the bit only signals, and nothing but the end of _Py_HandlePending
+    # clears the bit while it is set.
+    _assert_pass(r"""
+import re, time
+import stackweave_c
+pat = re.compile(r'(a+)+$')
+n = 14
+while n < 24:
+    s = 'a' * n + '!'
+    t = time.perf_counter(); pat.search(s)
+    if time.perf_counter() - t >= 0.003:
+        break
+    n += 1
+seq = []
+def in_c():
+    end = time.perf_counter() + 0.5
+    while time.perf_counter() < end:
+        pat.search(s)
+        if not seq or seq[-1] != "C":
+            seq.append("C")
+def in_python():
+    for _ in range(20):
+        end = time.perf_counter() + 0.005
+        while time.perf_counter() < end:
+            pass
+        if not seq or seq[-1] != "P":
+            seq.append("P")
+stackweave_c.mn_init(2)
+stackweave_c.mn_fiber(in_c, hub=0)
+stackweave_c.mn_fiber(in_python, hub=0)
+stackweave_c.mn_run()
+stackweave_c.mn_fini()
+turns = "".join(seq)
+print("turns", turns, "n", n)
+# the C-bound fiber was switched out before its 0.5 s were up
+assert turns.count("C") >= 2, turns
+print("PASS")
+""", timeout=30)
+
+
+def test_a_fiber_is_not_switched_out_inside_a_gc_collection():
+    # A collection's finalizers run Python, whose eval-breaker checks reach the
+    # hook while the collection still holds the interpreter's collecting flag.
+    # Switched out there, the fiber would keep it -- every other collection in
+    # the process skipped -- until it next ran.  So preemption waits for the
+    # collection to end: no sibling on the hub runs inside it.
+    _assert_pass(r"""
+import gc, time
+import stackweave_c
+log = []
+class Slow:
+    def __del__(self):
+        end = time.perf_counter() + 0.02
+        while time.perf_counter() < end:
+            pass
+def collector():
+    for _ in range(10):
+        x = Slow()
+        x.self = x            # a cycle: only the collector frees it
+    del x
+    t0 = time.perf_counter()
+    gc.collect()
+    log.append(("collect", t0, time.perf_counter()))
+def sibling():
+    for _ in range(40):
+        log.append(("turn", time.perf_counter()))
+        end = time.perf_counter() + 0.005
+        while time.perf_counter() < end:
+            pass
+gc.disable()
+stackweave_c.mn_init(2)
+stackweave_c.mn_fiber(collector, hub=0)
+stackweave_c.mn_fiber(sibling, hub=0)
+stackweave_c.mn_run()
+stackweave_c.mn_fini()
+(t0, t1), = [(e[1], e[2]) for e in log if e[0] == "collect"]
+inside = [e[1] for e in log if e[0] == "turn" and t0 < e[1] < t1]
+print("collect %.3f s, sibling turns inside: %d" % (t1 - t0, len(inside)))
+assert t1 - t0 >= 0.15, (t0, t1)
+assert not inside, inside
+print("PASS")
+""", timeout=30)
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__] + sys.argv[1:]))

@@ -259,11 +259,15 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   eval-breaker hook, or without it the eval-frame wrapper and the liveness
   pending call; the `preempt_init` time-slicer; the seeded controller's
   frame-count hook, compiled only with `RUNLOOM_MN_CTRL`) gates on
-  `runloom_tstate_in_destruction` and defers (the request stays armed); yielding
-  inside a `tp_dealloc` freezes a half-dead object across a GC-safe point → UAF.
-  The eval breaker is no safe point by itself: a dealloc's callback re-enters
+  `runloom_tstate_preempt_unsafe` and defers (the request stays armed);
+  yielding inside a `tp_dealloc` freezes a half-dead object across a GC-safe
+  point → UAF. The same gate defers while a GC collection is in progress
+  (`gcstate->collecting`: a fiber switched out in a finalizer the collection
+  runs would keep every other collection in the process from running) and
+  while the state runs the pending calls (`handling_thread`). The eval breaker
+  is no safe point by itself: a dealloc's callback or a finalizer re-enters
   the eval loop and `_Py_HandlePending` nested, so a yield site there keeps the
-  gate too.
+  gate too. Guard: `tests/test_preempt_breaker.py` (`..._inside_a_gc_collection`).
 - **A thread-local's address never survives a park.** The compiler computes it
   once per function and reuses it after calls (macOS keeps the `tlv_get_addr`
   result, aarch64 Linux the `tpidr_el0` base, x86-64 global-dynamic the
@@ -536,8 +540,13 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   at the end of `_Py_HandlePending`, and sysmon raises the wedged resume's
   eval breaker with `_PyEval_RequestFiberBreak` on the tstate it reads under
   its hazard pointer (`runloom_sysmon_request_break`), so the fiber yields at
-  its next function entry or loop back-edge. An interpreter built from an older
-  copy of `src/patches` (`stackweave_c.fiber_breaker_hook == 0`) falls back to
+  its next function entry or loop back-edge. The request is a per-state flag
+  (`_fiber_break`) that the borrowed `_PY_ASYNC_EXCEPTION_BIT` only signals:
+  nothing else clears the bit while it is set, since from 3.15
+  `PyErr_CheckSignals()` would, in any long C loop. stackweave looks the two
+  functions up at run time, so one build loads on interpreters with and
+  without them. An interpreter built from an older copy of `src/patches`
+  (`stackweave_c.fiber_breaker_hook == 0`) falls back to
   the eval-frame wrapper plus a pending call, whose known gap is that a fiber
   preempted from the pending call keeps CPython's pending-call slot
   (`handling_thread`) until it resumes. Guard: `tests/test_preempt_breaker.py`

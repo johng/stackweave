@@ -285,17 +285,14 @@ unsigned long long runloom_mn_c_caller_holds(void);
  * migrates.  Only the running fiber's own thread calls it. */
 int runloom_mn_hold_here(int delta);
 
-/* Preemption (mn_sched_hub_resume_preempt.c.inc).  RUNLOOM_HAVE_FIBER_BREAKER:
- * the interpreter's headers carry the exec-home patch's eval-breaker fiber hook
- * (_Py_FIBER_BREAKER_HOOK, Include/cpython/ceval.h), which preemption uses in
- * place of a PEP 523 eval-frame wrapper.  via_breaker: 1 once installed that way
- * (stats "preempt_via_breaker"); yields: preemption yields taken, any site
- * (stats "preempt_yields", an odometer). */
-#if defined(_Py_FIBER_BREAKER_HOOK)
-#  define RUNLOOM_HAVE_FIBER_BREAKER 1
-#else
-#  define RUNLOOM_HAVE_FIBER_BREAKER 0
-#endif
+/* Preemption (mn_sched_hub_resume_preempt.c.inc).  fiber_breaker_available:
+ * the running interpreter exports the exec-home patch's eval-breaker fiber hook
+ * (_PyEval_SetFiberBreakerHook / _PyEval_RequestFiberBreak, looked up at run
+ * time, so one build loads on interpreters with and without it), which
+ * preemption uses in place of a PEP 523 eval-frame wrapper.  via_breaker: 1
+ * once installed that way (stats "preempt_via_breaker"); yields: preemption
+ * yields taken, any site (stats "preempt_yields", an odometer). */
+int                runloom_mn_fiber_breaker_available(void);
 int                runloom_mn_preempt_via_breaker(void);
 unsigned long long runloom_mn_preempt_yields(void);
 
@@ -314,7 +311,8 @@ unsigned long long runloom_mn_preempt_yields(void);
 struct runloom_hub;                       /* defined in mn_sched.c */
 void runloom_sysmon_tstate_retire_wait(PyThreadState *ts);
 int  runloom_sysmon_hub_attach_state(struct runloom_hub *h, PyThreadState *hts);
-void runloom_sysmon_request_break(struct runloom_hub *h, PyThreadState *hts);
+void runloom_sysmon_request_break(struct runloom_hub *h);
+void runloom_mn_request_fiber_break(PyThreadState *ts);
 
 typedef struct runloom_hub_info {
     int       id;                 /* dense hub index 0..count-1 */

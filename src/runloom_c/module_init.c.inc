@@ -666,7 +666,7 @@ PyMODINIT_FUNC PyInit_stackweave_c(void)
      * hook (the exec-home patch's _PyEval_SetFiberBreakerHook) instead of a PEP
      * 523 eval-frame wrapper, which deoptimizes every Python call (mn_sched.h). */
     if (PyModule_AddIntConstant(m, "fiber_breaker_hook",
-                                RUNLOOM_HAVE_FIBER_BREAKER) < 0) {
+                                runloom_mn_fiber_breaker_available()) < 0) {
         Py_DECREF(m);
         return NULL;
     }

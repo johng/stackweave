@@ -60,6 +60,16 @@ size_t runloom_gen_exc_state_offset(void);
  * when built with RUNLOOM_NO_IFRAME. */
 int runloom_tstate_in_destruction(PyThreadState *ts);
 
+/* Whether a preemption yield must wait on `ts`: in_destruction above, or a
+ * slot an eval-breaker handler holds for the whole interpreter -- a GC
+ * collection in progress (gcstate->collecting: a fiber switched out inside a
+ * finalizer the collection runs keeps it set, so every other thread's
+ * collection is skipped until it resumes) or this state running the pending
+ * calls (pending->handling_thread: no other thread runs them meanwhile).
+ * Another thread's collection defers us too; the next request comes a sysmon
+ * tick later.  The three preemption sites gate on this. */
+int runloom_tstate_preempt_unsafe(PyThreadState *ts);
+
 /* Py_TSTATE_EXEC_HOME's fiber mark (_PyThreadStateImpl._fiber): a lock that
  * records its owner records a marked state, not its OS thread; unmarked states
  * keep the OS thread, as stock.  Set on each per-g state before its first

@@ -69,29 +69,23 @@ int runloom_sysmon_hub_attach_state(runloom_hub_t *h, PyThreadState *hts)
 /* Ask CPython to run the eval-breaker fiber hook on the thread state hub `h`
  * is running now (runloom_preempt_breaker_hook): the fiber's own tstate under
  * migration, read under the same hazard as hub_attach_state so it cannot be
- * freed between the read and the request; the hub's (`hts`, which lives as long
- * as the hub) otherwise.  A request that lands on a resume that has since
- * ended is harmless: the bit stays on that tstate until it next runs, and the
- * hook drops a request naming another resume (runloom_mn_preempt_due). */
-void runloom_sysmon_request_break(runloom_hub_t *h, PyThreadState *hts)
+ * freed between the read and the request.  None (between two resumes): nothing
+ * to preempt; sysmon asks again next tick if the next resume wedges.  A request
+ * that lands on a resume that has since ended is harmless: it stays on that
+ * tstate until it next runs, and the hook drops a request naming another
+ * resume (runloom_mn_preempt_due). */
+void runloom_sysmon_request_break(runloom_hub_t *h)
 {
-#if RUNLOOM_HAVE_FIBER_BREAKER
     void *ts = __atomic_load_n((void **)&h->resume_tstate, __ATOMIC_ACQUIRE);
-    if (ts == NULL) {
-        if (hts != NULL) _PyEval_RequestFiberBreak(hts);
-        return;
-    }
+    if (ts == NULL) return;
     runloom_mutex_lock(&runloom_sysmon_hazard_lock);
     __atomic_store_n(&runloom_sysmon_hazard_ts, ts, __ATOMIC_RELEASE);
     __atomic_thread_fence(__ATOMIC_SEQ_CST);
     if (__atomic_load_n((void **)&h->resume_tstate, __ATOMIC_ACQUIRE) == ts)
-        _PyEval_RequestFiberBreak((PyThreadState *)ts);
+        runloom_mn_request_fiber_break((PyThreadState *)ts);
     /* else: the resume ended under us; sysmon re-requests next tick */
     __atomic_store_n(&runloom_sysmon_hazard_ts, (void *)NULL, __ATOMIC_RELEASE);
     runloom_mutex_unlock(&runloom_sysmon_hazard_lock);
-#else
-    (void)h; (void)hts;
-#endif
 }
 
 /* sysmon watchdog thread.  Holds NO GIL and NO tstate -- it only reads
@@ -180,10 +174,12 @@ static RUNLOOM_THREAD_RET runloom_sysmon_main(void *arg)
                 (now - start) > runloom_sysmon_preempt_ns &&
                 tss == RUNLOOM_TS_ATTACHED &&
                 __atomic_load_n(&runloom_preempt_enabled, __ATOMIC_RELAXED)) {
-                __atomic_store_n(&h->preempt_seq, seq, __ATOMIC_RELAXED);
+                /* RELEASE: the hook reads it after taking the request, whose
+                 * own release store (_PyEval_RequestFiberBreak) follows this. */
+                __atomic_store_n(&h->preempt_seq, seq, __ATOMIC_RELEASE);
                 if (runloom_mn_preempt_via_breaker()) {
                     if (!runloom_mn_ctrl_armed())
-                        runloom_sysmon_request_break(h, hts);
+                        runloom_sysmon_request_break(h);
                 } else {
                     /* Without the hook: the eval-frame wrapper reads preempt_seq
                      * at the running g's next Python frame entry.

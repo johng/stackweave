@@ -55,6 +55,9 @@
 
 #include <errno.h>
 #include <stdlib.h>
+#if !defined(_WIN32)
+#  include <dlfcn.h>   /* dlsym: runloom_mn_fiber_breaker_available */
+#endif
 #include <stdio.h>
 #include <string.h>
 #include <stdalign.h>   /* alignas for cache-line padding (B4 / R6) */

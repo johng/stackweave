@@ -651,6 +651,22 @@ unsigned long long runloom_iframe_tlbc_switches(void)
     return __atomic_load_n(&runloom_tlbc_switches_total, __ATOMIC_RELAXED);
 }
 
+/* See runloom_iframe.h. */
+int runloom_tstate_preempt_unsafe(PyThreadState *ts)
+{
+    if (runloom_tstate_in_destruction(ts)) return 1;
+#if defined(RUNLOOM_DESTRUCT_HAVE)
+    if (ts == NULL) return 0;
+    if (_Py_atomic_load_int_relaxed(&ts->interp->gc.collecting)) return 1;
+    if (_Py_atomic_load_ptr_relaxed(&ts->interp->ceval.pending.handling_thread) == ts)
+        return 1;
+    if (_Py_atomic_load_ptr_relaxed(
+            &_PyRuntime.ceval.pending_mainthread.handling_thread) == ts)
+        return 1;
+#endif
+    return 0;
+}
+
 int runloom_tstate_in_destruction(PyThreadState *ts)
 {
 #if defined(RUNLOOM_DESTRUCT_HAVE)
