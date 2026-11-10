@@ -93,6 +93,17 @@ int runloom_netpoll_parked_count(void);
 int runloom_netpoll_deadline_heap_total(void);
 unsigned long long runloom_netpoll_stale_arm_heals(void);
 int runloom_netpoll_fd_armed_count(void);
+/* The per-hub netpoll counters (STACKWEAVE_NETPOLL_COUNTERS=1), by index;
+ * stats() reports them as netpoll_c_<name>. */
+int runloom_netpoll_counter_n(void);
+const char *runloom_netpoll_counter_name(int k);
+unsigned long long runloom_netpoll_counter(int k);
+/* sysmon backstop: poll hub hub_idx's epoll/kqueue for it when the hub has
+ * parkers and has not started a poll for the budget.  Returns fibers woken. */
+int runloom_netpoll_backstop_poll(int hub_idx, long long now_ns);
+/* A hub blocking somewhere that still wakes on its poller's readiness (the
+ * io_uring loop backend's ring wait) says so, as the pump's own wait does. */
+void runloom_netpoll_hub_waiting(void *hub_opaque, int on);
 
 /* DIAG: dump every parked parker (fd/g/hub/commit) to stderr. */
 void runloom_netpoll_dump_parkers(void);
