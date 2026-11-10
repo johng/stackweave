@@ -259,15 +259,18 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   eval-breaker hook, or without it the eval-frame wrapper and the liveness
   pending call; the `preempt_init` time-slicer; the seeded controller's
   frame-count hook, compiled only with `RUNLOOM_MN_CTRL`) gates on
-  `runloom_tstate_preempt_unsafe` and defers (the request stays armed);
-  yielding inside a `tp_dealloc` freezes a half-dead object across a GC-safe
-  point → UAF. The same gate defers while a GC collection is in progress
-  (`gcstate->collecting`: a fiber switched out in a finalizer the collection
-  runs would keep every other collection in the process from running) and
-  while the state runs the pending calls (`handling_thread`). The eval breaker
-  is no safe point by itself: a dealloc's callback or a finalizer re-enters
-  the eval loop and `_Py_HandlePending` nested, so a yield site there keeps the
-  gate too. Guard: `tests/test_preempt_breaker.py` (`..._inside_a_gc_collection`).
+  `runloom_tstate_in_destruction` and defers (the eval-breaker hook by asking
+  again, since CPython has taken the request); yielding inside a `tp_dealloc`
+  freezes a half-dead object across a GC-safe point → UAF. The eval breaker is
+  no safe point by itself: a dealloc's callback re-enters the eval loop and
+  `_Py_HandlePending` nested, so a yield site there keeps the gate too. The
+  eval-breaker hook also never runs while its thread runs a GC collection or
+  the pending calls (the patch's `_fiber_break_hold`): their Python reaches a
+  nested `_Py_HandlePending` while the thread holds the interpreter's
+  collecting flag or pending-call slot, which a switched-out fiber would keep.
+  (The fallbacks -- eval-frame wrapper, liveness pending call, `preempt_init`
+  time-slicer -- can still yield in a collection's finalizer.) Guard:
+  `tests/test_preempt_breaker.py` (`..._inside_a_gc_collection`).
 - **A thread-local's address never survives a park.** The compiler computes it
   once per function and reuses it after calls (macOS keeps the `tlv_get_addr`
   result, aarch64 Linux the `tpidr_el0` base, x86-64 global-dynamic the

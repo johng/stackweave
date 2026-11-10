@@ -1301,7 +1301,7 @@ static PyObject *runloom_preempt_eval_frame(PyThreadState *ts,
      * reset / preempt_seq not cleared) so the very next frame entry after
      * the destructor unwinds takes the yield -- preemption is deferred a few
      * frames, never lost. */
-    if (do_preempt && runloom_tstate_preempt_unsafe(ts)) {
+    if (do_preempt && runloom_tstate_in_destruction(ts)) {
         do_preempt = 0;
     } else if (do_preempt) {
         if (runloom_mn_ctrl.preempt_frames > 0) runloom_mn_preempt_ctr = 0;
@@ -1386,7 +1386,7 @@ static int runloom_mn_liveness_pending_cb(void *arg)
      * A single-frame loop -- the only thing this backstop targets -- can't be
      * inside a C destructor, so this is belt-and-suspenders; if it ever does
      * fire there, skip and let the sysmon re-post once destruction unwinds. */
-    if (runloom_tstate_preempt_unsafe(PyThreadState_GET())) {
+    if (runloom_tstate_in_destruction(PyThreadState_GET())) {
         return 0;
     }
     /* Only for the resume sysmon flagged: the call was posted for that one,
@@ -1449,8 +1449,10 @@ void runloom_mn_request_fiber_break(PyThreadState *ts)
  * break on the thread state the wedged resume runs on
  * (runloom_sysmon_request_break); CPython raises that thread's eval breaker,
  * and at its next check -- a function entry (RESUME) or a loop back-edge --
- * _Py_HandlePending() calls this from its end, with the pending-call slot and
- * everything else it takes already released.  So, unlike the eval-frame
+ * _Py_HandlePending() calls this from its end -- never while this thread runs
+ * the pending calls or a GC collection (the patch's _fiber_break_hold), so a
+ * fiber switched out here holds neither the pending-call slot nor the
+ * collecting flag.  So, unlike the eval-frame
  * wrapper, nothing is paid until a preemption is asked for (that wrapper's
  * presence alone deoptimizes every Python-to-Python call process-wide: ~1.8x
  * slower calls, ~2 KB of C stack per frame, recursion in a 512 KB fiber capped
@@ -1461,9 +1463,8 @@ void runloom_mn_request_fiber_break(PyThreadState *ts)
  *
  * Same gates as the other two sites: only the resume sysmon flagged
  * (runloom_mn_preempt_due), never mid object-destruction, never a fiber nested
- * in a run(1)/Coro.  A destruction defers without consuming the request;
- * sysmon re-requests every tick the wedge persists, so the yield comes at most
- * a tick later. */
+ * in a run(1)/Coro.  CPython has taken the request by the time this runs, so
+ * a destruction defers by asking again: the destructor's next check retries. */
 static void runloom_preempt_breaker_hook(PyThreadState *ts)
 {
     /* The nest-aware accessors: NULL inside a run(1)/Coro nested on the hub's
@@ -1471,7 +1472,12 @@ static void runloom_preempt_breaker_hook(PyThreadState *ts)
     runloom_hub_t *h = (runloom_hub_t *)runloom_mn_current_hub_opaque();
     runloom_g_t *g = runloom_mn_tls_current_g();
     if (h == NULL || g == NULL || !runloom_mn_preempt_due(h)) return;
-    if (runloom_tstate_preempt_unsafe(ts)) return;
+    if (runloom_tstate_in_destruction(ts)) {
+        /* CPython has taken the request: ask again, so the destructor's next
+         * check retries, as the eval-frame wrapper does at its next frame. */
+        runloom_mn_request_fiber_break(ts);
+        return;
+    }
     __atomic_store_n(&h->preempt_seq, 0, __ATOMIC_RELAXED);
     {
 #if defined(RUNLOOM_FSM_VALIDATE)

@@ -35,7 +35,12 @@ NEEDS_HOOK = KNOWN_GAP(
     "recursion near 180 frames",
     raises=AssertionError)
 
-pytestmark = [] if stackweave_c.fiber_breaker_hook else [NEEDS_HOOK]
+
+
+def needs_hook(test):
+    """A known gap where the interpreter lacks the hook; the C-loop test below
+    is not one (the fallback's pending call preempts it)."""
+    return test if stackweave_c.fiber_breaker_hook else NEEDS_HOOK(test)
 
 
 def _assert_pass(code, timeout=60):
@@ -45,6 +50,7 @@ def _assert_pass(code, timeout=60):
     return p.stdout
 
 
+@needs_hook
 def test_fibers_recurse_to_the_recursion_limit():
     # 3000 Python frames need no C stack with specialized calls; through an
     # eval-frame function they need ~6 MB, twelve times a fiber's stack.
@@ -63,6 +69,7 @@ print("PASS")
 """)
 
 
+@needs_hook
 def test_plain_threads_keep_specialized_calls_after_run():
     # The eval-frame function was process-wide and never removed: once run()
     # had installed it, a plain thread's recursion was C-stack bound too.
@@ -81,6 +88,7 @@ print("PASS")
 """)
 
 
+@needs_hook
 def test_three_single_frame_loops_on_one_hub_all_take_turns():
     # Without the hook a single-frame loop is preempted from a pending call,
     # and the preempted fiber keeps the interpreter's pending-call slot until
@@ -161,6 +169,7 @@ print("PASS")
 """, timeout=30)
 
 
+@needs_hook
 def test_a_fiber_is_not_switched_out_inside_a_gc_collection():
     # A collection's finalizers run Python, whose eval-breaker checks reach the
     # hook while the collection still holds the interpreter's collecting flag.
