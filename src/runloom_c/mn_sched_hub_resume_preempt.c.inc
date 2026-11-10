@@ -1429,8 +1429,12 @@ int runloom_mn_fiber_breaker_available(void)
             dlsym(RTLD_DEFAULT, "_PyEval_SetFiberBreakerHook");
         runloom_request_fiber_break = (void (*)(PyThreadState *))
             dlsym(RTLD_DEFAULT, "_PyEval_RequestFiberBreak");
+        /* And the revision with the GC / pending-call hold, which exports
+         * _PyEval_FiberBreakRelease: an earlier one could switch a fiber out
+         * inside a collection's finalizer, so it gets the fallback. */
         st = (runloom_set_fiber_breaker_hook != NULL &&
-              runloom_request_fiber_break != NULL);
+              runloom_request_fiber_break != NULL &&
+              dlsym(RTLD_DEFAULT, "_PyEval_FiberBreakRelease") != NULL);
 #endif
         __atomic_store_n(&runloom_fiber_breaker_state, st, __ATOMIC_RELEASE);
     }

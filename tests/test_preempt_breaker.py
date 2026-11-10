@@ -189,19 +189,19 @@ def collector():
         x = Slow()
         x.self = x            # a cycle: only the collector frees it
     del x
-    t0 = time.perf_counter()
     gc.collect()
-    # end: the collection's own "stop" callback, still inside it -- a break
-    # held over the collection is taken at the first check after it returns
-    log.append(("collect", t0, stop[-1]))
+    # the collection's own "start" and "stop" callbacks, inside it: a break
+    # held over it is taken at the first check after it returns, and one
+    # before it at the first check before it starts
+    log.append(("collect", edges["start"], edges["stop"]))
 def sibling():
     for _ in range(40):
         log.append(("turn", time.perf_counter()))
         end = time.perf_counter() + 0.005
         while time.perf_counter() < end:
             pass
-stop = []
-gc.callbacks.append(lambda phase, info: phase == "stop" and stop.append(time.perf_counter()))
+edges = {}
+gc.callbacks.append(lambda phase, info: edges.__setitem__(phase, time.perf_counter()))
 gc.disable()
 stackweave_c.mn_init(2)
 stackweave_c.mn_fiber(collector, hub=0)

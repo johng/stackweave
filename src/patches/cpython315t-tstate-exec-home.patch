@@ -114,7 +114,7 @@
 #         Modules/_threadmodule.c, Modules/_testinternalcapi/test_lock.c,
 #         Modules/_io/bufferedio.c, Modules/_multiprocessing/semaphore.c,
 #         Python/ceval_macros.h, Python/ceval.c (Py_TSTATE_TLBC_FOLLOW),
-#         Include/cpython/ceval.h, Python/ceval_gil.c
+#         Include/cpython/ceval.h, Python/ceval_gil.c, Python/gc_free_threading.c
 #
 --- a/Include/cpython/object.h
 +++ b/Include/cpython/object.h
@@ -1241,7 +1241,7 @@
              (COUNTER) = pause_backoff_counter(cnt); \
 --- a/Include/cpython/ceval.h
 +++ b/Include/cpython/ceval.h
-@@ -44,3 +44,16 @@ PyAPI_FUNC(void) PyUnstable_PerfMapState_Fini(void);
+@@ -44,3 +44,21 @@
  PyAPI_FUNC(int) PyUnstable_CopyPerfMapFile(const char* parent_filename);
  PyAPI_FUNC(int) PyUnstable_PerfTrampoline_CompileCode(PyCodeObject *);
  PyAPI_FUNC(int) PyUnstable_PerfTrampoline_SetPersistAfterFork(int enable);
@@ -1257,17 +1257,61 @@
 +typedef void (*_Py_FiberBreakerHook)(PyThreadState *tstate);
 +PyAPI_FUNC(void) _PyEval_SetFiberBreakerHook(_Py_FiberBreakerHook hook);
 +PyAPI_FUNC(void) _PyEval_RequestFiberBreak(PyThreadState *tstate);
++/* Drop one level of the thread state's fiber-break hold (raised around a GC
++   collection and the pending calls); at zero, re-raise a request that
++   waited.  Exported so a fiber runtime can tell this revision of the hook
++   (with the hold) from an earlier one. */
++PyAPI_FUNC(void) _PyEval_FiberBreakRelease(PyThreadState *tstate);
 +#endif
 --- a/Python/ceval_gil.c
 +++ b/Python/ceval_gil.c
-@@ -1294,7 +1294,72 @@
+@@ -915,10 +915,28 @@
+     pending->handling_thread = NULL;
+     FT_MUTEX_UNLOCK(&pending->mutex);
+ }
++
++#ifdef Py_TSTATE_EXEC_HOME
++/* Every caller of make_pending_calls() (_Py_HandlePending, and
++   _PyEval_MakePendingCalls from an interrupted lock wait or at finalization)
++   runs the pending calls under the fiber-break hold: no fiber is switched out
++   while it is the interpreter's pending->handling_thread. */
++static int make_pending_calls_impl(PyThreadState *tstate);
+ 
+ static int
+ make_pending_calls(PyThreadState *tstate)
+ {
++    ((_PyThreadStateImpl *)tstate)->_fiber_break_hold++;
++    int res = make_pending_calls_impl(tstate);
++    _PyEval_FiberBreakRelease(tstate);
++    return res;
++}
++#define make_pending_calls make_pending_calls_impl
++#endif
++
++static int
++make_pending_calls(PyThreadState *tstate)
++{
+     PyInterpreterState *interp = tstate->interp;
+     struct _pending_calls *pending = &interp->ceval.pending;
+     struct _pending_calls *pending_main = &_PyRuntime.ceval.pending_mainthread;
+@@ -974,6 +992,9 @@
+     clear_pending_handling_thread(pending);
+     return 0;
+ }
++#ifdef Py_TSTATE_EXEC_HOME
++#undef make_pending_calls
++#endif
+ 
+ 
+ void
+@@ -1294,7 +1315,72 @@
  }
  
  #endif
 +
 +#ifdef Py_TSTATE_EXEC_HOME
 +/* Fiber preemption at the eval breaker.
- 
++
 +   A stackful-fiber scheduler (stackweave) preempts a CPU-bound fiber by
 +   switching it out from inside the eval loop.  A PEP 523 eval-frame function
 +   can do that at every frame entry, but its mere presence makes the
@@ -1277,7 +1321,7 @@
 +   make_pending_calls(), holding the interpreter's pending-call slot
 +   (pending->handling_thread) until the fiber resumes, so no other thread can
 +   be preempted meanwhile.
-+
+ 
 +   Instead, the scheduler registers a hook, and its watchdog thread calls
 +   _PyEval_RequestFiberBreak() on the thread state the fiber runs on.  The
 +   hook runs at the end of _Py_HandlePending(), after every slot it takes is
@@ -1333,22 +1377,7 @@
  /* Do periodic things, like check for signals and async I/0.
  * We need to do reasonably frequently, but not too frequently.
  * All loops should include a check of the eval breaker.
-@@ -1376,7 +1441,14 @@
- 
-     /* Pending calls */
-     if ((breaker & _PY_CALLS_TO_DO_BIT) != 0) {
-+#ifdef Py_TSTATE_EXEC_HOME
-+        ((_PyThreadStateImpl *)tstate)->_fiber_break_hold++;
-+        int calls_err = make_pending_calls(tstate);
-+        _PyEval_FiberBreakRelease(tstate);
-+        if (calls_err != 0) {
-+#else
-         if (make_pending_calls(tstate) != 0) {
-+#endif
-             return -1;
-         }
-     }
-@@ -1432,6 +1504,31 @@
+@@ -1432,6 +1518,31 @@
      _PyRunRemoteDebugger(tstate);
  #endif
  
@@ -1380,7 +1409,7 @@
      return 0;
  }
  
-@@ -1440,6 +1537,12 @@
+@@ -1440,6 +1551,12 @@
  {
      assert(tstate != NULL);
      assert(tstate == _PyThreadState_GET());
@@ -1395,19 +1424,7 @@
      if (exc != NULL) {
 --- a/Python/gc_free_threading.c
 +++ b/Python/gc_free_threading.c
-@@ -2196,6 +2196,11 @@
- 
- /* This is the main function.  Read this to understand how the
-  * collection process works. */
-+#ifdef Py_TSTATE_EXEC_HOME
-+// Python/ceval_gil.c: drop one level of the thread state's fiber-break hold.
-+extern void _PyEval_FiberBreakRelease(PyThreadState *tstate);
-+#endif
-+
- static Py_ssize_t
- gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
- {
-@@ -2219,6 +2224,11 @@
+@@ -2219,6 +2219,11 @@
          _Py_atomic_store_int(&gcstate->collecting, 0);
          return 0;
      }
@@ -1419,7 +1436,7 @@
      gcstate->frame = tstate->current_frame;
  
      assert(generation >= 0 && generation < NUM_GENERATIONS);
-@@ -2312,6 +2322,9 @@
+@@ -2312,6 +2317,9 @@
      }
  
      assert(!_PyErr_Occurred(tstate));
