@@ -1233,14 +1233,29 @@ static runloom_hub_t *runloom_tspool_hub(void)
 /* Whether a finished fiber's state on this thread would be kept: a hub
  * thread, the pool on, and room in its pool or the depot -- checked before the
  * reset, so a full pool costs nothing more than the Clear it falls back to. */
+static inline int runloom_tspool_spill(int cap) { return cap / 2 > 0 ? cap / 2 : 1; }
+
+/* Room for one more state: in the hub's pool, or (spilling half of it) in the
+ * depot.  Racy on the depot, as a hint; put rechecks under the lock. */
+static int runloom_tspool_has_room(runloom_hub_t *h, int cap)
+{
+    return h->tspool_n < cap ||
+           __atomic_load_n(&runloom_tspool_depot_n, __ATOMIC_RELAXED) +
+               runloom_tspool_spill(cap) <= cap * RUNLOOM_TSPOOL_DEPOT_MULT;
+}
+
 RUNLOOM_NOINLINE int runloom_mn_tspool_on(void)
 {
     runloom_hub_t *h = runloom_tls_hub;
     int cap = runloom_tspool_cap();
     if (h == NULL || cap == 0) return 0;
-    return h->tspool_n < cap ||
-           __atomic_load_n(&runloom_tspool_depot_n, __ATOMIC_RELAXED) + cap / 2 <=
-               cap * RUNLOOM_TSPOOL_DEPOT_MULT;
+    return runloom_tspool_has_room(h, cap);
+}
+
+static void runloom_tspool_free_one(PyThreadState *ts)
+{
+    runloom_iframe_clear_fiber_tstate(ts);
+    PyThreadState_Delete(ts);
 }
 
 RUNLOOM_NOINLINE PyThreadState *runloom_mn_tspool_get(void)
@@ -1253,7 +1268,7 @@ RUNLOOM_NOINLINE PyThreadState *runloom_mn_tspool_get(void)
         if (__atomic_load_n(&runloom_tspool_depot_n, __ATOMIC_RELAXED) == 0) return NULL;
         runloom_mutex_lock(&runloom_tspool_depot_lock);
         {
-            int k = cap / 2 > 0 ? cap / 2 : 1;
+            int k = runloom_tspool_spill(cap);
             if (k > runloom_tspool_depot_n) k = runloom_tspool_depot_n;
             memcpy(h->tspool, runloom_tspool_depot + runloom_tspool_depot_n - k,
                    (size_t)k * sizeof(PyThreadState *));
@@ -1265,6 +1280,13 @@ RUNLOOM_NOINLINE PyThreadState *runloom_mn_tspool_get(void)
         if (h->tspool_n == 0) return NULL;
     }
     ts = h->tspool[--h->tspool_n];
+    if (ts->c_tracefunc != NULL || ts->c_profilefunc != NULL) {
+        /* threading.settrace_all_threads / setprofile_all_threads reached it
+         * in the pool; a fresh state would carry no tracer, so neither may
+         * this.  Clear it instead (and try the next). */
+        runloom_tspool_free_one(ts);
+        return runloom_mn_tspool_get();
+    }
     h->tspool_hits++;
     return ts;                  /* still unbound: hub_main binds it at attach */
 }
@@ -1286,7 +1308,7 @@ RUNLOOM_NOINLINE int runloom_mn_tspool_put(PyThreadState *ts)
     if (h->tspool_n >= cap) {
         /* Full: the older half to the depot, if the depot has room; the
          * hub keeps the states it freed last. */
-        int k = cap / 2 > 0 ? cap / 2 : 1, moved = 0;
+        int k = runloom_tspool_spill(cap), moved = 0;
         runloom_mutex_lock(&runloom_tspool_depot_lock);
         if (runloom_tspool_depot == NULL)
             runloom_tspool_depot = (PyThreadState **)calloc(
@@ -1309,11 +1331,6 @@ RUNLOOM_NOINLINE int runloom_mn_tspool_put(PyThreadState *ts)
     return 1;
 }
 
-static void runloom_tspool_free_one(PyThreadState *ts)
-{
-    runloom_iframe_clear_fiber_tstate(ts);
-    PyThreadState_Delete(ts);
-}
 
 /* Spawns served from a pool, counted as each hub exits (stats
  * "tstate_pool_hits"; a running session's hubs are not in it yet). */
@@ -1354,6 +1371,7 @@ static void runloom_mn_tspool_depot_drain(void)
  * concerned, and its after-fork code clears them; forget (leak) the array. */
 static void runloom_mn_tspool_forget_after_fork(void)
 {
+    __atomic_store_n(&runloom_tspool_hits_done, 0ULL, __ATOMIC_RELAXED);
     runloom_tspool_depot = NULL;
     runloom_tspool_depot_n = 0;
     runloom_mutex_init(&runloom_tspool_depot_lock);

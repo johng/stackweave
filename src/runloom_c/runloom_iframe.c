@@ -233,11 +233,13 @@ void runloom_iframe_clear_fiber_tstate(PyThreadState *ts)
 
 /* See runloom_iframe.h.  Resets what PyThreadState_Clear resets for the
  * objects a finished fiber's state holds -- thread-locals, the context, the
- * exception, the asyncio loop and task, the async-generator hooks -- and keeps
- * what a long-lived OS thread keeps between the tasks it runs: its QSBR slot,
- * TLBC index, mimalloc state, freelists, per-thread refcounts and id (reused
- * like an OS thread's ident after it exits).  Runs where the Clear it replaces
- * ran: some other state current, on the hub thread whose pool takes it. */
+ * exception, the asyncio loop and task, the async-generator hooks -- plus the
+ * per-thread setting a fresh state starts at 0 (coroutine origin tracking);
+ * hands its freelists to the current state; and keeps what a long-lived OS
+ * thread keeps between the tasks it runs: its QSBR slot, TLBC index, mimalloc
+ * state and per-thread refcounts.  It gets a new id when it is pooled
+ * (runloom_mn_tspool_put).  Runs where the Clear it replaces ran: some other
+ * state current, on the hub thread whose pool takes it. */
 int runloom_iframe_recycle_fiber_tstate(PyThreadState *ts)
 {
 #if defined(RUNLOOM_DESTRUCT_HAVE)
@@ -265,6 +267,7 @@ int runloom_iframe_recycle_fiber_tstate(PyThreadState *ts)
     Py_CLEAR(ts->async_gen_finalizer);
     Py_CLEAR(ts->context);
     ts->context_ver++;
+    ts->coroutine_origin_tracking_depth = 0;
     _Py_unset_eval_breaker_bit(ts, _PY_ASYNC_EXCEPTION_BIT);
     /* Its freelists go to the hub's state, as a Clear here hands them over:
      * a pooled state must not pin the blocks they hold. */
@@ -326,6 +329,25 @@ unsigned long long runloom_iframe_reserve_tstate_ids(PyInterpreterState *interp,
 #else
     (void)interp; (void)n;
     return 0;
+#endif
+}
+
+/* See runloom_iframe.h. */
+void runloom_iframe_bind_reused(PyThreadState *fiber, PyThreadState *hub)
+{
+#if defined(RUNLOOM_DESTRUCT_HAVE)
+    _PyThreadStateImpl *f = (_PyThreadStateImpl *)fiber;
+    uintptr_t tid = ((_PyThreadStateImpl *)hub)->brc.tid;
+    struct _brc_bucket *b;
+    if (f->brc.tid != 0 || tid == 0) return;
+    b = runloom_brc_bucket(fiber->interp, tid);
+    PyMutex_Lock(&b->mutex);
+    f->brc.tid = tid;
+    llist_insert_tail(b->root.next, &f->brc.bucket_node);
+    fiber->_status.bound = 1;
+    PyMutex_Unlock(&b->mutex);
+#else
+    (void)fiber; (void)hub;
 #endif
 }
 

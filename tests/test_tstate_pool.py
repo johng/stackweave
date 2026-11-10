@@ -53,11 +53,14 @@ def fiber(i):
         bad.append(("running loop", i))
     if sys.get_asyncgen_hooks().firstiter is not None:
         bad.append(("asyncgen hooks", i))
+    if sys.get_coroutine_origin_tracking_depth() != 0:
+        bad.append(("coroutine origin tracking", i))
     # leave all of it behind for whichever fiber gets this state next
     loc.v = i
     cv.set(i)
     asyncio.events._set_running_loop(object())
     sys.set_asyncgen_hooks(firstiter=hook)
+    sys.set_coroutine_origin_tracking_depth(5)
     try:
         raise KeyError(i)
     except KeyError:
@@ -103,6 +106,37 @@ def main():
     stackweave.sleep(0.5)
     assert len(calls) == n, (n, len(calls))
 stackweave.run(2, main)
+print("PASS")
+""")
+
+
+def test_a_tracer_set_on_every_thread_does_not_reach_later_fibers():
+    # threading.settrace_all_threads reaches every state in the interpreter,
+    # pooled ones included; a fiber spawned afterwards gets a fresh state's
+    # (untraced) start, whether or not its state came from a pool.
+    _assert_pass(r"""
+import threading
+import stackweave, stackweave_c
+seen = []
+def tracer(frame, event, arg):
+    if frame.f_code.co_name == "later":
+        seen.append(event)
+    return None
+def later():
+    return sum(range(10))
+def main():
+    for _ in range(2000):
+        stackweave.fiber(lambda: None)     # fill the pools
+    stackweave.sleep(0.2)
+    threading.settrace_all_threads(tracer)
+    try:
+        for _ in range(500):
+            stackweave.fiber(later)
+        stackweave.sleep(0.3)
+    finally:
+        threading.settrace_all_threads(None)
+stackweave.run(4, main)
+assert not seen, seen[:5]
 print("PASS")
 """)
 

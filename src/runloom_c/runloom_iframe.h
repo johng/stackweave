@@ -157,6 +157,12 @@ int runloom_iframe_recycle_fiber_tstate(PyThreadState *ts);
 unsigned long long runloom_iframe_reserve_tstate_ids(PyInterpreterState *interp,
                                                      unsigned n);
 
+/* Just before a reused state's first attach (hub_main, the hub's own state
+ * current): put it in the hub's biased-refcount bucket and mark it bound
+ * again, in one bucket-mutex hold, so no clear of it -- a fork child's -- ever
+ * finds it bound with brc.tid 0.  A no-op for a state already in a bucket. */
+void runloom_iframe_bind_reused(PyThreadState *fiber, PyThreadState *hub);
+
 /* In a fork child, from a pthread_atfork child handler (before CPython's
  * after-fork code): a fork made in a fiber makes fiber_ts, the forking
  * fiber's state, the runtime's main thread state, so signals set their
