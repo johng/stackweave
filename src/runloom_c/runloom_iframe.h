@@ -60,7 +60,6 @@ size_t runloom_gen_exc_state_offset(void);
  * when built with RUNLOOM_NO_IFRAME. */
 int runloom_tstate_in_destruction(PyThreadState *ts);
 
-
 /* Py_TSTATE_EXEC_HOME's fiber mark (_PyThreadStateImpl._fiber): a lock that
  * records its owner records a marked state, not its OS thread; unmarked states
  * keep the OS thread, as stock.  Set on each per-g state before its first

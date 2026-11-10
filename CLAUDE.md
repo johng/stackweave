@@ -259,8 +259,8 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   eval-breaker hook, or without it the eval-frame wrapper and the liveness
   pending call; the `preempt_init` time-slicer; the seeded controller's
   frame-count hook, compiled only with `RUNLOOM_MN_CTRL`) gates on
-  `runloom_tstate_in_destruction` and defers (the eval-breaker hook by asking
-  again, since CPython has taken the request); yielding inside a `tp_dealloc`
+  `runloom_tstate_in_destruction` and defers (the eval-breaker hook until
+  sysmon's next request, a tick later); yielding inside a `tp_dealloc`
   freezes a half-dead object across a GC-safe point → UAF. The eval breaker is
   no safe point by itself: a dealloc's callback re-enters the eval loop and
   `_Py_HandlePending` nested, so a yield site there keeps the gate too. The

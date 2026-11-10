@@ -1463,8 +1463,8 @@ void runloom_mn_request_fiber_break(PyThreadState *ts)
  *
  * Same gates as the other two sites: only the resume sysmon flagged
  * (runloom_mn_preempt_due), never mid object-destruction, never a fiber nested
- * in a run(1)/Coro.  CPython has taken the request by the time this runs, so
- * a destruction defers by asking again: the destructor's next check retries. */
+ * in a run(1)/Coro.  A destruction defers to sysmon's next request, a tick
+ * later. */
 static void runloom_preempt_breaker_hook(PyThreadState *ts)
 {
     /* The nest-aware accessors: NULL inside a run(1)/Coro nested on the hub's
@@ -1472,12 +1472,10 @@ static void runloom_preempt_breaker_hook(PyThreadState *ts)
     runloom_hub_t *h = (runloom_hub_t *)runloom_mn_current_hub_opaque();
     runloom_g_t *g = runloom_mn_tls_current_g();
     if (h == NULL || g == NULL || !runloom_mn_preempt_due(h)) return;
-    if (runloom_tstate_in_destruction(ts)) {
-        /* CPython has taken the request: ask again, so the destructor's next
-         * check retries, as the eval-frame wrapper does at its next frame. */
-        runloom_mn_request_fiber_break(ts);
-        return;
-    }
+    /* Mid destruction: leave preempt_seq armed and return; sysmon asks again
+     * at its next tick while the resume is still wedged (asking here would
+     * send every later check in the destructor back through the slow path). */
+    if (runloom_tstate_in_destruction(ts)) return;
     __atomic_store_n(&h->preempt_seq, 0, __ATOMIC_RELAXED);
     {
 #if defined(RUNLOOM_FSM_VALIDATE)

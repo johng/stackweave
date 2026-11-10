@@ -36,7 +36,6 @@ NEEDS_HOOK = KNOWN_GAP(
     raises=AssertionError)
 
 
-
 def needs_hook(test):
     """A known gap where the interpreter lacks the hook; the C-loop test below
     is not one (the fallback's pending call preempts it)."""
@@ -192,13 +191,17 @@ def collector():
     del x
     t0 = time.perf_counter()
     gc.collect()
-    log.append(("collect", t0, time.perf_counter()))
+    # end: the collection's own "stop" callback, still inside it -- a break
+    # held over the collection is taken at the first check after it returns
+    log.append(("collect", t0, stop[-1]))
 def sibling():
     for _ in range(40):
         log.append(("turn", time.perf_counter()))
         end = time.perf_counter() + 0.005
         while time.perf_counter() < end:
             pass
+stop = []
+gc.callbacks.append(lambda phase, info: phase == "stop" and stop.append(time.perf_counter()))
 gc.disable()
 stackweave_c.mn_init(2)
 stackweave_c.mn_fiber(collector, hub=0)
