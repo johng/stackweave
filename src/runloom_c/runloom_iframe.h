@@ -151,10 +151,11 @@ void runloom_iframe_clear_fiber_tstate(PyThreadState *ts);
  * Delete it (pool full); runloom_iframe_clear_fiber_tstate handles brc.tid 0. */
 int runloom_iframe_recycle_fiber_tstate(PyThreadState *ts);
 
-/* In a fork child, before CPython clears every other thread state: give each
- * bound state with brc.tid 0 (a pooled one) a bucket and a tid no thread has,
- * so the clear's brc removal finds it where a debug build asserts it is. */
-void runloom_iframe_fork_child_rebucket(PyInterpreterState *interp);
+/* Reserve `n` thread-state ids no state has had, as PyThreadState_New takes
+ * one (under HEAD_LOCK): a reused state gets a new id, since the exec-home
+ * patch keys a lock's owner on it.  Returns the first. */
+unsigned long long runloom_iframe_reserve_tstate_ids(PyInterpreterState *interp,
+                                                     unsigned n);
 
 /* In a fork child, from a pthread_atfork child handler (before CPython's
  * after-fork code): a fork made in a fiber makes fiber_ts, the forking

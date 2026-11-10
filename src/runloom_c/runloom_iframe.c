@@ -138,6 +138,13 @@ void runloom_iframe_hand_over_freelists(PyThreadState *dead)
 #endif
 }
 
+#if defined(RUNLOOM_DESTRUCT_HAVE)
+static inline struct _brc_bucket *runloom_brc_bucket(PyInterpreterState *interp, uintptr_t tid)
+{
+    return &interp->brc.table[tid % _Py_BRC_NUM_BUCKETS];
+}
+#endif
+
 /* See runloom_iframe.h.  PyThreadState_Clear ends by abandoning the cleared
  * state's four mimalloc heaps, and each abandon also sweeps the interpreter's
  * abandoned-segment pool on behalf of other threads (_mi_abandoned_collect:
@@ -173,18 +180,20 @@ void runloom_iframe_hand_over_freelists(PyThreadState *dead)
 void runloom_iframe_clear_fiber_tstate(PyThreadState *ts)
 {
 #if defined(RUNLOOM_DESTRUCT_HAVE)
-    /* A pooled state is out of every biased-refcount bucket (brc.tid 0, see
-     * runloom_iframe_recycle_fiber_tstate): put it back in the current
-     * thread's, so the Clear's brc removal unlinks it from where a bound state
-     * is expected to be. */
+    /* A pooled state is marked unbound and out of every biased-refcount
+     * bucket (runloom_iframe_recycle_fiber_tstate).  Bind it again and put it
+     * in a bucket, so the Clear abandons its mimalloc heaps (skipped for an
+     * unbound state) and its brc removal finds it where a bound state is. */
     {
         _PyThreadStateImpl *ti = (_PyThreadStateImpl *)ts;
-        _PyThreadStateImpl *cur = (_PyThreadStateImpl *)PyThreadState_GetUnchecked();
-        if (ti->brc.tid == 0 && ts->_status.bound && cur != NULL && cur->brc.tid != 0) {
-            struct _brc_bucket *b =
-                &ts->interp->brc.table[cur->brc.tid % _Py_BRC_NUM_BUCKETS];
+        if (ti->brc.tid == 0 && !ts->_status.bound && ts->_status.initialized) {
+            /* An odd value is no thread's id (_Py_ThreadId() is an aligned
+             * thread pointer), so nothing is ever queued to it. */
+            uintptr_t tid = (uintptr_t)ts | 1;
+            struct _brc_bucket *b = runloom_brc_bucket(ts->interp, tid);
+            ts->_status.bound = 1;
             PyMutex_Lock(&b->mutex);
-            ti->brc.tid = cur->brc.tid;
+            ti->brc.tid = tid;
             llist_insert_tail(&b->root, &ti->brc.bucket_node);
             PyMutex_Unlock(&b->mutex);
         }
@@ -256,6 +265,9 @@ int runloom_iframe_recycle_fiber_tstate(PyThreadState *ts)
     Py_CLEAR(ts->context);
     ts->context_ver++;
     _Py_unset_eval_breaker_bit(ts, _PY_ASYNC_EXCEPTION_BIT);
+    /* Its freelists go to the hub's state, as a Clear here hands them over:
+     * a pooled state must not pin the blocks they hold. */
+    runloom_iframe_hand_over_freelists(ts);
     /* No hub's allocator until the next resume borrows one. */
     runloom_iframe_borrow_alloc_home(ts, ts);
     /* Out of its biased-refcount bucket while pooled, with brc.tid 0 --
@@ -266,8 +278,7 @@ int runloom_iframe_recycle_fiber_tstate(PyThreadState *ts)
      * mutex the other hub takes on every resume).  Only with nothing queued
      * to it: a dropper that queued an object here must see it merged. */
     if (ti->brc.tid != 0) {
-        struct _brc_bucket *b =
-            &ts->interp->brc.table[ti->brc.tid % _Py_BRC_NUM_BUCKETS];
+        struct _brc_bucket *b = runloom_brc_bucket(ts->interp, ti->brc.tid);
         int empty;
         PyMutex_Lock(&b->mutex);
         empty = (ti->brc.objects_to_merge.head == NULL);
@@ -278,9 +289,15 @@ int runloom_iframe_recycle_fiber_tstate(PyThreadState *ts)
         PyMutex_Unlock(&b->mutex);
         if (!empty) return 0;
     }
-    /* A finalizer run by a clear above ran under another state, but could
-     * still have left a deferred dealloc on this one. */
-    if (ts->delete_later != NULL) return 0;
+    /* Unbound while pooled, with brc.tid 0: CPython's own "never bound", so a
+     * clear of every other state (a fork child, finalization) skips its brc
+     * removal and its unbind, as it must for a state in no bucket (a debug
+     * build asserts tid 0 means unbound).  runloom_mn_tspool_get binds it
+     * again; runloom_iframe_clear_fiber_tstate too. */
+    ts->_status.bound = 0;
+    /* A finalizer run by a clear above ran under another state, but anything
+     * left on this one's trashcan list must not outlive the fiber. */
+    if (ts->delete_later != NULL) runloom_iframe_drain_trashcan(ts);
     return 1;
 #else
     (void)ts;
@@ -288,25 +305,21 @@ int runloom_iframe_recycle_fiber_tstate(PyThreadState *ts)
 #endif
 }
 
+
 /* See runloom_iframe.h. */
-void runloom_iframe_fork_child_rebucket(PyInterpreterState *interp)
+unsigned long long runloom_iframe_reserve_tstate_ids(PyInterpreterState *interp,
+                                                     unsigned n)
 {
 #if defined(RUNLOOM_DESTRUCT_HAVE)
-    PyThreadState *p;
-    if (interp == NULL) return;
-    for (p = interp->threads.head; p != NULL; p = p->next) {
-        _PyThreadStateImpl *ti = (_PyThreadStateImpl *)p;
-        if (ti->brc.tid == 0 && p->_status.bound) {
-            /* An odd value is no thread's id (_Py_ThreadId() is an aligned
-             * thread pointer), so nothing will ever be queued to it. */
-            uintptr_t tid = (uintptr_t)p | 1;
-            ti->brc.tid = tid;
-            llist_insert_tail(&interp->brc.table[tid % _Py_BRC_NUM_BUCKETS].root,
-                              &ti->brc.bucket_node);
-        }
-    }
+    unsigned long long first;
+    HEAD_LOCK(interp->runtime);
+    first = interp->threads.next_unique_id + 1;
+    interp->threads.next_unique_id += n;
+    HEAD_UNLOCK(interp->runtime);
+    return first;
 #else
-    (void)interp;
+    (void)interp; (void)n;
+    return 0;
 #endif
 }
 
@@ -330,10 +343,6 @@ int runloom_iframe_service_merge_queue(PyThreadState *ts)
     return rounds;
 }
 
-static inline struct _brc_bucket *runloom_brc_bucket(PyInterpreterState *interp, uintptr_t tid)
-{
-    return &interp->brc.table[tid % _Py_BRC_NUM_BUCKETS];
-}
 
 /* Move `node` to the FRONT of `bucket`'s list (llist_insert_tail inserts
  * before its first argument, so "before the current first" is the front). */

@@ -665,10 +665,6 @@ static void runloom_mn_atfork_child(void)
         runloom_iframe_fork_child_own_heap(ts);
     }
     runloom_iframe_fork_child_main_tstate(fiber ? ts : NULL);
-    /* Pooled states are out of every brc bucket; CPython's after-fork code is
-     * about to clear them with every other thread's. */
-    runloom_iframe_fork_child_rebucket(ts != NULL ? ts->interp
-                                                  : PyInterpreterState_Main());
 }
 
 void runloom_mn_atfork_init(void)

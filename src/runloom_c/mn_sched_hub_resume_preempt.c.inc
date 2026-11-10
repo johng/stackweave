@@ -1191,10 +1191,13 @@ static RUNLOOM_TLS runloom_g_t   *runloom_tls_current_g = NULL;
  * current) and in mn_fini (the depot, on the main thread); a fork child
  * forgets the depot, whose states CPython clears with every other thread's.
  * STACKWEAVE_TSTATE_POOL sizes each hub's pool (default 64, 0 = off); the
- * depot holds 16 pools' worth. */
+ * depot holds 4 pools' worth.  Every pooled state stays in the interpreter's
+ * thread list, so a stop-the-world or a walk of the states visits it too: the
+ * pools are kept small. */
 #define RUNLOOM_TSPOOL_DEFAULT    64
 #define RUNLOOM_TSPOOL_MAX        1024
-#define RUNLOOM_TSPOOL_DEPOT_MULT 16
+#define RUNLOOM_TSPOOL_DEPOT_MULT 4
+#define RUNLOOM_TSPOOL_ID_BLOCK   256
 static int runloom_tspool_cap_v = -1;
 static runloom_mutex_t runloom_tspool_depot_lock = RUNLOOM_MUTEX_STATIC_INIT;
 static PyThreadState **runloom_tspool_depot = NULL;
@@ -1214,7 +1217,9 @@ static int runloom_tspool_cap(void)
     return c;
 }
 
-/* The calling thread's hub, if the pool is on and this is a hub thread. */
+/* The calling thread's hub, if the pool is on and this is a hub thread.  The
+ * raw TLS read, not the nest-aware accessor, on purpose: the pool is a cache
+ * of the OS thread's, and a run(1) nested on its fiber is the same thread. */
 static runloom_hub_t *runloom_tspool_hub(void)
 {
     runloom_hub_t *h = runloom_tls_hub;
@@ -1253,6 +1258,7 @@ RUNLOOM_NOINLINE PyThreadState *runloom_mn_tspool_get(void)
     }
     ts = h->tspool[--h->tspool_n];
     h->tspool_hits++;
+    ts->_status.bound = 1;      /* unbound while pooled (recycle_fiber_tstate) */
     return ts;
 }
 
@@ -1262,8 +1268,17 @@ RUNLOOM_NOINLINE int runloom_mn_tspool_put(PyThreadState *ts)
     int cap;
     if (h == NULL) return 0;
     cap = runloom_tspool_cap();
+    /* A new id: the exec-home patch records a lock's owner as the state's id,
+     * so a lock the last fiber left held must not look like the next one's. */
+    if (h->tspool_id_next >= h->tspool_id_end) {
+        h->tspool_id_next = runloom_iframe_reserve_tstate_ids(ts->interp,
+                                                              RUNLOOM_TSPOOL_ID_BLOCK);
+        h->tspool_id_end = h->tspool_id_next + RUNLOOM_TSPOOL_ID_BLOCK;
+    }
+    ts->id = h->tspool_id_next++;
     if (h->tspool_n >= cap) {
-        /* Full: half of it to the depot, if the depot has room. */
+        /* Full: the older half to the depot, if the depot has room; the
+         * hub keeps the states it freed last. */
         int k = cap / 2 > 0 ? cap / 2 : 1, moved = 0;
         runloom_mutex_lock(&runloom_tspool_depot_lock);
         if (runloom_tspool_depot == NULL)
@@ -1272,7 +1287,9 @@ RUNLOOM_NOINLINE int runloom_mn_tspool_put(PyThreadState *ts)
         if (runloom_tspool_depot != NULL &&
             runloom_tspool_depot_n + k <= cap * RUNLOOM_TSPOOL_DEPOT_MULT) {
             memcpy(runloom_tspool_depot + runloom_tspool_depot_n,
-                   h->tspool + h->tspool_n - k, (size_t)k * sizeof(PyThreadState *));
+                   h->tspool, (size_t)k * sizeof(PyThreadState *));
+            memmove(h->tspool, h->tspool + k,
+                    (size_t)(h->tspool_n - k) * sizeof(PyThreadState *));
             __atomic_store_n(&runloom_tspool_depot_n, runloom_tspool_depot_n + k,
                              __ATOMIC_RELAXED);
             moved = k;

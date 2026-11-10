@@ -464,19 +464,25 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   `PyThreadState_Clear` clears for the objects a state holds -- thread-locals
   (`threading_local_key`/`_sentinel`, `dict`), the context (and bumps
   `context_ver`), the exception, the asyncio loop and task, the async-generator
-  hooks, 3.15's `lazy_imports` -- and keeps what a long-lived OS thread keeps:
-  the QSBR slot, TLBC index, mimalloc state, freelists, per-thread refcounts
-  and the id (reused like an OS thread's ident). A state it does not cover (a
-  frame, tracing, an asyncio task, an object queued to merge) is cleared as
-  before. A new field CPython's Clear resets must be reset there too. A pooled
-  state sits outside every biased-refcount bucket with `brc.tid` 0 (CPython's
-  "never bound"; adopt then inserts it under one bucket mutex, not two), so a
-  Clear puts it back first (`runloom_iframe_clear_fiber_tstate`), and so does
-  a fork child before CPython clears it (`runloom_iframe_fork_child_rebucket`,
-  for a debug build's assert). Each hub's pool is touched only by its thread;
-  a mutex depot evens out hubs; hubs drain their pools at exit, `mn_fini` the
-  depot. `STACKWEAVE_TSTATE_POOL` sizes a hub's pool (64, 0 = off). Guard:
-  `tests/test_tstate_pool.py` (`stats()["tstate_pool_hits"]`).
+  hooks, 3.15's `lazy_imports` -- hands its freelists to the hub's state, and
+  gives it a NEW id (`runloom_iframe_reserve_tstate_ids`, blocks taken under
+  `HEAD_LOCK`): the exec-home patch records a lock's owner as the state's id, so
+  a lock the last fiber left held must not let the next one in. It keeps what a
+  long-lived OS thread keeps: the QSBR slot, TLBC index, mimalloc state and
+  per-thread refcounts. A state the reset does not cover (a frame, tracing, an
+  asyncio task, an object queued to merge) is cleared as before. A new field
+  CPython's Clear resets must be reset there too. A pooled state is unbound
+  (`_status.bound` 0) and out of every biased-refcount bucket (`brc.tid` 0) --
+  CPython's own "never bound", so a fork child's or finalization's clear of it
+  skips the brc removal and the unbind; adopt inserts it into the running
+  hub's bucket under that one mutex, not two; `runloom_mn_tspool_get` binds it
+  again, and `runloom_iframe_clear_fiber_tstate` binds and buckets it before a
+  Clear. Each hub's pool is touched only by its thread; a mutex depot (4 pools'
+  worth) evens out hubs; hubs drain their pools at exit, `mn_fini` the depot.
+  Pooled states stay in the interpreter's thread list (a stop-the-world visits
+  them), so the pools stay small. `STACKWEAVE_TSTATE_POOL` sizes a hub's pool
+  (64, 0 = off). Guard: `tests/test_tstate_pool.py`
+  (`stats()["tstate_pool_hits"]`).
 - **A hub-thread wake lands on the waker's OWN deque (Go-style local
   wake), not the global run-queue.** `runloom_mn_woken_enqueue`
   is the single routing point: hub-thread waker + unpinned g + not replay +

@@ -153,5 +153,53 @@ print("PASS")
 """, timeout=90)
 
 
+def test_a_lock_a_finished_fiber_left_held_is_not_the_next_ones():
+    # The exec-home patch records a lock's owner as the owning state's id, so
+    # a reused state gets a new id: an RLock the last fiber on it left held
+    # must not let the next fiber in as if it were the owner.
+    _assert_pass(r"""
+import threading
+import stackweave, stackweave_c
+got = []
+def holder(rl):
+    rl.acquire()                      # and never release
+def other(rl):
+    got.append(rl.acquire(blocking=False))
+def driver():
+    for _ in range(20):
+        rl = threading.RLock()
+        stackweave_c.mn_fiber(lambda: holder(rl), hub=0)
+        stackweave.sleep(0.002)
+        stackweave_c.mn_fiber(lambda: other(rl), hub=0)
+        stackweave.sleep(0.002)
+def main():
+    stackweave_c.mn_fiber(driver, hub=0)
+    stackweave.sleep(0.5)
+stackweave.run(2, main)
+print("got", got, "hits", stackweave_c.stats()["tstate_pool_hits"])
+assert got and not any(got), got
+assert stackweave_c.stats()["tstate_pool_hits"] > 0
+print("PASS")
+""")
+
+
+def test_a_pool_of_one_overflows_and_still_clears_cleanly():
+    # A full pool and depot clear a reset state as before: the path that puts
+    # an unbound pooled state back in a bucket before its Clear.
+    _assert_pass(r"""
+import stackweave, stackweave_c
+N = 5000
+done = bytearray(N)
+def main():
+    for i in range(N):
+        stackweave.fiber(lambda i=i: done.__setitem__(i, 1))
+    while sum(done) < N:
+        stackweave.sleep(0.001)
+stackweave.run(4, main)
+assert stackweave_c.stats()["tstate_pool_hits"] > 0
+print("PASS")
+""", env={"STACKWEAVE_TSTATE_POOL": "1"})
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__] + sys.argv[1:]))

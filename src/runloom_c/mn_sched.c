@@ -287,11 +287,13 @@ typedef struct runloom_hub {
     /* Finished fibers' per-g thread states, reset and kept for the next spawn
      * on this hub's thread instead of PyThreadState_New
      * (runloom_mn_tspool_get/put).  Only this hub's own thread touches them;
-     * malloc'd at the first put, drained and freed at hub exit. */
+     * malloc'd at first use, drained and freed at hub exit. */
     PyThreadState      **tspool;
     int                  tspool_n;
     /* Spawns served from tspool or the depot (stats "tstate_pool_hits"). */
     unsigned long long   tspool_hits;
+    /* Thread-state ids reserved for reused states, [next, end). */
+    unsigned long long   tspool_id_next, tspool_id_end;
 } runloom_hub_t;
 
 /* B4/R6: enforce that every hub array element starts on its own cache line, so
