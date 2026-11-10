@@ -119,12 +119,24 @@ across hubs on one kernel lock.
 
 **per-hub epoll** — each hub polls its own epoll set plus a wake eventfd,
 instead of all hubs sharing one `runloom_epoll_fd`. Measured **+34–40 %**
-saturation throughput on a 64-core box versus the old shared set.
+saturation throughput on a 64-core box versus the old shared set. An fd stays
+in the epoll of the hub that first armed it, even when fibers on other hubs
+park on it (dispatch finds their parkers through the fd's pool mask); only an
+fd whose owner is not a live hub moves to the shared epoll.
+
+**netpoll backstop** — while anything is parked, sysmon polls the epoll (or
+kqueue) of a hub that is not blocked in its own poll and has gone
+`STACKWEAVE_NETPOLL_BACKSTOP_MS` (5) without starting one: a hub running one
+long fiber or stuck in a C call would otherwise hold every waiter whose fd it
+polls. Go's sysmon does the same for its one poller (10 ms).
 
 **arm / disarm** — adding or removing an fd's interest bits in the poller.
 Level-triggered, so a stale arm with no waiter makes `epoll_wait` return
 instantly forever — the 2026-08 busy-spin bug, fixed by adding
-`runloom_netpoll_disarm_in` to mirror the existing `disarm_out`.
+`runloom_netpoll_disarm_in` to mirror the existing `disarm_out`. An arm with
+no waiter is dropped once it has missed for `STACKWEAVE_NETPOLL_MISS_GRACE_US`
+(2000), not at the first miss: the first miss is usually a woken waiter that
+has not read yet, and dropping it cost a DEL and a fresh ADD per round trip.
 
 **self-pipe / wake eventfd** — an fd whose only job is to be written to, so a
 hub blocked in `epoll_wait` can be interrupted.

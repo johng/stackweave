@@ -343,8 +343,11 @@ def test_mn_mixed_wakers_drain_cleanly_under_contention():
 # LOST PARK -- a committed-PARKED g dropped from its by_fd bucket, never woken,
 # never timed out, then freed (docs/dev/repro/LOST_PARK_FINDING.md).  Repro'd
 # ~1-2% single-copy pre-fix; PERHUB_EPOLL=0 or one-fd-per-waiter was clean.  The
-# fix moves a multi-pool fd ONCE to the shared epoll (nested in every hub's
-# pump), so all hubs deliver its events with no migration churn.  Oracle: with
+# first fix moved a multi-pool fd ONCE to the shared epoll (nested in every
+# hub's pump); now a multi-pool fd stays in its owner hub's epoll (no DEL+ADD at
+# all) and the shared move is only for an owner that is not a live hub, with
+# sysmon polling a hub that stops polling.  Either way there is no migration
+# churn for the race to ride.  Oracle: with
 # the deterministic netpoll_parked barrier, ALL N must reach the park (the
 # barrier returns True); a lost park leaves it < N and the assert fires.
 # --------------------------------------------------------------------------

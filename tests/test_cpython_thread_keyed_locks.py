@@ -479,8 +479,19 @@ def main():
             loop = asyncio.get_running_loop()
             assert loop._stackweave_fiber is not None, "loop not keyed by fiber"
             seen = set()
-            for _ in range(300):
-                await asyncio.sleep(0.001)
+            for i in range(300):
+                g = None
+                if i == 150 and len(seen) < 2:
+                    # Not moved by itself yet (a woken fiber usually resumes
+                    # on the hub that polled its wake): pin the next resume
+                    # to another hub, as force_migrate does.
+                    g = stackweave_c.current_g()
+                    g.pin((stackweave_c.mn_current_hub() + 1) % stackweave_c.mn_hub_count())
+                try:
+                    await asyncio.sleep(0.001)
+                finally:
+                    if g is not None:
+                        g.pin(None)
                 seen.add(threading.get_ident())
                 loop.call_soon(lambda: None)
             # another fiber is another thread of control: still refused

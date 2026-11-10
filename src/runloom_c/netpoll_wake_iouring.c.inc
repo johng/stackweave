@@ -482,6 +482,7 @@ void runloom_netpoll_wake_pump(void *hub_opaque)
          * still-zero wake_efd.  If the target's eventfd isn't up, fall through to
          * the shared eventfd (nested in every pool epoll) -- correct, just a herd. */
         runloom_parker_pool_t *pool = runloom_parker_pool_for_hub(hub_opaque);
+        if (hub_opaque == NULL) RUNLOOM_NPC(RUNLOOM_NPC_WAKE_NULL, 1);
         if (__atomic_load_n(&pool->lock_inited, __ATOMIC_ACQUIRE) == 2 &&
             pool->wake_efd >= 0) {
             /* Dedup: only the 0->1 transition writes; the pump clears
@@ -498,6 +499,9 @@ void runloom_netpoll_wake_pump(void *hub_opaque)
                 uint64_t one = 1;
                 ssize_t w = write(pool->wake_efd, &one, sizeof one);
                 (void)w;
+                RUNLOOM_NPC(RUNLOOM_NPC_WAKE_WRITE, 1);
+            } else {
+                RUNLOOM_NPC(RUNLOOM_NPC_WAKE_DEDUP, 1);
             }
             return;
         }
@@ -508,6 +512,7 @@ void runloom_netpoll_wake_pump(void *hub_opaque)
             uint64_t one = 1;
             ssize_t w = write(fd, &one, sizeof one);
             (void)w;
+            RUNLOOM_NPC(RUNLOOM_NPC_WAKE_SHARED, 1);
         }
     }
 #elif defined(RUNLOOM_HAVE_KQUEUE)

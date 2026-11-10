@@ -323,6 +323,21 @@ static int runloom_netpoll_validate_arm(int fd)
  * migration ADD-fail recovery below error-wakes through it. */
 static int runloom_pump_dispatch_event(int fd, int mask, int wake_all);
 
+#if defined(RUNLOOM_HAVE_EPOLL)
+/* After a register that left fd in another live hub's epoll (the keep path
+ * below): an owner asleep on its idle condvar -- it saw nothing parked when it
+ * went there -- is not polling that epoll, so signal it out, or this waiter
+ * waits out the condvar's timed wait or the backstop.  Outside every lock (the
+ * kick takes the hub's idle_lock, which ranks below the pool locks). */
+static void runloom_np_kick_owner_if_idle(int fd, runloom_parker_pool_t *mine)
+{
+    int ow = runloom_fd_epoll_pool_get(fd);
+    if (ow < 0 || ow >= RUNLOOM_PARKER_POOL_HUBS || &runloom_pools[ow] == mine) return;
+    if (__atomic_load_n(&runloom_pools[ow].in_wait, __ATOMIC_RELAXED)) return;
+    runloom_mn_hub_kick_if_idle(ow);
+}
+#endif
+
 static int runloom_netpoll_register(int fd, int events)
 {
 #if defined(RUNLOOM_HAVE_EPOLL)
@@ -375,7 +390,17 @@ static int runloom_netpoll_register(int fd, int events)
      * (plus the documented cross-pool stale-arm migration and the stale-arm
      * self-heal below) ARE the proof; a NOTE-edge here would be ceremony. */
     need = events & (RUNLOOM_NETPOLL_READ | RUNLOOM_NETPOLL_WRITE);
+    /* A READ register re-opens the READ miss grace (the only kind there is);
+     * a WRITE one must not keep a stale IN arm alive while a writer streams. */
+    if (need & RUNLOOM_NETPOLL_READ) runloom_np_miss_clear(fd);
 
+    if (runloom_npc_enabled()) {
+        /* DIAG: count a register that found the global lock held. */
+        if (runloom_mutex_trylock(&runloom_pool.lock) == 0)
+            runloom_mutex_unlock(&runloom_pool.lock);
+        else
+            runloom_npc_add(RUNLOOM_NPC_REG_LOCK_WAIT, 1);
+    }
     RUNLOOM_RLOCK(&runloom_pool.lock, RUNLOOM_RANK_PARKER_POOL);
     cur = runloom_fd_armed_get(fd);
     target = cur | need;
@@ -399,7 +424,36 @@ static int runloom_netpoll_register(int fd, int events)
          * unarmed (cur=0) so the ADD + owner record below target my_pool_idx.
          * owner<0 (shared fallback) is already correct for THIS hub since the
          * fallback epoll is shared, so only a >=0 owner mismatch migrates. */
-        if (owner >= 0 && owner != my_pool_idx) {
+        if (owner >= 0 && owner != my_pool_idx &&
+            my_pool_idx >= 0 && my_pool_idx < RUNLOOM_PARKER_POOL_HUBS &&
+            owner < RUNLOOM_PARKER_POOL_HUBS && owner < runloom_mn_hub_count() &&
+            runloom_pools[owner].epoll_fd >= 0) {
+
+            /* KEEP IT IN ITS OWNER.  The fd lives in a live hub's epoll and a
+             * fiber parked on it from another hub: leave it there (ep is the
+             * owner's epoll, set above).  The owner's pump reports it, and
+             * dispatch finds this parker through the fd's pool mask whatever
+             * pool it linked into.  Under migration nearly every fd is parked
+             * on from more than one hub; moving each one to the shared epoll
+             * below (nested in every hub's epoll) made every hub poll every
+             * fd: each readiness reached several hubs, all but one found no
+             * parker and disarmed it, and the fd was re-ADDed and moved again
+             * -- epoll_ctl under runloom_pool.lock on most round trips, and
+             * the c-echo bench fell from 148k round trips/s at 4 hubs to 113k
+             * at 16 (Linux c-32; kept here: CLAUDE.md, "An fd is polled by one
+             * hub").  A hub
+             * that stops polling (one long fiber, a C call) does not strand
+             * these fds: sysmon polls its epoll for it
+             * (runloom_netpoll_backstop_poll).  Only for a caller on a hub's
+             * own pool: a run(1) drain nested on a hub fiber parks in the
+             * DEFAULT pool and pumps only its epoll, so its fd moves to the
+             * shared epoll nested there (below), as before.
+             *
+             * An fd number reused after a raw close (no unregister) keeps its
+             * stale arm here, as it already did for a same-hub re-park: the
+             * stale-arm probe (validate_arm, STACKWEAVE_STALE_ARM_PROBE_MS)
+             * heals it. */
+        } else if (owner >= 0 && owner != my_pool_idx) {
             /* MULTI-POOL fd: the SAME fd is now wanted by a second hub's pool.
              * The old behaviour ping-ponged it between per-hub epolls (DEL from
              * the owner, fresh ADD into mine) on every cross-hub re-park.  Under
@@ -429,6 +483,7 @@ static int runloom_netpoll_register(int fd, int events)
              * direction's waiter never received its event (a deterministic lost
              * wakeup / hang).  Compute the full mask BEFORE zeroing cur. */
             target = cur | need;
+            RUNLOOM_NPC(RUNLOOM_NPC_SHARED_MOVE, 1);
             cur = 0;                 /* fresh ADD into the shared epoll */
             ep = runloom_epoll_fd;
             my_pool_idx = -1;        /* record as shared -> no future migration */
@@ -456,6 +511,7 @@ static int runloom_netpoll_register(int fd, int events)
          * finding, 2026-07-05).  Returning -1 (errno = the epoll_ctl
          * verdict: EBADF/EPERM) makes wait_fd unlink and raise instead --
          * strictly better than parking on an fd the kernel cannot report. */
+        RUNLOOM_NPC(RUNLOOM_NPC_REG_SKIP, 1);
         if (runloom_netpoll_dbg_stale_check() &&
             runloom_netpoll_validate_arm(fd) < 0)
             return -1;
@@ -487,6 +543,7 @@ static int runloom_netpoll_register(int fd, int events)
      * direction's waiter never woke.  epoll_ctl is a brief non-blocking syscall
      * that does NOT release the GIL, so holding the lock across it adds no
      * blocking path and no lock-order inversion. */
+    RUNLOOM_NPC(RUNLOOM_NPC_REG_CTL, 1);
     if (cur == 0) {
         if (epoll_ctl(ep, EPOLL_CTL_ADD, fd, &ev) == 0) {
             RUNLOOM_RUNLOCK(&runloom_pool.lock, RUNLOOM_RANK_PARKER_POOL);
