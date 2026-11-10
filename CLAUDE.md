@@ -475,10 +475,10 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   (`_status.bound` 0) and out of every biased-refcount bucket (`brc.tid` 0) --
   CPython's own "never bound", so a fork child's or finalization's clear of it
   skips the brc removal and the unbind -- from its reset until its next
-  fiber's first resume, where hub_main binds it just before the attach and
-  adopt inserts it into the running hub's bucket under that one mutex, not
-  two; `runloom_iframe_clear_fiber_tstate` binds and buckets it before a
-  Clear. The reset also flushes its GC allocation count; its pending delayed
+  fiber's first resume, where hub_main puts it in the hub's own bucket and
+  binds it in one bucket-mutex hold just before the attach
+  (`runloom_iframe_bind_reused`; never a move out of another hub's bucket);
+  `runloom_iframe_clear_fiber_tstate` binds and buckets it before a Clear. The reset also flushes its GC allocation count; its pending delayed
   frees stay with it until the next fiber on it runs. Each hub's pool is touched only by its thread; a mutex depot (4 pools'
   worth) evens out hubs; hubs drain their pools at exit, `mn_fini` the depot.
   Pooled states stay in the interpreter's thread list (a stop-the-world visits

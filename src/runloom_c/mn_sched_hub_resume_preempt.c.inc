@@ -1263,29 +1263,33 @@ RUNLOOM_NOINLINE PyThreadState *runloom_mn_tspool_get(void)
     runloom_hub_t *h = runloom_tspool_hub();
     PyThreadState *ts;
     if (h == NULL) return NULL;
-    if (h->tspool_n == 0) {
-        int cap = runloom_tspool_cap();
-        if (__atomic_load_n(&runloom_tspool_depot_n, __ATOMIC_RELAXED) == 0) return NULL;
-        runloom_mutex_lock(&runloom_tspool_depot_lock);
-        {
-            int k = runloom_tspool_spill(cap);
-            if (k > runloom_tspool_depot_n) k = runloom_tspool_depot_n;
-            memcpy(h->tspool, runloom_tspool_depot + runloom_tspool_depot_n - k,
-                   (size_t)k * sizeof(PyThreadState *));
-            __atomic_store_n(&runloom_tspool_depot_n, runloom_tspool_depot_n - k,
-                             __ATOMIC_RELAXED);
-            h->tspool_n = k;
+    for (;;) {
+        if (h->tspool_n == 0) {
+            int cap = runloom_tspool_cap();
+            if (__atomic_load_n(&runloom_tspool_depot_n, __ATOMIC_RELAXED) == 0)
+                return NULL;
+            runloom_mutex_lock(&runloom_tspool_depot_lock);
+            {
+                int k = runloom_tspool_spill(cap);
+                if (k > runloom_tspool_depot_n) k = runloom_tspool_depot_n;
+                memcpy(h->tspool, runloom_tspool_depot + runloom_tspool_depot_n - k,
+                       (size_t)k * sizeof(PyThreadState *));
+                __atomic_store_n(&runloom_tspool_depot_n, runloom_tspool_depot_n - k,
+                                 __ATOMIC_RELAXED);
+                h->tspool_n = k;
+            }
+            runloom_mutex_unlock(&runloom_tspool_depot_lock);
+            if (h->tspool_n == 0) return NULL;
         }
-        runloom_mutex_unlock(&runloom_tspool_depot_lock);
-        if (h->tspool_n == 0) return NULL;
-    }
-    ts = h->tspool[--h->tspool_n];
-    if (ts->c_tracefunc != NULL || ts->c_profilefunc != NULL) {
+        ts = h->tspool[--h->tspool_n];
+        if (ts->c_tracefunc == NULL && ts->c_profilefunc == NULL) break;
         /* threading.settrace_all_threads / setprofile_all_threads reached it
          * in the pool; a fresh state would carry no tracer, so neither may
-         * this.  Clear it instead (and try the next). */
+         * this.  Clear it, and let this spawn take a fresh state -- at most
+         * one Clear per spawn, so a tracer left installed costs each spawn one
+         * state, not the whole pool on one spawner's stack. */
         runloom_tspool_free_one(ts);
-        return runloom_mn_tspool_get();
+        return NULL;
     }
     h->tspool_hits++;
     return ts;                  /* still unbound: hub_main binds it at attach */
@@ -1297,14 +1301,6 @@ RUNLOOM_NOINLINE int runloom_mn_tspool_put(PyThreadState *ts)
     int cap;
     if (h == NULL) return 0;
     cap = runloom_tspool_cap();
-    /* A new id: the exec-home patch records a lock's owner as the state's id,
-     * so a lock the last fiber left held must not look like the next one's. */
-    if (h->tspool_id_next >= h->tspool_id_end) {
-        h->tspool_id_next = runloom_iframe_reserve_tstate_ids(ts->interp,
-                                                              RUNLOOM_TSPOOL_ID_BLOCK);
-        h->tspool_id_end = h->tspool_id_next + RUNLOOM_TSPOOL_ID_BLOCK;
-    }
-    ts->id = h->tspool_id_next++;
     if (h->tspool_n >= cap) {
         /* Full: the older half to the depot, if the depot has room; the
          * hub keeps the states it freed last. */
@@ -1327,6 +1323,15 @@ RUNLOOM_NOINLINE int runloom_mn_tspool_put(PyThreadState *ts)
         if (!moved) return 0;
         h->tspool_n -= k;
     }
+    /* A new id: the exec-home patch records a lock's owner as the state's id,
+     * so a lock the last fiber left held must not look like the next one's.
+     * Only once it is kept. */
+    if (h->tspool_id_next >= h->tspool_id_end) {
+        h->tspool_id_next = runloom_iframe_reserve_tstate_ids(ts->interp,
+                                                              RUNLOOM_TSPOOL_ID_BLOCK);
+        h->tspool_id_end = h->tspool_id_next + RUNLOOM_TSPOOL_ID_BLOCK;
+    }
+    ts->id = h->tspool_id_next++;
     h->tspool[h->tspool_n++] = ts;
     return 1;
 }

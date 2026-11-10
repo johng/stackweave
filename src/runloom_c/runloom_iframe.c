@@ -339,7 +339,11 @@ void runloom_iframe_bind_reused(PyThreadState *fiber, PyThreadState *hub)
     _PyThreadStateImpl *f = (_PyThreadStateImpl *)fiber;
     uintptr_t tid = ((_PyThreadStateImpl *)hub)->brc.tid;
     struct _brc_bucket *b;
-    if (f->brc.tid != 0 || tid == 0) return;
+    if (f->brc.tid != 0) return;
+    if (tid == 0) {                 /* a hub state is always bound; just in case */
+        fiber->_status.bound = 1;   /* adopt's tid-0 branch buckets it */
+        return;
+    }
     b = runloom_brc_bucket(fiber->interp, tid);
     PyMutex_Lock(&b->mutex);
     f->brc.tid = tid;
