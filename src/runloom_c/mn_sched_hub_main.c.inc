@@ -1586,6 +1586,11 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
              * the migration-adopt reorder item 3 / the handoff path could
              * introduce.  No-op unless RUNLOOM_DELAY names this site. */
             runloom_delay_inject(RUNLOOM_DLY_HANDOFF_ADOPT);
+            /* A reused state is unbound (and in no brc bucket) from its reset
+             * until here, so a clear of it meanwhile (a fork child, a drop
+             * before it ran) sees CPython's own "never bound".  Bucket it and
+             * bind it in one hold, before the attach needs it bound. */
+            if (!g->tstate->_status.bound) runloom_iframe_bind_reused(g->tstate, hub_ts);
             PyEval_RestoreThread(g->tstate);      /* attach g's own tstate */
             /* Drops of this hub's objects now land on the FIBER's tstate,
              * whose eval loop merges them as it runs (runloom_iframe_brc_adopt). */
@@ -1795,6 +1800,9 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
         h->iouring_ring    = NULL;
         h->iouring_eventfd = -1;
     }
+    /* Free the thread states this hub's pool kept, while its own state is
+     * current (their freelists go to it, as at a fiber's end). */
+    runloom_mn_tspool_hub_drain(h);
     /* Reverse runloom_coro_thread_init (flush this thread's coro/stack pools,
      * disarm the sigaltstack). */
     runloom_coro_thread_fini();
