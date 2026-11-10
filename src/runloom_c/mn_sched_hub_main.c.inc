@@ -1444,6 +1444,14 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                         if (!have_sub &&
                             __atomic_load_n(&h->sched.sleep_purge, __ATOMIC_ACQUIRE))
                             have_sub = 1;
+                        /* And netpoll's owner kick (runloom_mn_hub_kick_if_idle):
+                         * a fiber on another hub that parked on an fd this hub's
+                         * epoll holds links its parker, fences, then signals only
+                         * an announced hub -- so one that parked before our
+                         * announce shows up in the count here, and we go poll
+                         * instead of sleeping on the condvar. */
+                        if (!have_sub && runloom_netpoll_parked_count() > 0)
+                            have_sub = 1;
                         /* The two signallers that do NOT read idle_waiting set
                          * a flag first and then signal under idle_lock, so
                          * re-checking their flag here, under that lock, means

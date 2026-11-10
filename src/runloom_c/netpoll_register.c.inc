@@ -390,7 +390,9 @@ static int runloom_netpoll_register(int fd, int events)
      * (plus the documented cross-pool stale-arm migration and the stale-arm
      * self-heal below) ARE the proof; a NOTE-edge here would be ceremony. */
     need = events & (RUNLOOM_NETPOLL_READ | RUNLOOM_NETPOLL_WRITE);
-    runloom_np_miss_clear(fd);
+    /* A READ register re-opens the READ miss grace (the only kind there is);
+     * a WRITE one must not keep a stale IN arm alive while a writer streams. */
+    if (need & RUNLOOM_NETPOLL_READ) runloom_np_miss_clear(fd);
 
     if (runloom_npc_enabled()) {
         /* DIAG: count a register that found the global lock held. */

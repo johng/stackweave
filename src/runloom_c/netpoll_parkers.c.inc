@@ -331,6 +331,7 @@ static RUNLOOM_NOINLINE void runloom_npc_add(int k, unsigned long long n)
     do { if (runloom_npc_enabled()) runloom_npc_add((k), (unsigned long long)(n)); } while (0)
 
 /* Numeric knobs, each read once from the environment. */
+#if defined(RUNLOOM_HAVE_EPOLL) || defined(RUNLOOM_HAVE_KQUEUE)
 static int runloom_np_knob(const char *name, int dflt, int *cache)
 {
     int v = __atomic_load_n(cache, __ATOMIC_RELAXED);
@@ -360,6 +361,7 @@ static int runloom_np_backstop_ms(void)
 {
     return runloom_np_knob("STACKWEAVE_NETPOLL_BACKSTOP_MS", 5, &runloom_np_backstop_v);
 }
+#endif
 
 /* Pool mutexes are glibc's ADAPTIVE kind where it exists: a pool lock is taken
  * by its own hub (link/unlink) and by any hub dispatching an event to a parker

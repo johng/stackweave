@@ -124,8 +124,8 @@ in the epoll of the hub that first armed it, even when fibers on other hubs
 park on it (dispatch finds their parkers through the fd's pool mask); only an
 fd whose owner is not a live hub moves to the shared epoll.
 
-**netpoll backstop** — sysmon polls the epoll (or kqueue) of a hub that has
-parkers, is not blocked in its own poll, and has gone
+**netpoll backstop** — while anything is parked, sysmon polls the epoll (or
+kqueue) of a hub that is not blocked in its own poll and has gone
 `STACKWEAVE_NETPOLL_BACKSTOP_MS` (5) without starting one: a hub running one
 long fiber or stuck in a C call would otherwise hold every waiter whose fd it
 polls. Go's sysmon does the same for its one poller (10 ms).

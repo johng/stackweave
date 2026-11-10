@@ -608,9 +608,13 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   only an fd whose owner is not a live hub moves to the shared epoll. On kqueue
   it sits in the kqueue of the hub its waiter parked on. So a hub that stops
   polling -- one long fiber, a blocking C call -- holds those waiters, and the
-  netpoll backstop on the sysmon tick (`runloom_netpoll_backstop_poll`) polls
-  the poller of any hub that has parkers, is not blocked in its own poll, and
-  has not started one for `STACKWEAVE_NETPOLL_BACKSTOP_MS` (5). A new place a
+  netpoll backstop on the sysmon tick (`runloom_netpoll_backstop_poll`) polls,
+  while anything is parked anywhere (an owner's own pool may be empty while a
+  waiter on another hub depends on its epoll), the poller of any hub that is
+  not blocked in its own poll and has not started one for
+  `STACKWEAVE_NETPOLL_BACKSTOP_MS` (5; 0 = off). A waiter that parks from
+  another hub on an fd whose owner sleeps on its idle condvar kicks the owner
+  (`runloom_mn_hub_kick_if_idle`). A new place a
   hub blocks while still listening to its poller (the io_uring loop's ring
   wait) must say so (`runloom_netpoll_hub_waiting`), or the backstop polls it
   every tick. Moving every multi-hub fd to the shared epoll instead (the old

@@ -144,9 +144,10 @@ void runloom_mn_hub_kick_if_idle(int hub_idx)
     runloom_hub_t *h;
     if (runloom_hubs == NULL || hub_idx < 0 || hub_idx >= runloom_hub_count) return;
     h = &runloom_hubs[hub_idx];
-    /* The hub reads the parked count once, before it sets idle_waiting, so a
-     * signal racing its entry to the wait is lost -- the wait is timed
-     * (idle_ns), which bounds that case; this covers the hub already asleep. */
+    /* Dekker with the hub's idle path, which announces idle_waiting, fences,
+     * then re-checks the parked count (hub_main): our caller linked its parker
+     * before this fence, so either the hub sees it and polls, or we see the
+     * announce and signal. */
     __atomic_thread_fence(__ATOMIC_SEQ_CST);
     if (__atomic_load_n(&h->idle_waiting, __ATOMIC_ACQUIRE)) {
         RUNLOOM_RLOCK(&h->idle_lock, RUNLOOM_RANK_HUB_IDLE);
