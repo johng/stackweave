@@ -340,7 +340,7 @@ def runtime_line(runs, keys, key_name):
             continue
         e = docs[0]["env"]
         if "go" in e:
-            what = "%s (GOMAXPROCS = the hub count)" % e["go"]
+            what = "%s (GOMAXPROCS = the hub count, unpinned)" % e["go"]
         else:
             what = "python %s (%s)" % (e["python"], "gil off" if e["gil_enabled"] is False
                                         else "GIL build")
@@ -349,6 +349,11 @@ def runtime_line(runs, keys, key_name):
                            if kk == k and su != "memory" for d in ds
                            if d["env"].get("pinned_cpus")})
             what += ", pinned to %s CPUs" % "/".join(map(str, pins)) if pins else ", unpinned"
+            # threads re-pins for each py-echo @Nh row (bench.baselines); the
+            # env records only the suite's own pin
+            if pins and key_name[k] == "threads" and any(
+                    su == "echo" for (su, kk) in runs if kk == k):
+                what += " (N CPUs in its py-echo @Nh rows)"
         by.setdefault(what, []).append(key_name[k])
     return "; ".join("%s on %s" % ("/".join(v), w) for w, v in by.items())
 

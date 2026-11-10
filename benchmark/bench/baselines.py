@@ -67,7 +67,9 @@ MSG = 64
 HUBS = int(os.environ.get("STACKWEAVE_BENCH_HUBS", "4"))
 # An event loop has no hub count: its echo number goes in the default-hubs row.
 ECHO_ROW = "py-echo @%dh" % HUBS
-# bench.echo's hub counts: threads run the echo once per count, on that many CPUs.
+# bench.echo's hub counts (its --hubs default; gobench -echo-procs): threads run the
+# echo once per count, on that many CPUs.  This file must not import bench.echo,
+# which imports stackweave.
 ECHO_HUBS = (2, 4, 8, 16)
 KINDS = ("threads", "asyncio", "uvloop", "trio", "gevent")
 SPAWN_ROWS = ("spawn noop mn_fiber", "spawn noop stackweave.fiber")
@@ -1243,15 +1245,19 @@ def main(argv=None):
             rt.echo(s, 64, rounds, samples, warmup)
         else:
             # A thread per connection runs on as many cores as it is given: one
-            # row per bench.echo hub count, each on that many CPUs.
-            for h in ECHO_HUBS:
-                cpus = echo_cpus[h]
-                if len(cpus) < h:
-                    print("skip py-echo @%dh: %d CPUs here" % (h, len(cpus)))
-                    continue
-                pin(cpus)
-                rt.echo(s, 64, rounds, samples, warmup, row="py-echo @%dh" % h)
-            pin(s.pinned)
+            # row per bench.echo hub count, each on that many CPUs.  The suite's
+            # own pin comes back even if a row fails, so later suites in this
+            # process run on (and record) the CPUs they were meant to.
+            try:
+                for h in ECHO_HUBS:
+                    cpus = echo_cpus[h]
+                    if len(cpus) < h:
+                        print("skip py-echo @%dh: %d CPUs here" % (h, len(cpus)))
+                        continue
+                    pin(cpus)
+                    rt.echo(s, 64, rounds, samples, warmup, row="py-echo @%dh" % h)
+            finally:
+                pin(s.pinned)
     if args.suite in ("apps", "memory"):
         from bench import appspec, baselines_apps
         apps = baselines_apps.make(args.kind, rt)

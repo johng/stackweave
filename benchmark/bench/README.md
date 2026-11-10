@@ -63,10 +63,14 @@ interpreter, no `go`) are skipped with a note.
   stdlib, the pinned / busy / drifted / `@Nh` rows are stackweave
   scheduling variants (Go runs the `@Nh` rows with GOMAXPROCS=N), and Go has
   no foreign OS thread without cgo.
-- Same cores for every runtime: stackweave runs its hubs (4 unless a row
-  says `@Nh`), Go runs `GOMAXPROCS` = the hub count, and the threads and
-  event-loop columns are pinned to as many CPUs as there are hubs (not in the
-  memory suite, where RSS does not depend on it). Unpinned, a thread per
+- Same parallelism for every runtime, not identical CPU masks: stackweave
+  runs its fibers on its hubs (4 unless a row says `@Nh`) in a process pinned
+  to more CPUs than that (apps 2x the hubs, echo 2x the largest hub count,
+  mnsched the largest scaling count), so sysmon and the `blocking()` pool do
+  not take a hub's core; Go runs `GOMAXPROCS` = the hub count, unpinned
+  (GOMAXPROCS bounds the threads running Go code, not those in syscalls or
+  GC work); the threads and event-loop columns are pinned to as many CPUs as
+  there are hubs (not in the memory suite, where RSS does not depend on it). Unpinned, a thread per
   connection spread over every core of the box -- 32 on a c-32, 8x the
   others' -- which compared core counts, not runtimes. Runs up to and
   including `20261109-070826-linux-c32` have unpinned threads and event-loop

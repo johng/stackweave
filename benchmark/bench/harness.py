@@ -111,8 +111,10 @@ def default_pin_set(n=8, node=1):
 
 
 def pin(cpus):
-    """Pin this process (and children that inherit affinity) to ``cpus``.
-    Returns the set actually applied, or None if unsupported."""
+    """Pin the calling thread to ``cpus`` -- and the threads and child
+    processes it starts afterwards, which inherit its affinity; threads that
+    are already running keep theirs (Linux affinity is per thread).  Returns
+    the set actually applied, or None if unsupported."""
     if not hasattr(os, "sched_setaffinity"):
         return None
     try:

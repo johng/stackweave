@@ -37,8 +37,8 @@ One set of workloads, run on stackweave and on threads, asyncio, uvloop, trio,
 gevent and Go (`benchmark/bench`, `python -m bench.compare`). DigitalOcean c-32
 (32-core Xeon 8358, kernel 7.0), every CPython 3.14.4 built the same way
 (clang-19, PGO, no LTO), median of 3 interleaved passes. Every runtime gets the
-same cores: 4 hubs, `GOMAXPROCS=4`, and the Python runtimes pinned to 4 CPUs,
-unless a row says otherwise.[^cores] Higher is better unless marked.
+same parallelism: 4 hubs, `GOMAXPROCS=4`, and the Python runtimes pinned to 4
+CPUs, unless a row says otherwise.[^cores] Higher is better unless marked.
 
 | workload | stackweave | best Python runtime | Go |
 | --- | ---: | ---: | ---: |
@@ -57,28 +57,32 @@ unless a row says otherwise.[^cores] Higher is better unless marked.
 | foreign thread → fiber wake, p50 / p99 (lower is better) | 13 / **20 µs** | 13 / 50 µs (threads) | — |
 | 1 ms timer lateness, p50, io_uring loop (lower is better) | **8.5 µs** | 65 µs (threads) | 382 µs |
 
-[^cores]: Equal cores, not the whole box: stackweave runs 4 hub threads, Go runs
-    with `GOMAXPROCS=4`, and the threads and event-loop processes are pinned
-    (`sched_setaffinity`) to 4 CPUs -- 16 hubs, `GOMAXPROCS=16` and 16 CPUs in
-    the 16-hub echo cells. The memory rows are not pinned (RSS does not depend
-    on it). asyncio, uvloop, trio and gevent run their loop on one thread
-    either way; the pin mainly holds back threads, which would otherwise
-    spread a thread per connection over all 32 cores. Unpinned in an
+[^cores]: Equal parallelism, not the whole box, and not identical CPU masks.
+    stackweave runs every fiber on its 4 hub threads (16 in the 16-hub echo
+    cells); the harness pins its process to more CPUs than that (8 for the app
+    rows, 16 or 32 for the others) so its helper threads -- sysmon, the
+    `blocking()` pool -- do not take a hub's core. Go runs with `GOMAXPROCS=4`
+    (16), which bounds the threads running Go code but not those in syscalls
+    or GC background work, and is not pinned. The threads and event-loop
+    processes are pinned (`sched_setaffinity`) to 4 CPUs, 16 in the 16-hub echo
+    cells. The memory rows are not pinned (RSS does not depend on it).
+    asyncio, uvloop, trio and gevent run their loop on one thread either way;
+    the pin mainly holds back threads, which would otherwise spread a thread
+    per connection over all 32 cores. Unpinned in an
     [earlier run](benchmark/bench/results/compare/20261109-070826-linux-c32/summary.md)
     (Xeon 8280), threads served the HTTP row at 239 k req/s. This table
-    compares runtimes on equal cores, not how far each one scales on a
-    bigger box.
+    compares runtimes at the same parallelism, not how far each one scales on
+    a bigger box.
 
 The short story: stackweave runs message-passing workloads 2.5–11× faster than
 the fastest Python event loop, runs a CPU-bound pipeline 2.8× faster than any
-of them (3.7× faster than threads on the same cores), out-yields Go 3×, and has
+of them (3.7× faster than threads on 4 CPUs), out-yields Go 3×, and has
 the tightest wakes and timers here. On the HTTP API it is 25% ahead of Go and
 11% ahead of a thread per connection (49% on the io_uring loop), and Python
-echo on the io_uring loop is within 7% of Go from 4 to 16 hubs, and ahead of
-it at 16. Go is still
-1.5–3.6× ahead on channel hand-offs, and far ahead on spawn and on
-timer-heavy fan-out: 2.2× on the gateway row, and the event loops beat
-stackweave on the crawler. The honest gaps are memory (a parked fiber carries
+echo on the io_uring loop is within 8% of Go at 4 and 8 hubs and 4% ahead of
+it at 16. Go is still 1.5–3.6× ahead on channel hand-offs, and far ahead on
+spawn and on timer-heavy fan-out: 2.2× on the gateway row, and the event loops
+beat stackweave on the crawler. The honest gaps are memory (a parked fiber carries
 a C stack and a thread state, ~10× a goroutine), spawn / sleep cost at 10k+
 fibers, and lock contention: 64 fibers on one `Mutex` run 3.3× slower than 64
 threads on a `threading.Lock`. Every row and caveat:
