@@ -1230,9 +1230,17 @@ static runloom_hub_t *runloom_tspool_hub(void)
     return h->tspool != NULL ? h : NULL;
 }
 
+/* Whether a finished fiber's state on this thread would be kept: a hub
+ * thread, the pool on, and room in its pool or the depot -- checked before the
+ * reset, so a full pool costs nothing more than the Clear it falls back to. */
 RUNLOOM_NOINLINE int runloom_mn_tspool_on(void)
 {
-    return runloom_tls_hub != NULL && runloom_tspool_cap() > 0;
+    runloom_hub_t *h = runloom_tls_hub;
+    int cap = runloom_tspool_cap();
+    if (h == NULL || cap == 0) return 0;
+    return h->tspool_n < cap ||
+           __atomic_load_n(&runloom_tspool_depot_n, __ATOMIC_RELAXED) + cap / 2 <=
+               cap * RUNLOOM_TSPOOL_DEPOT_MULT;
 }
 
 RUNLOOM_NOINLINE PyThreadState *runloom_mn_tspool_get(void)
@@ -1258,8 +1266,7 @@ RUNLOOM_NOINLINE PyThreadState *runloom_mn_tspool_get(void)
     }
     ts = h->tspool[--h->tspool_n];
     h->tspool_hits++;
-    ts->_status.bound = 1;      /* unbound while pooled (recycle_fiber_tstate) */
-    return ts;
+    return ts;                  /* still unbound: hub_main binds it at attach */
 }
 
 RUNLOOM_NOINLINE int runloom_mn_tspool_put(PyThreadState *ts)

@@ -180,13 +180,14 @@ static inline struct _brc_bucket *runloom_brc_bucket(PyInterpreterState *interp,
 void runloom_iframe_clear_fiber_tstate(PyThreadState *ts)
 {
 #if defined(RUNLOOM_DESTRUCT_HAVE)
-    /* A pooled state is marked unbound and out of every biased-refcount
-     * bucket (runloom_iframe_recycle_fiber_tstate).  Bind it again and put it
-     * in a bucket, so the Clear abandons its mimalloc heaps (skipped for an
+    /* A reused state is unbound and out of every biased-refcount bucket from
+     * its reset (runloom_iframe_recycle_fiber_tstate) until its next fiber's
+     * first resume binds it and adopt buckets it.  Bind it and put it in a
+     * bucket, so the Clear abandons its mimalloc heaps (skipped for an
      * unbound state) and its brc removal finds it where a bound state is. */
     {
         _PyThreadStateImpl *ti = (_PyThreadStateImpl *)ts;
-        if (ti->brc.tid == 0 && !ts->_status.bound && ts->_status.initialized) {
+        if (ti->brc.tid == 0 && ts->_status.initialized) {
             /* An odd value is no thread's id (_Py_ThreadId() is an aligned
              * thread pointer), so nothing is ever queued to it. */
             uintptr_t tid = (uintptr_t)ts | 1;
@@ -268,6 +269,10 @@ int runloom_iframe_recycle_fiber_tstate(PyThreadState *ts)
     /* Its freelists go to the hub's state, as a Clear here hands them over:
      * a pooled state must not pin the blocks they hold. */
     runloom_iframe_hand_over_freelists(ts);
+    /* Its allocations count toward the young collection now, as the Clear
+     * flushes them, not whenever its state next runs. */
+    _Py_atomic_add_int(&ts->interp->gc.young.count, (int)ti->gc.alloc_count);
+    ti->gc.alloc_count = 0;
     /* No hub's allocator until the next resume borrows one. */
     runloom_iframe_borrow_alloc_home(ts, ts);
     /* Out of its biased-refcount bucket while pooled, with brc.tid 0 --
@@ -289,15 +294,16 @@ int runloom_iframe_recycle_fiber_tstate(PyThreadState *ts)
         PyMutex_Unlock(&b->mutex);
         if (!empty) return 0;
     }
-    /* Unbound while pooled, with brc.tid 0: CPython's own "never bound", so a
-     * clear of every other state (a fork child, finalization) skips its brc
-     * removal and its unbind, as it must for a state in no bucket (a debug
-     * build asserts tid 0 means unbound).  runloom_mn_tspool_get binds it
-     * again; runloom_iframe_clear_fiber_tstate too. */
+    /* Unbound from here until its next fiber's first resume, with brc.tid 0:
+     * CPython's own "never bound", so a clear of every other state (a fork
+     * child, finalization) skips its brc removal and its unbind, as it must
+     * for a state in no bucket (a debug build asserts tid 0 means unbound).
+     * hub_main binds it just before that resume attaches it, and adopt
+     * buckets it; runloom_iframe_clear_fiber_tstate binds and buckets it
+     * before a Clear.  The pending delayed frees stay with it (not the
+     * interpreter's queue, as a Clear would put them): they are freed when
+     * the next fiber on it runs; a pool is small. */
     ts->_status.bound = 0;
-    /* A finalizer run by a clear above ran under another state, but anything
-     * left on this one's trashcan list must not outlive the fiber. */
-    if (ts->delete_later != NULL) runloom_iframe_drain_trashcan(ts);
     return 1;
 #else
     (void)ts;
