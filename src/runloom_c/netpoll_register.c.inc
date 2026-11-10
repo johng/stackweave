@@ -323,6 +323,21 @@ static int runloom_netpoll_validate_arm(int fd)
  * migration ADD-fail recovery below error-wakes through it. */
 static int runloom_pump_dispatch_event(int fd, int mask, int wake_all);
 
+#if defined(RUNLOOM_HAVE_EPOLL)
+/* After a register that left fd in another live hub's epoll (the keep path
+ * below): an owner asleep on its idle condvar -- it saw nothing parked when it
+ * went there -- is not polling that epoll, so signal it out, or this waiter
+ * waits out the condvar's timed wait or the backstop.  Outside every lock (the
+ * kick takes the hub's idle_lock, which ranks below the pool locks). */
+static void runloom_np_kick_owner_if_idle(int fd, runloom_parker_pool_t *mine)
+{
+    int ow = runloom_fd_epoll_pool_get(fd);
+    if (ow < 0 || ow >= RUNLOOM_PARKER_POOL_HUBS || &runloom_pools[ow] == mine) return;
+    if (__atomic_load_n(&runloom_pools[ow].in_wait, __ATOMIC_RELAXED)) return;
+    runloom_mn_hub_kick_if_idle(ow);
+}
+#endif
+
 static int runloom_netpoll_register(int fd, int events)
 {
 #if defined(RUNLOOM_HAVE_EPOLL)
@@ -411,11 +426,7 @@ static int runloom_netpoll_register(int fd, int events)
             my_pool_idx >= 0 && my_pool_idx < RUNLOOM_PARKER_POOL_HUBS &&
             owner < RUNLOOM_PARKER_POOL_HUBS && owner < runloom_mn_hub_count() &&
             runloom_pools[owner].epoll_fd >= 0) {
-            /* An owner asleep on its idle condvar (it saw nothing parked) is
-             * not polling its epoll: wake it, or this waiter waits out the
-             * condvar timeout or the backstop. */
-            if (!__atomic_load_n(&runloom_pools[owner].in_wait, __ATOMIC_RELAXED))
-                runloom_mn_hub_kick_if_idle(owner);
+
             /* KEEP IT IN ITS OWNER.  The fd lives in a live hub's epoll and a
              * fiber parked on it from another hub: leave it there (ep is the
              * owner's epoll, set above).  The owner's pump reports it, and

@@ -346,8 +346,12 @@ int runloom_netpoll_pump(long long timeout_ns)
         Py_BEGIN_ALLOW_THREADS
         n = epoll_wait(wait_fd, evs, 64, ms);
         Py_END_ALLOW_THREADS
-        if (epool != NULL && ms != 0)
+        if (epool != NULL && ms != 0) {
+            /* The wait ended now: the hub is about to dispatch what it got, so
+             * sysmon must not poll the same readiness behind it. */
+            __atomic_store_n(&epool->last_pump_ns, monotonic_ns(), __ATOMIC_RELAXED);
             __atomic_store_n(&epool->in_wait, 0, __ATOMIC_RELAXED);
+        }
         RUNLOOM_NPC(RUNLOOM_NPC_PUMP, 1);
         if (ms != 0) RUNLOOM_NPC(RUNLOOM_NPC_PUMP_BLOCK, 1);
         if (n > 0) RUNLOOM_NPC(RUNLOOM_NPC_PUMP_EV, n);
@@ -448,7 +452,11 @@ int runloom_netpoll_pump(long long timeout_ns)
                 Py_BEGIN_ALLOW_THREADS
                 n = kevent(kpool->kqueue_fd, NULL, 0, evs, 256, passtsp);
                 Py_END_ALLOW_THREADS
-                if (may_block) __atomic_store_n(&kpool->in_wait, 0, __ATOMIC_RELAXED);
+                if (may_block) {
+                    __atomic_store_n(&kpool->last_pump_ns, monotonic_ns(),
+                                     __ATOMIC_RELAXED);
+                    __atomic_store_n(&kpool->in_wait, 0, __ATOMIC_RELAXED);
+                }
             }
             if (n < 0) {
                 runloom_netpoll_wait_failed(n);   /* EINTR -> retry; else log+backoff */
