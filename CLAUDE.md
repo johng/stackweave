@@ -465,6 +465,37 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   Guards: `tests/test_tlbc_hub_copies.py` (`stats()["tlbc_switches"]` > 0 when
   shared), `tests/test_cpython_thread_keyed_locks.py::test_cost_live_fibers_share_bytecode_within_1_5x_of_tlbc_off`.
 
+- **A finished fiber's thread state is reset and reused.** Creating and
+  destroying a per-g `PyThreadState` was most of a spawn (a calloc, a QSBR slot,
+  a TLBC index, the mimalloc bind, `HEAD_LOCK` twice, a biased-refcount bucket
+  insert and remove -- several under interpreter-wide mutexes). The final
+  `runloom_g_decref` on a hub thread instead resets it
+  (`runloom_iframe_recycle_fiber_tstate`) into that hub's pool, and the next
+  spawn there takes it (`runloom_mn_tspool_get`). The reset clears what
+  `PyThreadState_Clear` clears for the objects a state holds -- thread-locals
+  (`threading_local_key`/`_sentinel`, `dict`), the context (and bumps
+  `context_ver`), the exception, the asyncio loop and task, the async-generator
+  hooks, 3.15's `lazy_imports` -- hands its freelists to the hub's state, and
+  gives it a NEW id (`runloom_iframe_reserve_tstate_ids`, blocks taken under
+  `HEAD_LOCK`): the exec-home patch records a lock's owner as the state's id, so
+  a lock the last fiber left held must not let the next one in. It keeps what a
+  long-lived OS thread keeps: the QSBR slot, TLBC index, mimalloc state and
+  per-thread refcounts. A state the reset does not cover (a frame, tracing, an
+  asyncio task, an object queued to merge) is cleared as before. A new field
+  CPython's Clear resets must be reset there too. A pooled state is unbound
+  (`_status.bound` 0) and out of every biased-refcount bucket (`brc.tid` 0) --
+  CPython's own "never bound", so a fork child's or finalization's clear of it
+  skips the brc removal and the unbind -- from its reset until its next
+  fiber's first resume, where hub_main puts it in the hub's own bucket and
+  binds it in one bucket-mutex hold just before the attach
+  (`runloom_iframe_bind_reused`; never a move out of another hub's bucket);
+  `runloom_iframe_clear_fiber_tstate` binds and buckets it before a Clear. The reset also flushes its GC allocation count; its pending delayed
+  frees stay with it until the next fiber on it runs. Each hub's pool is touched only by its thread; a mutex depot (4 pools'
+  worth) evens out hubs; hubs drain their pools at exit, `mn_fini` the depot.
+  Pooled states stay in the interpreter's thread list (a stop-the-world visits
+  them), so the pools stay small. `STACKWEAVE_TSTATE_POOL` sizes a hub's pool
+  (64, 0 = off). Guard: `tests/test_tstate_pool.py`
+  (`stats()["tstate_pool_hits"]`).
 - **A hub-thread wake lands on the waker's OWN deque (Go-style local
   wake), not the global run-queue.** `runloom_mn_woken_enqueue`
   is the single routing point: hub-thread waker + unpinned g + not replay +

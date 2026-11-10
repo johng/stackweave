@@ -315,6 +315,12 @@ unsigned long long runloom_mn_preempt_yields(void);
  * and hubinfo's blocked_at frame walk takes the same hazard. */
 struct runloom_hub;                       /* defined in mn_sched.c */
 void runloom_sysmon_tstate_retire_wait(PyThreadState *ts);
+/* The per-hub-thread pool of reset per-g thread states
+ * (mn_sched_hub_resume_preempt.c.inc). */
+int runloom_mn_tspool_on(void);
+PyThreadState *runloom_mn_tspool_get(void);
+int runloom_mn_tspool_put(PyThreadState *ts);
+unsigned long long runloom_mn_tspool_hits(void);
 int  runloom_sysmon_hub_attach_state(struct runloom_hub *h, PyThreadState *hts);
 void runloom_sysmon_request_break(struct runloom_hub *h);
 void runloom_mn_request_fiber_break(PyThreadState *ts);

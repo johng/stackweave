@@ -142,6 +142,27 @@ void runloom_iframe_hand_over_freelists(PyThreadState *dead);
  * otherwise cost every fiber teardown a walk of every abandoned segment. */
 void runloom_iframe_clear_fiber_tstate(PyThreadState *ts);
 
+/* Get a finished fiber's per-g state ready for the next fiber on this hub
+ * thread instead of clearing it (runloom_mn_tspool_put; CLAUDE.md, "A
+ * finished fiber's thread state is reset and reused").  1 = reset, reusable,
+ * and out of its biased-refcount bucket (brc.tid 0); 0 = it holds something a
+ * reset does not cover (a frame, tracing, an asyncio task, a pending merge)
+ * -- Clear + Delete it as before.  After a 1 the caller may still Clear +
+ * Delete it (pool full); runloom_iframe_clear_fiber_tstate handles brc.tid 0. */
+int runloom_iframe_recycle_fiber_tstate(PyThreadState *ts);
+
+/* Reserve `n` thread-state ids no state has had, as PyThreadState_New takes
+ * one (under HEAD_LOCK): a reused state gets a new id, since the exec-home
+ * patch keys a lock's owner on it.  Returns the first. */
+unsigned long long runloom_iframe_reserve_tstate_ids(PyInterpreterState *interp,
+                                                     unsigned n);
+
+/* Just before a reused state's first attach (hub_main, the hub's own state
+ * current): put it in the hub's biased-refcount bucket and mark it bound
+ * again, in one bucket-mutex hold, so no clear of it -- a fork child's -- ever
+ * finds it bound with brc.tid 0.  A no-op for a state already in a bucket. */
+void runloom_iframe_bind_reused(PyThreadState *fiber, PyThreadState *hub);
+
 /* In a fork child, from a pthread_atfork child handler (before CPython's
  * after-fork code): a fork made in a fiber makes fiber_ts, the forking
  * fiber's state, the runtime's main thread state, so signals set their
