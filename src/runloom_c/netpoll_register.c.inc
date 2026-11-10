@@ -409,7 +409,13 @@ static int runloom_netpoll_register(int fd, int events)
          * fallback epoll is shared, so only a >=0 owner mismatch migrates. */
         if (owner >= 0 && owner != my_pool_idx &&
             my_pool_idx >= 0 && my_pool_idx < RUNLOOM_PARKER_POOL_HUBS &&
-            owner < runloom_mn_hub_count() && runloom_pools[owner].epoll_fd >= 0) {
+            owner < RUNLOOM_PARKER_POOL_HUBS && owner < runloom_mn_hub_count() &&
+            runloom_pools[owner].epoll_fd >= 0) {
+            /* An owner asleep on its idle condvar (it saw nothing parked) is
+             * not polling its epoll: wake it, or this waiter waits out the
+             * condvar timeout or the backstop. */
+            if (!__atomic_load_n(&runloom_pools[owner].in_wait, __ATOMIC_RELAXED))
+                runloom_mn_hub_kick_if_idle(owner);
             /* KEEP IT IN ITS OWNER.  The fd lives in a live hub's epoll and a
              * fiber parked on it from another hub: leave it there (ep is the
              * owner's epoll, set above).  The owner's pump reports it, and
@@ -421,7 +427,8 @@ static int runloom_netpoll_register(int fd, int events)
              * parker and disarmed it, and the fd was re-ADDed and moved again
              * -- epoll_ctl under runloom_pool.lock on most round trips, and
              * the c-echo bench fell from 148k round trips/s at 4 hubs to 113k
-             * at 16 (Linux c-32, 2026-11-09; kept here: 199k / 452k).  A hub
+             * at 16 (Linux c-32; kept here: CLAUDE.md, "An fd is polled by one
+             * hub").  A hub
              * that stops polling (one long fiber, a C call) does not strand
              * these fds: sysmon polls its epoll for it
              * (runloom_netpoll_backstop_poll).  Only for a caller on a hub's

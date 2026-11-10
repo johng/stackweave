@@ -452,6 +452,10 @@ void runloom_netpoll_reset_after_fork(void)
          * the parent (e.g. a hub kicked by mn_fini that exited without
          * pumping) would make wake_pump skip every later kick to this pool. */
         p->wake_pending = 0;
+        /* A hub blocked in its pump at fork left in_wait set: the child's
+         * hub must not look like it is polling. */
+        __atomic_store_n(&p->in_wait, 0, __ATOMIC_RELAXED);
+        __atomic_store_n(&p->last_pump_ns, 0LL, __ATOMIC_RELAXED);
         /* The child needs pollers of its own -- fork shares the parent's
          * kernel epoll/kqueue, and fini above closed the inherited handles --
          * but only for the pools it uses.  So a hub pool goes back to

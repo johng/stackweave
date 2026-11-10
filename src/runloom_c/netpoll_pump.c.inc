@@ -5,11 +5,11 @@
 
 #if defined(RUNLOOM_HAVE_EPOLL) || defined(RUNLOOM_HAVE_KQUEUE)
 /* The backstop's gate, both backends: hub `hub_idx`'s pool when sysmon should
- * poll it now, else NULL -- the backstop is on, something is parked (anywhere:
- * an fd stays in its owner hub's poller whichever pool its waiter linked
- * into, so the owner's own pool may be empty while a waiter on another hub
- * depends on it), the hub is not blocked in its own poll, and it has not
- * started one for the budget. */
+ * poll it now, else NULL -- the backstop is on, the hub is not blocked in its
+ * own poll, and it has not started one for the budget.  sysmon calls the
+ * backstop only while something is parked ANYWHERE: an fd stays in its owner
+ * hub's poller whichever pool its waiter linked into, so the owner's own pool
+ * may be empty while a waiter on another hub depends on it. */
 static runloom_parker_pool_t *runloom_np_backstop_due(int hub_idx, long long now_ns)
 {
     runloom_parker_pool_t *pool;
@@ -17,7 +17,6 @@ static runloom_parker_pool_t *runloom_np_backstop_due(int hub_idx, long long now
     if (ms <= 0 || hub_idx < 0 || hub_idx >= RUNLOOM_PARKER_POOL_HUBS) return NULL;
     pool = &runloom_pools[hub_idx];
     if (__atomic_load_n(&pool->lock_inited, __ATOMIC_ACQUIRE) != 2) return NULL;
-    if (runloom_netpoll_parked_count() == 0) return NULL;
     if (__atomic_load_n(&pool->in_wait, __ATOMIC_RELAXED)) return NULL;
     if (now_ns - __atomic_load_n(&pool->last_pump_ns, __ATOMIC_RELAXED) <
         (long long)ms * 1000000LL)
@@ -87,8 +86,12 @@ static void runloom_epoll_handle_event(int fd, unsigned int events, int *woke)
          * (STACKWEAVE_NETPOLL_MISS_GRACE_US, default 2000; 0 = at once), so a
          * dead fd spins a hub for at most that long.  Only for an fd a live
          * hub owns: one in the shared epoll is polled by every hub, which
-         * would all spin through the grace, so it is dropped at once. */
-        if (runloom_np_owned_by_live_hub(fd) && runloom_np_miss_defer(fd)) {
+         * would all spin through the grace, so it is dropped at once.  And
+         * not for a write-only report: a socket stays writable, and a reader
+         * re-parking (which clears the grace) would keep its OUT arm, and
+         * the hub's epoll_wait returning at once, for good. */
+        if ((mask & RUNLOOM_NETPOLL_READ) && runloom_np_owned_by_live_hub(fd) &&
+            runloom_np_miss_defer(fd)) {
             RUNLOOM_NPC(RUNLOOM_NPC_MISS_DEFER, 1);
             return;
         }

@@ -192,6 +192,11 @@ int runloom_mn_pin_for_wake(runloom_g_t *g, int hub_id);
  * runs its loop top promptly.  Safe from any thread; NULL is a no-op. */
 void runloom_mn_hub_kick(void *hub_opaque);
 
+/* Signal hub `hub_idx` out of its idle condvar wait, if it is in one (one
+ * relaxed load otherwise): netpoll calls it when a waiter parks, from another
+ * hub, on an fd whose epoll that hub owns and is not polling right now. */
+void runloom_mn_hub_kick_if_idle(int hub_idx);
+
 /* Bulk-spawn n fibers all running `callable`, looping the spawn core in C
  * (skips n Python->C dispatches + per-call arg parsing).  indexed != 0 calls
  * each as callable(i) for i in 0..n-1 (per-fiber arg); 0 calls callable().

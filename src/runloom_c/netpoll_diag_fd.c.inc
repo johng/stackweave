@@ -548,7 +548,7 @@ static inline void runloom_np_miss_clear(int fd)
 static inline int runloom_np_owned_by_live_hub(int fd)
 {
     int ow = runloom_fd_epoll_pool_get(fd);
-    return ow >= 0 && ow < runloom_mn_hub_count();
+    return ow >= 0 && ow < RUNLOOM_PARKER_POOL_HUBS && ow < runloom_mn_hub_count();
 }
 
 static int runloom_np_miss_defer(int fd)

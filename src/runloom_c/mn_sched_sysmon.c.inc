@@ -66,8 +66,11 @@ int runloom_sysmon_hub_attach_state(runloom_hub_t *h, PyThreadState *hts)
     return tss;
 }
 
-/* sysmon watchdog thread.  Holds NO GIL and NO tstate -- it only reads
- * per-hub atomics and writes to stderr, never touching the Python C-API.
+/* sysmon watchdog thread.  Holds NO GIL and NO tstate, and never touches the
+ * Python C-API.  It reads per-hub atomics and writes to stderr -- and, as the
+ * netpoll backstop, polls a stopped hub's poller and wakes its waiters
+ * (runloom_netpoll_backstop_poll: takes parker-pool locks and
+ * runloom_pool.lock, wakes fibers as a foreign waker).
  * Scans every runloom_sysmon_tick_ns; logs a hub whose current runloom_coro_resume
  * has run longer than runloom_sysmon_wedge_ns (an unanticipated non-yielding
  * block), once per wedge episode, and a matching "recovered" line so a run's
@@ -185,8 +188,9 @@ static RUNLOOM_THREAD_RET runloom_sysmon_main(void *arg)
          * fiber, or stuck in a C call -- gets its poller polled from here, so
          * those waiters wake and run on other hubs (Go's sysmon polls its
          * netpoller after 10 ms).  Guard: tests/test_netpoll_owner_backstop.py. */
-        for (i = 0; i < n; i++)
-            (void)runloom_netpoll_backstop_poll(i, now);
+        if (runloom_netpoll_parked_count() > 0)
+            for (i = 0; i < n; i++)
+                (void)runloom_netpoll_backstop_poll(i, now);
         /* Piggyback the depot auto-cap recompute on the watchdog tick: decay the
          * live-stack watermark, resize the pool cap.  Cheap, off the hot path. */
         runloom_stack_autocap_tick();
