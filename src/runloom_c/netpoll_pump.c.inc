@@ -172,7 +172,8 @@ int runloom_netpoll_backstop_poll(int hub_idx, long long now_ns)
 }
 #elif defined(RUNLOOM_HAVE_KQUEUE)
 /* kqueue twin of the backstop above: same gate, the kqueue pump's per-event
- * handling (one-shot knotes, so wake_all; the self-pipe stays with its hub). */
+ * handling (wake_all; a persistent knote nobody takes is left for its hub's
+ * pump to drop; the self-pipe stays with its hub). */
 int runloom_netpoll_backstop_poll(int hub_idx, long long now_ns)
 {
     runloom_parker_pool_t *pool;
@@ -456,6 +457,29 @@ int runloom_netpoll_pump(long long timeout_ns)
                  * dead fd runnable so its next syscall observes the error. */
                 if (evs[i].flags & (EV_EOF | EV_ERROR))
                     mask |= RUNLOOM_NETPOLL_READ | RUNLOOM_NETPOLL_WRITE;
+                if (evs[i].udata == RUNLOOM_KQ_PERSIST_UDATA) {
+                    /* A hub pool's LEVEL knote.  Wake every same-direction
+                     * waiter, as for a one-shot one (B2: losers re-check and
+                     * re-park; the level re-reports what is left), and drop an
+                     * arm nobody came back for once its grace has passed.  No
+                     * pending-wake bit on a miss: the level knote re-reports
+                     * readiness nobody took, and a bit set here would outlive
+                     * a raw close and wake the next socket given this fd
+                     * number for nothing. */
+                    int dir = (evs[i].filter == EVFILT_READ) ? RUNLOOM_NETPOLL_READ
+                                                             : RUNLOOM_NETPOLL_WRITE;
+                    int w = runloom_pump_dispatch_event(fd, mask, 1);
+                    if (w > 0) {
+                        woke += w;
+                    } else if (!runloom_np_miss_defer(fd)) {
+                        runloom_kq_disarm(fd, dir);
+                        /* A waiter that linked after the dispatch above saw the
+                         * arm still set and skipped its EV_ADD: wake it. */
+                        __atomic_thread_fence(__ATOMIC_SEQ_CST);
+                        woke += runloom_pump_dispatch_event(fd, dir, 1);
+                    }
+                    continue;
+                }
                 /* wake_all=1: one-shot knote -> wake every same-dir waiter (B2). */
                 woke += runloom_pump_dispatch_event(fd, mask, 1);
             }

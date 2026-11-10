@@ -122,7 +122,9 @@ instead of all hubs sharing one `runloom_epoll_fd`. Measured **+34–40 %**
 saturation throughput on a 64-core box versus the old shared set. An fd stays
 in the epoll of the hub that first armed it, even when fibers on other hubs
 park on it (dispatch finds their parkers through the fd's pool mask); only an
-fd whose owner is not a live hub moves to the shared epoll.
+fd whose owner is not a live hub moves to the shared epoll. kqueue does the
+same with a LEVEL knote per armed direction (one-shot only for the default
+pool), so a re-park on an armed fd costs no `kevent` call.
 
 **netpoll backstop** — sysmon polls the epoll (or kqueue) of a hub that has
 parkers, is not blocked in its own poll, and has gone

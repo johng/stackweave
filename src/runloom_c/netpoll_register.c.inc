@@ -90,7 +90,7 @@ static unsigned long long runloom_stale_arm_heals;
 
 #endif /* EPOLL || KQUEUE */
 
-#if defined(RUNLOOM_HAVE_EPOLL)
+#if defined(RUNLOOM_HAVE_EPOLL) || defined(RUNLOOM_HAVE_KQUEUE)
 /* ADVISORY, LOCK-FREE: will runloom_netpoll_register(fd, events) take the
  * zero-syscall already-armed skip?  wait_fd calls this BEFORE linking, so a
  * predicted-skip park can carry the stale-arm probe deadline from the start
@@ -121,6 +121,8 @@ static int runloom_netpoll_arm_predict_skip(int fd, int events)
         return (cur & need) == need;
     }
 }
+#endif
+#if defined(RUNLOOM_HAVE_EPOLL)
 
 /* Validate one fd's LEVEL arm against the kernel and self-heal a stale one.
  * Called WITHOUT any RUNLOOM_RANK_PARKER_POOL lock held (takes
@@ -283,15 +285,44 @@ static int runloom_netpoll_validate_arm(int fd)
 static int runloom_netpoll_validate_arm(int fd)
 {
     if (fd < 0) return 0;
-    /* NO runloom_fd_armed_get() GATE HERE -- that was the bug in the first two
-     * attempts at this fix.  runloom_fd_armed is epoll's zero-syscall
-     * already-armed cache; the kqueue register path never writes it (it sets
-     * only the registration bitmap and re-issues EV_ADD|EV_ONESHOT every park,
-     * by design).  So runloom_fd_armed_get is ALWAYS 0 here and gating on it
-     * made this function a silent no-op -- measured on macos-14 (macos-debug
-     * run 33947955453): PROBE ARM and PROBE TICK both fired, DEAD ARM never
-     * did.  Copying the epoll version's gate was cargo-culting a cache that
-     * does not exist on this backend.
+    {
+        /* A hub pool's persistent arm (runloom_kq_register_persist): re-EV_ADD
+         * its armed directions in the owner's kqueue.  Idempotent for the live
+         * knote; recreates one an fd number reused after a raw close lost (the
+         * close dropped the knote, not our arm); EBADF for a dead fd, cleared
+         * as unregister clears it, and the caller error-wakes. */
+        struct kevent kev[2];
+        int n = 0, cur, owner, dead = 0;
+        RUNLOOM_RLOCK(&runloom_pool.lock, RUNLOOM_RANK_PARKER_POOL);
+        cur = runloom_fd_armed_get(fd);
+        owner = runloom_fd_epoll_pool_get(fd);
+        if (cur != 0 && owner >= 0 && runloom_pools[owner].kqueue_fd >= 0) {
+            if (cur & RUNLOOM_NETPOLL_READ)
+                EV_SET(&kev[n++], fd, EVFILT_READ, EV_ADD, 0, 0, RUNLOOM_KQ_PERSIST_UDATA);
+            if (cur & RUNLOOM_NETPOLL_WRITE)
+                EV_SET(&kev[n++], fd, EVFILT_WRITE, EV_ADD, 0, 0, RUNLOOM_KQ_PERSIST_UDATA);
+            if (kevent(runloom_pools[owner].kqueue_fd, kev, n, NULL, 0, NULL) != 0 &&
+                errno == EBADF) {
+                runloom_fd_armed_set(fd, 0);
+                runloom_fd_epoll_pool_set(fd, -1);
+                runloom_fd_bit_clear(fd);
+                dead = 1;
+            }
+        }
+        RUNLOOM_RUNLOCK(&runloom_pool.lock, RUNLOOM_RANK_PARKER_POOL);
+        if (dead) {
+            __atomic_add_fetch(&runloom_stale_arm_heals, 1ULL, __ATOMIC_RELAXED);
+            errno = EBADF;
+            return -1;
+        }
+    }
+    /* NO runloom_fd_armed_get() GATE BELOW -- that was the bug in the first two
+     * attempts at this fix.  On kqueue only a hub pool's persistent arm writes
+     * runloom_fd_armed; the DEFAULT pool sets only the registration bitmap and
+     * re-issues EV_ADD|EV_ONESHOT every park, by design.  So for its fds
+     * runloom_fd_armed_get is always 0, and gating on it made this function a
+     * silent no-op -- measured on macos-14 (macos-debug run 33947955453):
+     * PROBE ARM and PROBE TICK both fired, DEAD ARM never did.
      *
      * Nothing is lost by dropping it: the probe only ever runs for an fd some
      * parker actually parked on, and if that parker has since gone, the
@@ -322,6 +353,88 @@ static int runloom_netpoll_validate_arm(int fd)
 /* Defined in netpoll_pump_helpers.c.inc (included after this fragment); the
  * migration ADD-fail recovery below error-wakes through it. */
 static int runloom_pump_dispatch_event(int fd, int mask, int wake_all);
+
+#if defined(RUNLOOM_HAVE_KQUEUE)
+/* A hub pool's arm on kqueue works as on epoll (CLAUDE.md, "An fd is polled
+ * by one hub"): each direction is EV_ADDed LEVEL (no ONESHOT) once, into the
+ * kqueue of the hub that first armed the fd, and stays there while armed.  A
+ * re-park whose direction is armed costs no syscall, and a waiter on another
+ * hub is found through the fd's pool mask.  The pump drops a direction nobody
+ * came back for once the miss grace has passed (runloom_kq_disarm).  An fd
+ * number reused after a raw close keeps our arm but lost its knote: a park by
+ * a DIFFERENT fiber than the last one re-EV_ADDs (idempotent for a live
+ * knote), and the stale-arm probe heals the rest (validate_arm).  The
+ * DEFAULT pool (single-thread scheduler) keeps EV_ONESHOT per park. */
+static int runloom_kq_register_persist(runloom_parker_pool_t *kpool, int fd, int events)
+{
+    struct kevent kev[2];
+    int need = events & (RUNLOOM_NETPOLL_READ | RUNLOOM_NETPOLL_WRITE);
+    int cur, owner, add, n = 0, my = (int)(kpool - runloom_pools);
+    runloom_parker_pool_t *op = kpool;
+    runloom_np_miss_clear(fd);
+    RUNLOOM_RLOCK(&runloom_pool.lock, RUNLOOM_RANK_PARKER_POOL);
+    cur = runloom_fd_armed_get(fd);
+    owner = runloom_fd_epoll_pool_get(fd);
+    if (cur != 0) {
+        if (owner >= 0 && owner < runloom_mn_hub_count() &&
+            runloom_pools[owner].kqueue_fd >= 0)
+            op = &runloom_pools[owner];
+        else
+            cur = 0;                     /* owner gone: arm fresh in mine */
+    }
+    if (runloom_fd_armer != NULL && (size_t)fd < runloom_fd_pending_wake_cap) {
+        /* (goid << 1) | 1, never 0, so consecutive goids never collide. */
+        runloom_g_t *cg = runloom_mn_tls_current_g();
+        unsigned int gid = ((unsigned int)(cg != NULL ? cg->id : 0) << 1) | 1u;
+        if (cur != 0 && __atomic_load_n(&runloom_fd_armer[fd], __ATOMIC_RELAXED) != gid) {
+            need |= cur;                 /* re-add every armed direction */
+            cur = 0;
+        }
+        __atomic_store_n(&runloom_fd_armer[fd], gid, __ATOMIC_RELAXED);
+    }
+    if (cur != 0 && (cur & need) == need) {
+        RUNLOOM_RUNLOCK(&runloom_pool.lock, RUNLOOM_RANK_PARKER_POOL);
+        RUNLOOM_NPC(RUNLOOM_NPC_REG_SKIP, 1);
+        return 0;
+    }
+    add = need & ~cur;
+    if (add & RUNLOOM_NETPOLL_READ)
+        EV_SET(&kev[n++], fd, EVFILT_READ, EV_ADD, 0, 0, RUNLOOM_KQ_PERSIST_UDATA);
+    if (add & RUNLOOM_NETPOLL_WRITE)
+        EV_SET(&kev[n++], fd, EVFILT_WRITE, EV_ADD, 0, 0, RUNLOOM_KQ_PERSIST_UDATA);
+    RUNLOOM_NPC(RUNLOOM_NPC_REG_CTL, 1);
+    {
+        int finj = runloom_fault_inject(RUNLOOM_FAULT_KQUEUE_CTL);
+        if (finj || (n > 0 && kevent(op->kqueue_fd, kev, n, NULL, 0, NULL) != 0)) {
+            RUNLOOM_RUNLOCK(&runloom_pool.lock, RUNLOOM_RANK_PARKER_POOL);
+            if (finj) errno = finj;
+            return -1;
+        }
+    }
+    runloom_fd_armed_set(fd, cur | add);
+    runloom_fd_epoll_pool_set(fd, op == kpool ? my : owner);
+    RUNLOOM_RUNLOCK(&runloom_pool.lock, RUNLOOM_RANK_PARKER_POOL);
+    return 0;
+}
+
+/* Drop direction `dir` of fd's persistent arm: nobody came back for it. */
+static void runloom_kq_disarm(int fd, int dir)
+{
+    struct kevent kev;
+    int cur, owner;
+    RUNLOOM_RLOCK(&runloom_pool.lock, RUNLOOM_RANK_PARKER_POOL);
+    cur = runloom_fd_armed_get(fd);
+    owner = runloom_fd_epoll_pool_get(fd);
+    if ((cur & dir) && owner >= 0 && runloom_pools[owner].kqueue_fd >= 0) {
+        EV_SET(&kev, fd, dir == RUNLOOM_NETPOLL_READ ? EVFILT_READ : EVFILT_WRITE,
+               EV_DELETE, 0, 0, NULL);
+        (void)kevent(runloom_pools[owner].kqueue_fd, &kev, 1, NULL, 0, NULL);
+        runloom_fd_armed_set(fd, cur & ~dir);
+        if ((cur & ~dir) == 0) runloom_fd_epoll_pool_set(fd, -1);
+    }
+    RUNLOOM_RUNLOCK(&runloom_pool.lock, RUNLOOM_RANK_PARKER_POOL);
+}
+#endif
 
 static int runloom_netpoll_register(int fd, int events)
 {
@@ -590,6 +703,8 @@ static int runloom_netpoll_register(int fd, int events)
     {
     runloom_parker_pool_t *kpool =
         runloom_parker_pool_for_hub(runloom_mn_current_hub_opaque());
+    if (kpool != &runloom_pool && kpool->kqueue_fd >= 0)
+        return runloom_kq_register_persist(kpool, fd, events);
     RUNLOOM_RLOCK(&runloom_pool.lock, RUNLOOM_RANK_PARKER_POOL);
     if (runloom_fd_bit_set(fd) != 0) {
         RUNLOOM_RUNLOCK(&runloom_pool.lock, RUNLOOM_RANK_PARKER_POOL);

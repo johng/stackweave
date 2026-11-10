@@ -361,9 +361,14 @@ static void runloom_mn_woken_enqueue(runloom_g_t *g)
          * of ONE as surplus (runloom_mn_any_stealable_work), so a hub that is
          * parking right now either sees this g or gets kicked. */
         runloom_mn_wakep_one();
-    } else {
-        runloom_mn_global_runq_push(g);
+        /* Not the DEFAULT pool's kick below: no hub polls that pool, and
+         * wakep_one has just kicked a parked hub if one should steal.  On
+         * kqueue it was a write() per wake (10% of a hub's time on an echo
+         * server; 256 per pub/sub publish), on epoll an exchange on a cache
+         * line every hub shares. */
+        return;
     }
+    runloom_mn_global_runq_push(g);
     /* Same cross-hub wake-latency fix as hub_submit: an idle hub blocked in
      * epoll_wait re-loops to steal / pull.  No-op if the pump is not armed. */
     runloom_netpoll_wake_pump(NULL);

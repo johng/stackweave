@@ -226,6 +226,11 @@ static unsigned char *runloom_fd_epoll_pool = NULL;
  * last register: the miss grace (runloom_np_miss_defer).  Not allocated with
  * STACKWEAVE_NETPOLL_MISS_GRACE_US=0. */
 static unsigned int *runloom_fd_miss_us = NULL;
+#if defined(RUNLOOM_HAVE_KQUEUE)
+/* kqueue: the fiber that last armed or re-parked on each fd, as
+ * ((goid << 1) | 1) -- 0 is "none" (runloom_kq_register_persist). */
+static unsigned int *runloom_fd_armer = NULL;
+#endif
 
 /* Upper/lower bounds on the preallocated fd capacity.  4M fds = 4MB
  * pending-wake array + 512KB registration bitmap, worst case. */
@@ -287,9 +292,10 @@ static void runloom_fd_arrays_init(void)
         return;   /* caps stay 0; set/consume/bit_* bounds-check to no-ops */
     }
     memset(ep, 0xFF, cap_fds);
-#if defined(RUNLOOM_HAVE_EPOLL)
     if (runloom_np_miss_grace_us() > 0)
         runloom_fd_miss_us = (unsigned int *)calloc(cap_fds, sizeof(unsigned int));
+#if defined(RUNLOOM_HAVE_KQUEUE)
+    runloom_fd_armer = (unsigned int *)calloc(cap_fds, sizeof(unsigned int));
 #endif
     runloom_fd_epoll_pool           = ep;
     runloom_fd_registered_bm        = bm;
@@ -536,7 +542,6 @@ static int runloom_selfpipe_w = -1;
  * dispatch found nobody parked; returns 1 to keep the arm (first miss, or still
  * inside the grace since the first one), 0 to disarm now.  Relaxed: two pollers
  * racing on one fd only shift the window by a miss. */
-#if defined(RUNLOOM_HAVE_EPOLL)
 static inline void runloom_np_miss_clear(int fd)
 {
     unsigned int *a = runloom_fd_miss_us;
@@ -563,4 +568,3 @@ static int runloom_np_miss_defer(int fd)
     __atomic_store_n(&a[fd], 0u, __ATOMIC_RELAXED);
     return 0;
 }
-#endif

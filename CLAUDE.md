@@ -605,8 +605,14 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
 - **An fd is polled by one hub, and sysmon polls for a hub that stops.** On
   epoll an fd stays in the epoll of the hub that first armed it, whichever hub
   its later waiters park on (dispatch finds them through the fd's pool mask);
-  only an fd whose owner is not a live hub moves to the shared epoll. On kqueue
-  it sits in the kqueue of the hub its waiter parked on. So a hub that stops
+  only an fd whose owner is not a live hub moves to the shared epoll. kqueue
+  does the same: a hub's arm is a LEVEL knote (`runloom_kq_register_persist`)
+  added once into the kqueue of the hub that first armed the fd; only the
+  default pool (the single-thread scheduler) re-arms `EV_ONESHOT` per park. A
+  persistent arm outlives a raw close, so a park by a different fiber than the
+  last one re-adds it (an fd number reused after close), a miss sets no
+  pending-wake bit (it would wake the next socket on that number), and the
+  stale-arm probe heals the rest. So a hub that stops
   polling -- one long fiber, a blocking C call -- holds those waiters, and the
   netpoll backstop on the sysmon tick (`runloom_netpoll_backstop_poll`) polls
   the poller of any hub that has parkers, is not blocked in its own poll, and

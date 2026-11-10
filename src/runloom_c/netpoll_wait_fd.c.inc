@@ -554,13 +554,11 @@ int runloom_netpoll_wait_fd(int fd, int events, long long timeout_ns)
         }
     }
 #elif defined(RUNLOOM_HAVE_KQUEUE)
-    /* kqueue needs the same probe, on a DIFFERENT trigger.
-     *
-     * The epoll condition above is arm_predict_skip -- "this park will take the
-     * zero-syscall already-armed path, so nothing will re-ADD a poisoned fd".
-     * That condition does not exist here: runloom_netpoll_register re-arms with
-     * EV_ADD|EV_ONESHOT on EVERY park and the fd bitmap explicitly does not gate
-     * the kevent, so a reused fd number is always armed afresh.
+    /* A hub pool's arm on kqueue is persistent, like epoll's
+     * (runloom_kq_register_persist), so a park that will skip on an armed fd
+     * gets epoll's probe, timed or not.  The DEFAULT pool re-arms with
+     * EV_ADD|EV_ONESHOT on EVERY park, so a reused fd number is always armed
+     * afresh there, and only the other half of the hazard applies.
      *
      * What kqueue shares is the OTHER half of the hazard: an fd closed WHILE a
      * fiber is parked on it silently drops the knote, no event can ever follow,
@@ -577,7 +575,17 @@ int runloom_netpoll_wait_fd(int fd, int events, long long timeout_ns)
      *
      * Same sim exclusion as epoll: the probe stamps a WALL-clock deadline, and
      * under RUNLOOM_SIM that heap drives the LOGICAL clock. */
-    if (!runloom_sim_enabled() && timeout_ns < 0) {
+    if (!runloom_sim_enabled() && runloom_netpoll_arm_predict_skip(fd, events)) {
+        long long probe_ns = runloom_netpoll_stale_probe_ns();
+        if (timeout_ns >= 0 && timeout_ns / 2 < probe_ns) probe_ns = timeout_ns / 2;
+        if (probe_ns > 0) {
+            long long probe_at = monotonic_ns() + probe_ns;
+            if (park->deadline_ns < 0 || probe_at < park->deadline_ns) {
+                park->probe_pending = 1;
+                park->deadline_ns = probe_at;
+            }
+        }
+    } else if (!runloom_sim_enabled() && timeout_ns < 0) {
         long long probe_ns = runloom_netpoll_stale_probe_ns();
         if (probe_ns > 0) {
             park->probe_pending = 1;

@@ -342,17 +342,19 @@ static int runloom_np_knob(const char *name, int dflt, int *cache)
     }
     return v;
 }
-#if defined(RUNLOOM_HAVE_EPOLL)
 static int runloom_np_grace_v = -1;
-#endif
 static int runloom_np_backstop_v = -1;
-#if defined(RUNLOOM_HAVE_EPOLL)
 /* How long an arm with nobody parked may keep missing before it is dropped
- * (runloom_epoll_handle_event); 0 drops it at the first miss. */
+ * (runloom_epoll_handle_event; the kqueue pump for a persistent knote); 0
+ * drops it at the first miss. */
 static int runloom_np_miss_grace_us(void)
 {
     return runloom_np_knob("STACKWEAVE_NETPOLL_MISS_GRACE_US", 2000, &runloom_np_grace_v);
 }
+#if defined(RUNLOOM_HAVE_KQUEUE)
+/* udata of a hub pool's persistent (LEVEL) knote (runloom_kq_register_persist);
+ * the DEFAULT pool's one-shot knotes carry NULL. */
+#define RUNLOOM_KQ_PERSIST_UDATA ((void *)1)
 #endif
 /* sysmon polls a hub's poller once the hub has gone this long without starting
  * a poll (runloom_netpoll_backstop_poll). */
