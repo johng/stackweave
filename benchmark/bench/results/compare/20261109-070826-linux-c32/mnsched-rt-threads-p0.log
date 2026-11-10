@@ -1,0 +1,16 @@
+runtime: threads  python 3.14.4  gil=False
+
+  pingpong local-wake                   57887.9 ops/s     17274.8 ns/op  med=1727.477ms  rsd= 1.5%
+  spawn noop mn_fiber                    8147.6 ops/s    122735.0 ns/op  med=2454.700ms  rsd= 0.8%
+  spawn noop stackweave.fiber            8147.6 ops/s    122735.0 ns/op  med=2454.700ms  rsd= 0.8%
+  yield 1000 fibers x200              1559109.7 ops/s       641.4 ns/op  med= 128.278ms  rsd= 2.0%
+  64 pairs pingpong                    237152.4 ops/s      4216.7 ns/op  med= 539.737ms  rsd= 1.5%
+  fan-out 1->32 buf64                   59493.1 ops/s     16808.7 ns/op  med=1680.867ms  rsd= 1.7%
+  mutex 64 fibers contended            439381.8 ops/s      2275.9 ns/op  med= 291.318ms  rsd= 1.1%
+  waitgroup fork-join 100x50             6892.8 ops/s    145078.7 ns/op  med= 725.394ms  rsd= 0.9%
+  blocking() sleep(100us)              151416.4 ops/s      6604.3 ns/op  med=  21.134ms  rsd= 1.7%
+  foreign thread -> fiber wake       p50=    13.1us  p90=    26.5us  p99=    44.9us  max=    152.8us  n=4000
+  spawn->run round-robin             p50=   114.1us  p90=   139.7us  p99=   236.7us  max=    283.9us  n=1000
+  timer lateness 1ms                 p50=    62.9us  p90=    76.6us  p99=   461.1us  max=    890.2us  n=10000
+
+wrote /root/sw/benchmark/bench/results/compare/20261109-070826/mnsched-rt-threads-p0.json

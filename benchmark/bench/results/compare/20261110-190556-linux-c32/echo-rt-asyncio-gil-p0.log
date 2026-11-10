@@ -1,0 +1,5 @@
+runtime: asyncio  python 3.14.4  gil=True
+
+  py-echo @4h                           17511.8 ops/s     57104.3 ns/op  med=1827.337ms  rsd= 0.2%
+
+wrote /root/sw/benchmark/bench/results/compare/20261110-190556/echo-rt-asyncio-gil-p0.json

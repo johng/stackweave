@@ -1,0 +1,17 @@
+runtime: gevent  python 3.14.4  gil=False
+
+  pingpong local-wake                  121539.4 ops/s      8227.8 ns/op  med= 822.778ms  rsd= 0.3%
+  spawn noop mn_fiber                   63372.4 ops/s     15779.7 ns/op  med= 315.595ms  rsd= 0.4%
+  spawn noop stackweave.fiber           63372.4 ops/s     15779.7 ns/op  med= 315.595ms  rsd= 0.4%
+  yield 1000 fibers x200               461224.6 ops/s      2168.1 ns/op  med= 433.628ms  rsd= 0.6%
+  64 pairs pingpong                    121022.7 ops/s      8262.9 ns/op  med=1057.653ms  rsd= 0.3%
+  fan-out 1->32 buf64                  403965.7 ops/s      2475.5 ns/op  med= 247.546ms  rsd= 0.5%
+  mutex 64 fibers contended           3395060.3 ops/s       294.5 ns/op  med=  37.702ms  rsd= 0.3%
+  waitgroup fork-join 100x50            61082.3 ops/s     16371.3 ns/op  med=  81.857ms  rsd= 1.1%
+  blocking() sleep(100us)               51622.3 ops/s     19371.5 ns/op  med=  61.989ms  rsd= 1.8%
+  foreign thread -> fiber wake       p50=    16.2us  p90=    28.7us  p99=    69.8us  max=    149.6us  n=4000
+  cross-hub pinned wake              p50=     7.1us  p90=    28.2us  p99=    35.6us  max=    118.5us  n=4000
+  spawn->run round-robin             p50=    21.9us  p90=    82.6us  p99=   121.9us  max=    147.1us  n=1000
+  timer lateness 1ms                 p50=  2976.8us  p90=  4855.6us  p99=  5920.1us  max=   6325.1us  n=10000
+
+wrote /root/sw/benchmark/bench/results/compare/20261110-190556/mnsched-rt-gevent-p1.json

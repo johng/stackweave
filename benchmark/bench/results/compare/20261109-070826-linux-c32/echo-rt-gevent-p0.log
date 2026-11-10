@@ -1,0 +1,5 @@
+runtime: gevent  python 3.14.4  gil=False
+
+  py-echo @4h                           33218.9 ops/s     30103.3 ns/op  med= 963.306ms  rsd= 1.3%
+
+wrote /root/sw/benchmark/bench/results/compare/20261109-070826/echo-rt-gevent-p0.json

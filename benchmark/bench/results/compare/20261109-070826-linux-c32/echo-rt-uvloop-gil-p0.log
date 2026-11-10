@@ -1,0 +1,5 @@
+runtime: uvloop  python 3.14.4  gil=True
+
+  py-echo @4h                           55547.2 ops/s     18002.7 ns/op  med= 576.087ms  rsd= 0.9%
+
+wrote /root/sw/benchmark/bench/results/compare/20261109-070826/echo-rt-uvloop-gil-p0.json

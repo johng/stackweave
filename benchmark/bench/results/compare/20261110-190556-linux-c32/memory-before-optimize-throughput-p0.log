@@ -1,0 +1,10 @@
+==============================================================================
+suite: memory
+python 3.14.4 CPython  gil=False  | stackweave fcontext-asm/epoll @ cb25055d
+cpu: Intel(R) Xeon(R) Platinum 8358 CPU @ 2.60GHz  | 32 vCPU / 1 NUMA  | pinned=none  aslr=2  load=2.96/6.71/6.51
+tlbc: on (gc_frames_active=1, PYTHON_TLBC=None)  | build: -  | env: STACKWEAVE_BENCH_OPTIMIZE=throughput STACKWEAVE_BLOCKPOOL_WORKERS=16
+==============================================================================
+  rss per parked unit @10k              24.45 KB/unit  (10000 units, RSS 36.2 -> 275.0 MB)
+  rss per parked unit @100k             24.13 KB/unit  (100000 units, RSS 470.8 -> 2827.0 MB)
+
+wrote /root/sw/benchmark/bench/results/compare/20261110-190556/memory-before-optimize-throughput-p0.json

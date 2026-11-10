@@ -1,0 +1,17 @@
+runtime: uvloop  python 3.14.4  gil=False
+
+  pingpong local-wake                  162375.6 ops/s      6158.6 ns/op  med= 615.856ms  rsd= 0.5%
+  spawn noop mn_fiber                  339898.1 ops/s      2942.1 ns/op  med=  58.841ms  rsd= 0.9%
+  spawn noop stackweave.fiber          339898.1 ops/s      2942.1 ns/op  med=  58.841ms  rsd= 0.9%
+  yield 1000 fibers x200              1252349.5 ops/s       798.5 ns/op  med= 159.700ms  rsd= 0.5%
+  64 pairs pingpong                    211092.9 ops/s      4737.3 ns/op  med= 606.368ms  rsd= 1.8%
+  fan-out 1->32 buf64                  412135.6 ops/s      2426.4 ns/op  med= 242.639ms  rsd= 2.1%
+  mutex 64 fibers contended           2055481.7 ops/s       486.5 ns/op  med=  62.273ms  rsd= 1.9%
+  waitgroup fork-join 100x50           380264.7 ops/s      2629.7 ns/op  med=  13.149ms  rsd= 1.0%
+  blocking() sleep(100us)               43535.1 ops/s     22970.0 ns/op  med=  73.504ms  rsd= 4.5%
+  foreign thread -> fiber wake       p50=    16.1us  p90=    46.4us  p99=    68.6us  max=    244.5us  n=4000
+  cross-hub pinned wake              p50=     3.4us  p90=     3.8us  p99=     4.3us  max=     22.4us  n=4000
+  spawn->run round-robin             p50=     3.7us  p90=     4.1us  p99=     6.6us  max=     22.1us  n=1000
+  timer lateness 1ms                 p50=  2378.2us  p90=  3043.2us  p99=  3477.7us  max=   3494.4us  n=10000
+
+wrote /root/sw/benchmark/bench/results/compare/20261109-070826/mnsched-rt-uvloop-p2.json
