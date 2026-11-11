@@ -1,0 +1,63 @@
+{
+  "env": {
+    "aslr": "2",
+    "build_label": "",
+    "cpu_model": "Intel(R) Xeon(R) Platinum 8358 CPU @ 2.60GHz",
+    "cpu_perflevels": null,
+    "gc_frames_active": null,
+    "gil_enabled": true,
+    "git_dirty": false,
+    "git_sha": "bb76842f",
+    "governor": "n/a (virtualized)",
+    "host": "stackweave-bench-c32",
+    "iouring_available": null,
+    "kernel": "7.0.0-42-generic",
+    "loadavg": [
+      "2.64",
+      "5.74",
+      "7.46"
+    ],
+    "nproc": 32,
+    "numa_nodes": 1,
+    "optimize": null,
+    "perf_event_paranoid": "4",
+    "pinned_cpus": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "py_cflags": "-fno-strict-overflow -Wsign-compare -Wunreachable-code -DNDEBUG -g -O3 -Wall",
+    "py_config_args": "'--prefix=/opt/py-gil' '--enable-optimizations' '--with-tail-call-interp' 'CC=clang-19'",
+    "python": "3.14.4",
+    "python_build": "main Nov 11 2026 07:39:02",
+    "python_impl": "CPython",
+    "python_tlbc_env": null,
+    "runloom_backend": "import-failed: ModuleNotFoundError('import of stackweave_c halted; None in sys.modules')",
+    "runloom_netpoll": "import-failed: ModuleNotFoundError('import of stackweave_c halted; None in sys.modules')",
+    "runloom_so": "import-failed: ModuleNotFoundError('import of stackweave_c halted; None in sys.modules')",
+    "runtime": "uvloop",
+    "stackweave_env": {},
+    "timestamp": "2026-11-11T08:31:16+00:00"
+  },
+  "results": [
+    {
+      "ci95_hi_s": 0.537850677,
+      "ci95_lo_s": 0.5355433775,
+      "inner": 32000,
+      "mad_s": 0.0010702045000000049,
+      "mean_s": 0.5366258981666666,
+      "median_s": 0.5368101835000001,
+      "min_s": 0.533286646,
+      "name": "py-echo @4h",
+      "note": "streams server + 64 client tasks, one loop",
+      "ops_per_s": 59611.38775602232,
+      "per_op_ns": 16775.318234375005,
+      "per_op_s": 1.6775318234375004e-05,
+      "rsd_pct": 0.3187975169195556,
+      "samples": 12,
+      "stdev_s": 0.0017107500385025963
+    }
+  ],
+  "suite": "baseline-uvloop"
+}

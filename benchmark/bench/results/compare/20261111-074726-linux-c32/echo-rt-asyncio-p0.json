@@ -1,0 +1,63 @@
+{
+  "env": {
+    "aslr": "2",
+    "build_label": "",
+    "cpu_model": "Intel(R) Xeon(R) Platinum 8358 CPU @ 2.60GHz",
+    "cpu_perflevels": null,
+    "gc_frames_active": null,
+    "gil_enabled": false,
+    "git_dirty": false,
+    "git_sha": "bb76842f",
+    "governor": "n/a (virtualized)",
+    "host": "stackweave-bench-c32",
+    "iouring_available": null,
+    "kernel": "7.0.0-42-generic",
+    "loadavg": [
+      "7.53",
+      "6.52",
+      "6.16"
+    ],
+    "nproc": 32,
+    "numa_nodes": 1,
+    "optimize": null,
+    "perf_event_paranoid": "4",
+    "pinned_cpus": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "py_cflags": "-fno-strict-overflow -Wsign-compare -Wunreachable-code -DNDEBUG -g -O3 -Wall",
+    "py_config_args": "'--prefix=/opt/py-ft' '--enable-optimizations' '--with-tail-call-interp' '--disable-gil' 'CC=clang-19'",
+    "python": "3.14.4",
+    "python_build": "main Nov 11 2026 07:39:30",
+    "python_impl": "CPython",
+    "python_tlbc_env": null,
+    "runloom_backend": "import-failed: ModuleNotFoundError('import of stackweave_c halted; None in sys.modules')",
+    "runloom_netpoll": "import-failed: ModuleNotFoundError('import of stackweave_c halted; None in sys.modules')",
+    "runloom_so": "import-failed: ModuleNotFoundError('import of stackweave_c halted; None in sys.modules')",
+    "runtime": "asyncio",
+    "stackweave_env": {},
+    "timestamp": "2026-11-11T08:07:10+00:00"
+  },
+  "results": [
+    {
+      "ci95_hi_s": 0.7069828225,
+      "ci95_lo_s": 0.7027457655,
+      "inner": 32000,
+      "mad_s": 0.0015324429999999944,
+      "mean_s": 0.7047681156666666,
+      "median_s": 0.7038318705,
+      "min_s": 0.702215329,
+      "name": "py-echo @4h",
+      "note": "streams server + 64 client tasks, one loop",
+      "ops_per_s": 45465.40351642119,
+      "per_op_ns": 21994.745953125,
+      "per_op_s": 2.1994745953124997e-05,
+      "rsd_pct": 0.35703815822622886,
+      "samples": 12,
+      "stdev_s": 0.002516291099941965
+    }
+  ],
+  "suite": "baseline-asyncio"
+}

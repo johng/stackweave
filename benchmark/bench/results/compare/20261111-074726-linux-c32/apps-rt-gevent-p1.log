@@ -1,0 +1,9 @@
+runtime: gevent  python 3.14.4  gil=False
+
+  http json api 64 conns                21586.2 ops/s     46325.8 ns/op  med= 592.970ms  rsd= 0.5%
+  api gateway fan-out 8 x 1ms            5827.6 ops/s    171597.7 ns/op  med= 343.195ms  rsd= 0.7%
+  parse+hash pipeline 4 workers        166797.3 ops/s      5995.3 ns/op  med= 119.906ms  rsd= 0.1%
+  pub/sub broadcast 256 subs          1359329.4 ops/s       735.7 ns/op  med=  94.164ms  rsd= 0.7%
+  crawler 10k concurrent x 3 fetches    71918.8 ops/s     13904.6 ns/op  med= 417.137ms  rsd= 1.2%
+
+wrote /root/sw/benchmark/bench/results/compare/20261111-074726/apps-rt-gevent-p1.json

@@ -1,0 +1,63 @@
+{
+  "env": {
+    "aslr": "2",
+    "build_label": "",
+    "cpu_model": "Intel(R) Xeon(R) Platinum 8358 CPU @ 2.60GHz",
+    "cpu_perflevels": null,
+    "gc_frames_active": null,
+    "gil_enabled": true,
+    "git_dirty": false,
+    "git_sha": "bb76842f",
+    "governor": "n/a (virtualized)",
+    "host": "stackweave-bench-c32",
+    "iouring_available": null,
+    "kernel": "7.0.0-42-generic",
+    "loadavg": [
+      "3.60",
+      "5.59",
+      "5.86"
+    ],
+    "nproc": 32,
+    "numa_nodes": 1,
+    "optimize": null,
+    "perf_event_paranoid": "4",
+    "pinned_cpus": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "py_cflags": "-fno-strict-overflow -Wsign-compare -Wunreachable-code -DNDEBUG -g -O3 -Wall",
+    "py_config_args": "'--prefix=/opt/py-gil' '--enable-optimizations' '--with-tail-call-interp' 'CC=clang-19'",
+    "python": "3.14.4",
+    "python_build": "main Nov 11 2026 07:39:02",
+    "python_impl": "CPython",
+    "python_tlbc_env": null,
+    "runloom_backend": "import-failed: ModuleNotFoundError('import of stackweave_c halted; None in sys.modules')",
+    "runloom_netpoll": "import-failed: ModuleNotFoundError('import of stackweave_c halted; None in sys.modules')",
+    "runloom_so": "import-failed: ModuleNotFoundError('import of stackweave_c halted; None in sys.modules')",
+    "runtime": "asyncio",
+    "stackweave_env": {},
+    "timestamp": "2026-11-11T08:08:04+00:00"
+  },
+  "results": [
+    {
+      "ci95_hi_s": 1.8925607995,
+      "ci95_lo_s": 1.8828704805,
+      "inner": 32000,
+      "mad_s": 0.005106880499999966,
+      "mean_s": 1.88949610125,
+      "median_s": 1.8889310925,
+      "min_s": 1.876994651,
+      "name": "py-echo @4h",
+      "note": "streams server + 64 client tasks, one loop",
+      "ops_per_s": 16940.79796084462,
+      "per_op_ns": 59029.096640625,
+      "per_op_s": 5.9029096640625e-05,
+      "rsd_pct": 0.47682694430682604,
+      "samples": 12,
+      "stdev_s": 0.009009626522386988
+    }
+  ],
+  "suite": "baseline-asyncio"
+}
