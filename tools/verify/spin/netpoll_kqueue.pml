@@ -45,7 +45,31 @@
  *                   so ENABLE hits ENOENT and silently arms nothing -> the
  *                   post-link re-check never happens -> no delivery -> lost
  *                   wake even though the fd is level-ready.
+ *
+ * THE OTHER ARM: -DPERSIST.  The above is the DEFAULT pool's arm (the
+ * single-thread scheduler).  An M:N hub's pool arms the way epoll does
+ * (runloom_kq_register_persist): one LEVEL knote per direction, EV_ADDed once
+ * into the owner hub's kqueue, and a re-park whose direction the arm cache
+ * (runloom_fd_armed) records SKIPS the kevent.  A LEVEL knote re-reports a
+ * ready fd on every kevent, so -- as in netpoll_rearm.pml -- a delivery that
+ * finds no parker is followed by another one.  What that model does not have
+ * is the pump DROPPING the knote on a miss (the miss grace may keep it a
+ * while; a WRITE or stray one goes at once): runloom_kq_disarm EV_DELETEs it
+ * and clears the cache bit under runloom_pool.lock.  A g that linked after the
+ * miss's dispatch but registered BEFORE the disarm took the skip on the
+ * cached arm, so no knote will ever report for it again.  What closes that is
+ * the pump's re-dispatch AFTER the disarm (netpoll_pump.c.inc): the g is
+ * linked by then, so it is found and woken; a g that registers after the
+ * disarm sees no cached arm and EV_ADDs a fresh knote.  Starts from the
+ * re-park case: knote present, cache armed.
+ *
+ *   -DPERSIST                     PROVEN: no lost wake.
+ *   -DBUG_PERSIST_NO_REDISPATCH   the persistent arm without the re-dispatch
+ *                                 after the disarm -> Spin finds the lost wake.
  */
+#ifdef BUG_PERSIST_NO_REDISPATCH
+#define PERSIST
+#endif
 
 #define ARMED  0
 #define PARKED 1
@@ -64,7 +88,12 @@ byte deliv      = 0;      /* kevent deliveries queued to the pump          */
 /* kq_armed: is the knote currently present/enabled in the kqueue?  Starts 0:
  * the previous park's EV_ONESHOT delivery auto-DELETED the knote, so this park
  * is re-arming from "no knote" (the re-park case the bug controls hinge on). */
+#ifdef PERSIST
+bit  kq_armed   = 1;      /* the persistent LEVEL knote, from a prior park */
+bit  cache_armed = 1;     /* runloom_fd_armed records it                    */
+#else
 bit  kq_armed   = 0;
+#endif
 
 #define LOCK   d_step { (lock == 0) -> lock = 1 }
 #define UNLOCK lock = 0
@@ -80,7 +109,16 @@ active proctype waitfd()
     if
     :: got -> LOCK; linked = 0; UNLOCK; g_runnable = 1; g_done = 1;
     :: else ->
-#ifdef BUG_EV_CLEAR
+#if defined(PERSIST)
+        /* runloom_kq_register_persist: skip on a cached arm, else EV_ADD a
+         * LEVEL knote (the pump's delivery guard re-reports a ready fd). */
+        LOCK;
+        if
+        :: cache_armed -> skip;                              /* zero-syscall skip */
+        :: else        -> kq_armed = 1; cache_armed = 1;     /* EV_ADD, LEVEL     */
+        fi;
+        UNLOCK;
+#elif defined(BUG_EV_CLEAR)
         /* register-once + EV_CLEAR: re-park issues NO kevent (cached no-op);
          * EV_CLEAR is edge-triggered so an already-ready fd is NOT re-reported. */
         skip;
@@ -116,6 +154,46 @@ active proctype waitfd()
     fi;
 }
 
+#ifdef PERSIST
+/* runloom_pump_dispatch_event under pool->lock: claim + wake a linked parker.
+ * Sets `found` when a parker was there. */
+#define DISPATCH(found) \
+    LOCK; \
+    if \
+    :: linked -> \
+        atomic { prior = commit; if :: commit != WOKEN -> commit = WOKEN; :: else -> skip; fi; } \
+        if \
+        :: prior == WOKEN -> skip; \
+        :: else -> linked = 0; \
+                   if :: prior == PARKED -> g_runnable = 1; :: else -> skip; fi; \
+        fi; \
+        found = 1; \
+    :: else -> found = 0; \
+    fi; \
+    UNLOCK
+
+active proctype pump()
+{
+    byte prior;
+    bit found;
+    do
+    :: atomic { (kq_armed && fd_ready) -> skip }    /* the LEVEL knote reports */
+       DISPATCH(found);
+       if
+       :: found -> skip;
+       :: else ->                                   /* a miss: no pending bit */
+          if
+          :: skip;                                  /* the miss grace keeps it */
+          :: LOCK; kq_armed = 0; cache_armed = 0; UNLOCK;   /* runloom_kq_disarm */
+#ifndef BUG_PERSIST_NO_REDISPATCH
+             DISPATCH(found);                       /* the re-dispatch after it */
+#endif
+          fi;
+       fi;
+    :: (g_done) -> break;
+    od;
+}
+#else
 active proctype pump()
 {
     byte prior;
@@ -151,3 +229,4 @@ active proctype pump()
     :: (g_done) -> break;
     od;
 }
+#endif /* PERSIST */

@@ -497,6 +497,10 @@ void runloom_netpoll_reset_after_fork(void)
          * epoll_pool resets to 0xFF ("no owner"), matching arrays_init. */
         if (runloom_fd_armed != NULL) memset(runloom_fd_armed, 0, cap);
         if (runloom_fd_epoll_pool != NULL) memset(runloom_fd_epoll_pool, 0xFF, cap);
+        if (runloom_fd_miss_us != NULL) memset(runloom_fd_miss_us, 0, cap * sizeof(unsigned int));
+#if defined(RUNLOOM_HAVE_KQUEUE)
+        if (runloom_fd_armer != NULL) memset(runloom_fd_armer, 0, 2 * cap * sizeof(unsigned int));
+#endif
     }
 #if defined(RUNLOOM_HAVE_EPOLL)
     /* The per-hub io_uring ring registry names the PARENT hubs' rings (dead in

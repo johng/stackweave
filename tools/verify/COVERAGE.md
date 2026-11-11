@@ -191,7 +191,7 @@ TLA+ `RunloomMnRun`.
 | `netpoll_multipool.pml` | multi-pool dispatch `pool→sub` lock hierarchy |
 | `netpoll_deadline.pml` | fd-dispatch vs timeout-drain vs cancel claim race |
 | `netpoll_forceunlink.pml` | force_unlink vs pump: exactly-once release / no UAF |
-| `netpoll_kqueue.pml` | kqueue `EV_ADD|EV_ONESHOT` re-add arm (BSD/macOS) |
+| `netpoll_kqueue.pml` | kqueue `EV_ADD|EV_ONESHOT` re-add arm (BSD/macOS, default pool); `-DPERSIST`: hub pools' persistent LEVEL arm + miss disarm + re-dispatch |
 | `netpoll_iouring_loop.pml` | **NEW** io_uring-as-loop backend Dekker wake + re-arm |
 | `iouring_msclose.pml` | io_uring multishot handle lifetime, recv vs close: **refcount makes concurrent close-vs-parked-recv UAF-safe** (+ `BUG_NO_REFCOUNT` reproduces the old UAF) |
 | `cross_thread_wake.pml` | Phase C per-thread sched owner-routed wake_safe |
