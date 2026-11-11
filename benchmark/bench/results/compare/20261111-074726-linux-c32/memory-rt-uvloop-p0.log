@@ -1,0 +1,6 @@
+runtime: uvloop  python 3.14.4  gil=False
+
+  rss per parked unit @10k               1.19 KB/unit  (10000 units, RSS 32.1 -> 43.7 MB)
+  rss per parked unit @100k              1.03 KB/unit  (100000 units, RSS 47.2 -> 148.0 MB)
+
+wrote /root/sw/benchmark/bench/results/compare/20261111-074726/memory-rt-uvloop-p0.json

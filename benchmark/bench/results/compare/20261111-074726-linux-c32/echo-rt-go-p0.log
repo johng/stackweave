@@ -1,0 +1,12 @@
+runtime: go go1.26.6  GOMAXPROCS=4 (scaling 1,2,4,8,16)
+
+  c-echo @2h                           157899.3 ops/s      6333.1 ns/op  med= 202.661ms  rsd= 0.9%
+  py-echo @2h                          157899.3 ops/s      6333.1 ns/op  med= 202.661ms  rsd= 0.9%
+  c-echo @4h                           302132.6 ops/s      3309.8 ns/op  med= 105.914ms  rsd= 2.3%
+  py-echo @4h                          302132.6 ops/s      3309.8 ns/op  med= 105.914ms  rsd= 2.3%
+  c-echo @8h                           576627.5 ops/s      1734.2 ns/op  med=  55.495ms  rsd= 0.5%
+  py-echo @8h                          576627.5 ops/s      1734.2 ns/op  med=  55.495ms  rsd= 0.5%
+  c-echo @16h                          970580.4 ops/s      1030.3 ns/op  med=  32.970ms  rsd= 4.2%
+  py-echo @16h                         970580.4 ops/s      1030.3 ns/op  med=  32.970ms  rsd= 4.2%
+
+wrote /root/sw/benchmark/bench/results/compare/20261111-074726/echo-rt-go-p0.json

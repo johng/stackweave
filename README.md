@@ -42,20 +42,20 @@ CPUs, unless a row says otherwise.[^cores] Higher is better unless marked.
 
 | workload | stackweave | best Python runtime | Go |
 | --- | ---: | ---: | ---: |
-| ping-pong, one unbuffered pair (round-trips/s) | 748 k | 191 k (uvloop, GIL build) | 2.71 M |
-| 64 ping-pong pairs (round-trips/s) | 2.91 M | 260 k (uvloop, GIL build) | 4.41 M |
-| yield, 1000 fibers (switches/s) | **9.22 M** | 1.60 M (uvloop, GIL build) | 2.87 M |
-| fan-out 1→32 over a buffered channel (items/s) | 1.29 M | 523 k (uvloop, GIL build) | 4.36 M |
-| spawn a no-op fiber (/s) | 129–302 k | 424 k (uvloop, GIL build) | 2.86 M |
-| TCP echo, Python handler, io_uring loop, 4 / 16 hubs (round-trips/s) | 284 k / **959 k** | 164 k / 487 k (thread per conn) | 305 k / 924 k |
-| HTTP/1.1 JSON API, 64 keep-alive conns (req/s) | 95 k (128 k on the io_uring loop) | 86 k (thread per conn) | 76 k (net/http) |
-| API gateway: 8 × 1 ms backend calls per request (req/s) | 30.4 k | 20.7 k (uvloop, GIL build) | 66 k |
-| JSON parse + sha256 pipeline, 4 workers (records/s) | 465 k | 168 k (gevent) | 711 k |
-| pub/sub broadcast to 256 subscribers (deliveries/s) | 4.79 M | 1.38 M (gevent) | 5.39 M |
-| crawler: 10k concurrent tasks × 3 slow fetches (fetches/s) | 107 k | 244 k (uvloop, GIL build) | 1.72 M |
+| ping-pong, one unbuffered pair (round-trips/s) | 849 k | 197 k (uvloop, GIL build) | 2.74 M |
+| 64 ping-pong pairs (round-trips/s) | 3.47 M | 266 k (uvloop, GIL build) | 4.68 M |
+| yield, 1000 fibers (switches/s) | **9.20 M** | 1.49 M (uvloop, GIL build) | 2.90 M |
+| fan-out 1→32 over a buffered channel (items/s) | 1.33 M | 527 k (uvloop, GIL build) | 4.41 M |
+| spawn a no-op fiber (/s) | 130–273 k | 403 k (uvloop, GIL build) | 2.89 M |
+| TCP echo, Python handler, io_uring loop, 4 / 16 hubs (round-trips/s) | 289 k / 862 k | 164 k / 490 k (thread per conn) | 305 k / 946 k |
+| HTTP/1.1 JSON API, 64 keep-alive conns (req/s) | 93 k (127 k on the io_uring loop) | 84 k (thread per conn) | 74 k (net/http) |
+| API gateway: 8 × 1 ms backend calls per request (req/s) | 29.6 k | 21.1 k (uvloop, GIL build) | 70 k |
+| JSON parse + sha256 pipeline, 4 workers (records/s) | 456 k | 167 k (gevent) | 690 k |
+| pub/sub broadcast to 256 subscribers (deliveries/s) | 4.80 M | 1.36 M (gevent) | 5.45 M |
+| crawler: 10k concurrent tasks × 3 slow fetches (fetches/s) | 98 k | 224 k (uvloop, GIL build) | 1.65 M |
 | memory per parked fiber at 100k (lower is better) | 24 KB | 1.0 KB (uvloop) | 2.4 KB |
-| foreign thread → fiber wake, p50 / p99 (lower is better) | 13 / **20 µs** | 13 / 50 µs (threads) | — |
-| 1 ms timer lateness, p50, io_uring loop (lower is better) | **8.5 µs** | 65 µs (threads) | 382 µs |
+| foreign thread → fiber wake, p50 / p99 (lower is better) | **12 / 18 µs** | 14 / 28 µs (threads) | — |
+| 1 ms timer lateness, p50, io_uring loop (lower is better) | **8.5 µs** | 65 µs (threads) | 331 µs |
 
 [^cores]: Equal parallelism, not the whole box, and not identical CPU masks.
     stackweave runs every fiber on its 4 hub threads (16 in the 16-hub echo
@@ -74,19 +74,19 @@ CPUs, unless a row says otherwise.[^cores] Higher is better unless marked.
     compares runtimes at the same parallelism, not how far each one scales on
     a bigger box.
 
-The short story: stackweave runs message-passing workloads 2.5–11× faster than
-the fastest Python event loop, runs a CPU-bound pipeline 2.8× faster than any
-of them (3.7× faster than threads on 4 CPUs), out-yields Go 3×, and has
-the tightest wakes and timers here. On the HTTP API it is 25% ahead of Go and
-11% ahead of a thread per connection (49% on the io_uring loop), and Python
-echo on the io_uring loop is within 8% of Go at 4 and 8 hubs and 4% ahead of
-it at 16. Go is still 1.5–3.6× ahead on channel hand-offs, and far ahead on
-spawn and on timer-heavy fan-out: 2.2× on the gateway row, and the event loops
-beat stackweave on the crawler. The honest gaps are memory (a parked fiber carries
+The short story: stackweave runs message-passing workloads 2.5–13× faster than
+the fastest Python event loop, runs a CPU-bound pipeline 2.7× faster than any
+of them (3.3× faster than threads on 4 CPUs), out-yields Go 3×, and has
+the tightest wakes and timers here. On the HTTP API it is 27% ahead of Go and
+11% ahead of a thread per connection (52% on the io_uring loop), and Python
+echo on the io_uring loop is within 5–9% of Go at 4, 8 and 16 hubs. Go is
+still 1.35–3.3× ahead on channel hand-offs, and far ahead on spawn and on
+timer-heavy fan-out: 2.4× on the gateway row, and the event loops beat
+stackweave on the crawler. The honest gaps are memory (a parked fiber carries
 a C stack and a thread state, ~10× a goroutine), spawn / sleep cost at 10k+
-fibers, and lock contention: 64 fibers on one `Mutex` run 3.3× slower than 64
+fibers, and lock contention: 64 fibers on one `Mutex` run 3.1× slower than 64
 threads on a `threading.Lock`. Every row and caveat:
-**[latest comparison](benchmark/bench/results/compare/20261110-190556-linux-c32/summary.md)**.
+**[latest comparison](benchmark/bench/results/compare/20261111-074726-linux-c32/summary.md)**.
 
 ```python
 stackweave.optimize("throughput")   # max spawn rate + a 16-worker blocking() pool

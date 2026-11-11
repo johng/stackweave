@@ -1,0 +1,13 @@
+==============================================================================
+suite: apps
+python 3.14.4 CPython  gil=False  | stackweave fcontext-asm/epoll @ bb76842f
+cpu: Intel(R) Xeon(R) Platinum 8358 CPU @ 2.60GHz  | 32 vCPU / 1 NUMA  | pinned=8 cpus [0..7]  aslr=2  load=3.11/4.77/5.53
+tlbc: on (gc_frames_active=1, PYTHON_TLBC=None)  | build: -  | env: STACKWEAVE_BENCH_OPTIMIZE=throughput STACKWEAVE_BLOCKPOOL_WORKERS=16
+==============================================================================
+  http json api 64 conns                94128.1 ops/s     10623.8 ns/op  med= 135.985ms  rsd= 1.0%
+  api gateway fan-out 8 x 1ms           29623.4 ops/s     33757.1 ns/op  med=  67.514ms  rsd= 2.0%
+  parse+hash pipeline 4 workers        454897.9 ops/s      2198.3 ns/op  med=  43.966ms  rsd= 0.5%
+  pub/sub broadcast 256 subs          4696863.3 ops/s       212.9 ns/op  med=  27.252ms  rsd= 3.9%
+  crawler 10k concurrent x 3 fetches    96043.6 ops/s     10411.9 ns/op  med= 312.358ms  rsd=15.7%
+
+wrote /root/sw/benchmark/bench/results/compare/20261111-074726/apps-main-optimize-throughput-p0.json

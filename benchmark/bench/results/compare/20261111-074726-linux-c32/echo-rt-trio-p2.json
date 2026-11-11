@@ -1,0 +1,63 @@
+{
+  "env": {
+    "aslr": "2",
+    "build_label": "",
+    "cpu_model": "Intel(R) Xeon(R) Platinum 8358 CPU @ 2.60GHz",
+    "cpu_perflevels": null,
+    "gc_frames_active": null,
+    "gil_enabled": false,
+    "git_dirty": false,
+    "git_sha": "bb76842f",
+    "governor": "n/a (virtualized)",
+    "host": "stackweave-bench-c32",
+    "iouring_available": null,
+    "kernel": "7.0.0-42-generic",
+    "loadavg": [
+      "7.44",
+      "6.81",
+      "7.88"
+    ],
+    "nproc": 32,
+    "numa_nodes": 1,
+    "optimize": null,
+    "perf_event_paranoid": "4",
+    "pinned_cpus": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "py_cflags": "-fno-strict-overflow -Wsign-compare -Wunreachable-code -DNDEBUG -g -O3 -Wall",
+    "py_config_args": "'--prefix=/opt/py-ft' '--enable-optimizations' '--with-tail-call-interp' '--disable-gil' 'CC=clang-19'",
+    "python": "3.14.4",
+    "python_build": "main Nov 11 2026 07:39:30",
+    "python_impl": "CPython",
+    "python_tlbc_env": null,
+    "runloom_backend": "import-failed: ModuleNotFoundError('import of stackweave_c halted; None in sys.modules')",
+    "runloom_netpoll": "import-failed: ModuleNotFoundError('import of stackweave_c halted; None in sys.modules')",
+    "runloom_so": "import-failed: ModuleNotFoundError('import of stackweave_c halted; None in sys.modules')",
+    "runtime": "trio",
+    "stackweave_env": {},
+    "timestamp": "2026-11-11T09:03:17+00:00"
+  },
+  "results": [
+    {
+      "ci95_hi_s": 1.3753611915000001,
+      "ci95_lo_s": 1.3668591829999999,
+      "inner": 32000,
+      "mad_s": 0.003764060000000069,
+      "mean_s": 1.37023972075,
+      "median_s": 1.3703437735000001,
+      "min_s": 1.354358266,
+      "name": "py-echo @4h",
+      "note": "serve_tcp + 64 client tasks, one trio.run",
+      "ops_per_s": 23351.804575481583,
+      "per_op_ns": 42823.242921875004,
+      "per_op_s": 4.2823242921875005e-05,
+      "rsd_pct": 0.5686635200960674,
+      "samples": 12,
+      "stdev_s": 0.007792053429771472
+    }
+  ],
+  "suite": "baseline-trio"
+}

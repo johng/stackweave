@@ -1,0 +1,13 @@
+==============================================================================
+suite: apps
+python 3.14.4 CPython  gil=False  | stackweave fcontext-asm/epoll @ bb76842f
+cpu: Intel(R) Xeon(R) Platinum 8358 CPU @ 2.60GHz  | 32 vCPU / 1 NUMA  | pinned=8 cpus [0..7]  aslr=2  load=13.25/11.01/8.59
+tlbc: on (gc_frames_active=1, PYTHON_TLBC=None)  | build: -  | env: STACKWEAVE_TCPCONN_IOURING=1
+==============================================================================
+  http json api 64 conns                73226.8 ops/s     13656.2 ns/op  med= 174.799ms  rsd= 0.6%
+  api gateway fan-out 8 x 1ms           29595.3 ops/s     33789.2 ns/op  med=  67.578ms  rsd= 2.9%
+  parse+hash pipeline 4 workers        458538.8 ops/s      2180.8 ns/op  med=  43.617ms  rsd= 0.5%
+  pub/sub broadcast 256 subs          4810964.6 ops/s       207.9 ns/op  med=  26.606ms  rsd= 3.4%
+  crawler 10k concurrent x 3 fetches   102648.9 ops/s      9741.9 ns/op  med= 292.258ms  rsd=11.4%
+
+wrote /root/sw/benchmark/bench/results/compare/20261111-074726/apps-before-tcpconn-iouring-p1.json

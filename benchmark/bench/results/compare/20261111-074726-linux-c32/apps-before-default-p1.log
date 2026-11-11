@@ -1,0 +1,13 @@
+==============================================================================
+suite: apps
+python 3.14.4 CPython  gil=False  | stackweave fcontext-asm/epoll @ bb76842f
+cpu: Intel(R) Xeon(R) Platinum 8358 CPU @ 2.60GHz  | 32 vCPU / 1 NUMA  | pinned=8 cpus [0..7]  aslr=2  load=9.89/10.40/8.45
+tlbc: on (gc_frames_active=1, PYTHON_TLBC=None)  | build: -  | env: -
+==============================================================================
+  http json api 64 conns                92856.0 ops/s     10769.4 ns/op  med= 137.848ms  rsd= 0.9%
+  api gateway fan-out 8 x 1ms           30162.0 ops/s     33154.3 ns/op  med=  66.309ms  rsd= 1.4%
+  parse+hash pipeline 4 workers        455898.3 ops/s      2193.5 ns/op  med=  43.869ms  rsd= 0.6%
+  pub/sub broadcast 256 subs          4705583.8 ops/s       212.5 ns/op  med=  27.202ms  rsd= 3.3%
+  crawler 10k concurrent x 3 fetches   100403.1 ops/s      9959.8 ns/op  med= 298.795ms  rsd=14.5%
+
+wrote /root/sw/benchmark/bench/results/compare/20261111-074726/apps-before-default-p1.json
