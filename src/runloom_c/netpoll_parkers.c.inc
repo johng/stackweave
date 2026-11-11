@@ -283,7 +283,13 @@ static runloom_parker_pool_t *runloom_parker_pool_for_hub(void *hub_opaque)
  * padded slot per hub (the calling thread's hub id; RUNLOOM_PARKER_POOL_HUBS for
  * any other thread), so counting does not add a shared cache line to the very
  * paths it measures; off, each site is one predictable branch.  stats() sums
- * the slots (netpoll_c_<name>). */
+ * the slots (netpoll_c_<name>).
+ *
+ * The slots are allocated when the counters are turned on, never static: 16 KB
+ * of 256-aligned .bss moved every later global of the module, and that alone
+ * cost same-hub ping-pong 7% and a contended Mutex 9% on a Linux c-8 (Xeon
+ * 8358) with the counters off -- the same loss as an unused array of that size
+ * added to the build before them (more L2 misses, the same instructions). */
 enum {
     RUNLOOM_NPC_REG_SKIP, RUNLOOM_NPC_REG_CTL, RUNLOOM_NPC_REG_LOCK_WAIT,
     RUNLOOM_NPC_SHARED_MOVE, RUNLOOM_NPC_SHARED_DRAIN, RUNLOOM_NPC_SHARED_EV,
@@ -304,27 +310,61 @@ static const char *const runloom_npc_names[RUNLOOM_NPC__N] = {
 typedef struct {
     unsigned long long v[RUNLOOM_NPC__N];
 } __attribute__((aligned(256))) runloom_npc_slot_t;
-static runloom_npc_slot_t runloom_npc[RUNLOOM_PARKER_POOL_HUBS + 1];
+#define RUNLOOM_NPC_SLOTS (RUNLOOM_PARKER_POOL_HUBS + 1)
+static runloom_npc_slot_t *runloom_npc;   /* NULL until the counters turn on */
 static int runloom_npc_on = -1;
+
+/* Decided once per process, by whichever thread first reaches a counting site:
+ * read the variable and, when it is on, allocate and publish the slots BEFORE
+ * the flag, then settle the flag with a CAS from -1.  A thread that loses the
+ * CAS returns the winner's answer (and frees slots that never got published),
+ * so the flag can never flip after it is set.  If the slots cannot be
+ * allocated, the counters stay off and say so once on stderr. */
+static RUNLOOM_NOINLINE int runloom_npc_init(void)
+{
+    const char *e = getenv("STACKWEAVE_NETPOLL_COUNTERS");
+    int on = (e != NULL && e[0] != '\0' && e[0] != '0') ? 1 : 0;
+    int expected = -1, failed = 0;
+    if (on) {
+        void *m = NULL;
+        runloom_npc_slot_t *none = NULL;
+        size_t sz = sizeof(runloom_npc_slot_t) * RUNLOOM_NPC_SLOTS;
+        if (posix_memalign(&m, sizeof(runloom_npc_slot_t), sz) == 0) {
+            memset(m, 0, sz);
+            if (!__atomic_compare_exchange_n(&runloom_npc, &none, (runloom_npc_slot_t *)m,
+                                             0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+                free(m);                      /* another thread published first */
+        } else {
+            on = 0;
+            failed = 1;
+        }
+    }
+    if (!__atomic_compare_exchange_n(&runloom_npc_on, &expected, on, 0,
+                                     __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+        return expected;                      /* another thread decided first */
+    if (failed)
+        fprintf(stderr, "stackweave: STACKWEAVE_NETPOLL_COUNTERS is set, but the "
+                        "counter slots could not be allocated; netpoll counters off\n");
+    return on;
+}
 
 static int runloom_npc_enabled(void)
 {
     int on = __atomic_load_n(&runloom_npc_on, __ATOMIC_RELAXED);
-    if (__builtin_expect(on < 0, 0)) {
-        const char *e = getenv("STACKWEAVE_NETPOLL_COUNTERS");
-        on = (e != NULL && e[0] != '\0' && e[0] != '0') ? 1 : 0;
-        __atomic_store_n(&runloom_npc_on, on, __ATOMIC_RELAXED);
-    }
+    if (__builtin_expect(on < 0, 0)) on = runloom_npc_init();
     return on;
 }
 
 static RUNLOOM_NOINLINE void runloom_npc_add(int k, unsigned long long n)
 {
     int id = -1;
-    void *h = runloom_mn_current_hub_opaque();
+    void *h;
+    runloom_npc_slot_t *slots = __atomic_load_n(&runloom_npc, __ATOMIC_ACQUIRE);
+    if (slots == NULL) return;
+    h = runloom_mn_current_hub_opaque();
     if (h != NULL) id = runloom_mn_hub_id_of(h);
     if (id < 0 || id >= RUNLOOM_PARKER_POOL_HUBS) id = RUNLOOM_PARKER_POOL_HUBS;
-    __atomic_add_fetch(&runloom_npc[id].v[k], n, __ATOMIC_RELAXED);
+    __atomic_add_fetch(&slots[id].v[k], n, __ATOMIC_RELAXED);
 }
 
 #define RUNLOOM_NPC(k, n) \
@@ -389,9 +429,10 @@ unsigned long long runloom_netpoll_counter(int k)
 {
     unsigned long long t = 0;
     int i;
-    if (k < 0 || k >= RUNLOOM_NPC__N) return 0;
-    for (i = 0; i <= RUNLOOM_PARKER_POOL_HUBS; i++)
-        t += __atomic_load_n(&runloom_npc[i].v[k], __ATOMIC_RELAXED);
+    runloom_npc_slot_t *slots = __atomic_load_n(&runloom_npc, __ATOMIC_ACQUIRE);
+    if (k < 0 || k >= RUNLOOM_NPC__N || slots == NULL) return 0;
+    for (i = 0; i < RUNLOOM_NPC_SLOTS; i++)
+        t += __atomic_load_n(&slots[i].v[k], __ATOMIC_RELAXED);
     return t;
 }
 

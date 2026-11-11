@@ -107,6 +107,13 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   `bytearray(N)` slot per goroutine — a shared `+= 1` loses increments GIL-off).
 - Loopback packets traverse the host nft ruleset (~14% throughput tax) — pass
   `--netns` to big_100 for a clean number.
+- The hub resume path is layout-sensitive on Linux: ping-pong, local-wake and
+  a contended `Mutex` move 5-9% when unrelated code or `.bss` elsewhere in the
+  module moves (an unused 16 KB array did it alone; `-falign-functions=64`
+  does not cure it). Before blaming a change for a few % there, A/B it in
+  interleaved rounds against a build with an equal-size dummy change. Keep
+  big DIAG tables off `.bss` (allocate them when enabled, like the netpoll
+  counters; guard: `tests/test_netpoll_counters.py`).
 
 ## Scheduler invariants
 - **A freed `runloom_g` struct never returns to the OS.** `slab_free` retains it
