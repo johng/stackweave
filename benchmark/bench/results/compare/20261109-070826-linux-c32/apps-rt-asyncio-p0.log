@@ -1,0 +1,9 @@
+runtime: asyncio  python 3.14.4  gil=False
+
+  http json api 64 conns                22203.7 ops/s     45037.6 ns/op  med= 576.481ms  rsd= 0.6%
+  api gateway fan-out 8 x 1ms           10020.2 ops/s     99798.7 ns/op  med= 199.597ms  rsd= 0.4%
+  parse+hash pipeline 4 workers        127638.6 ops/s      7834.6 ns/op  med= 156.692ms  rsd= 1.1%
+  pub/sub broadcast 256 subs          1006893.3 ops/s       993.2 ns/op  med= 127.124ms  rsd= 0.6%
+  crawler 10k concurrent x 3 fetches   104608.8 ops/s      9559.4 ns/op  med= 286.783ms  rsd= 1.7%
+
+wrote /root/sw/benchmark/bench/results/compare/20261109-070826/apps-rt-asyncio-p0.json

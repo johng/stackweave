@@ -192,6 +192,11 @@ int runloom_mn_pin_for_wake(runloom_g_t *g, int hub_id);
  * runs its loop top promptly.  Safe from any thread; NULL is a no-op. */
 void runloom_mn_hub_kick(void *hub_opaque);
 
+/* Signal hub `hub_idx` out of its idle condvar wait, if it is in one (one
+ * relaxed load otherwise): netpoll calls it when a waiter parks, from another
+ * hub, on an fd whose epoll that hub owns and is not polling right now. */
+void runloom_mn_hub_kick_if_idle(int hub_idx);
+
 /* Bulk-spawn n fibers all running `callable`, looping the spawn core in C
  * (skips n Python->C dispatches + per-call arg parsing).  indexed != 0 calls
  * each as callable(i) for i in 0..n-1 (per-fiber arg); 0 calls callable().
@@ -285,6 +290,17 @@ unsigned long long runloom_mn_c_caller_holds(void);
  * migrates.  Only the running fiber's own thread calls it. */
 int runloom_mn_hold_here(int delta);
 
+/* Preemption (mn_sched_hub_resume_preempt.c.inc).  fiber_breaker_available:
+ * the running interpreter exports the exec-home patch's eval-breaker fiber hook
+ * (_PyEval_SetFiberBreakerHook / _PyEval_RequestFiberBreak, looked up at run
+ * time, so one build loads on interpreters with and without it), which
+ * preemption uses in place of a PEP 523 eval-frame wrapper.  via_breaker: 1
+ * once installed that way (stats "preempt_via_breaker"); yields: preemption
+ * yields taken, any site (stats "preempt_yields", an odometer). */
+int                runloom_mn_fiber_breaker_available(void);
+int                runloom_mn_preempt_via_breaker(void);
+unsigned long long runloom_mn_preempt_yields(void);
+
 /* ---- per-hub diagnostic snapshot (runloom.inspect.hubs()) ----
  * A point-in-time view of every hub's scheduler state, for answering
  * "what is each hub doing / is any hub wedged, on what, for how long".
@@ -299,7 +315,15 @@ int runloom_mn_hold_here(int delta);
  * and hubinfo's blocked_at frame walk takes the same hazard. */
 struct runloom_hub;                       /* defined in mn_sched.c */
 void runloom_sysmon_tstate_retire_wait(PyThreadState *ts);
+/* The per-hub-thread pool of reset per-g thread states
+ * (mn_sched_hub_resume_preempt.c.inc). */
+int runloom_mn_tspool_on(void);
+PyThreadState *runloom_mn_tspool_get(void);
+int runloom_mn_tspool_put(PyThreadState *ts);
+unsigned long long runloom_mn_tspool_hits(void);
 int  runloom_sysmon_hub_attach_state(struct runloom_hub *h, PyThreadState *hts);
+void runloom_sysmon_request_break(struct runloom_hub *h);
+void runloom_mn_request_fiber_break(PyThreadState *ts);
 
 typedef struct runloom_hub_info {
     int       id;                 /* dense hub index 0..count-1 */

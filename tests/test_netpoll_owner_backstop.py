@@ -44,21 +44,12 @@ def _move_to_hub(hub):
     raise AssertionError("never resumed on hub %d" % hub)
 
 
-def test_reader_on_a_wedged_hub_wakes_on_another_hub():
+def _run_wedged(reader, st):
+    """Run `reader` (which sets st["parked"] once parked), wedge hub 0's thread
+    in a C sleep for WEDGE_S, and write from a plain OS thread -- not a fiber:
+    one that happened to sit on hub 0 would wait out the wedge too (its sleep
+    timer is on hub 0's heap), a different gap from the one under test."""
     libc = ctypes.CDLL(ctypes.util.find_library("c"))
-    a, b = socket.socketpair()
-    a.setblocking(False)
-    b.setblocking(False)
-    st = {}
-
-    def reader():
-        g = _move_to_hub(0)
-        g.pin(None)                       # still on hub 0; its wake may go anywhere
-        st["park_hub"] = stackweave_c.mn_current_hub()
-        st["parked"] = True
-        st["ready"] = stackweave_c.wait_fd(a.fileno(), READ, 10000)
-        st["woke_at"] = time.monotonic()
-        st["wake_hub"] = stackweave_c.mn_current_hub()
 
     def wedge():
         _move_to_hub(0)
@@ -67,13 +58,13 @@ def test_reader_on_a_wedged_hub_wakes_on_another_hub():
         st["unwedged_at"] = time.monotonic()
         stackweave_c.current_g().pin(None)
 
-    def writer():                         # a plain OS thread, not a fiber
+    def writer():
         deadline = time.monotonic() + 30
         while "wedged_at" not in st and time.monotonic() < deadline:
             time.sleep(0.001)
         time.sleep(0.05)
         st["sent_at"] = time.monotonic()
-        b.send(b"x")
+        st["b"].send(b"x")
 
     def main():                           # run() returns once both fibers finish
         stackweave.fiber(reader)
@@ -85,18 +76,73 @@ def test_reader_on_a_wedged_hub_wakes_on_another_hub():
         t.start()
         st["writer"] = t
 
-    try:
-        stackweave.run(HUBS, main)
-        st["writer"].join(30)
-    finally:
-        a.close()
-        b.close()
+    stackweave.run(HUBS, main)
+    st["writer"].join(30)
 
-    assert st["park_hub"] == 0
+
+def _socketpair(st):
+    a, b = socket.socketpair()
+    a.setblocking(False)
+    b.setblocking(False)
+    st["b"] = b
+    return a, b
+
+
+def _assert_woke_during_wedge(st, what):
     assert st["ready"] & READ, st
     late = st["woke_at"] - st["sent_at"]
     assert late < WAKE_LIMIT_S, (
-        "the reader waited %.3f s for its wedged hub (wedge %.1f s): nothing "
-        "polled hub 0's fds while it was stuck" % (late, WEDGE_S))
+        "the reader waited %.3f s for wedged hub 0 (wedge %.1f s): %s"
+        % (late, WEDGE_S, what))
     assert st["woke_at"] < st["unwedged_at"], st
+
+
+def test_reader_on_a_wedged_hub_wakes_on_another_hub():
+    st = {}
+    a, b = _socketpair(st)
+
+    def reader():
+        g = _move_to_hub(0)
+        g.pin(None)                       # still on hub 0; its wake may go anywhere
+        st["park_hub"] = stackweave_c.mn_current_hub()
+        st["parked"] = True
+        st["ready"] = stackweave_c.wait_fd(a.fileno(), READ, 10000)
+        st["woke_at"] = time.monotonic()
+        st["wake_hub"] = stackweave_c.mn_current_hub()
+
+    try:
+        _run_wedged(reader, st)
+    finally:
+        a.close()
+        b.close()
+    assert st["park_hub"] == 0
+    _assert_woke_during_wedge(st, "nothing polled hub 0's fds while it was stuck")
     assert st["wake_hub"] != 0, st
+
+
+def test_reader_parked_from_another_hub_on_a_wedged_owners_fd_wakes():
+    # On epoll the fd stays in the epoll of the hub that first armed it, even
+    # when its reader later parks from another hub -- whose pool then holds the
+    # parker while the owner's holds none.  The backstop must poll the owner
+    # anyway: it used to skip a hub with no parkers of its own, stranding this
+    # reader for the whole wedge.
+    st = {}
+    a, b = _socketpair(st)
+
+    def reader():
+        _move_to_hub(0)
+        stackweave_c.wait_fd(a.fileno(), READ, 5)    # arms the fd on hub 0, times out
+        g = _move_to_hub(1)
+        g.pin(None)
+        st["park_hub"] = stackweave_c.mn_current_hub()
+        st["parked"] = True
+        st["ready"] = stackweave_c.wait_fd(a.fileno(), READ, 10000)
+        st["woke_at"] = time.monotonic()
+
+    try:
+        _run_wedged(reader, st)
+    finally:
+        a.close()
+        b.close()
+    assert st["park_hub"] == 1
+    _assert_woke_during_wedge(st, "its fd sits in hub 0's epoll")

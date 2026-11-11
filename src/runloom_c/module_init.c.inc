@@ -662,6 +662,14 @@ PyMODINIT_FUNC PyInit_stackweave_c(void)
         Py_DECREF(m);
         return NULL;
     }
+    /* Whether this build preempts through the interpreter's eval-breaker fiber
+     * hook (the exec-home patch's _PyEval_SetFiberBreakerHook) instead of a PEP
+     * 523 eval-frame wrapper, which deoptimizes every Python call (mn_sched.h). */
+    if (PyModule_AddIntConstant(m, "fiber_breaker_hook",
+                                runloom_mn_fiber_breaker_available()) < 0) {
+        Py_DECREF(m);
+        return NULL;
+    }
     /* Install the blockpool worker-thread teardown hook so each offload worker
      * releases the persistent Python tstate it lazily created (see
      * py_blocking_worker) on its own thread at exit -- before any worker starts

@@ -699,6 +699,9 @@ int runloom_netpoll_wait_fd(int fd, int events, long long timeout_ns)
         runloom_parker_pool_release(park);
         return -1;
     }
+#if defined(RUNLOOM_HAVE_EPOLL)
+    runloom_np_kick_owner_if_idle(fd, pool);
+#endif
 
     /* Re-check pending bits after register: the ADD may have
      * synthesized an edge that another hub's pump processed in the

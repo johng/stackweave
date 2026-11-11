@@ -1,0 +1,63 @@
+{
+  "env": {
+    "aslr": "2",
+    "build_label": "",
+    "cpu_model": "Intel(R) Xeon(R) Platinum 8358 CPU @ 2.60GHz",
+    "cpu_perflevels": null,
+    "gc_frames_active": null,
+    "gil_enabled": false,
+    "git_dirty": false,
+    "git_sha": "cb25055d",
+    "governor": "n/a (virtualized)",
+    "host": "stackweave-bench-c32",
+    "iouring_available": null,
+    "kernel": "7.0.0-42-generic",
+    "loadavg": [
+      "4.50",
+      "6.07",
+      "6.11"
+    ],
+    "nproc": 32,
+    "numa_nodes": 1,
+    "optimize": null,
+    "perf_event_paranoid": "4",
+    "pinned_cpus": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "py_cflags": "-fno-strict-overflow -Wsign-compare -Wunreachable-code -DNDEBUG -g -O3 -Wall",
+    "py_config_args": "'--prefix=/opt/py-ft' '--enable-optimizations' '--with-tail-call-interp' '--disable-gil' 'CC=clang-19'",
+    "python": "3.14.4",
+    "python_build": "main Nov 10 2026 19:03:33",
+    "python_impl": "CPython",
+    "python_tlbc_env": null,
+    "runloom_backend": "import-failed: ModuleNotFoundError('import of stackweave_c halted; None in sys.modules')",
+    "runloom_netpoll": "import-failed: ModuleNotFoundError('import of stackweave_c halted; None in sys.modules')",
+    "runloom_so": "import-failed: ModuleNotFoundError('import of stackweave_c halted; None in sys.modules')",
+    "runtime": "gevent",
+    "stackweave_env": {},
+    "timestamp": "2026-11-10T19:27:04+00:00"
+  },
+  "results": [
+    {
+      "ci95_hi_s": 0.876357847,
+      "ci95_lo_s": 0.871780472,
+      "inner": 32000,
+      "mad_s": 0.0015378659999999988,
+      "mean_s": 0.8743919220833334,
+      "median_s": 0.8751662135,
+      "min_s": 0.869742884,
+      "name": "py-echo @4h",
+      "note": "StreamServer + 64 client greenlets",
+      "ops_per_s": 36564.482844949314,
+      "per_op_ns": 27348.944171875002,
+      "per_op_s": 2.7348944171875e-05,
+      "rsd_pct": 0.3330740037794124,
+      "samples": 12,
+      "stdev_s": 0.0029123721836067182
+    }
+  ],
+  "suite": "baseline-gevent"
+}

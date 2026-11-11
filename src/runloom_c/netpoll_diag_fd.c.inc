@@ -549,6 +549,13 @@ static inline void runloom_np_miss_clear(int fd)
         __atomic_load_n(&a[fd], __ATOMIC_RELAXED) != 0)
         __atomic_store_n(&a[fd], 0u, __ATOMIC_RELAXED);
 }
+/* Whether fd's arm lives in a live hub's own epoll, not the shared one. */
+static inline int runloom_np_owned_by_live_hub(int fd)
+{
+    int ow = runloom_fd_epoll_pool_get(fd);
+    return ow >= 0 && ow < RUNLOOM_PARKER_POOL_HUBS && ow < runloom_mn_hub_count();
+}
+
 static int runloom_np_miss_defer(int fd)
 {
     unsigned int *a = runloom_fd_miss_us;

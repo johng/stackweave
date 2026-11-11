@@ -117,6 +117,12 @@ Lives in a **parker pool**, one per hub (up to
 `RUNLOOM_PARKER_POOL_HUBS`, 64), so registration and wake don't serialise
 across hubs on one kernel lock.
 
+**thread-state pool** — each hub thread keeps the per-g `PyThreadState`s
+of fibers that finished on it, reset, and gives them to its next spawns
+instead of creating fresh ones (`STACKWEAVE_TSTATE_POOL`, 64 per hub): 2-3x
+spawn throughput, more at high hub counts, where creating a state serialized
+the hubs on interpreter-wide mutexes.
+
 **per-hub epoll** — each hub polls its own epoll set plus a wake eventfd,
 instead of all hubs sharing one `runloom_epoll_fd`. Measured **+34–40 %**
 saturation throughput on a 64-core box versus the old shared set. An fd stays
@@ -126,8 +132,8 @@ fd whose owner is not a live hub moves to the shared epoll. kqueue does the
 same with a LEVEL knote per armed direction (one-shot only for the default
 pool), so a re-park on an armed fd costs no `kevent` call.
 
-**netpoll backstop** — sysmon polls the epoll (or kqueue) of a hub that has
-parkers, is not blocked in its own poll, and has gone
+**netpoll backstop** — while anything is parked, sysmon polls the epoll (or
+kqueue) of a hub that is not blocked in its own poll and has gone
 `STACKWEAVE_NETPOLL_BACKSTOP_MS` (5) without starting one: a hub running one
 long fiber or stuck in a C call would otherwise hold every waiter whose fd it
 polls. Go's sysmon does the same for its one poller (10 ms).

@@ -55,6 +55,9 @@
 
 #include <errno.h>
 #include <stdlib.h>
+#if !defined(_WIN32)
+#  include <dlfcn.h>   /* dlsym: runloom_mn_fiber_breaker_available */
+#endif
 #include <stdio.h>
 #include <string.h>
 #include <stdalign.h>   /* alignas for cache-line padding (B4 / R6) */
@@ -284,6 +287,16 @@ typedef struct runloom_hub {
      * runloom_mn_any_stealable_work.  PyMem_Calloc'd with the hub array, so no
      * per-session reset.  Pin contract: mn_sched.h, runloom_mn_fiber_pinned. */
     volatile long        runq_pinned_n;
+    /* Finished fibers' per-g thread states, reset and kept for the next spawn
+     * on this hub's thread instead of PyThreadState_New
+     * (runloom_mn_tspool_get/put).  Only this hub's own thread touches them;
+     * malloc'd at first use, drained and freed at hub exit. */
+    PyThreadState      **tspool;
+    int                  tspool_n;
+    /* Spawns served from tspool or the depot (stats "tstate_pool_hits"). */
+    unsigned long long   tspool_hits;
+    /* Thread-state ids reserved for reused states, [next, end). */
+    unsigned long long   tspool_id_next, tspool_id_end;
 } runloom_hub_t;
 
 /* B4/R6: enforce that every hub array element starts on its own cache line, so

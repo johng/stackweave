@@ -66,8 +66,33 @@ int runloom_sysmon_hub_attach_state(runloom_hub_t *h, PyThreadState *hts)
     return tss;
 }
 
-/* sysmon watchdog thread.  Holds NO GIL and NO tstate -- it only reads
- * per-hub atomics and writes to stderr, never touching the Python C-API.
+/* Ask CPython to run the eval-breaker fiber hook on the thread state hub `h`
+ * is running now (runloom_preempt_breaker_hook): the fiber's own tstate under
+ * migration, read under the same hazard as hub_attach_state so it cannot be
+ * freed between the read and the request.  None (between two resumes): nothing
+ * to preempt; sysmon asks again next tick if the next resume wedges.  A request
+ * that lands on a resume that has since ended is harmless: it stays on that
+ * tstate until it next runs, and the hook drops a request naming another
+ * resume (runloom_mn_preempt_due). */
+void runloom_sysmon_request_break(runloom_hub_t *h)
+{
+    void *ts = __atomic_load_n((void **)&h->resume_tstate, __ATOMIC_ACQUIRE);
+    if (ts == NULL) return;
+    runloom_mutex_lock(&runloom_sysmon_hazard_lock);
+    __atomic_store_n(&runloom_sysmon_hazard_ts, ts, __ATOMIC_RELEASE);
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    if (__atomic_load_n((void **)&h->resume_tstate, __ATOMIC_ACQUIRE) == ts)
+        runloom_mn_request_fiber_break((PyThreadState *)ts);
+    /* else: the resume ended under us; sysmon re-requests next tick */
+    __atomic_store_n(&runloom_sysmon_hazard_ts, (void *)NULL, __ATOMIC_RELEASE);
+    runloom_mutex_unlock(&runloom_sysmon_hazard_lock);
+}
+
+/* sysmon watchdog thread.  Holds NO GIL and NO tstate, and never touches the
+ * Python C-API.  It reads per-hub atomics and writes to stderr -- and, as the
+ * netpoll backstop, polls a stopped hub's poller and wakes its waiters
+ * (runloom_netpoll_backstop_poll: takes parker-pool locks and
+ * runloom_pool.lock, wakes fibers as a foreign waker).
  * Scans every runloom_sysmon_tick_ns; logs a hub whose current runloom_coro_resume
  * has run longer than runloom_sysmon_wedge_ns (an unanticipated non-yielding
  * block), once per wedge episode, and a matching "recovered" line so a run's
@@ -139,44 +164,57 @@ static RUNLOOM_THREAD_RET runloom_sysmon_main(void *arg)
                 w_seq[i]   = seq;
                 w_start[i] = start;
             }
-            /* Preemption dispatch.  An ATTACHED wedge holds its tstate -> ask
-             * the eval-frame wrapper to yield the running g at its next Python
-             * frame.  Re-armed every tick the wedge persists (the wrapper clears
-             * it on each yield), giving periodic time-slicing.  (A DETACHED wedge
-             * needs no dispatch: work-stealing already drains its fresh fibers to
-             * idle hubs.) */
+            /* Preemption dispatch.  An ATTACHED wedge holds its tstate -> name
+             * the resume to preempt (preempt_seq) and ask for it to yield.
+             * Re-armed every tick the wedge persists (each yield clears it),
+             * giving periodic time-slicing.  (A DETACHED wedge needs no
+             * dispatch: work-stealing already drains its fresh fibers to idle
+             * hubs.)  Where the interpreter has the eval-breaker fiber hook,
+             * the ask is a break request on the running tstate, which reaches
+             * the hook at the fiber's next function entry or loop back-edge --
+             * single-frame loops included -- and nothing below is needed. */
             if (start != 0 &&
                 (now - start) > runloom_sysmon_preempt_ns &&
                 tss == RUNLOOM_TS_ATTACHED &&
                 __atomic_load_n(&runloom_preempt_enabled, __ATOMIC_RELAXED)) {
-                __atomic_store_n(&h->preempt_seq, seq, __ATOMIC_RELAXED);
-                /* Single-frame liveness backstop: the eval-frame flag above only
-                 * fires at a Python FRAME boundary, so it cannot break a
-                 * single-frame `while: pass` (no calls -> no frame entry).  Post
-                 * an eval-breaker pending call too; it rides backward-jump checks
-                 * INSIDE the frame and yields the running g (flags=0 -> runs on
-                 * the wedged HUB thread, not the parked main thread).  This is
-                 * needed in the DEFAULT scheduler as well, not only the controlled
-                 * one: at H=1 (or any time the single sibling shares the wedged
-                 * hub) there is no parallel hub to make progress while a
-                 * single-frame loop spins, so without this the sibling starves
-                 * (test_preemption_busy_loop_yields_to_sibling at H=1 hung on a
-                 * scheduling order that ran the busy loop first).  Frame-bearing
-                 * code is already broken off by the wrapper above; the extra
-                 * pending call there only yields a g that is anyway about to
-                 * yield, which is harmless. */
+                /* RELEASE: the hook reads it after taking the request, whose
+                 * own release store (_PyEval_RequestFiberBreak) follows this. */
+                __atomic_store_n(&h->preempt_seq, seq, __ATOMIC_RELEASE);
+                if (runloom_mn_preempt_via_breaker()) {
+                    if (!runloom_mn_ctrl_armed())
+                        runloom_sysmon_request_break(h);
+                } else {
+                    /* Without the hook: the eval-frame wrapper reads preempt_seq
+                     * at the running g's next Python frame entry.
+                     *
+                     * Single-frame liveness backstop: the eval-frame flag above only
+                     * fires at a Python FRAME boundary, so it cannot break a
+                     * single-frame `while: pass` (no calls -> no frame entry).  Post
+                     * an eval-breaker pending call too; it rides backward-jump checks
+                     * INSIDE the frame and yields the running g (flags=0 -> runs on
+                     * the wedged HUB thread, not the parked main thread).  This is
+                     * needed in the DEFAULT scheduler as well, not only the controlled
+                     * one: at H=1 (or any time the single sibling shares the wedged
+                     * hub) there is no parallel hub to make progress while a
+                     * single-frame loop spins, so without this the sibling starves
+                     * (test_preemption_busy_loop_yields_to_sibling at H=1 hung on a
+                     * scheduling order that ran the busy loop first).  Frame-bearing
+                     * code is already broken off by the wrapper above; the extra
+                     * pending call there only yields a g that is anyway about to
+                     * yield, which is harmless. */
 #ifdef RUNLOOM_MN_LIVENESS_BACKSTOP
-                /* Skipped under the armed controlled scheduler (MN_SIM_DST_PLAN
-                 * I2 gate [7]): this wall-clock pending-call injects an
-                 * unconditional yield at an OS-timing-decided frame -- exactly
-                 * the nondeterministic escape the seed forbids; the
-                 * deterministic frame-count preempt is the liveness story
-                 * under the barrier. */
-                if (runloom_mn_interp != NULL && !runloom_mn_ctrl_armed()) {
-                    _PyEval_AddPendingCall(runloom_mn_interp,
-                                           runloom_mn_liveness_pending_cb, NULL, 0);
-                }
+                    /* Skipped under the armed controlled scheduler (MN_SIM_DST_PLAN
+                     * I2 gate [7]): this wall-clock pending-call injects an
+                     * unconditional yield at an OS-timing-decided frame -- exactly
+                     * the nondeterministic escape the seed forbids; the
+                     * deterministic frame-count preempt is the liveness story
+                     * under the barrier. */
+                    if (runloom_mn_interp != NULL && !runloom_mn_ctrl_armed()) {
+                        _PyEval_AddPendingCall(runloom_mn_interp,
+                                               runloom_mn_liveness_pending_cb, NULL, 0);
+                    }
 #endif
+                }
             }
         }
         /* Netpoll backstop: each fd is polled by one hub (on epoll the hub
@@ -185,8 +223,9 @@ static RUNLOOM_THREAD_RET runloom_sysmon_main(void *arg)
          * fiber, or stuck in a C call -- gets its poller polled from here, so
          * those waiters wake and run on other hubs (Go's sysmon polls its
          * netpoller after 10 ms).  Guard: tests/test_netpoll_owner_backstop.py. */
-        for (i = 0; i < n; i++)
-            (void)runloom_netpoll_backstop_poll(i, now);
+        if (runloom_netpoll_parked_count() > 0)
+            for (i = 0; i < n; i++)
+                (void)runloom_netpoll_backstop_poll(i, now);
         /* Piggyback the depot auto-cap recompute on the watchdog tick: decay the
          * live-stack watermark, resize the pool cap.  Cheap, off the hot path. */
         runloom_stack_autocap_tick();

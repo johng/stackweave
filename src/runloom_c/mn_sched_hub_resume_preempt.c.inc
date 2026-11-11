@@ -1178,6 +1178,210 @@ static PyInterpreterState *runloom_mn_interp = NULL;
 static RUNLOOM_TLS runloom_hub_t *runloom_tls_hub = NULL;
 static RUNLOOM_TLS runloom_g_t   *runloom_tls_current_g = NULL;
 
+/* ---- Per-g thread-state pool (CLAUDE.md, "A finished fiber's thread state is
+ * reset and reused") ------------------------------------------------------------
+ * A finished fiber's PyThreadState, reset by runloom_iframe_recycle_fiber_tstate,
+ * goes to the pool of the hub thread it finished on, and the next spawn on that
+ * thread takes it instead of PyThreadState_New: no calloc, QSBR reserve and
+ * unregister, TLBC index, mimalloc bind, HEAD_LOCK or brc insert and remove per
+ * fiber -- most of a spawn's cost, and most of what serialized spawns across
+ * hubs.  Each hub's pool is touched only by its own thread (spawn and the
+ * final decref never park); a mutex depot evens out hubs whose spawns and
+ * completions don't balance.  Drained at hub exit (on the hub, its state
+ * current) and in mn_fini (the depot, on the main thread); a fork child
+ * forgets the depot, whose states CPython clears with every other thread's.
+ * STACKWEAVE_TSTATE_POOL sizes each hub's pool (default 64, 0 = off); the
+ * depot holds 4 pools' worth.  Every pooled state stays in the interpreter's
+ * thread list, so a stop-the-world or a walk of the states visits it too: the
+ * pools are kept small. */
+#define RUNLOOM_TSPOOL_DEFAULT    64
+#define RUNLOOM_TSPOOL_MAX        1024
+#define RUNLOOM_TSPOOL_DEPOT_MULT 4
+#define RUNLOOM_TSPOOL_ID_BLOCK   256
+static int runloom_tspool_cap_v = -1;
+static runloom_mutex_t runloom_tspool_depot_lock = RUNLOOM_MUTEX_STATIC_INIT;
+static PyThreadState **runloom_tspool_depot = NULL;
+static int runloom_tspool_depot_n = 0;
+
+static int runloom_tspool_cap(void)
+{
+    int c = __atomic_load_n(&runloom_tspool_cap_v, __ATOMIC_RELAXED);
+    if (c < 0) {
+        const char *e = getenv("STACKWEAVE_TSTATE_POOL");
+        long v = (e != NULL && *e != '\0') ? atol(e) : RUNLOOM_TSPOOL_DEFAULT;
+        if (v < 0) v = 0;
+        if (v > RUNLOOM_TSPOOL_MAX) v = RUNLOOM_TSPOOL_MAX;
+        c = (int)v;
+        __atomic_store_n(&runloom_tspool_cap_v, c, __ATOMIC_RELAXED);
+    }
+    return c;
+}
+
+/* The calling thread's hub, if the pool is on and this is a hub thread.  The
+ * raw TLS read, not the nest-aware accessor, on purpose: the pool is a cache
+ * of the OS thread's, and a run(1) nested on its fiber is the same thread. */
+static runloom_hub_t *runloom_tspool_hub(void)
+{
+    runloom_hub_t *h = runloom_tls_hub;
+    if (h == NULL || runloom_tspool_cap() == 0) return NULL;
+    if (h->tspool == NULL)
+        h->tspool = (PyThreadState **)calloc((size_t)runloom_tspool_cap(),
+                                             sizeof(PyThreadState *));
+    return h->tspool != NULL ? h : NULL;
+}
+
+/* Whether a finished fiber's state on this thread would be kept: a hub
+ * thread, the pool on, and room in its pool or the depot -- checked before the
+ * reset, so a full pool costs nothing more than the Clear it falls back to. */
+static inline int runloom_tspool_spill(int cap) { return cap / 2 > 0 ? cap / 2 : 1; }
+
+/* Room for one more state: in the hub's pool, or (spilling half of it) in the
+ * depot.  Racy on the depot, as a hint; put rechecks under the lock. */
+static int runloom_tspool_has_room(runloom_hub_t *h, int cap)
+{
+    return h->tspool_n < cap ||
+           __atomic_load_n(&runloom_tspool_depot_n, __ATOMIC_RELAXED) +
+               runloom_tspool_spill(cap) <= cap * RUNLOOM_TSPOOL_DEPOT_MULT;
+}
+
+RUNLOOM_NOINLINE int runloom_mn_tspool_on(void)
+{
+    runloom_hub_t *h = runloom_tls_hub;
+    int cap = runloom_tspool_cap();
+    if (h == NULL || cap == 0) return 0;
+    return runloom_tspool_has_room(h, cap);
+}
+
+static void runloom_tspool_free_one(PyThreadState *ts)
+{
+    runloom_iframe_clear_fiber_tstate(ts);
+    PyThreadState_Delete(ts);
+}
+
+RUNLOOM_NOINLINE PyThreadState *runloom_mn_tspool_get(void)
+{
+    runloom_hub_t *h = runloom_tspool_hub();
+    PyThreadState *ts;
+    if (h == NULL) return NULL;
+    for (;;) {
+        if (h->tspool_n == 0) {
+            int cap = runloom_tspool_cap();
+            if (__atomic_load_n(&runloom_tspool_depot_n, __ATOMIC_RELAXED) == 0)
+                return NULL;
+            runloom_mutex_lock(&runloom_tspool_depot_lock);
+            {
+                int k = runloom_tspool_spill(cap);
+                if (k > runloom_tspool_depot_n) k = runloom_tspool_depot_n;
+                memcpy(h->tspool, runloom_tspool_depot + runloom_tspool_depot_n - k,
+                       (size_t)k * sizeof(PyThreadState *));
+                __atomic_store_n(&runloom_tspool_depot_n, runloom_tspool_depot_n - k,
+                                 __ATOMIC_RELAXED);
+                h->tspool_n = k;
+            }
+            runloom_mutex_unlock(&runloom_tspool_depot_lock);
+            if (h->tspool_n == 0) return NULL;
+        }
+        ts = h->tspool[--h->tspool_n];
+        if (ts->c_tracefunc == NULL && ts->c_profilefunc == NULL) break;
+        /* threading.settrace_all_threads / setprofile_all_threads reached it
+         * in the pool; a fresh state would carry no tracer, so neither may
+         * this.  Clear it, and let this spawn take a fresh state -- at most
+         * one Clear per spawn, so a tracer left installed costs each spawn one
+         * state, not the whole pool on one spawner's stack. */
+        runloom_tspool_free_one(ts);
+        return NULL;
+    }
+    h->tspool_hits++;
+    return ts;                  /* still unbound: hub_main binds it at attach */
+}
+
+RUNLOOM_NOINLINE int runloom_mn_tspool_put(PyThreadState *ts)
+{
+    runloom_hub_t *h = runloom_tspool_hub();
+    int cap;
+    if (h == NULL) return 0;
+    cap = runloom_tspool_cap();
+    if (h->tspool_n >= cap) {
+        /* Full: the older half to the depot, if the depot has room; the
+         * hub keeps the states it freed last. */
+        int k = runloom_tspool_spill(cap), moved = 0;
+        runloom_mutex_lock(&runloom_tspool_depot_lock);
+        if (runloom_tspool_depot == NULL)
+            runloom_tspool_depot = (PyThreadState **)calloc(
+                (size_t)cap * RUNLOOM_TSPOOL_DEPOT_MULT, sizeof(PyThreadState *));
+        if (runloom_tspool_depot != NULL &&
+            runloom_tspool_depot_n + k <= cap * RUNLOOM_TSPOOL_DEPOT_MULT) {
+            memcpy(runloom_tspool_depot + runloom_tspool_depot_n,
+                   h->tspool, (size_t)k * sizeof(PyThreadState *));
+            memmove(h->tspool, h->tspool + k,
+                    (size_t)(h->tspool_n - k) * sizeof(PyThreadState *));
+            __atomic_store_n(&runloom_tspool_depot_n, runloom_tspool_depot_n + k,
+                             __ATOMIC_RELAXED);
+            moved = k;
+        }
+        runloom_mutex_unlock(&runloom_tspool_depot_lock);
+        if (!moved) return 0;
+        h->tspool_n -= k;
+    }
+    /* A new id: the exec-home patch records a lock's owner as the state's id,
+     * so a lock the last fiber left held must not look like the next one's.
+     * Only once it is kept. */
+    if (h->tspool_id_next >= h->tspool_id_end) {
+        h->tspool_id_next = runloom_iframe_reserve_tstate_ids(ts->interp,
+                                                              RUNLOOM_TSPOOL_ID_BLOCK);
+        h->tspool_id_end = h->tspool_id_next + RUNLOOM_TSPOOL_ID_BLOCK;
+    }
+    ts->id = h->tspool_id_next++;
+    h->tspool[h->tspool_n++] = ts;
+    return 1;
+}
+
+
+/* Spawns served from a pool, counted as each hub exits (stats
+ * "tstate_pool_hits"; a running session's hubs are not in it yet). */
+static unsigned long long runloom_tspool_hits_done = 0;
+
+unsigned long long runloom_mn_tspool_hits(void)
+{
+    return __atomic_load_n(&runloom_tspool_hits_done, __ATOMIC_RELAXED);
+}
+
+/* Hub exit, on the hub's thread with its own state current. */
+static void runloom_mn_tspool_hub_drain(runloom_hub_t *h)
+{
+    __atomic_add_fetch(&runloom_tspool_hits_done, h->tspool_hits, __ATOMIC_RELAXED);
+    h->tspool_hits = 0;
+    while (h->tspool_n > 0)
+        runloom_tspool_free_one(h->tspool[--h->tspool_n]);
+    free(h->tspool);
+    h->tspool = NULL;
+}
+
+/* mn_fini, on the main thread, every hub joined. */
+static void runloom_mn_tspool_depot_drain(void)
+{
+    PyThreadState **d;
+    int n;
+    runloom_mutex_lock(&runloom_tspool_depot_lock);
+    d = runloom_tspool_depot;
+    n = runloom_tspool_depot_n;
+    runloom_tspool_depot = NULL;
+    __atomic_store_n(&runloom_tspool_depot_n, 0, __ATOMIC_RELAXED);
+    runloom_mutex_unlock(&runloom_tspool_depot_lock);
+    while (n > 0) runloom_tspool_free_one(d[--n]);
+    free(d);
+}
+
+/* Fork child: the depot's states are other threads' as far as CPython is
+ * concerned, and its after-fork code clears them; forget (leak) the array. */
+static void runloom_mn_tspool_forget_after_fork(void)
+{
+    __atomic_store_n(&runloom_tspool_hits_done, 0ULL, __ATOMIC_RELAXED);
+    runloom_tspool_depot = NULL;
+    runloom_tspool_depot_n = 0;
+    runloom_mutex_init(&runloom_tspool_depot_lock);
+}
+
 /* A run(1) drain (or a Coro) on the hub's current fiber runs other fibers on
  * that fiber's stack and thread state, as on any thread with no hub.  While
  * one is active the hub is not theirs: whatever asks "which M:N fiber is
@@ -1227,9 +1431,17 @@ static _PyFrameEvalFunction runloom_preempt_prev_eval = NULL;
 /* Process-lifetime guard: the preempt eval-frame hook is installed EXACTLY ONCE
  * (first mn_init) and never swapped back -- see runloom_preempt_install. */
 static int runloom_preempt_installed = 0;
+/* 1 once runloom_preempt_install chose the eval-breaker hook (the
+ * interpreter has the exec-home patch's _PyEval_SetFiberBreakerHook) over the
+ * eval-frame wrapper.  Written once, before any hub runs; sysmon reads it to
+ * pick how it asks for a preemption. */
+static int runloom_preempt_via_breaker = 0;
+/* Odometer: preemption yields taken, by any site (stats "preempt_yields"). */
+static unsigned long long runloom_mn_preempt_yields_total = 0;
 
-/* The preemption yield, shared by every preemption site (the eval-frame
- * wrapper, the liveness pending call, the preempt_init time-slicer): back on
+/* The preemption yield, shared by every preemption site (the eval-breaker
+ * hook, the eval-frame wrapper, the liveness pending call, the preempt_init
+ * time-slicer): back on
  * this hub's ready ring and resumed here, never on the stealable yield queue.
  * A time slice ends wherever the fiber happens to be, perhaps holding a lock
  * keyed on the OS thread (see runloom_mn_requeue_local).  Pushing from inside
@@ -1239,6 +1451,7 @@ static int runloom_preempt_installed = 0;
 static RUNLOOM_NOINLINE void runloom_mn_preempt_yield(runloom_hub_t *h,
                                                       runloom_g_t *g)
 {
+    __atomic_add_fetch(&runloom_mn_preempt_yields_total, 1, __ATOMIC_RELAXED);
     runloom_sched_ready_push(&h->sched, g);
     runloom_pystate_snap(&g->snap);
     runloom_tls_self_queued = 1;
@@ -1252,7 +1465,8 @@ static RUNLOOM_NOINLINE void runloom_mn_preempt_yield(runloom_hub_t *h,
  * write). */
 static inline int runloom_mn_preempt_due(runloom_hub_t *h)
 {
-    long want = __atomic_load_n(&h->preempt_seq, __ATOMIC_RELAXED);
+    /* ACQUIRE: pairs with sysmon's release store of the request. */
+    long want = __atomic_load_n(&h->preempt_seq, __ATOMIC_ACQUIRE);
     if (__builtin_expect(want == 0, 1)) return 0;
     if (want == __atomic_load_n(&h->resume_seq, __ATOMIC_RELAXED)) return 1;
     (void)__atomic_compare_exchange_n(&h->preempt_seq, &want, 0, 0,
@@ -1400,8 +1614,105 @@ static int runloom_mn_liveness_pending_cb(void *arg)
     return 0;
 }
 
-/* Install the preemption eval-frame wrapper on `interp` ONCE for the process
- * lifetime.  Install runs in mn_init after runloom_sysmon_config (so
+/* The interpreter's eval-breaker fiber hook (exec-home patch), looked up at
+ * run time rather than linked: an extension built against hook headers must
+ * still load on an interpreter without them, and fall back to the eval-frame
+ * wrapper there instead of failing to import on a missing symbol. */
+typedef void (*runloom_fiber_breaker_hook_t)(PyThreadState *ts);
+static void (*runloom_set_fiber_breaker_hook)(runloom_fiber_breaker_hook_t) = NULL;
+static void (*runloom_request_fiber_break)(PyThreadState *ts) = NULL;
+static int runloom_fiber_breaker_state = -1;   /* -1 unresolved, 0 absent, 1 present */
+
+int runloom_mn_fiber_breaker_available(void)
+{
+    int st = __atomic_load_n(&runloom_fiber_breaker_state, __ATOMIC_ACQUIRE);
+    if (st < 0) {
+        st = 0;
+#if !defined(_WIN32)
+        runloom_set_fiber_breaker_hook = (void (*)(runloom_fiber_breaker_hook_t))
+            dlsym(RTLD_DEFAULT, "_PyEval_SetFiberBreakerHook");
+        runloom_request_fiber_break = (void (*)(PyThreadState *))
+            dlsym(RTLD_DEFAULT, "_PyEval_RequestFiberBreak");
+        /* And the revision with the GC / pending-call hold, which exports
+         * _PyEval_FiberBreakRelease: an earlier one could switch a fiber out
+         * inside a collection's finalizer, so it gets the fallback. */
+        st = (runloom_set_fiber_breaker_hook != NULL &&
+              runloom_request_fiber_break != NULL &&
+              dlsym(RTLD_DEFAULT, "_PyEval_FiberBreakRelease") != NULL);
+#endif
+        __atomic_store_n(&runloom_fiber_breaker_state, st, __ATOMIC_RELEASE);
+    }
+    return st;
+}
+
+/* sysmon's request on the thread state a wedged resume runs on. */
+void runloom_mn_request_fiber_break(PyThreadState *ts)
+{
+    if (runloom_mn_fiber_breaker_available())
+        runloom_request_fiber_break(ts);
+}
+
+/* Eval-breaker preemption (the default where the interpreter has the
+ * exec-home patch's fiber hook, see src/patches/README.md).  sysmon asks for a
+ * break on the thread state the wedged resume runs on
+ * (runloom_sysmon_request_break); CPython raises that thread's eval breaker,
+ * and at its next check -- a function entry (RESUME) or a loop back-edge --
+ * _Py_HandlePending() calls this from its end -- never while this thread runs
+ * the pending calls or a GC collection (the patch's _fiber_break_hold), so a
+ * fiber switched out here holds neither the pending-call slot nor the
+ * collecting flag.  So, unlike the eval-frame
+ * wrapper, nothing is paid until a preemption is asked for (that wrapper's
+ * presence alone deoptimizes every Python-to-Python call process-wide: ~1.8x
+ * slower calls, ~2 KB of C stack per frame, recursion in a 512 KB fiber capped
+ * near 180 frames), and unlike the liveness pending call, a fiber switched
+ * out here holds nothing that stops another hub's fiber being preempted
+ * meanwhile.  Runs on every thread that services its eval breaker; anything
+ * not running a hub fiber returns at the first check.
+ *
+ * Same gates as the other two sites: only the resume sysmon flagged
+ * (runloom_mn_preempt_due), never mid object-destruction, never a fiber nested
+ * in a run(1)/Coro.  A destruction defers to sysmon's next request, a tick
+ * later. */
+static void runloom_preempt_breaker_hook(PyThreadState *ts)
+{
+    /* The nest-aware accessors: NULL inside a run(1)/Coro nested on the hub's
+     * fiber, whose inner fibers this must never switch out (CLAUDE.md). */
+    runloom_hub_t *h = (runloom_hub_t *)runloom_mn_current_hub_opaque();
+    runloom_g_t *g = runloom_mn_tls_current_g();
+    if (h == NULL || g == NULL || !runloom_mn_preempt_due(h)) return;
+    /* Mid destruction: leave preempt_seq armed and return; sysmon asks again
+     * at its next tick while the resume is still wedged (asking here would
+     * send every later check in the destructor back through the slow path). */
+    if (runloom_tstate_in_destruction(ts)) return;
+    __atomic_store_n(&h->preempt_seq, 0, __ATOMIC_RELAXED);
+    {
+#if defined(RUNLOOM_FSM_VALIDATE)
+        /* p69b witness (tools/verify/cbmc/preempt_defer_cbmc.c): returned
+         * above if in_destruction, so this yield is unreachable mid-destruction. */
+        if (runloom_tstate_in_destruction(ts))
+            runloom_fsm_violation("preempt_gate", 1 /*about-to-yield*/, 0,
+                                  __FILE__, __LINE__);
+#endif
+        runloom_mn_preempt_yield(h, g);
+    }
+}
+
+int runloom_mn_preempt_via_breaker(void)
+{
+    return __atomic_load_n(&runloom_preempt_via_breaker, __ATOMIC_RELAXED);
+}
+
+unsigned long long runloom_mn_preempt_yields(void)
+{
+    return __atomic_load_n(&runloom_mn_preempt_yields_total, __ATOMIC_RELAXED);
+}
+
+/* Install the preemption hook on `interp` ONCE for the process lifetime: the
+ * eval-breaker hook above where the interpreter has it, else the eval-frame
+ * wrapper (also kept for the seeded controller's frame-count preemption, which
+ * must count every frame entry).
+ *
+ * The eval-frame wrapper: install runs in mn_init after runloom_sysmon_config (so
  * runloom_preempt_enabled is set) and BEFORE any fiber runs Python.  Capturing
  * the previous func means we chain rather than clobber a wrapper someone else
  * installed.
@@ -1437,6 +1748,12 @@ static void runloom_preempt_install(PyInterpreterState *interp)
 {
     if (!__atomic_load_n(&runloom_preempt_enabled, __ATOMIC_RELAXED)) return;
     if (runloom_preempt_installed) return;   /* install once; never re-swap */
+    if (runloom_mn_ctrl.preempt_frames <= 0 && runloom_mn_fiber_breaker_available()) {
+        runloom_set_fiber_breaker_hook(runloom_preempt_breaker_hook);
+        __atomic_store_n(&runloom_preempt_via_breaker, 1, __ATOMIC_RELAXED);
+        runloom_preempt_installed = 1;
+        return;
+    }
     /* Release-store so the eval hook's acquire-load sees a fully-published
      * prev pointer; pairs with the load in runloom_preempt_eval_frame. */
     __atomic_store_n((void **)&runloom_preempt_prev_eval,

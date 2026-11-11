@@ -109,14 +109,19 @@ def main():
     holds = stackweave_c.stats()["mn_c_caller_holds"]
     total = con.execute("select sum(f(x)) from t").fetchone()[0]
     holds = stackweave_c.stats()["mn_c_caller_holds"] - holds
+    # One hub at a time: a connection's cursors share its cached statements,
+    # and execute() checks a cached one is not busy before it steps it
+    # (Modules/_sqlite/cursor.c), so two running the same SQL at once can
+    # take the same statement and one resets it under the other (fetchone()
+    # None).  CPython leaves serializing a shared connection to the caller.
     out = {}
-    wg = stackweave.WaitGroup(); wg.add(H)
-    def use(h):
+    def use(h, wg):
         out[h] = con.execute("select count(*) from t").fetchone()[0]
         wg.done()
     for h in range(H):
-        stackweave_c.mn_fiber(lambda h=h: use(h), hub=h)
-    wg.wait()
+        wg = stackweave.WaitGroup(); wg.add(1)
+        stackweave_c.mn_fiber(lambda h=h, wg=wg: use(h, wg), hub=h)
+        wg.wait()
     print("sum=%s per-hub=%s moved=%s holds=%d" % (total, out, seen, holds), flush=True)
     assert seen == {"moved": False}, seen
     assert holds > 0, "no park was held on its hub (stats mn_c_caller_holds)"
