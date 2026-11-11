@@ -499,7 +499,7 @@ void runloom_netpoll_reset_after_fork(void)
         if (runloom_fd_epoll_pool != NULL) memset(runloom_fd_epoll_pool, 0xFF, cap);
         if (runloom_fd_miss_us != NULL) memset(runloom_fd_miss_us, 0, cap * sizeof(unsigned int));
 #if defined(RUNLOOM_HAVE_KQUEUE)
-        if (runloom_fd_armer != NULL) memset(runloom_fd_armer, 0, cap * sizeof(unsigned int));
+        if (runloom_fd_armer != NULL) memset(runloom_fd_armer, 0, 2 * cap * sizeof(unsigned int));
 #endif
     }
 #if defined(RUNLOOM_HAVE_EPOLL)

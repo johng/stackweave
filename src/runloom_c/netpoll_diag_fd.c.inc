@@ -227,8 +227,9 @@ static unsigned char *runloom_fd_epoll_pool = NULL;
  * STACKWEAVE_NETPOLL_MISS_GRACE_US=0. */
 static unsigned int *runloom_fd_miss_us = NULL;
 #if defined(RUNLOOM_HAVE_KQUEUE)
-/* kqueue: the fiber that last armed or re-parked on each fd, as
- * ((goid << 1) | 1) -- 0 is "none" (runloom_kq_register_persist). */
+/* kqueue: per fd and direction, the fiber that last parked there on a hub
+ * pool's persistent arm, as ((goid << 1) | 1); 0 is "none".  Slot 2*fd is
+ * READ, 2*fd + 1 is WRITE (runloom_kq_armer_slot; runloom_kq_register_persist). */
 static unsigned int *runloom_fd_armer = NULL;
 #endif
 
@@ -292,10 +293,12 @@ static void runloom_fd_arrays_init(void)
         return;   /* caps stay 0; set/consume/bit_* bounds-check to no-ops */
     }
     memset(ep, 0xFF, cap_fds);
+#if defined(RUNLOOM_HAVE_EPOLL) || defined(RUNLOOM_HAVE_KQUEUE)
     if (runloom_np_miss_grace_us() > 0)
         runloom_fd_miss_us = (unsigned int *)calloc(cap_fds, sizeof(unsigned int));
+#endif
 #if defined(RUNLOOM_HAVE_KQUEUE)
-    runloom_fd_armer = (unsigned int *)calloc(cap_fds, sizeof(unsigned int));
+    runloom_fd_armer = (unsigned int *)calloc(2 * cap_fds, sizeof(unsigned int));
 #endif
     runloom_fd_epoll_pool           = ep;
     runloom_fd_registered_bm        = bm;
@@ -474,14 +477,16 @@ static int runloom_fd_armed_set(int fd, int mask)
     return 0;
 }
 
-/* Per-fd owning-pool accessors (per-hub epoll).  Caller MUST hold
- * runloom_pool.lock, like the arm-mask accessors.  get returns -1 for "none". */
+/* Per-fd owning-pool accessors (per-hub epoll / kqueue).  Like the arm-mask
+ * accessors: set, and any read that feeds a register/unregister decision, hold
+ * runloom_pool.lock; the bytes are relaxed atomics for the advisory lock-free
+ * readers (the miss grace, the idle-owner kick).  get returns -1 for "none". */
 static int runloom_fd_epoll_pool_get(int fd)
 {
     if (fd < 0 || runloom_fd_epoll_pool == NULL) return -1;
     if ((size_t)fd >= runloom_fd_pending_wake_cap) return -1;
     {
-        unsigned char v = runloom_fd_epoll_pool[fd];
+        unsigned char v = __atomic_load_n(&runloom_fd_epoll_pool[fd], __ATOMIC_RELAXED);
         return (v == 0xFFu) ? -1 : (int)v;
     }
 }
@@ -490,7 +495,9 @@ static void runloom_fd_epoll_pool_set(int fd, int idx)
 {
     if (fd < 0 || runloom_fd_epoll_pool == NULL) return;
     if ((size_t)fd >= runloom_fd_pending_wake_cap) return;
-    runloom_fd_epoll_pool[fd] = (idx < 0 || idx > 0xFE) ? 0xFFu : (unsigned char)idx;
+    __atomic_store_n(&runloom_fd_epoll_pool[fd],
+                     (idx < 0 || idx > 0xFE) ? (unsigned char)0xFFu : (unsigned char)idx,
+                     __ATOMIC_RELAXED);
 }
 
 #if defined(RUNLOOM_HAVE_EPOLL)
@@ -538,6 +545,7 @@ static int runloom_selfpipe_r = -1;
 static int runloom_selfpipe_w = -1;
 #endif
 
+#if defined(RUNLOOM_HAVE_EPOLL) || defined(RUNLOOM_HAVE_KQUEUE)
 /* Miss grace.  clear: a waiter came back for fd (register).  defer: a
  * dispatch found nobody parked; returns 1 to keep the arm (first miss, or still
  * inside the grace since the first one), 0 to disarm now.  Relaxed: two pollers
@@ -575,3 +583,4 @@ static int runloom_np_miss_defer(int fd)
     __atomic_store_n(&a[fd], 0u, __ATOMIC_RELAXED);
     return 0;
 }
+#endif /* EPOLL || KQUEUE */

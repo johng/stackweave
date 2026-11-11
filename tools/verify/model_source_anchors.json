@@ -37,7 +37,7 @@
  },
  "tools/verify/cbmc/sched_steal_cbmc.c": {
   "runloom_cldeque_steal": "0f490f9c3f355330",
-  "runloom_mn_woken_enqueue": "0275cacd944b388f"
+  "runloom_mn_woken_enqueue": "bd1d9d2b0d7098ee"
  },
  "tools/verify/cbmc/snap_refown_cbmc.c": {
   "runloom_pystate_load": "4e9c973ec1d62e7f",

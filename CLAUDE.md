@@ -670,13 +670,19 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   epoll an fd stays in the epoll of the hub that first armed it, whichever hub
   its later waiters park on (dispatch finds them through the fd's pool mask);
   only an fd whose owner is not a live hub moves to the shared epoll. kqueue
-  does the same: a hub's arm is a LEVEL knote (`runloom_kq_register_persist`)
-  added once into the kqueue of the hub that first armed the fd; only the
-  default pool (the single-thread scheduler) re-arms `EV_ONESHOT` per park. A
-  persistent arm outlives a raw close, so a park by a different fiber than the
-  last one re-adds it (an fd number reused after close), a miss sets no
-  pending-wake bit (it would wake the next socket on that number), and the
-  stale-arm probe heals the rest. So a hub that stops
+  does the same: a hub's arm is a LEVEL knote per direction
+  (`runloom_kq_register_persist`), added once into the kqueue of the hub that
+  first armed the fd; only the default pool (the single-thread scheduler)
+  re-arms `EV_ONESHOT` per park. A miss sets no pending-wake bit (it would wake
+  the next socket on that number) and drops the knote in the kqueue that
+  reported it, whatever the arm cache says (`runloom_kq_disarm`; a READ arm the
+  cache places there after the miss grace, anything else at once), and the
+  pump re-dispatches after the drop. A persistent arm outlives a raw close: a
+  park by a different fiber than the last one in that direction re-adds it,
+  so does any park that makes a kevent call anyway, and the stale-arm probe
+  heals the rest (the same fiber and direction, as on epoll).
+  `release_if_idle` deletes the knotes, and `socket.detach()` calls it while
+  the fd is still ours. So a hub that stops
   polling -- one long fiber, a blocking C call -- holds those waiters, and the
   netpoll backstop on the sysmon tick (`runloom_netpoll_backstop_poll`) polls,
   while anything is parked anywhere (an owner's own pool may be empty while a
@@ -692,8 +698,9 @@ The invariants below are recorded here in full; [docs/dev/](docs/dev/) holds oth
   disarmed it, and the re-ADD cost `epoll_ctl` under `runloom_pool.lock` on
   most round trips: c-echo fell from 148k round trips/s at 4 hubs to 113k at
   16; kept in the owner it is 224k and 576k (Linux c-32). Guards:
-  `tests/test_netpoll_owner_backstop.py` and the lost-park test
-  `tests/test_cov100_wake_iouring.py::test_mn_many_parkers_one_fd_across_hubs_none_lost`.
+  `tests/test_netpoll_owner_backstop.py`, the lost-park test
+  `tests/test_cov100_wake_iouring.py::test_mn_many_parkers_one_fd_across_hubs_none_lost`,
+  `tests/test_kqueue_persistent_arm.py` and `spin/netpoll_kqueue.pml -DPERSIST`.
 
 ## aio bridge invariants (src/stackweave/aio/)
 - Layout: `_base.py` is the foundation (`_go_io`, `_wait_fd`, `_CURRENT_TASKS`);

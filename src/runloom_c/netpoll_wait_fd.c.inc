@@ -554,24 +554,26 @@ int runloom_netpoll_wait_fd(int fd, int events, long long timeout_ns)
         }
     }
 #elif defined(RUNLOOM_HAVE_KQUEUE)
-    /* A hub pool's arm on kqueue is persistent, like epoll's
-     * (runloom_kq_register_persist), so a park that will skip on an armed fd
-     * gets epoll's probe, timed or not.  The DEFAULT pool re-arms with
-     * EV_ADD|EV_ONESHOT on EVERY park, so a reused fd number is always armed
-     * afresh there, and only the other half of the hazard applies.
+    /* Two halves of the same hazard as epoll's, and kqueue has both.
      *
-     * What kqueue shares is the OTHER half of the hazard: an fd closed WHILE a
-     * fiber is parked on it silently drops the knote, no event can ever follow,
-     * and an UNTIMED park therefore hangs forever.  epoll survives that only
-     * because its probe error-wakes the parker; kqueue had no probe at all,
-     * which is macos-14's deterministic failure of
+     * (1) A park that will SKIP its kevent.  A hub pool's arm is persistent
+     * (runloom_kq_register_persist), so an fd number reused after a raw close
+     * can sit on an arm whose knote the close dropped: the same probe as
+     * epoll's above, timed parks included, and validate_arm re-adds the knote.
+     * (The DEFAULT pool re-arms EV_ADD|EV_ONESHOT on every park, so a reused
+     * number is armed afresh there; a probe its park takes from a hub pool's
+     * arm cached for the same number is only a spare.)
+     *
+     * (2) An fd closed WHILE a fiber is parked on it silently drops the knote,
+     * no event can ever follow, and an UNTIMED park therefore hangs forever.
+     * epoll survives that only because its probe error-wakes the parker;
+     * kqueue had no probe at all, which is macos-14's deterministic failure of
      * test_adv_netpoll::test_untimed_park_on_fd_closed_after_skip_gets_error_woken.
-     *
-     * So probe exactly the parks that can hang UNBOUNDEDLY -- untimed ones.  A
-     * timed park already self-limits: its deadline fires, wait_fd returns 0, and
-     * the caller retries into a loud EBADF.  Restricting it that way also keeps
-     * the cost off the hot path, since the recv-after-recv park that dominates a
-     * busy connection is woken by its event long before any probe tick.
+     * So an untimed park that does not skip gets the probe too, to error-wake
+     * it.  A timed one self-limits: its deadline fires, wait_fd returns 0, and
+     * the caller retries into a loud EBADF.  The busy recv-after-recv park is
+     * woken by its event long before any probe tick, so this costs the hot
+     * path nothing.
      *
      * Same sim exclusion as epoll: the probe stamps a WALL-clock deadline, and
      * under RUNLOOM_SIM that heap drives the LOGICAL clock. */
@@ -699,7 +701,7 @@ int runloom_netpoll_wait_fd(int fd, int events, long long timeout_ns)
         runloom_parker_pool_release(park);
         return -1;
     }
-#if defined(RUNLOOM_HAVE_EPOLL)
+#if defined(RUNLOOM_HAVE_EPOLL) || defined(RUNLOOM_HAVE_KQUEUE)
     runloom_np_kick_owner_if_idle(fd, pool);
 #endif
 

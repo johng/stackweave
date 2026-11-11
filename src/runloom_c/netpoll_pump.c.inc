@@ -427,10 +427,17 @@ int runloom_netpoll_pump(long long timeout_ns)
          * set waiting for the next 64-turn periodic pump, which throttled
          * wakeup delivery (and thus throughput) under high parked counts -- a
          * 3-hop proxy / many-socket-per-task workload at 50k+ wedged on it.
-         * The cap stops a flood from starving g execution.  EV_ONESHOT arm
-         * discipline is unchanged, so the kqueue FV model still holds. */
+         * The cap stops a flood from starving g execution.
+         *
+         * Only while the batches hold one-shot knotes (the default pool's).  A
+         * hub pool's LEVEL knote re-reports a ready fd on every kevent until a
+         * fiber reads it, and the fibers just woken have not run yet: a second
+         * pass returns the same fds again, each a dispatch miss.  So a pass
+         * that returned a LEVEL knote ends the drain, as epoll's single batch
+         * does; what the full batch left is reported again by the next pump.
+         * Models: spin/netpoll_kqueue.pml (both arms). */
         for (;;) {
-            int i;
+            int i, saw_level = 0;
             /* Fault injection only on the first (blocking) pass, matching the
              * original single-kevent semantics. */
             int finj = (drained == 0)
@@ -491,19 +498,33 @@ int runloom_netpoll_pump(long long timeout_ns)
                 if (evs[i].udata == RUNLOOM_KQ_PERSIST_UDATA) {
                     /* A hub pool's LEVEL knote.  Wake every same-direction
                      * waiter, as for a one-shot one (B2: losers re-check and
-                     * re-park; the level re-reports what is left), and drop an
-                     * arm nobody came back for once its grace has passed.  No
+                     * re-park; the level re-reports what is left).  No
                      * pending-wake bit on a miss: the level knote re-reports
                      * readiness nobody took, and a bit set here would outlive
                      * a raw close and wake the next socket given this fd
-                     * number for nothing. */
+                     * number for nothing.
+                     *
+                     * A miss drops the knote, as epoll's handler drops its arm:
+                     * a READ arm this kqueue owns keeps the miss grace first
+                     * (the level re-report of a reader woken but not yet run);
+                     * a WRITE report is dropped at once, since a socket stays
+                     * writable and a reader re-parking would keep re-opening
+                     * the grace, so kevent would return at once for good; and
+                     * a knote the cache does not place here (an fd
+                     * unregistered while still open, or one left in a previous
+                     * owner's kqueue) is a stray, dropped at once. */
                     int dir = (evs[i].filter == EVFILT_READ) ? RUNLOOM_NETPOLL_READ
                                                              : RUNLOOM_NETPOLL_WRITE;
                     int w = runloom_pump_dispatch_event(fd, mask, 1);
+                    saw_level = 1;
                     if (w > 0) {
                         woke += w;
-                    } else if (!runloom_np_miss_defer(fd)) {
-                        runloom_kq_disarm(fd, dir);
+                    } else if (dir == RUNLOOM_NETPOLL_READ &&
+                               runloom_kq_arm_is_owned(kpool, fd, dir) &&
+                               runloom_np_miss_defer(fd)) {
+                        RUNLOOM_NPC(RUNLOOM_NPC_MISS_DEFER, 1);
+                    } else {
+                        runloom_kq_disarm(kpool, fd, dir);
                         /* A waiter that linked after the dispatch above saw the
                          * arm still set and skipped its EV_ADD: wake it. */
                         __atomic_thread_fence(__ATOMIC_SEQ_CST);
@@ -515,9 +536,10 @@ int runloom_netpoll_pump(long long timeout_ns)
                 woke += runloom_pump_dispatch_event(fd, mask, 1);
             }
             drained += n;
-            /* Stop when the batch was short (kqueue drained) or the per-pump
+            /* Stop when the batch was short (kqueue drained), held a LEVEL
+             * knote (the next pass would re-read it; see above) or the per-pump
              * cap is hit (don't let a flood starve g execution). */
-            if (n < 256 || drained >= 4096) break;
+            if (saw_level || n < 256 || drained >= 4096) break;
         }
     }
 #else

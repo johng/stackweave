@@ -599,6 +599,7 @@ def _patched_sendfile(self, file, offset=0, count=None):
 _orig_close   = None
 _orig_detach  = None
 _netpoll_unregister = getattr(stackweave_c, "netpoll_unregister", None)
+_netpoll_release_if_idle = getattr(stackweave_c, "netpoll_release_if_idle", None)
 _netpoll_cancel_fd = getattr(stackweave_c, "netpoll_cancel_fd", None)
 
 
@@ -638,13 +639,27 @@ def _patched_close(self):
 
 
 def _patched_detach(self):
-    """Same bitmap clear as close: the fd is leaving our control."""
+    """Same bitmap clear as close: the fd is leaving our control.
+
+    Unlike close, the fd stays OPEN, so the kernel keeps whatever registration
+    a hub's poller holds for it (a LEVEL epoll arm or kqueue knote).  Drop that
+    first, while this socket still owns the fd: left there with the arm cache
+    cleared, a writable socket's arm was reported to that hub at once on every
+    poll, nobody could match it to an arm to delete, and a later wait on the
+    fd from another hub armed it there as well (ssl.wrap_socket detaches the
+    plain socket it wraps).  release_if_idle keeps the arm while a fiber is
+    still parked on the fd."""
     try:
         fd = self.fileno()
     except (OSError, ValueError):
         fd = -1
     if fd >= 0:
         _SOCK_TIMEOUTS.pop(fd, None)
+        if _netpoll_release_if_idle is not None:
+            try:
+                _netpoll_release_if_idle(fd)
+            except (OSError, ValueError):
+                pass
         if _netpoll_unregister is not None:
             try:
                 _netpoll_unregister(fd)

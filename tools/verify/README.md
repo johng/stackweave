@@ -468,6 +468,19 @@ Two negative controls, each making Spin find the lost wake:
   and silently arms nothing -> the post-link re-check never happens -> lost wake
   even though the fd is level-ready.
 
+**The hub pools' arm (`-DPERSIST`).** The above is the DEFAULT pool's arm (the
+single-thread scheduler). An M:N hub's pool arms the way epoll does
+(`runloom_kq_register_persist`): one LEVEL knote per direction, added once into
+the owner hub's kqueue, and a re-park the arm cache records skips the kevent.
+LEVEL re-reports a ready fd, as in #9; what is new is the pump **dropping** the
+knote on a miss (`runloom_kq_disarm`, after the miss grace for a READ arm, at
+once for a WRITE or stray one). A g that linked after the miss but registered
+before the disarm skipped on the cached arm, so no knote will report for it
+again; the pump's re-dispatch after the disarm finds it linked and wakes it.
+* `-DPERSIST` -- **no lost wake** for that arm.
+* `-DBUG_PERSIST_NO_REDISPATCH` -- the same arm without the re-dispatch: Spin
+  finds the lost wake.
+
 ## Scope & honesty
 
 * Spin models are **sequentially consistent**: they prove the algorithm
@@ -544,7 +557,7 @@ verify/
     iouring_msclose.pml    io_uring multishot handle lifetime, recv vs close (+ BUG_CONCURRENT_CLOSE)
     netpoll_deadline.pml   netpoll fd-dispatch vs timeout vs cancel claim race (+ BUG_SWEEP_NO_COMMIT, BUG_CANCEL_NO_COMMIT)
     netpoll_forceunlink.pml netpoll force_unlink vs pump, exactly-once release / no UAF (+ BUG_NO_RECHECK)
-    netpoll_kqueue.pml     netpoll kqueue arm (BSD/macOS): EV_ADD|EV_ONESHOT re-add (+ BUG_EV_CLEAR, BUG_REENABLE_NOT_READD)
+    netpoll_kqueue.pml     netpoll kqueue arm (BSD/macOS): EV_ADD|EV_ONESHOT re-add (+ BUG_EV_CLEAR, BUG_REENABLE_NOT_READD); hub pools' persistent LEVEL arm -DPERSIST (+ BUG_PERSIST_NO_REDISPATCH)
     cross_thread_wake.pml  Phase C per-thread-sched owner-routed wake_safe (+ BUG_ROUTE_TO_WAKER)
   cbmc/
     cldeque_cbmc.c         harness over the real cldeque.c
